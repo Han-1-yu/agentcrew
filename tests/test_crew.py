@@ -17,6 +17,7 @@
 
 import asyncio
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -1084,3 +1085,104 @@ async def test_final_task_runs_last_and_writes_delivery(env):
     assert started[-1] == "T-FINAL"
     assert started.index("T-FINAL") > started.index("T-002")
     assert (_artifacts(env["settings"], rec.run_id) / "DELIVERY.md").is_file()
+
+
+# ── 状态 sole-writer 纪律（spec §6.1:446）──────────────────────────────────
+
+#: 允许写 ``Task.status`` 的地方：``transition`` 是唯一正规入口，另外两处是显式
+#: 声明的越权修复 —— ``TaskBoard.reset_failed``（``FAILED`` 无出边的人工重试）与
+#: ``Crew._apply_rework``（交付卡点把 ``SUCCEEDED`` 人工置回 ``READY``）。两者都在
+#: ``status_history`` 里留下 reason（``manual-retry`` / ``delivery-rework``）。
+_SANCTIONED_STATUS_WRITERS = {
+    ("task_board.py", "transition"),
+    ("task_board.py", "reset_failed"),
+    ("crew.py", "_apply_rework"),
+}
+
+
+def _install_status_writer_traps(monkeypatch, hits):
+    """装上两道陷阱：直接赋值 ``.status`` 与 ``model_copy(update={"status":…})``。
+
+    pydantic 的 ``model_copy`` 用 ``copied.__dict__.update(...)`` 落字段，绕过
+    ``__setattr__`` —— 只盯其中一处会漏掉另一处（``TaskBoard`` 全部写入走的正是
+    ``model_copy``），所以两道都要装。命中记录 ``(种类, 文件名, 函数名)``，函数名
+    为推导式时上溯一层，好让 ``_apply_rework`` 里的列表推导仍归到它自己名下。
+    """
+    original_setattr = Task.__setattr__
+    original_copy = Task.model_copy
+
+    def caller() -> tuple[str, str]:
+        frame = sys._getframe(2)
+        while frame.f_code.co_name in ("<listcomp>", "<genexpr>", "<dictcomp>"):
+            frame = frame.f_back
+        return Path(frame.f_code.co_filename).name, frame.f_code.co_name
+
+    def trap_setattr(self, name, value):
+        if name == "status":
+            hits.append(("setattr", *caller()))
+        return original_setattr(self, name, value)
+
+    def trap_copy(self, *, update=None, deep=False):
+        if update and "status" in update and update["status"] != self.status:
+            hits.append(("model_copy", *caller()))
+        return original_copy(self, update=update, deep=deep)
+
+    monkeypatch.setattr(Task, "__setattr__", trap_setattr)
+    monkeypatch.setattr(Task, "model_copy", trap_copy)
+
+
+async def test_task_status_is_only_written_through_the_board(env, monkeypatch):
+    """spec §6.1:446：``Task.status`` 只经 ``TaskBoard.transition()`` 写。
+
+    这条纪律此前只被 grep 功能性地验证过，没有回归守卫。陷阱覆盖两条写入通道
+    （直接赋值 + ``model_copy``），跑一趟真实的 mock run，断言每一次 ``status``
+    写入的来源都在白名单里。白名单只有三处：``transition`` 与两处显式声明的越权
+    修复（见 :data:`_SANCTIONED_STATUS_WRITERS`）。测试自身还做了两个反向对照，
+    证明陷阱真的抓得住（零命中不是「陷阱失效」）。
+    """
+    hits: list[tuple[str, str, str]] = []
+    _install_status_writer_traps(monkeypatch, hits)
+
+    rec = await Crew(env["settings"]).run("做一个 Todo 应用")
+
+    assert rec.status is RunStatus.COMPLETED
+    assert hits, "陷阱一次都没命中：写入纪律本身没被观测到，断言等于空转"
+    assert any(hit[1:] == ("task_board.py", "transition") for hit in hits), (
+        "正常路径（transition）一次都没被观测到，陷阱可能装错了位置")
+    unauthorized = [
+        hit for hit in hits if (hit[1], hit[2]) not in _SANCTIONED_STATUS_WRITERS
+    ]
+    assert unauthorized == [], f"这些地方绕过了 TaskBoard 写 status：{unauthorized}"
+
+    # 反向对照 1：直接赋值必须被抓住（``__setattr__`` 那条通道）
+    hits.clear()
+    victim = _task("T-CTRL")
+    victim.status = TaskStatus.SUCCEEDED
+    assert hits == [("setattr", "test_crew.py",
+                     "test_task_status_is_only_written_through_the_board")]
+
+    # 反向对照 2：白名单之外的地方调 ``model_copy`` 也必须被抓住
+    hits.clear()
+    _task("T-CTRL2").model_copy(update={"status": TaskStatus.RUNNING})
+    assert hits == [("model_copy", "test_crew.py",
+                     "test_task_status_is_only_written_through_the_board")]
+
+
+async def test_sanctioned_status_writer_is_recognized(env, monkeypatch):
+    """:meth:`TaskBoard.reset_failed` 的越权修复必须被白名单认下（不误报）。
+
+    白名单若与代码漂移（例如 ``reset_failed`` 改名），上一条用例要么静默放过
+    真正合法的修复，要么把人工重试判成违规 —— 两种都会让人把守卫删掉。
+    """
+    hits: list[tuple[str, str, str]] = []
+    _install_status_writer_traps(monkeypatch, hits)
+    board = TaskBoard([_task("T-FAIL")])
+    board.transition("T-FAIL", TaskStatus.READY)
+    board.transition("T-FAIL", TaskStatus.RUNNING)
+    board.transition("T-FAIL", TaskStatus.FAILED)
+    hits.clear()
+
+    board.reset_failed("T-FAIL")
+
+    assert hits == [("model_copy", "task_board.py", "reset_failed")]
+    assert ("task_board.py", "reset_failed") in _SANCTIONED_STATUS_WRITERS
