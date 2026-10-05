@@ -13,8 +13,9 @@
 （int 转换上限）；python 分支同样接 ``ValueError`` —— 3.12 起 null 字节是
 ``SyntaxError``，≤3.11 上却是裸 ``ValueError``，而目标运行时是 3.10+。以上
 都在 3.12.10 上实测（≤3.11 的 ``ValueError`` 路径由 monkeypatch 覆盖），
-并各有对应测试。python 分支另外压掉 ``SyntaxWarning``：无效转义序列在
-``-W error`` 下会从「解析成功」翻成 ``SyntaxError``，判决不能随环境变。
+并各有对应测试。python 分支另外压掉 ``SyntaxWarning`` 与 ``DeprecationWarning``
+（无效转义序列在 3.12 是前者、3.10/3.11 是后者）：它们在 ``-W error`` 下会从
+「解析成功」翻成异常，判决不能随环境变。
 """
 
 import ast
@@ -72,11 +73,15 @@ def _check_python(content: str) -> str | None:
     """``ast.parse`` 校验语法；错误消息带行号（G1 直接当返工提示用）。"""
     try:
         with warnings.catch_warnings():
-            # 无效转义序列（如 "\d"）在 3.12+ 是 SyntaxWarning：默认只打到
-            # stderr 并解析成功，``-W error`` / ``PYTHONWARNINGS=error`` 下同一
-            # 份源码却变成 SyntaxError —— 判决会随跑它的人翻转。校验原语只认
-            # 语法，这里按「警告不是错误」统一裁决，顺带保证输出干净。
+            # 无效转义序列（如 "\d"）是警告而非语法错误：默认只打到 stderr 并
+            # 解析成功，``-W error`` / ``PYTHONWARNINGS=error`` 下同一份源码却
+            # 变成异常 —— 判决会随跑它的人翻转。**两个警告类都必须压**：3.12
+            # 起是 SyntaxWarning，3.10/3.11 上还是 DeprecationWarning（目标
+            # 运行时是 3.10+），只压前者会让 ≤3.11 在 ``-W error`` 下抛
+            # DeprecationWarning 穿出本函数。校验原语只认语法，这里按「警告
+            # 不是错误」统一裁决，顺带保证输出干净。
             warnings.simplefilter("ignore", SyntaxWarning)
+            warnings.simplefilter("ignore", DeprecationWarning)
             ast.parse(content)
     except SyntaxError as exc:
         return _syntax_message(exc)

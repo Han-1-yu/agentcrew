@@ -215,17 +215,42 @@ def test_syntax_message_renders_position_only_when_known():
 
 
 def test_python_invalid_escape_verdict_is_filter_independent():
-    """无效转义序列是 SyntaxWarning，不是语法错误：判决不能随警告过滤器翻转。
+    """无效转义序列是警告，不是语法错误：判决不能随警告过滤器翻转。
 
-    默认配置下 ``ast.parse`` 只把 SyntaxWarning 打到 stderr 并解析成功；``-W
-    error``（或 ``PYTHONWARNINGS=error``）下同一份源码会变成 SyntaxError。校验
-    原语若随环境改判，G1 的结论就依赖跑它的人 —— 这里统一按「警告不是错误」。
+    这条用例走**真解析器**，因此覆盖的是「本解释器实际发的那个警告类」：默认
+    配置下 ``ast.parse`` 只把警告打到 stderr 并解析成功，``-W error``（或
+    ``PYTHONWARNINGS=error``）下同一份源码会变成异常。校验原语若随环境改判，
+    G1 的结论就依赖跑它的人 —— 这里统一按「警告不是错误」处理。
+
+    **注意**：警告类是随版本变的（3.12 起是 ``SyntaxWarning``，3.10/3.11 上是
+    ``DeprecationWarning``），所以实现里两个类都压；下一节的模拟用例把这一点
+    钉死，别把过滤器「简化」回只压 ``SyntaxWarning``。
     """
     source = 'import re\n\nPATTERN = re.compile("\\d+")\n'
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         assert parse_check("python", source) is None
     assert parse_check("python", source) is None
+
+
+def test_python_suppression_covers_deprecation_warning(monkeypatch):
+    """3.10/3.11 的无效转义序列是 ``DeprecationWarning``（3.12 起才提升为
+    ``SyntaxWarning``）；本机没有那两个解释器，于是直接让「解析」发一条
+    ``DeprecationWarning`` —— 校验的是**压制过滤器真的生效**，而不是当前
+    解释器恰好发了哪个警告类。过滤器只压 ``SyntaxWarning`` 的话，这条警告会
+    在 ``-W error`` 下从 ``parse_check`` 里穿出来。
+    """
+    class _WarningAst:
+        @staticmethod
+        def parse(source: str) -> object:
+            warnings.warn("invalid escape sequence '\\d'", DeprecationWarning,
+                          stacklevel=2)
+            return None
+
+    monkeypatch.setattr(contract, "ast", _WarningAst)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert contract.parse_check("python", "x = 1\n") is None
 
 
 def test_toml_check_is_skipped_without_tomllib(monkeypatch):
