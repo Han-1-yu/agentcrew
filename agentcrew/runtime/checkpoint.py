@@ -306,6 +306,10 @@ def repair_statuses(board: TaskBoard) -> int:
       意图由派发通道等价实现。若在此调用 ``transition`` 会抛
       ``IllegalTransitionError``。
     - ``REVIEW`` 保持：产物已完整落盘，只需重跑门禁，远比重跑 Agent 便宜。
+      重跑门禁的**执行者**是 ``Scheduler``：它会把停在 ``REVIEW`` 且没有 worker
+      的任务补派发给 ``Gatekeeper``（``Scheduler._regate_ids``）。只保留状态是
+      不够的 —— ``take_ready`` 只派发 ``READY`` / ``REWORK``，重启后没有任何
+      worker 认领它，任务永远不终结、下游全部卡死（停滞，退出码 4）。
     - ``PENDING`` / ``READY`` / ``BLOCKED`` 保持：由正常调度重算。
     - 终态（``SUCCEEDED`` / ``FAILED`` / ``CANCELLED`` / ``SKIPPED``）不动。
 

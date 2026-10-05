@@ -283,6 +283,34 @@ async def test_rework_dispatch_does_not_bump_attempts(env):
     assert runs == ["dispatched", "rework-dispatched"]
 
 
+# ── 停在 REVIEW 的任务必须被重新送进门禁 ──
+
+async def test_review_task_without_a_worker_is_regated(env):
+    """没有 worker 的 ``REVIEW`` 任务必须被补派发到门禁，而不是永远停在那里。
+
+    ``repair_statuses`` 刻意保留 ``REVIEW``（产物已完整落盘，只需重跑门禁），
+    但调度循环只处理自己派发的 worker 的完成事件、``take_ready`` 又只派发
+    ``READY`` / ``REWORK`` —— 缺了这道补派发，一个停在 ``REVIEW`` 的任务没有
+    worker、永不终结，它的下游全部卡死（整个 run 判停滞、退出码 4）。
+    真实触发路径：硬杀 / 断电 / 文档化的第二次 Ctrl-C，窗口 = 每一次门禁评估。
+    """
+    write_fixture(env["fx"], "A")
+    write_fixture(env["fx"], "B")
+    a = mk("A")
+    # 产物已在盘上（门禁窗口里被杀的任务，产物是完整的）：G1 只差重新跑一遍
+    env["store"].commit("A.py", "# A\nX = 1\n", spec=a.deliverables[0], task=a)
+    env["store"].write_manifest()
+    board, sch = build(
+        env, [a.model_copy(update={"status": S.REVIEW}), mk("B", ["A"])])
+
+    await asyncio.wait_for(sch.run(), timeout=5)
+
+    assert sch.deadlock_report is None
+    assert board.get("A").status is S.SUCCEEDED   # 门禁真的被判了
+    assert board.get("B").status is S.SUCCEEDED   # 下游因此被解锁
+    assert board.get("B").attempts == 1           # 走的是正常执行通道
+
+
 # ── 并发峰值是实测值 ──
 
 async def test_peak_concurrency_reaches_limit_across_eight_dispatches(env):

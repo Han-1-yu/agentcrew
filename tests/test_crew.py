@@ -681,6 +681,40 @@ async def test_resume_repairs_running_task_without_resetting_attempts(env):
     assert board.get("T-002").attempts == 2  # 一次中断消耗一次尝试（spec §13.3）
 
 
+async def test_resume_regates_task_stuck_in_review(env):
+    """硬杀落在门禁评估窗口（任务停在 ``REVIEW``）时，resume 必须重跑门禁。
+
+    ``repair_statuses`` 刻意保留 ``REVIEW``（产物已完整落盘，只需重跑门禁，比
+    重跑 Agent 便宜），但调度循环只处理**自己派发的** worker 的完成事件 ——
+    重启后没有人为这个 ``REVIEW`` 任务派 worker，它永远不终结、下游全部卡死：
+    resume 以停滞收尾（退出码 4），而引擎其实完全知道该怎么办（重跑门禁）。
+    触发窗口 = 每一次门禁评估（真实 provider 下是每任务数秒），可达路径是硬杀 /
+    断电 / 文档化的第二次 Ctrl-C。
+    """
+    rec = await Crew(env["settings"]).run("做一个 Todo 应用")
+    # T-001 已 SUCCEEDED、T-002 停在门禁窗口里、T-FINAL 还在等 T-002
+    _patch_tasks(
+        env["settings"], rec.run_id, "T-002",
+        status="review", attempts=1, result=None, reviews=[], status_history=[],
+    )
+    _patch_tasks(
+        env["settings"], rec.run_id, "T-FINAL",
+        status="pending", attempts=0, result=None, reviews=[], status_history=[],
+    )
+    resumed = Crew.resume_from(Settings.load(), rec.run_id)
+    out = await resumed.resume()
+    assert resumed.stalled is False            # 不是停滞（退出码 4）
+    assert out.status is RunStatus.COMPLETED
+    board = resumed.checkpoint.load_board()
+    assert all(task.status is TaskStatus.SUCCEEDED for task in board.all())
+    # 重跑门禁而不是重跑 Agent：T-002 没有被再执行一次
+    assert board.get("T-002").attempts == 1
+    assert not any(
+        change.to_status is TaskStatus.RUNNING
+        for change in board.get("T-002").status_history
+    )
+
+
 async def test_resume_rehydrates_artifact_records_from_manifest(env):
     """resume 必须重建产物记录：否则 §9.2 的跨任务冲突检测在重启后失明。"""
     rec = await Crew(env["settings"]).run("做一个 Todo 应用")

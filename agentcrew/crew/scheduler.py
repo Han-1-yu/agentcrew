@@ -31,6 +31,13 @@
    丢弃该任务此前的产物记录与文件（Task 13 的 carry-forward）。没有它，一次
    多产出会一直挂在 ``store.by_task`` 上，让此后每一次返工都被 G1 的「契约外
    产物」检查驳回 —— 一个多余文件就把任务判死。
+5. **停在 ``REVIEW`` 的任务必须被补派发到门禁**（C2）：``repair_statuses``
+   刻意保留 ``REVIEW``（产物已完整落盘，只需重跑门禁），而重启后没有任何
+   worker 会认领它 —— 只靠 ``take_ready`` 派发 ``READY``/``REWORK`` 的话，
+   它就永远不终结、下游全部卡死（整轮 run 判停滞、退出码 4）。触发窗口是
+   **每一次门禁评估**，可达路径是硬杀 / 断电 / 文档化的第二次 Ctrl-C。
+   补派发的是一条**只跑门禁**的 worker（不占任务槽位：该任务早已执行完毕，
+   没有 Agent 要跑），出口仍归 ``Gatekeeper``。
 
 取消语义（spec §7.3）：``cancel(hard=False)`` 只置事件 —— 主循环不再派发新任务，
 在跑的 worker 自然结束并照常回流；``cancel(hard=True)`` 额外 ``cancel()`` 掉在跑
@@ -154,7 +161,8 @@ class Scheduler:
     async def run(self) -> None:
         """跑到全部任务终结 / 停滞 / 取消为止（spec §7.3 的调度循环）。
 
-        每轮：``refresh`` → ``take_ready(limit=空闲槽位)`` → 派发 → 有在跑就
+        每轮：``refresh`` → ``take_ready(limit=空闲槽位)`` → 派发 → 停在
+        ``REVIEW`` 且无人认领的任务补派发门禁（边界 5）→ 有在跑就
         ``await queue.get()`` 处理一个完成事件 → 落 checkpoint。无就绪、无在跑
         但仍未终结 → 记 ``deadlock_report`` 后退出。取消置位后停止派发，等在跑的
         worker 收尾（``_drain_workers``）再返回。
@@ -172,6 +180,8 @@ class Scheduler:
                 free = self._max_concurrency - len(self._workers)
                 for task in self._board.take_ready(limit=free):
                     self._spawn(task, discarded=self._discard_before_rework(task))
+                for task_id in self._regate_ids(limit=free):
+                    self._spawn_regate(task_id)
                 if self._workers:
                     outcome = await self._completion_queue.get()
                     self._handle_completion(outcome)
@@ -213,6 +223,30 @@ class Scheduler:
             outcome = _error_outcome(task.id, exc)
         self._completion_queue.put_nowait(outcome)
 
+    async def _regate_worker(self, task_id: str) -> None:
+        """只跑门禁的 worker：把停在 ``REVIEW`` 的任务重新送给 ``Gatekeeper``。
+
+        **故意不占任务槽位**：``async with self._task_slot`` 的语义是「一个 Agent
+        正在执行」，而这里的任务早在被杀之前就执行完了（产物完整落盘）—— 门禁
+        本来就在槽位之外跑（边界 1），给它占一个槽位只会把执行并发无谓地掐掉。
+        出口与 :meth:`_worker` 完全一致：``Gatekeeper.evaluate`` 负责
+        ``REVIEW → {SUCCEEDED|REWORK|FAILED}``，异常收敛成错误结局回流。
+        """
+        try:
+            decision = await self._gatekeeper.evaluate(
+                self._board.get(task_id), round_no=self._round_no(
+                    self._board.get(task_id))
+            )
+            outcome = WorkerOutcome(task_id=task_id, decision=decision)
+        except asyncio.CancelledError:
+            self._completion_queue.put_nowait(
+                WorkerOutcome(task_id=task_id, error=CANCELLED_ERROR)
+            )
+            raise
+        except Exception as exc:
+            outcome = _error_outcome(task_id, exc)
+        self._completion_queue.put_nowait(outcome)
+
     async def _execute_one(self, task: Task) -> WorkerOutcome:
         """在任务槽位内执行一个任务；成功即写结果并转 ``REVIEW``。
 
@@ -247,6 +281,36 @@ class Scheduler:
             rework=_is_rework_dispatch(task),
             discarded=discarded,
         )
+
+    def _spawn_regate(self, task_id: str) -> None:
+        """登记并启动一个只跑门禁的 worker（``REVIEW`` 补派发，见边界 5）。
+
+        事件名 ``task_regated`` 是**增量**：看板按事件名过滤，未知事件静默忽略
+        （与 ``llm_retry`` / ``task_notes`` 同族）；它必须与 ``task_dispatched``
+        区分开 —— 那不是一次执行派发，``attempts`` 一分不少。
+        """
+        self._workers[task_id] = asyncio.create_task(self._regate_worker(task_id))
+        self._peak_concurrency = max(self._peak_concurrency, len(self._workers))
+        self._notify("task_regated", task_id=task_id)
+
+    def _regate_ids(self, *, limit: int) -> list[str]:
+        """停在 ``REVIEW`` 且**当前没有 worker** 的任务 id（按 id 升序，取前 limit 个）。
+
+        两个筛选条件缺一不可：
+
+        - ``REVIEW``：只有这个状态「没有 worker 也没有就绪通道」；
+        - 不在 ``self._workers`` 里：``evaluate`` 内部要 ``await`` 评审调用，
+          完成任务之前板上状态仍是 ``REVIEW``，没有这个检查就会在下一轮重复
+          派发同一个任务（同一次门禁被并行判两遍）。
+
+        ``limit`` 与 ``take_ready`` 同源（空闲槽位数），保证 worker 注册表不超
+        并发上限；它同时充当「本轮最多补派发几个」的节流。
+        """
+        return [
+            task.id
+            for task in self._board.all()
+            if task.status is TaskStatus.REVIEW and task.id not in self._workers
+        ][: max(0, limit)]
 
     def _discard_before_rework(self, task: Task) -> int:
         """返工派发前清空该任务旧产物；非返工派发不做任何事。
