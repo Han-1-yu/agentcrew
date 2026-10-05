@@ -492,12 +492,18 @@ async def plan(self) -> list[Task]:
 `agentcrew/task/graph.py` 提供纯函数，全部无副作用、可单测：
 
 ```python
-def build_graph(tasks: Sequence[Task]) -> TaskGraph
-def detect_cycles(graph: TaskGraph) -> list[list[str]]      # Kahn，返回所有环
-def topo_order(graph: TaskGraph) -> list[str]
-def ready_ids(graph: TaskGraph, statuses: Mapping[str, TaskStatus]) -> list[str]
-def descendants(graph: TaskGraph, task_id: str) -> set[str]  # 用于失败传播
+TaskGraph.build(tasks: Sequence[Task]) -> TaskGraph      # 冻结 dataclass
+TaskGraph.dependencies(task_id: str) -> frozenset[str]   # 未知 id 抛 KeyError
+TaskGraph.dependents(task_id: str) -> frozenset[str]     # 未知 id 抛 KeyError
+TaskGraph.descendants(task_id: str) -> set[str]          # 传递闭包，用于失败传播
+TaskGraph.cycles() -> list[list[str]]                    # Kahn 剥离 + 简单环枚举，返回所有环
+TaskGraph.topo_order() -> list[str]                      # 有环时抛 CyclicGraphError（带 .cycles）
+
+ready_ids(tasks: Mapping[str, Task]) -> list[str]        # PENDING 且全部依赖 SUCCEEDED，按 id 升序
+blocked_ids(tasks: Mapping[str, Task]) -> list[str]      # PENDING 且任一依赖 FAILED/CANCELLED
 ```
+
+> 命名说明：图算法以 `TaskGraph` 的**方法**与两个**模块级函数**暴露（`cycles()` 而非 `detect_cycles`），字段 `dependents_map` 带 `_map` 后缀以避免与 `dependents(task_id)` 方法同名冲突。§7.2 的校验 4 调用 `TaskGraph.cycles()`。
 
 ### 7.2 拆解结果入库校验（`planner.py`）
 
