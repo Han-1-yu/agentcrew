@@ -440,3 +440,51 @@ def test_nesting_guard_survives_untokenizable_input():
     parse_check，违反「never raises」契约（test_parse_check_never_raises 抓过）。
     """
     assert parse_check("python", 'x = "\ud800"') is not None
+
+
+# ── 长度阈值的单位是「信息量」而非字符数（中文标定） ──────────────────────
+# 实测：真实模型生成的一份中文报告（「# 审计报告 / 结论：鉴权与输入校验均已覆盖。」，
+# 22 字符）被 G1 判「仅含占位内容」而驳回 —— 判定是错的，一份 22 字的中文**是**
+# 完整内容。根因是阈值 40 在 ASCII 上标定（37 vs 47），直接拿它比中文字符数会
+# 系统性误杀中文：中文一个字符约等于一个词，信息密度是拉丁字母的三倍。
+# 折算后两种文字的有效阈值才可比：中文约 13 字 ≈ 8 个词 ≈ 英文 40 字符 ≈ 8 个词。
+
+
+def test_chinese_sentence_is_not_a_placeholder():
+    """曾被误判的真实案例：一句完整的中文结论。"""
+    assert not has_placeholder("# 审计报告\n\n结论：鉴权与输入校验均已覆盖。\n")
+
+
+def test_short_chinese_module_description_is_not_a_placeholder():
+    """15 字的中文一行说明 —— 恰是模块 docstring 最常见的写法。"""
+    assert not has_placeholder("本模块负责产物契约与安全落盘。\n")
+
+
+def test_chinese_stub_without_marker_is_still_placeholder():
+    """放宽的是**长度单位**，不是判定本身：真正的短中文桩照拦。"""
+    assert has_placeholder("这是第一版")
+
+
+def test_cjk_characters_count_triple_in_length_rule():
+    from agentcrew.artifacts.contract import _content_units
+    assert _content_units("abc") == 3
+    assert _content_units("审计") == 6
+    assert _content_units("a审") == 4
+
+
+def test_ascii_calibration_is_unchanged_by_the_weighting():
+    """折算只影响 CJK：两个钉死锚点必须原样成立。"""
+    html_stub = "<html><body>placeholder</body></html>"
+    real_ascii = "# Todo App\n\nFastAPI service with CRUD endpoints.\n"
+    assert has_placeholder(html_stub)          # 37 字符，纯 ASCII
+    assert not has_placeholder(real_ascii)     # 47 字符，纯 ASCII
+
+
+def test_chinese_needs_fourteen_characters_to_clear_the_rule():
+    """边界：中文侧的有效阈值是 14 字（13×3=39 < 40，14×3=42 ≥ 40）。
+
+    14 字 ≈ 7 个中文词，与英文侧 40 字符 ≈ 8 个词基本对齐 —— 这正是折算 3 倍的
+    标定意图：两种文字的门槛落在同一个**信息量**上。
+    """
+    assert has_placeholder("一二三四五六七八九十十一二")        # 13 字 → 39 单位
+    assert not has_placeholder("一二三四五六七八九十十一二三")    # 14 字 → 42 单位
