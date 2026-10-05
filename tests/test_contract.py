@@ -269,24 +269,27 @@ def test_cross_kind_content_is_handled_by_the_label_kind():
 # ── has_placeholder：三条规则与标定 ───────────────────────────────
 
 
-def test_markers_are_detected_inside_long_content():
-    """标记必须在长内容里也命中 —— 短内容靠长度规则兜底，不能掩盖规则 1。"""
-    tail = "def handler(request):\n    return {\"ok\": True}  # 填充实现\n" * 20
-    assert has_placeholder(tail + "    # TODO: 实现真正的逻辑\n")
-    assert has_placeholder(tail + "    # YOUR CODE HERE\n")
+def test_markers_are_detected_in_short_stubs():
+    """规则 1 判的是「这段内容**是个桩**」，不是「文中出现过标记词」。
+
+    空文件本身由 ``min_bytes`` 兜底；规则 1 负责的是「只写了个标记就交上来」。
+    """
+    assert has_placeholder("# TODO: 实现真正的逻辑\n")
+    assert has_placeholder("# YOUR CODE HERE\n")
+    assert has_placeholder("FIXME\n")
 
 
 def test_todo_marker_is_uppercase_only():
     """``TODO`` 是全大写标记：小写/混合大小写的 ``todo`` 是演示项目的领域词。
 
     brief 的 ``test_real_content_is_not_placeholder`` 与控制器标定里的
-    ``<input placeholder="Add a todo">`` 都要求它不触发占位判定；而真正的
-    ``TODO`` 标记（T-005 的 attempt-1）必须照常命中，哪怕文件很长。
+    ``<input placeholder="Add a todo">`` 都要求它不触发占位判定。
     """
     long_body = "def add_todo(item):\n    return item\n" * 20
     assert not has_placeholder(long_body + "class Todo:\n    pass\n")
     assert not has_placeholder(long_body + "<!-- Add a todo -->\n")
-    assert has_placeholder(long_body + "# TODO: implement\n")
+    # 真正的 TODO 标记：短桩里照常命中（T-005 的 attempt-1 就是 87 字符的桩）
+    assert has_placeholder("# TODO: implement\n")
 
 
 def test_input_placeholder_attribute_is_legitimate():
@@ -361,7 +364,7 @@ def test_long_document_with_an_ellipsis_in_a_code_example_is_not_a_placeholder()
     被判「仅含占位内容」，连续两次驳回烧光返工额度、任务 FAILED。
 
     长文里的 ``...`` 几乎总是示例语法，不是「没写完」——规则 2 因此带长度上界。
-    规则 1（标记）刻意不带，见下一条。
+    规则 1（标记）同理，见下一条。
     """
     body = (
         "# Todo List 后端\n\n"
@@ -374,6 +377,28 @@ def test_long_document_with_an_ellipsis_in_a_code_example_is_not_a_placeholder()
     assert not has_placeholder(body)          # 但它不是占位文档
 
 
-def test_todo_marker_is_still_detected_in_long_content():
-    """与上一条相对：``TODO`` 标记**不设上界** —— T-005 的返工夹具依赖它。"""
-    assert has_placeholder("x = 1\n" * 200 + "# TODO: 实现真正的逻辑\n")
+def test_todo_marker_in_long_content_is_not_a_placeholder():
+    """长文里的 ``TODO`` / ``待实现`` 是**正常内容**，不是「没写完」。
+
+    这条是真实模型运行留下的回归：一份完整的 README 因为在「后续工作」里写了
+    ``## TODO`` 与 ``待实现``，被 G1 连判两次「仅含占位内容」，两次返工额度烧光、
+    任务 FAILED —— 而那份文档 2092 字符、安装/启动/API 章节俱全。
+
+    规则 1 与规则 2 共用长度上界，所以这里必须是 ``False``；T-005 的返工演示靠的是
+    **短桩**里的标记命中（见 ``test_markers_are_detected_in_short_stubs`` 与
+    ``test_todo_marker_is_uppercase_only``），不受影响。
+    """
+    long_readme = (
+        "# Todo List 后端\n\n"
+        "基于 Flask 的 Todo List REST API，数据持久化在服务端 JSON 文件。\n\n"
+        "## 依赖\n\n- Python 3.9+\n- Flask 3.x\n\n"
+        "安装依赖：\n\n```bash\npip install -r requirements.txt\n```\n\n"
+        "## 启动\n\n```bash\npython app.py\n```\n\n"
+        "## 环境变量\n\n- `PORT`：监听端口\n- `DATA_DIR`：数据目录\n\n"
+        "## API\n\n| 方法 | 路径 |\n|---|---|\n| GET | `/api/todos` |\n"
+        "| POST | `/api/todos` |\n| PUT | `/api/todos/<id>` |\n\n"
+        "## 后续工作\n\n- [ ] TODO: 支持多用户\n- [ ] 待实现分页\n"
+    ) * 3
+    assert "TODO" in long_readme and "待实现" in long_readme   # 两个标记确实都在
+    assert len(" ".join(long_readme.split())) > 400            # 且确实超过长度上界
+    assert not has_placeholder(long_readme)
