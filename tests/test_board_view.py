@@ -154,6 +154,32 @@ def test_start_degrades_to_line_logging_on_non_tty():
     assert "运行开始" in stream.getvalue()
 
 
+def test_live_is_refreshed_by_events_not_by_a_timer():
+    """spec §15.2：看板由 ledger 事件驱动刷新，不轮询。
+
+    关掉 ``Live`` 的定时器（``auto_refresh=False``）之后，画面只在
+    ``on_event`` 主动 ``refresh()`` 时更新 —— 这条同时钉住两件事：没有定时器，
+    以及事件确实会让画面跟上（否则看板会停在启动占位图上，事件与画面脱钩）。
+    """
+    import io
+
+    stream = io.StringIO()
+    console = Console(file=stream, force_terminal=True, width=100, no_color=True)
+    v = BoardView("R", "g", console=console)
+    v.start()
+    try:
+        live = v._live
+        assert live is not None, "强制 TTY 的 Console 必须启动 Live"
+        assert live.auto_refresh is False, "Ledger 驱动的看板不得让 Live 自己轮询"
+        v.render(TaskBoard([mk("T-001", S.RUNNING)]))   # Live 的取数回调
+        assert "T-001" not in stream.getvalue()          # 还没刷新：画面上是占位图
+        v.on_event(ev("task_transition", task_id="T-001",
+                      **{"from": "ready", "to": "running"}))
+        assert "T-001" in stream.getvalue(), "事件之后画面没有跟上（未主动 refresh）"
+    finally:
+        v.stop()
+
+
 def test_render_treats_task_data_as_literal_text():
     """目标 / 标题 / 角色里的富文本标记按字面渲染，绝不抛 MarkupError。"""
     view = BoardView("R[/x]", "目标[/red]", enabled=False)

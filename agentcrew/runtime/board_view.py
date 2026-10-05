@@ -195,6 +195,9 @@ class BoardView:
             console=self._console,
             get_renderable=self._live_renderable,
             refresh_per_second=4,
+            # spec §15.2：刷新由 ledger 事件驱动，不轮询 —— 定时器换来的只是
+            # 「画面比事件晚 250ms」，却让看板的更新频率与事件流脱钩。
+            auto_refresh=False,
         )
         self._live.start()
 
@@ -215,6 +218,10 @@ class BoardView:
 
         ``enabled=False`` 时仍更新内存状态（``last_event_text`` 供测试与
         ``--no-live`` 的报告使用），但不写任何输出。
+
+        **事件驱动的刷新**（spec §15.2）：``Live`` 关掉了定时器
+        （``auto_refresh=False``），画面只会在这里被主动重画 —— 每次事件都
+        ``refresh()`` 一次，看板因此与事件流同节拍，而不是按固定频率轮询。
         """
         description = self._describe(event)
         if description is None:
@@ -222,7 +229,10 @@ class BoardView:
         self.last_event_text = description
         if event.event == "llm_call":
             self._cost_usd += _as_float(event.data.get("estimated_cost_usd"))
-        if not self._enabled or self._live is not None or not self._plain_logging:
+        if self._live is not None:
+            self._live.refresh()
+            return
+        if not self._enabled or not self._plain_logging:
             return
         stamp = event.ts.strftime("%H:%M:%S")
         self._console.print(Text(f"{stamp} {description}"))
