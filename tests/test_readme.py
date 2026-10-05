@@ -107,6 +107,19 @@ def test_documents_six_subcommands():
     assert not missing, f"README 未记录子命令：{missing}"
 
 
+def test_documents_bare_invocation_overview():
+    """不带子命令直接运行时，除了帮助还会打印角色数与最近 3 次 run 概览。"""
+    assert "最近 3 次 run" in _readme(), "README 未记录无子命令启动的输出"
+
+
+def test_documents_ollama_endpoint_override_not_env_var():
+    """``OLLAMA_BASE_URL`` 不决定端点：说错了用户照着改仍会连 localhost。"""
+    text = _readme()
+    assert "models.providers.ollama.base_url" in text, (
+        "README 未指明 ollama 端点的正确覆盖方式")
+    assert "不决定端点" in text, "README 未声明 OLLAMA_BASE_URL 不决定端点"
+
+
 def test_documents_all_known_limitations():
     text = _readme()
     for label, anchors in KNOWN_LIMITATIONS.items():

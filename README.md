@@ -14,11 +14,12 @@ AgentCrew 把一次交付拆成**两个阶段**：
 
 - **规划阶段**：项目经理（`project_manager`）用一次受治理的 LLM 调用把目标拆解为
   任务 DAG。每个任务声明执行角色、依赖、验收标准与产物契约（路径、类型、最小字节数、
-  必需符号等）。引擎随后对拆解结果做结构性校验：任务 id 唯一、依赖无环且存在、
-  角色已注册、产物路径不被两个任务同时声明、每个任务都有验收标准，等等；校验失败会
-  把具体错误回灌给 PM 重新拆解（上限 `plan_max_attempts`，默认 2 次）。通过后引擎
-  追加保留的收尾任务 `T-FINAL`（由 `project_manager` 承担，产出 `DELIVERY.md`）。
-  规划阶段可以设置人工卡点（`--gate plan`），在开始烧 token 之前让人确认或编辑拆解结果。
+  必需符号等）。引擎先把保留的收尾任务 `T-FINAL` 追加到拆解结果上（由
+  `project_manager` 承担，独占 `DELIVERY.md`），再对整个任务列表做结构性校验：
+  任务 id 唯一、依赖无环且存在、角色已注册、产物路径不被两个任务同时声明、每个任务
+  都有验收标准，等等；校验失败会把具体错误回灌给 PM 重新拆解（上限
+  `plan_max_attempts`，默认 2 次）。规划阶段可以设置人工卡点（`--gate plan`），
+  在开始烧 token 之前让人确认或编辑拆解结果。
 - **执行阶段**：确定性调度器按 DAG 依赖派发任务、限流并发、组装上下文、执行状态机，
   并对每个任务的产物依次跑三层门禁（G1 静态校验 → G2 LLM 评审 → G3 人工卡点）。
   **调度决策全程没有 LLM 参与** —— LLM 只在两处被调用：任务执行（各角色 Agent）与
@@ -118,9 +119,10 @@ python main.py run --demo
   `--goal` 与 `--demo` 二选一，都不给或都给会以退出码 3 报错。
 - 默认模型是 `openai:gpt-4o-mini`，可在 `.env` 中用 `AGENTCREW_DEFAULT_MODEL`
   改成任意 `<provider>:<model>` 别名（见「模型绑定」）。
-- 在真实终端里默认 `gate=both`：规划完成后与封版前各有一个人工确认点；在管道 /
-  CI 等非 TTY 环境会**显式降级为 `gate=none`** 并在 stderr 说明，不会偷偷把人工
-  闸门换成自动放行。想全程无人值守就加 `--auto`。
+- 当 stdin 是终端时默认 `gate=both`：规划完成后与封版前各有一个人工确认点；
+  当 stdin 不是终端（管道 / CI / 重定向）时，含人工卡点的模式会**显式降级为
+  `gate=none`** 并在 stderr 说明，不会偷偷把人工闸门换成自动放行。想全程无人
+  值守就加 `--auto`。
 - 想看实时看板直接运行；想关掉看板（CI 友好）加 `--no-live`。
 
 ---
@@ -169,7 +171,8 @@ uvicorn app.main:app --reload
 
 ## 命令速查
 
-六个子命令（`python main.py --help` 查看完整帮助；无子命令时打印帮助）：
+六个子命令（`python main.py --help` 查看完整帮助；直接运行 `python main.py` 不带
+子命令时，打印帮助、已注册角色数与最近 3 次 run 概览）：
 
 | 子命令 | 用途 | 常用参数 |
 |---|---|---|
@@ -257,8 +260,10 @@ uvicorn app.main:app --reload
      - project_manager
    ```
 
-之后 `python main.py run --goal "..."` 会把这个角色注册进 `RoleCatalog`；PM 在
-拆解计划里引用 `wizard` 即可派发任务，引擎与 CLI 代码均无需改动。
+之后 `python main.py run --goal "..."` 会把这个角色注册进 `RoleCatalog`，PM 的
+「可用角色」菜单直接来自这份目录，拆解时即可为 `wizard` 安排任务；计划卡点的
+`[e] 编辑后执行` 也用同一份目录校验，自定义角色不会被误判为未注册。引擎与 CLI
+代码均无需改动。
 
 ### 方式二：代码注册 `crew.register_role(RoleSpec(...))`
 
@@ -339,7 +344,7 @@ asyncio.run(main())
 | `doubao` | OpenAI 兼容 | `https://ark.cn-beijing.volces.com/api/v3` | ❌ | ✅ | `ARK_API_KEY`（豆包 / 火山方舟） |
 | `qwen` | OpenAI 兼容 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | ❌ | ✅ | `DASHSCOPE_API_KEY`（通义千问） |
 | `ernie` | OpenAI 兼容 | `https://qianfan.baidubce.com/v2` | ❌ | ❌ | `QIANFAN_API_KEY`（文心一言，千帆 v2） |
-| `ollama` | OpenAI 兼容 | `http://localhost:11434/v1` | ❌ | ✅ | 不需要（本地；`OLLAMA_BASE_URL` 可改端点） |
+| `ollama` | OpenAI 兼容 | `http://localhost:11434/v1` | ❌ | ✅ | 不需要真实 Key（端点用 `models.providers.ollama.base_url` 覆盖，见「配置项」） |
 | `mock` | MockProvider | — | ✅ | ✅ | 不需要（离线确定性回放） |
 
 **`json_schema` 支持情况为什么重要**：需要结构化输出的调用（PM 拆解计划、G2 评审）
@@ -353,8 +358,9 @@ asyncio.run(main())
    原文回灌重试，最多 2 次（即最多 3 次模型调用）。
 
 因此同一个结构化任务，在不支持 `json_schema` 的 provider 上可能花更多调用次数、
-稳定性也略低（功能不受影响）。每次降级都会在 ledger 记一条 `llm_degraded` 事件，
-便于事后诊断「哪家 provider 不稳定」。能力位描述的是实际在跑的 provider，`--mock`
+稳定性也略低（功能不受影响）。每次降级都会在 ledger 记一条 `llm_degraded` 事件
+（工厂默认落账，调用方无需接线；显式传入自定义回调则替换该默认行为），便于事后
+诊断「哪家 provider 不稳定」。能力位描述的是实际在跑的 provider，`--mock`
 下就是 mock 预设的能力位。
 
 ---
@@ -380,17 +386,23 @@ asyncio.run(main())
 | `ARK_API_KEY` | 空 | `doubao`（豆包 / 火山方舟）的 Key |
 | `DASHSCOPE_API_KEY` | 空 | `qwen`（通义千问）的 Key |
 | `QIANFAN_API_KEY` | 空 | `ernie`（文心一言，千帆 v2 API Key） |
-| `OLLAMA_BASE_URL` | `http://localhost:11434/v1` | 本地 ollama 端点（无需真实 Key） |
+| `OLLAMA_BASE_URL` | `http://localhost:11434/v1` | **不决定端点**：只作为 ollama 客户端所需的非空 api_key 取值（留空则用占位串 `ollama`）；端点请用 `agentcrew.yaml` 的 `models.providers.ollama.base_url` 覆盖 |
 | `AGENTCREW_DEFAULT_MODEL` | `openai:gpt-4o-mini` | 默认模型别名 |
 | `AGENTCREW_MODEL_<ROLE>` | 空 | 按角色覆盖模型，8 个：`PROJECT_MANAGER` / `PRODUCT_MANAGER` / `ARCHITECT` / `BACKEND_DEV` / `FRONTEND_DEV` / `QA_ENGINEER` / `DEVOPS_ENGINEER` / `TECHNICAL_WRITER` |
 | `AGENTCREW_MAX_CONCURRENCY` | `4` | 全局并发上限（含 LLM 调用） |
 | `AGENTCREW_OUTPUT_DIR` | `output` | run 输出根目录 |
-| `AGENTCREW_GATE` | 真实 TTY 下 `both`，否则 `none` | 人工闸门：`both` / `plan` / `delivery` / `none` |
+| `AGENTCREW_GATE` | stdin 为终端时 `both`，否则 `none` | 人工闸门：`both` / `plan` / `delivery` / `none` |
 | `AGENTCREW_CONTEXT_BUDGET` | `24000` | 上下文预算（tokens，启发式估算） |
 | `AGENTCREW_LOG_LEVEL` | `INFO` | 日志级别 |
 | `AGENTCREW_MOCK` | `false` | 全局 mock 开关 |
 | `AGENTCREW_MOCK_LATENCY_MS` | `0` | mock 调用固定延迟（毫秒） |
 | `AGENTCREW_CONFIG` | `agentcrew.yaml` | YAML 配置文件路径 |
+
+> 注意：`OLLAMA_BASE_URL` **不参与端点解析** —— provider 的 `base_url` 只来自
+> 内置预设或 `agentcrew.yaml` 的 `models.providers.<provider>.base_url`。把远程
+> ollama 地址写进这个环境变量不会生效，请求仍会打到
+> `http://localhost:11434/v1`；要换端点请用 YAML 的
+> `models.providers.ollama.base_url`。
 
 ### `agentcrew.yaml`
 
@@ -546,15 +558,15 @@ reject 即短路：
   architect + product_manager 双评审，取都 approve）；评审输入为任务描述 +
   验收标准 + 产物内容（按 8000 tokens 的评审节选预算截断）+ 返工历史。`verdict=reject`
   时 `issues` 必须非空，否则视为评审格式错误重试（不计任务返工额度，最多 2 次；
-  仍失败按 approve 放行并记 warning —— 宁可放过，也不因评审器故障卡死全流程）。
-  评审的 token 消耗单独记入 ledger。
+  仍失败则按 approve 放行，并在该项评审的 `issues` 里写明格式错误，可追溯 ——
+  宁可放过，也不因评审器故障卡死全流程）。评审的 token 消耗单独记入 ledger。
 - **G3 — 人工闸门**（CLI）：由 `--gate` 控制两个卡点。`plan` 卡点在 PM 拆解通过
   校验、开始烧 token 以前展示任务 DAG，可选 `[a] 批准执行 / [e] 编辑后执行 /
   [s] 保存退出 / [q] 取消`；`delivery` 卡点在全部任务 `SUCCEEDED`、封版以前展示
   产物清单与统计，可选 `[a] 接受交付 / [r] 打回指定任务返工 / [q] 放弃`。
-  `--gate none`（等价 `--auto`）跳过两层；非 TTY 环境下含人工卡点的模式会
-  **显式降级为 `none`** 并在 stderr 说明，绝不「声称有人工卡点、实际全自动」。
-  人工裁决作为 `ReviewRecord(layer="human")` 完整留痕。
+  `--gate none`（等价 `--auto`）跳过两层；当 stdin 不是终端（管道 / CI / 重定向）
+  时，含人工卡点的模式会**显式降级为 `none`** 并在 stderr 说明，绝不「声称有人工
+  卡点、实际全自动」。人工裁决作为 `ReviewRecord(layer="human")` 完整留痕。
 
 每条门禁裁决都会写入任务历史（`board.record_review`），并落一条 `gate_result`
 审计事件（含层、裁决、分数、问题列表），`status` 命令的「G1 拦截 / G2 驳回 /

@@ -525,6 +525,56 @@ async def test_structured_accounts_consumed_tokens_before_reraising(
     assert f.llm_calls == 3
 
 
+async def test_complete_structured_emits_llm_degraded_by_default(
+        settings, monkeypatch, tmp_path):
+    """spec §12.3：降级默认落一条 ``llm_degraded``，调用方不接线也查得到。
+
+    PM 拆解与 G2 评审都不传 ``on_degrade``：旧实现里这条事件因此永远不会出现，
+    README 承诺的诊断是一个查不到的事实。默认处理器归工厂（工厂持有 ledger），
+    能力驱动的起始降级与 1/2 级失败降级都经它落账。
+    """
+    lg = Ledger(tmp_path / "l.jsonl", run_id="R")
+    f = ModelFactory(settings, ledger=lg)
+    incapable = _StructuredProvider(alias="ernie:e", texts=['{"value": 7}'])
+    monkeypatch.setattr(f, "_resolve", lambda alias: incapable)
+    answer = await f.complete_structured(
+        "ernie:e", [{"role": "user", "content": "x"}], _Answer,
+        temperature=0, max_tokens=10, purpose="plan", role="project_manager")
+
+    assert answer == _Answer(value=7)
+    events = list(lg.events("llm_degraded"))
+    assert len(events) == 1
+    assert events[0].data["provider"] == "ernie"
+    assert events[0].data["from_level"] == 1
+    assert events[0].data["to_level"] == 3
+    assert "起始级别降为 3" in events[0].data["reason"]
+
+    # 能力齐备（openai 预设从第 1 级起步）→ 一次降级都没有，事件数不变。
+    capable = _StructuredProvider(alias="openai:m", texts=['{"value": 1}'])
+    monkeypatch.setattr(f, "_resolve", lambda alias: capable)
+    await f.complete_structured(
+        "openai:m", [{"role": "user", "content": "x"}], _Answer,
+        temperature=0, max_tokens=10, purpose="review", role="architect")
+    assert lg.count("llm_degraded") == 1
+
+
+async def test_explicit_on_degrade_replaces_the_default_handler(
+        settings, monkeypatch, tmp_path):
+    """显式传入回调即接管留痕：默认处理器不再代发事件（调用方自行负责）。"""
+    lg = Ledger(tmp_path / "l.jsonl", run_id="R")
+    f = ModelFactory(settings, ledger=lg)
+    provider = _StructuredProvider(alias="ernie:e", texts=['{"value": 7}'])
+    monkeypatch.setattr(f, "_resolve", lambda alias: provider)
+    seen: list[object] = []
+    await f.complete_structured(
+        "ernie:e", [{"role": "user", "content": "x"}], _Answer,
+        temperature=0, max_tokens=10, purpose="plan", role="project_manager",
+        on_degrade=seen.append)
+
+    assert len(seen) == 1
+    assert lg.count("llm_degraded") == 0
+
+
 # ── Task 1 carry-forward：Key 解析的逐 provider 行为 ──
 
 @pytest.mark.parametrize("alias,env_name", [

@@ -19,6 +19,9 @@ spec §7.3 的两级并发限额里，任务槽位由 Scheduler 持有，本模�
   全局限额、§14.3 的报告要汇总 token/成本）经它调用，不会绕过限流与审计。
   ``models/structured.py`` 的 ``complete_structured`` 保持纯阶梯，仍可用任意
   Provider 独立测试。
+- **降级默认落账**（spec §12.3）：``complete_structured()`` 的 ``on_degrade``
+  缺省接本工厂的 ``llm_degraded`` 事件处理器 —— 调用方不接线也有诊断可查；
+  显式传入回调则替换默认（调用方自行负责留痕）。
 - fixture 缺失**绝不静默**（spec §16.1）：``MockProvider`` 的 ``on_fallback``
   接到 ledger 的 ``mock_fallback`` 事件。
 - Task 18 的 carry-forward：``Retry-After`` 被截断到 300 秒时，截断事实经
@@ -264,9 +267,16 @@ class ModelFactory:
         调用同样消耗 token，因此**每一次返回结果的调用各记一条 ``llm_call``**
         （与 ``call()`` 同形）；阶梯最终失败时已消耗的部分也已记账再抛原异常。
         Provider 调用本身抛错（无 usage 可记）时不产生事件，与 ``call()`` 一致。
+
+        ``on_degrade`` 缺省接 :meth:`_emit_degrade`：每次降级（能力驱动的初始
+        降级、1/2 级失败下降）都落一条 ``llm_degraded`` 事件（spec §12.3），
+        PM 拆解与 G2 评审不接线也查得到「哪家 provider 只能到第几级」。显式传入
+        回调则**替换**默认处理器，由调用方自行决定如何留痕。
         """
         provider = self.get(alias)
         collecting = _CollectingProvider(provider)
+        if on_degrade is None:
+            on_degrade = self._emit_degrade
         try:
             async with self._llm_semaphore:
                 return await structured.complete_structured(
@@ -307,6 +317,27 @@ class ModelFactory:
                 estimated_cost_usd=cost,
                 latency_ms=result.latency_ms,
                 purpose=purpose)
+
+    def _emit_degrade(self, event: DegradeEvent) -> None:
+        """把一次降级落成 ``llm_degraded`` 事件（spec §12.3）。
+
+        工厂持有 ledger，因此这是默认留痕的正确归属：PM 拆解与 G2 评审都不传
+        ``on_degrade``，没有这条默认处理器时降级事实只存在于内存里，操作者
+        事后无从诊断「哪家 provider 不稳定」。``from_level`` / ``to_level`` /
+        ``reason`` 原样取自 :class:`DegradeEvent`，字段与阶梯一一对应。
+
+        没有 ledger（纯逻辑测试、只读工厂）时静默跳过：降级本身不影响调用
+        结果，缺账不该把结构化调用打崩。
+        """
+        if self._ledger is None:
+            return
+        self._ledger.emit(
+            "llm_degraded",
+            provider=event.provider,
+            from_level=event.from_level,
+            to_level=event.to_level,
+            reason=event.reason,
+        )
 
     def _implementation_for(self, binding: ModelBinding) -> str:
         """binding 的生效实现方式（``provider_overrides`` 可整体替换它）。"""

@@ -30,6 +30,7 @@ from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.config import Settings
 from agentcrew.models.factory import ModelFactory
 from agentcrew.roles.builtin import BUILTIN_ROLES
+from agentcrew.roles.spec import RoleSpec
 from agentcrew.runtime.ledger import Ledger
 from agentcrew.task.planner import PlanOutput
 
@@ -148,10 +149,11 @@ class _SpyModels:
         return self._plan
 
 
-def pm_with_spy(env):
+def pm_with_spy(env, catalog=None):
     spy = _SpyModels(env["settings"], PlanOutput(tasks=[]))
     agent = ProjectManagerAgent(PM_ROLE, models=spy, store=env["store"],
-                                ledger=env["ledger"], project_goal="目标")
+                                ledger=env["ledger"], project_goal="目标",
+                                catalog=catalog)
     return agent, spy
 
 
@@ -203,6 +205,38 @@ async def test_pm_prompt_lists_all_eight_roles_with_responsibilities(env):
         assert role.key in system, f"提示词缺少角色 key：{role.key}"
         for responsibility in role.responsibilities:
             assert responsibility in system, f"提示词缺少 {role.key} 的职责：{responsibility}"
+
+
+#: 自定义角色（§8.3）：只在该用例里注册进目录，不进 BUILTIN_ROLES。
+WIZARD = RoleSpec(
+    key="wizard",
+    title="向导",
+    goal="把项目目标翻译成一份向导说明。",
+    backstory="你擅长把复杂目标压缩成三步。",
+    responsibilities=["产出向导说明"],
+    boundaries=["不写代码"],
+    output_contract="产出 docs/wizard.md（Markdown）。",
+    system_prompt="你是向导，只输出向导说明。",
+)
+
+
+async def test_pm_prompt_menu_comes_from_live_catalog(env):
+    """§8.3：注册的自定义角色必须进 PM 的可用角色菜单，否则永远不会被派发。
+
+    旧实现只渲染 ``BUILTIN_ROLES``，自定义角色能注册却从不出现 —— 「角色是
+    数据，不是代码」在提示词层面不成立。菜单改为读本次 run 的 ``RoleCatalog``
+    后，此断言钉死该行为；内置角色不得因此被挤掉。
+    """
+    from agentcrew.roles.catalog import RoleCatalog
+
+    catalog = RoleCatalog([*BUILTIN_ROLES, WIZARD])
+    agent, spy = pm_with_spy(env, catalog=catalog)
+    await agent.decompose("做一个 Todo 应用")
+    system, _ = _prompt_parts(spy)
+    assert "wizard" in system, "自定义角色未进入 PM 的可用角色菜单"
+    assert "向导" in system
+    for role in BUILTIN_ROLES:
+        assert role.key in system, f"菜单挤掉了内置角色：{role.key}"
 
 
 async def test_pm_prompt_reserves_final_task_and_delivery_md(env):

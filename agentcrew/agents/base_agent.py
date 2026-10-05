@@ -64,6 +64,7 @@ from agentcrew.context.context_bus import (
 from agentcrew.models.factory import ModelFactory
 from agentcrew.models.providers.base import Message
 from agentcrew.models.providers.mock import MockProvider, set_purpose
+from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.roles.spec import RoleSpec
 from agentcrew.runtime.ledger import Ledger
 from agentcrew.task.task import Task, TaskResult
@@ -133,12 +134,20 @@ class BaseAgent(ABC):
         store: ArtifactStore,
         ledger: Ledger,
         project_goal: str,
+        catalog: RoleCatalog | None = None,
     ) -> None:
+        """``catalog`` 是本 run 的角色目录（含自定义角色），可为 ``None``。
+
+        只有需要「看见整个团队」的 Agent 用它（PM 的拆解提示词要从目录渲染
+        可用角色清单，否则自定义角色永远不会出现在计划里）；其余 Agent 不读。
+        ``None`` 是合法的降级态：直接构造 Agent 的单测没有目录可给。
+        """
         self.spec = spec
         self._models = models
         self._store = store
         self._ledger = ledger
         self._project_goal = project_goal
+        self._catalog = catalog
 
     # ── 模板方法（子类不重写）────────────────────────────────────────────
 

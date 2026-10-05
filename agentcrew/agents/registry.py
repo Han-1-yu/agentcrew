@@ -114,6 +114,9 @@ class AgentFactory:
             store=self._store,
             ledger=self._ledger,
             project_goal=self._project_goal,
+            # 目录随 Agent 下发：PM 的拆解提示词据此渲染**含自定义角色**的
+            # 可用角色清单（§8.3 的「角色是数据」只有在模型看得见新角色时才成立）。
+            catalog=self._catalog,
         )
         self._agents[role_key] = agent
         return agent

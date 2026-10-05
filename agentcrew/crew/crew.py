@@ -130,8 +130,13 @@ def _alias_for(spec: RoleSpec, settings: Settings) -> str:
     return settings.role_bindings.get(spec.key) or settings.default_model
 
 
-def _build_catalog(settings: Settings) -> RoleCatalog:
-    """内置八角色 + 可选的 ``roles_dir``（spec §8.3）。"""
+def build_catalog(settings: Settings) -> RoleCatalog:
+    """内置八角色 + 可选的 ``roles_dir``（spec §8.3）。
+
+    公开函数：``main.py`` 在构造 ``CliPrompter`` 之前就要拿到与 ``Crew``
+    同一个目录，才能让计划编辑路径也用上自定义角色（否则编辑后的计划会被
+    「角色未注册」误拒）。同一个 ``RoleCatalog`` 实例必须同时交给两者。
+    """
     catalog = RoleCatalog(BUILTIN_ROLES)
     if settings.roles_dir is not None:
         catalog.load_dir(settings.roles_dir)
@@ -199,7 +204,7 @@ class Crew:
         ``BoardView``，不接线时零开销。
         """
         self._settings = settings
-        self._catalog = catalog if catalog is not None else _build_catalog(settings)
+        self._catalog = catalog if catalog is not None else build_catalog(settings)
         self._prompter = prompter
         self._on_event = on_event
         self._injected_store = store

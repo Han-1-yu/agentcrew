@@ -35,7 +35,7 @@ from agentcrew.crew.crew import (
     _rework_targets,
 )
 from agentcrew.gate.gatekeeper import DeliveryDecision, NullPrompter, PlanDecision
-from agentcrew.models.factory import ContextBudgetError
+from agentcrew.models.factory import ContextBudgetError, ModelFactory
 from agentcrew.roles.spec import RoleSpec
 from agentcrew.runtime.checkpoint import CheckpointStore, RunStatus
 from agentcrew.runtime.ledger import Ledger
@@ -303,6 +303,87 @@ async def test_register_custom_role_works_without_engine_changes(env):
         )
     )
     assert crew.catalog.has("security_auditor")
+
+
+#: 自定义角色的端到端夹具：计划引用它、契约声明产物、mock 回放该任务的回复。
+WIZARD = RoleSpec(
+    key="wizard",
+    title="向导",
+    goal="把项目目标翻译成一份向导说明。",
+    backstory="你擅长把复杂目标压缩成三步。",
+    responsibilities=["产出向导说明"],
+    boundaries=["不写代码"],
+    output_contract="产出 docs/wizard.md（Markdown）。",
+    system_prompt="你是向导，只输出向导说明。",
+    reviewer_for=["project_manager"],
+)
+WIZARD_BODY = (
+    "# 向导\n\n"
+    "## 步骤\n"
+    "- 第一步：打开页面 (open)\n"
+    "- 第二步：新增待办 (add)\n"
+    "- 第三步：勾选完成 (done)\n\n"
+    "## 说明\n"
+    "本文件由自定义角色 wizard 产出，用于验证「角色是数据」的端到端链路。\n"
+)
+
+
+async def test_registered_custom_role_reaches_menu_and_is_dispatched(
+        env, monkeypatch):
+    """S7 端到端：注册的 wizard 进 PM 菜单、过计划校验、被调度并产出产物。
+
+    ``register_role`` 的 API 一直能用，但旧 PM 只把 ``BUILTIN_ROLES`` 渲染进
+    提示词 —— 自定义角色注册了却永远不会被拆解引用，S7 的「引擎零改动」在
+    实际链路上不成立。本用例把整条链路钉死：提示词菜单 → 计划校验 → 调度 →
+    mock 回放 → 产物落盘，全部走真实代码。
+    """
+    fx = env["fx"]
+    plan = json.loads(json.dumps(PLAN))
+    plan["tasks"].append({
+        "id": "T-003",
+        "title": "向导说明",
+        "description": "产出向导说明",
+        "role": "wizard",
+        "acceptance_criteria": ["含三步步骤"],
+        "dependencies": [],
+        "priority": 2,
+        "brief": "向导说明",
+        "deliverables": [
+            {
+                "path": "docs/wizard.md",
+                "kind": "markdown",
+                "description": "向导说明",
+                "must_contain": ["步骤"],
+            }
+        ],
+    })
+    (fx / "plan_todo.json").write_text(json.dumps(plan), encoding="utf-8")
+    response = fx / "responses" / "T-003"
+    response.mkdir(parents=True)
+    (response / "attempt-1.md").write_text(
+        _response("markdown", "docs/wizard.md", WIZARD_BODY), encoding="utf-8")
+
+    prompts: list[str] = []
+    original = ModelFactory.complete_structured
+
+    async def spy(self, alias, messages, schema, **kwargs):
+        prompts.append(messages[0]["content"])
+        return await original(self, alias, messages, schema, **kwargs)
+
+    monkeypatch.setattr(ModelFactory, "complete_structured", spy)
+
+    crew = Crew(env["settings"])
+    crew.register_role(WIZARD)
+    rec = await crew.run("做一个 Todo 应用")
+
+    assert rec.status is RunStatus.COMPLETED
+    assert rec.stats.succeeded == 4  # T-001 / T-002 / T-003(wizard) / T-FINAL
+    assert prompts and "wizard" in prompts[0] and "向导" in prompts[0], (
+        "拆解提示词的可用角色菜单没有来自本次 run 的目录")
+    board = crew.checkpoint.load_board()
+    assert board.get("T-003").status is TaskStatus.SUCCEEDED
+    artifacts = env["settings"].output_dir / rec.run_id / "artifacts"
+    assert (artifacts / "docs" / "wizard.md").is_file()
 
 
 async def test_resume_continues_interrupted_run(env):

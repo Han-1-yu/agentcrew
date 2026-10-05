@@ -23,6 +23,7 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import subprocess
@@ -68,6 +69,8 @@ class CliPrompter:
 
     ``input_fn`` 缺省是内建 ``input``（TTY 交互），测试一律注入；
     ``edit_fn`` 缺省是 :func:`edit_tasks_in_editor`（开 ``$EDITOR``）。
+    ``catalog`` 是本 run 的角色目录：缺省编辑路径用它校验，自定义角色因此
+    不会被「角色未注册」误拒（不传则回落到内置八角色）。
     """
 
     def __init__(
@@ -76,9 +79,14 @@ class CliPrompter:
         input_fn: InputFn = input,
         edit_fn: EditFn | None = None,
         console: Console | None = None,
+        catalog: RoleCatalog | None = None,
     ) -> None:
         self._input = input_fn
-        self._edit: EditFn = edit_tasks_in_editor if edit_fn is None else edit_fn
+        self._edit: EditFn = (
+            functools.partial(edit_tasks_in_editor, catalog=catalog)
+            if edit_fn is None
+            else edit_fn
+        )
         self._console = Console() if console is None else console
 
     # ── 卡点一：计划 ─────────────────────────────────────────────────────
@@ -220,7 +228,10 @@ class CliPrompter:
 
 
 def edit_tasks_in_editor(
-    tasks: Sequence[Task], *, editor: str | None = None
+    tasks: Sequence[Task],
+    *,
+    editor: str | None = None,
+    catalog: RoleCatalog | None = None,
 ) -> list[Task]:
     """把拆解写进临时 JSON，交给编辑器改，读回后重走 §7.2 校验。
 
@@ -228,6 +239,10 @@ def edit_tasks_in_editor(
     是 ``extra="forbid"``，把运行期字段（status/attempts/reviews…）写进去会被
     解析直接拒掉。``T-FINAL`` 不写进文件：它是平台追加的保留任务，
     :func:`with_final_task` 会按编辑后的依赖关系重建。
+
+    ``catalog`` 是本次 run 的角色目录：校验编辑结果时用它判定「角色已注册」，
+    自定义角色（``roles.d`` / ``register_role``）因此可以在编辑后继续使用；
+    不传则回落到内置八角色（直接调用本函数的旧路径）。
 
     任何失败（编辑器起不来、退出码非 0、文件被删/被改成非 UTF-8、JSON 坏了、
     字段不合法、路径冲突、临时文件清不掉）都收敛成 :class:`PlanValidationError`，
@@ -252,7 +267,7 @@ def edit_tasks_in_editor(
     except ValueError as exc:  # JSONDecodeError 与 pydantic ValidationError 都是 ValueError
         raise PlanValidationError([f"编辑后的拆解无法解析：{exc}"]) from exc
     validated = with_final_task(to_tasks(plan))
-    validate_plan(validated, RoleCatalog(BUILTIN_ROLES))
+    validate_plan(validated, catalog if catalog is not None else RoleCatalog(BUILTIN_ROLES))
     return validated
 
 

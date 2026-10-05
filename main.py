@@ -39,11 +39,18 @@ from rich.console import Console
 from rich.text import Text
 
 from agentcrew.config import GateMode, Settings
-from agentcrew.crew.crew import EXIT_CODES, Crew, PlanFailedError, RunCancelled
+from agentcrew.crew.crew import (
+    EXIT_CODES,
+    Crew,
+    PlanFailedError,
+    RunCancelled,
+    build_catalog,
+)
 from agentcrew.gate.cli_prompter import CliPrompter
 from agentcrew.gate.gatekeeper import NullPrompter, Prompter
 from agentcrew.models.factory import ModelFactoryError
 from agentcrew.roles.builtin import BUILTIN_ROLES
+from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.runtime.board_view import BoardView
 from agentcrew.runtime.checkpoint import (
     CheckpointStore,
@@ -265,9 +272,15 @@ def _cmd_run(args: argparse.Namespace) -> int:
         settings = _settings_from(args)
     except (OSError, ValueError) as exc:  # pydantic ValidationError / YAML 解析错误
         return _fail(f"配置错误：{exc}")
+    try:
+        # 目录只建一次：CliPrompter 的编辑校验与 Crew 的调度必须看到同一批角色，
+        # 否则编辑后的计划会被「角色未注册」误拒（roles.d 的自定义角色）。
+        catalog = build_catalog(settings)
+    except (OSError, ValueError) as exc:
+        return _fail(f"配置错误：{exc}")
     console = Console()
     gate, prompter, downgraded = _resolve_gate(
-        settings.gate, interactive=_stdin_isatty(), console=console)
+        settings.gate, interactive=_stdin_isatty(), console=console, catalog=catalog)
     if downgraded:
         print(
             "非 TTY（管道 / CI）：--gate 含人工卡点但无法交互，已显式降级为 "
@@ -276,7 +289,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         )
     settings = settings.model_copy(update={"gate": gate})
     hook = _BoardHook(goal, enabled=not args.no_live, console=console)
-    crew = Crew(settings, prompter=prompter, on_event=hook)
+    crew = Crew(settings, catalog=catalog, prompter=prompter, on_event=hook)
     hook.bind(crew)
     return _drive(crew, lambda: crew.run(goal), hook=hook, console=console)
 
@@ -299,9 +312,14 @@ def _cmd_resume(args: argparse.Namespace) -> int:
             print(f"  {line}", file=sys.stderr)
         print("确认无误请加 --force 重试。", file=sys.stderr)
         return EXIT_CODES["config"]
+    try:
+        # 与 run 同一条目录：续跑时的计划编辑校验也要认得自定义角色。
+        catalog = build_catalog(settings)
+    except (OSError, ValueError) as exc:
+        return _fail(f"配置错误：{exc}")
     console = Console()
     gate, prompter, downgraded = _resolve_gate(
-        settings.gate, interactive=_stdin_isatty(), console=console)
+        settings.gate, interactive=_stdin_isatty(), console=console, catalog=catalog)
     if downgraded:
         print(
             "非 TTY（管道 / CI）：--gate 含人工卡点但无法交互，已显式降级为 "
@@ -312,7 +330,7 @@ def _cmd_resume(args: argparse.Namespace) -> int:
     hook = _BoardHook(record.project_goal, enabled=not args.no_live, console=console)
     try:
         crew = Crew.resume_from(
-            settings, args.run_id, prompter=prompter, on_event=hook)
+            settings, args.run_id, prompter=prompter, on_event=hook, catalog=catalog)
     except (OSError, ValueError) as exc:
         return _fail(f"无法恢复 run {args.run_id}：{exc}")
     hook.bind(crew)
@@ -567,7 +585,11 @@ def _effective_gate(gate: GateMode | None, *, auto: bool) -> GateMode | None:
 
 
 def _resolve_gate(
-    gate: GateMode, *, interactive: bool, console: Console | None = None
+    gate: GateMode,
+    *,
+    interactive: bool,
+    console: Console | None = None,
+    catalog: RoleCatalog | None = None,
 ) -> tuple[GateMode, Prompter, bool]:
     """gate 模式 → ``(生效的 gate, prompter, 是否降级)``。
 
@@ -575,11 +597,14 @@ def _resolve_gate(
     打一行说明。本函数绝不返回「gate 仍含人工卡点 + NullPrompter」的组合：那正是
     Task 27 的构造期守卫要拦的错位（``Gatekeeper`` 会为此抛 ``ValueError``，因为
     「声称有人工卡点、实际全自动放行」比没有闸门更危险）。
+
+    ``catalog`` 透传给 :class:`CliPrompter`：计划卡点的 ``[e] 编辑后执行`` 要用
+    它校验编辑结果，自定义角色才不会被误判为未注册。
     """
     if gate not in _HUMAN_GATES:
         return gate, NullPrompter(), False
     if interactive:
-        return gate, CliPrompter(console=console), False
+        return gate, CliPrompter(console=console, catalog=catalog), False
     return "none", NullPrompter(), True
 
 

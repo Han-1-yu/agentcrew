@@ -1,11 +1,16 @@
 """项目经理：``RoleSpec`` + 规划阶段的一次模型调用 ``decompose``（spec §7.0/§8.2）。
 
-本模块是组装环上的一个特例：``roles/builtin.py`` 从八个 agents 模块导入 ``ROLE``
-汇总成 ``BUILTIN_ROLES``，而 PM 的拆解提示词又需要这份全员清单。为保持模块级
-导入链单向（``roles/spec.py`` ← ``agents/*.py`` ← ``roles/builtin.py``），
-``BUILTIN_ROLES`` 在 :meth:`ProjectManagerAgent.decompose` 内以**函数级导入**
-取用：调用发生时 ``roles.builtin`` 必然已完整加载（Task 29 的 Crew 直接持有它，
-或由本函数当场导入），不会读到半初始化模块。
+拆解提示词里的「可用角色」清单从**本次 run 的 ``RoleCatalog``** 渲染（含
+``roles.d`` / ``register_role`` 注册的自定义角色）：PM 因此在提示词层面就可能
+建议一个新角色 —— 这正是 §8.3「新增角色是数据，不是代码」的前提，旧版只列
+``BUILTIN_ROLES`` 会让自定义角色在菜单里根本不可见。目录经 :class:`BaseAgent`
+的 ``catalog`` 参数下发（``AgentFactory`` 负责接线）；没有目录时（直接构造
+Agent 的单测）回落到八个内置角色。
+
+``roles/builtin.py`` 的导入仍保持函数级（``_builtin_roles``）：若本模块在顶层
+反向导入 ``roles.builtin``，builtin 展开到 ``agents.project_manager`` 时会拿到
+尚未定义 ``ROLE`` 的半初始化模块并直接 ImportError。``roles.catalog`` 不依赖
+agents 层，顶层导入安全。
 
 ``decompose`` 只做「一次受治理的结构化调用」：``PlanOutput`` 经
 ``ModelFactory.complete_structured``（全局并发信号量 + token/成本记账，
@@ -96,7 +101,7 @@ class ProjectManagerAgent(BaseAgent):
         self._set_plan_replay(alias)
         result = await self._models.complete_structured(
             alias,
-            _plan_messages(self.spec, goal, feedback, _builtin_roles()),
+            _plan_messages(self.spec, goal, feedback, self._prompt_roles()),
             PlanOutput,
             temperature=self.spec.temperature,
             max_tokens=self.spec.max_output_tokens,
@@ -104,6 +109,16 @@ class ProjectManagerAgent(BaseAgent):
             role=self.spec.key,
         )
         return cast(PlanOutput, result)
+
+    def _prompt_roles(self) -> Sequence[RoleSpec]:
+        """提示词的可用角色：优先本次 run 的目录（含自定义角色），否则内置八角色。
+
+        ``catalog`` 为空是直接构造 Agent 的降级态（单测、库外的极简用法）；
+        正常 run 由 ``AgentFactory`` 传入 Crew 的目录，顺序即注册顺序（确定）。
+        """
+        if self._catalog is not None:
+            return self._catalog.all()
+        return _builtin_roles()
 
     def _set_plan_replay(self, alias: str) -> None:
         """给 mock provider 设置 ``plan`` 回放上下文。
@@ -150,9 +165,9 @@ def _plan_messages(
 def _plan_system_prompt(spec: RoleSpec, roles: Sequence[RoleSpec]) -> str:
     """PM 规划系统提示词：角色提示词 + 输出形状 + 可用角色清单 + 硬约束。
 
-    角色清单从 ``RoleSpec`` 数据渲染（key 与全部职责），PM 因此不可能建议一个
-    目录里不存在的角色 —— §7.2 校验 2 的错误只该来自模型笔误，不该来自提示词
-    缺料。
+    角色清单从 ``RoleSpec`` 数据渲染（key 与全部职责），且由调用方传入**本次
+    run 的完整目录**：PM 因此既不可能建议一个目录里不存在的角色，也不会漏掉
+    自定义角色 —— §7.2 校验 2 的错误只该来自模型笔误，不该来自提示词缺料。
     """
     return "\n\n".join(
         (
