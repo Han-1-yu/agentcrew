@@ -25,12 +25,12 @@ from agentcrew.task.planner import (
 from agentcrew.task.task import TaskStatus
 
 
-def draft(tid, role="backend_dev", deps=(), paths=("backend/app/main.py",)):
+def draft(tid, role="backend_dev", deps=(), paths=("backend/app/main.py",), priority=5):
     return TaskDraft(id=tid, title=tid, description="d", role=role,
                      acceptance_criteria=["ok"],
                      deliverables=[ArtifactSpec(path=p, kind="python", description="x")
                                    for p in paths],
-                     dependencies=list(deps))
+                     dependencies=list(deps), priority=priority)
 
 
 @pytest.fixture
@@ -229,6 +229,35 @@ def test_to_tasks_maps_fields_and_keeps_runtime_defaults():
 def test_to_tasks_does_not_validate():
     """路径冲突等非法拆解由 validate_plan 负责；to_tasks 只管映射。"""
     assert len(to_tasks(PlanOutput(tasks=[draft("T-1"), draft("T-2")]))) == 2
+
+
+# ── 边界住在 TaskDraft 上：越界 priority 必须死在 PlanOutput 解析期（Task 20 的
+#    结构化输出阶梯会重试），而不是在 to_tasks 里抛 ValidationError —— 那会逃出
+#    Task 29 的 except PlanValidationError，把修复回合变成整次 run 崩溃。──
+@pytest.mark.parametrize("bad_priority", [-1, 0, 10, 99])
+def test_plan_output_rejects_out_of_range_priority(bad_priority):
+    with pytest.raises(ValidationError):
+        PlanOutput(tasks=[draft("T-1", priority=bad_priority)])
+
+
+@pytest.mark.parametrize("priority", [1, 5, 9])
+def test_plan_output_accepts_boundary_priority(priority):
+    assert to_tasks(PlanOutput(tasks=[draft("T-1", priority=priority)]))[0].priority == priority
+
+
+def test_to_tasks_never_raises_for_a_parseable_plan():
+    """只要 PlanOutput 解析通过，to_tasks 就不得再抛任何异常（无剩余校验面）。"""
+    plan = PlanOutput(tasks=[
+        TaskDraft(id="T-1", title="标题" * 50, description="描述" * 50, role="backend_dev",
+                  acceptance_criteria=["验收" * 20, "第二条"],
+                  deliverables=[ArtifactSpec(path="深/目录/文件.py", kind="python",
+                                             description="x" * 100,
+                                             must_contain=["完成"], min_bytes=100)],
+                  dependencies=["T-0"], priority=9, brief="摘要" * 20),
+        TaskDraft(id="T-0", title="", description="", role="backend_dev",
+                  acceptance_criteria=[], deliverables=[], dependencies=[], priority=1),
+    ])
+    assert [t.id for t in to_tasks(plan)] == ["T-1", "T-0"]
 
 
 def test_validate_plan_returns_none_when_valid(catalog):

@@ -43,7 +43,13 @@ class PlanValidationError(ValueError):
 
 
 class TaskDraft(BaseModel):
-    """PM 返回的单个任务草案；与 ``Task`` 的差异是只含 PM 能决定的字段。"""
+    """PM 返回的单个任务草案；与 ``Task`` 的差异是只含 PM 能决定的字段。
+
+    ``priority`` 的边界与 ``Task`` 保持一致（1..9）：越界必须在**解析期**被
+    ``PlanOutput`` 拦下（Task 20 的结构化输出阶梯会带着校验错误重试），而不是
+    留到 :func:`to_tasks` 抛 pydantic ``ValidationError`` —— 那会逃出 Task 29
+    的 ``except PlanValidationError``，把可修复的拆解问题变成整次 run 崩溃。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -54,7 +60,7 @@ class TaskDraft(BaseModel):
     acceptance_criteria: list[str]
     deliverables: list[ArtifactSpec]
     dependencies: list[str] = Field(default_factory=list)
-    priority: int = 5
+    priority: int = Field(5, ge=1, le=9)
     brief: str = ""
 
 
@@ -75,6 +81,9 @@ def to_tasks(plan: PlanOutput) -> list[Task]:
     """把拆解草案映射为 ``Task``；运行时字段（状态、计数、评审）保持默认。
 
     只做映射、不做校验：非法拆解由 :func:`validate_plan` 单独判定。
+    ``TaskDraft`` 的每个字段都与 ``Task`` 同约束或更严（``priority`` 已对齐
+    1..9，路径安全在 ``ArtifactSpec`` 构造时完成），因此只要 ``PlanOutput``
+    解析通过，本函数不会再抛异常。
     """
     return [
         Task(
