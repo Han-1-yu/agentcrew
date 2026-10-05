@@ -3,8 +3,9 @@
 两个断言层次：
 
 1. **被调用过**：``ArtifactStore.commit`` / ``ArtifactStore.resolve``、G1 的
-   ``run_static``、围栏解析 ``parse_fenced_blocks`` 都有计数（计数器由
-   ``offline_run`` 挂上）。
+   ``run_static``、G2 的 ``Reviewer.review``、围栏解析 ``parse_fenced_blocks``
+   都有计数（计数器由 ``offline_run`` 挂上）。G2 必须单列：G1 一个层就能让
+   8/9 个任务通过，一个「悄悄不再调用评审器」的实现照样跑得完 run。
 2. **没有旁路**：``artifacts/`` 下每个文件都必须能在 ``ArtifactStore`` 自己的
    记录里找到。这一条才是关键 —— 单看调用次数抓不住「文件悄悄写进了产物目录
    却没经 store」的未来优化，逐路径比对记录才抓得住。
@@ -27,6 +28,7 @@ def test_commit_resolve_and_gate_all_invoked(offline_run):
     assert counters["commit"] > 0, "ArtifactStore.commit 未被调用 —— mock 走了旁路"
     assert counters["resolve"] > 0, "ArtifactStore.resolve 未被调用"
     assert counters["static"] > 0, "G1 静态门禁未被调用"
+    assert counters["review"] > 0, "G2 LLM 评审层未被调用 —— 门禁少了一层照样能跑绿"
     assert counters["parse"] > 0, "围栏解析未被调用"
 
 

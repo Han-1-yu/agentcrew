@@ -52,7 +52,8 @@ class OfflineRun:
     artifacts: Path
     #: 已关闭但可读的 ledger（读取不受 ``close()`` 影响）。
     ledger: Ledger
-    #: 四个调用计数器：``commit`` / ``resolve`` / ``static`` / ``parse``。
+    #: 五个调用计数器：``commit`` / ``resolve`` / ``static`` / ``parse`` /
+    #: ``review``（G2 LLM 评审层）。
     counters: dict[str, int]
     #: run 期间 ``ArtifactStore.commit`` 的接收者，按实例去重（无旁路断言的权威来源）。
     stores: tuple[ArtifactStore, ...]
@@ -71,8 +72,9 @@ def offline_run(tmp_path_factory) -> OfflineRun:
        因此顺带证明「无密钥可跑」；``keys_at_run_time`` 把那一刻的环境原样留证。
        停用 ``load_dotenv`` 是必要的：否则开发者 ``.env`` 里的真 key 会在
        ``Settings.load()`` 里被重新读回，断言取证的就成了假象。
-    3. **四个计数器在这里统一挂钩**（只计数、不改行为）：无旁路断言与结局断言
-       读同一个 run，避免为「证明走了通路」再跑一遍。
+    3. **五个计数器在这里统一挂钩**（只计数、不改行为）：无旁路断言与结局断言
+       读同一个 run，避免为「证明走了通路」再跑一遍。其中 ``review`` 数的是
+       G2 评审层：它是唯一一个「不跑也能让整条 run 变绿」的门禁层。
 
     ``run_static`` 必须**同时**替换两个绑定：``gatekeeper`` 用
     ``from agentcrew.gate.static_checks import run_static`` 把函数绑进了自己的
@@ -93,7 +95,7 @@ def offline_run(tmp_path_factory) -> OfflineRun:
     monkeypatch.setattr(
         "agentcrew.models.factory.DEFAULT_FIXTURES_DIR", DEMO_FIXTURES_DIR)
 
-    counters = {"commit": 0, "resolve": 0, "static": 0, "parse": 0}
+    counters = {"commit": 0, "resolve": 0, "static": 0, "parse": 0, "review": 0}
     stores: dict[int, ArtifactStore] = {}
 
     original_commit = ArtifactStore.commit
@@ -135,6 +137,18 @@ def offline_run(tmp_path_factory) -> OfflineRun:
 
     monkeypatch.setattr(parser, "parse_fenced_blocks", spy_parse)
     monkeypatch.setattr(base_agent, "parse_fenced_blocks", spy_parse)
+
+    # G2（LLM 评审）层单独计数：G1 就能让 8/9 个任务通过，一个「悄悄不再调用
+    # 评审器」的实现照样能跑绿整条 run —— 只有直接数 Reviewer.review 才拦得住。
+    import agentcrew.gate.reviewer as reviewer_module
+
+    original_review = reviewer_module.Reviewer.review
+
+    async def spy_review(self, task, **kw):
+        counters["review"] += 1
+        return await original_review(self, task, **kw)
+
+    monkeypatch.setattr(reviewer_module.Reviewer, "review", spy_review)
 
     try:
         settings = Settings.load()
