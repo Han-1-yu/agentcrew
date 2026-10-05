@@ -74,8 +74,19 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         implementation="openai_compat",
         base_url="https://api.deepseek.com/v1",
         api_key_env="DEEPSEEK_API_KEY",
+        # supports_json_schema 实测为 False：2026-10-05 对 deepseek-chat 真发
+        # response_format={"type":"json_schema",...} 得到 400
+        # "This response_format type is unavailable now"。
+        # 降级链会正确地把该 400 判为 PermanentError 并降到第 2 级，
+        # 但每一次结构化调用都会白烧一次请求 —— 所以这里必须如实标 False。
+        #
+        # 另注（跨 provider 的硬约束）：deepseek 的 json_object 模式要求
+        # **提示词里必须出现 "json" 这个词**，否则 400
+        # "Prompt must contain the word 'json' in some form"。
+        # 第 2/3 级的注入指令已满足（见 models/structured.py 的
+        # _messages_for_level），并有测试钉住，改动那句措辞前先看那里的注释。
         capabilities=ProviderCapabilities(
-            supports_json_schema=True, supports_json_object=True),
+            supports_json_schema=False, supports_json_object=True),
     ),
     "doubao": ProviderPreset(
         implementation="openai_compat",

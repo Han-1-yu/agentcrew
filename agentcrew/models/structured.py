@@ -240,6 +240,11 @@ def _messages_for_level(
     """
     if level == _LEVEL_JSON_SCHEMA:
         return list(conversation)
+    # 警告：下面这句指令**必须**保留 "JSON" 这个字面词。部分 OpenAI 兼容
+    # provider（实测 deepseek）的 json_object 模式会校验提示词里是否出现
+    # "json"，缺失即 400「Prompt must contain the word 'json' in some form」。
+    # 改写措辞时不要把它换成纯中文表述，否则第 2 级在这些 provider 上直接失败。
+    # 该约束由 tests/test_structured_output.py 钉住。
     instruction = (
         "你必须只返回一个 JSON 对象，不要任何解释文字。"
         "该 JSON 必须符合以下 JSON Schema：\n"

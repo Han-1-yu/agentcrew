@@ -424,3 +424,24 @@ async def test_level3_provider_error_propagates_without_repair():
                                   temperature=0, max_tokens=10)
     assert not isinstance(ei.value, StructuredOutputError)
     assert len(p.seen_formats) == 1  # 不降级、不修复
+
+
+# ── 跨 provider 硬约束：L2/L3 的注入指令必须含 "json" 字面词 ──
+# 实测 deepseek 的 json_object 模式会校验提示词是否出现 "json"，
+# 缺失即 400 "Prompt must contain the word 'json' in some form"。
+# 这条测试防的是"把指令改写成纯中文"导致 L2 在部分 provider 上直接失败。
+@pytest.mark.parametrize("level", [2, 3])
+def test_json_word_present_in_injected_instruction(level):
+    from agentcrew.models.structured import _messages_for_level
+    msgs = _messages_for_level([{"role": "user", "content": "go"}], Answer, level)
+    system = next(m for m in msgs if m["role"] == "system")
+    assert "json" in system["content"].lower(), (
+        "第 %d 级注入的指令丢了 'json' 字面词；部分 OpenAI 兼容 provider"
+        "（如 deepseek）的 json_object 模式会因此返回 400" % level
+    )
+
+
+def test_level1_injects_nothing_so_no_json_word_required():
+    from agentcrew.models.structured import _messages_for_level
+    msgs = _messages_for_level([{"role": "user", "content": "go"}], Answer, 1)
+    assert msgs == [{"role": "user", "content": "go"}]
