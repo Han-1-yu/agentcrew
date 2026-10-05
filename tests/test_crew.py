@@ -27,14 +27,21 @@ from agentcrew.agents.project_manager import ProjectManagerAgent
 from agentcrew.artifacts.spec import ArtifactSpec
 from agentcrew.artifacts.store import ArtifactConflictError, ArtifactStore
 from agentcrew.config import Settings
-from agentcrew.crew.crew import EXIT_CODES, Crew, PlanFailedError, RunCancelled
+from agentcrew.crew.crew import (
+    EXIT_CODES,
+    Crew,
+    PlanFailedError,
+    RunCancelled,
+    _rework_targets,
+)
 from agentcrew.gate.gatekeeper import DeliveryDecision, NullPrompter, PlanDecision
 from agentcrew.models.factory import ContextBudgetError
 from agentcrew.roles.spec import RoleSpec
-from agentcrew.runtime.checkpoint import RunStatus
+from agentcrew.runtime.checkpoint import CheckpointStore, RunStatus
 from agentcrew.runtime.ledger import Ledger
 from agentcrew.task.planner import PlanOutput
 from agentcrew.task.task import Task, TaskStatus
+from agentcrew.task.task_board import TaskBoard
 
 #: brief 的两任务拆解（T-FINAL 由 Crew 追加，PM 不得自行生成）。
 PLAN = {
@@ -117,6 +124,19 @@ DEMO_FIXTURES = Path(__file__).resolve().parents[1] / "examples" / "fixtures"
 
 def _response(lang: str, path: str, body: str) -> str:
     return f"```{lang} file={path}\n{body}```\n"
+
+
+def _task(task_id: str, *, status: TaskStatus = TaskStatus.PENDING) -> Task:
+    """构造一个最小任务（面板/状态判定的纯逻辑用例用）。"""
+    return Task(
+        id=task_id,
+        title=f"任务{task_id}",
+        description="d",
+        role="backend_dev",
+        acceptance_criteria=["a"],
+        deliverables=[],
+        status=status,
+    )
 
 
 @pytest.fixture
@@ -443,6 +463,29 @@ async def test_malformed_model_alias_is_a_config_error(env, monkeypatch):
     assert finished[-1].data["exit_code"] == EXIT_CODES["config"]
 
 
+async def test_plan_is_persisted_before_execution(env, monkeypatch):
+    """规划成功即落 ``tasks.json``：死在执行开始前也能 resume，不必重拆。"""
+    original = Crew._execute
+    calls = {"n": 0}
+
+    async def flaky(self, run, board):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("模拟执行前崩溃")
+        return await original(self, run, board)
+
+    monkeypatch.setattr(Crew, "_execute", flaky)
+    with pytest.raises(RuntimeError, match="模拟执行前崩溃"):
+        await Crew(env["settings"]).run("做一个 Todo 应用")
+    run_dir = next(iter(env["settings"].output_dir.iterdir()))
+    board = CheckpointStore(run_dir).load_board()
+    assert {task.id for task in board.all()} == {"T-001", "T-002", "T-FINAL"}
+    rec = await Crew.resume_from(Settings.load(), run_dir.name).resume()
+    assert rec.status is RunStatus.COMPLETED and rec.stats.succeeded == 3
+    # 面板已在盘上：resume 没有重跑规划（否则 plan_created 会是 2）
+    assert _ledger(env["settings"], rec.run_id).count("plan_created") == 1
+
+
 # ── G3 prompter 守卫（Task 27 的规则必须原样生效）─────────────────────────
 
 
@@ -479,6 +522,63 @@ async def test_gate_none_without_prompter_runs_fully_automatically(env):
 
 
 # ── resume ────────────────────────────────────────────────────────────────
+
+
+async def test_resume_keeps_per_transition_checkpointing(env):
+    """resume 后的面板必须挂回 ``on_change``：派发时的 attempts 扣除当场落盘。
+
+    ``CheckpointStore.load_board`` 建的面板没有回调（回调只在构造函数上传）。
+    直接复用它，``READY → RUNNING`` 这次扣除要等到下一个完成事件或收尾才写盘，
+    硬中断就丢掉一次额度 —— 而 §13.3 正是靠「派发即消耗一次尝试」把
+    「中断 → resume → 中断」变成有界循环。这里在「已派发、未完成」的窗口里读盘。
+    """
+    rec = await Crew(env["settings"]).run("做一个 Todo 应用")
+    _patch_tasks(
+        env["settings"], rec.run_id, "T-002",
+        status="running", attempts=1, result=None, reviews=[], status_history=[],
+    )
+    _patch_tasks(
+        env["settings"], rec.run_id, "T-FINAL",
+        status="pending", attempts=0, result=None, reviews=[], status_history=[],
+    )
+    seen: list[tuple[str, int]] = []
+    tasks_path = _run_dir(env["settings"], rec.run_id) / "tasks.json"
+
+    def on_event(name, data):
+        if name == "task_dispatched" and data.get("task_id") == "T-002":
+            disk = json.loads(tasks_path.read_text(encoding="utf-8"))
+            item = next(t for t in disk["tasks"] if t["id"] == "T-002")
+            seen.append((item["status"], item["attempts"]))
+
+    resumed = Crew.resume_from(Settings.load(), rec.run_id, on_event=on_event)
+    out = await resumed.resume()
+    assert out.status is RunStatus.COMPLETED
+    assert seen == [("running", 2)]  # 不等完成事件，派发那一刻就已落盘
+
+
+async def test_manifest_is_written_during_the_run_not_only_at_the_end(env):
+    """硬杀可能落在任何时刻：MANIFEST 随状态跃迁落盘，resume 才有记录可载。"""
+    class Boom(RuntimeError):
+        """模拟进程被硬杀（异常穿出调度循环，收尾代码不再执行）。"""
+
+    def on_event(name, _data):
+        if name == "task_completed":
+            raise Boom("硬杀")
+
+    with pytest.raises(Boom):
+        await Crew(env["settings"], on_event=on_event).run("做一个 Todo 应用")
+    run_dir = next(iter(env["settings"].output_dir.iterdir()))
+    manifest = json.loads(
+        (run_dir / "artifacts" / "MANIFEST.json").read_text(encoding="utf-8"))
+    assert [entry["path"] for entry in manifest["entries"]] == ["docs/PRD.md"]
+    # 这份清单让 Task 11 的 carry-forward 在最需要它的时候可用
+    store = ArtifactStore(run_dir / "artifacts", run_id=run_dir.name)
+    out = await Crew.resume_from(
+        Settings.load(), run_dir.name, store=store).resume()
+    assert out.status is RunStatus.COMPLETED and out.stats.succeeded == 3
+    assert {record.path for record in store.records()} == {
+        "docs/PRD.md", "backend/app/main.py", "DELIVERY.md",
+    }
 
 
 async def test_resume_repairs_running_task_without_resetting_attempts(env):
@@ -609,6 +709,81 @@ async def test_delivery_gate_rework_reschedules_selected_task(env, monkeypatch):
     board = crew.checkpoint.load_board()
     assert board.get("T-002").attempts == 2  # 人工打回走后重新派发
     assert all(task.status is TaskStatus.SUCCEEDED for task in board.all())
+
+
+async def test_delivery_gate_does_not_open_on_failed_run(env, monkeypatch):
+    """§10.3：交付卡点只在全部任务 SUCCEEDED 时打开。
+
+    失败 run 被问「接受交付？」没有意义，更危险的是 ``abort`` 会把 FAILED 记成
+    CANCELLED（退出码 1 → 130，真实结局被掩盖）。这里给一个「若被问就 abort」的
+    桩：它必须一次都没被问。
+    """
+    monkeypatch.setenv("AGENTCREW_GATE", "delivery")
+    (env["fx"] / "reviews.json").write_text(
+        json.dumps({"T-001": REJECT, "_default": APPROVE}), encoding="utf-8")
+    prompter = _StubPrompter(deliveries=[DeliveryDecision(action="abort")])
+    rec = await Crew(Settings.load(), prompter=prompter).run("做一个 Todo 应用")
+    assert prompter.delivery_records == []
+    assert rec.status is RunStatus.FAILED
+    finished = list(_ledger(env["settings"], rec.run_id).events("run_finished"))
+    assert finished[-1].data["exit_code"] == EXIT_CODES["failed"]
+    # 失败传播不是死锁：不写停滞报告（`BLOCKED` 非终态，别把结局 1 改成 4）
+    assert not (
+        _run_dir(env["settings"], rec.run_id) / "diagnostics" / "stall-report.md"
+    ).exists()
+
+
+async def test_delivery_rework_of_unknown_id_raises(env, monkeypatch):
+    """打回一个不存在的 id：明确报错，不能静默忽略（人工会被反复追问同一件事）。"""
+    monkeypatch.setenv("AGENTCREW_GATE", "delivery")
+    prompter = _StubPrompter(
+        deliveries=[DeliveryDecision(action="rework", task_ids=["T-999"])])
+    with pytest.raises(ValueError, match="T-999"):
+        await Crew(Settings.load(), prompter=prompter).run("做一个 Todo 应用")
+
+
+def test_rework_targets_reject_unreworkable_status():
+    """存在但状态不可返工的 id 同样报错：只有 FAILED / SUCCEEDED 可打回。"""
+    board = TaskBoard([
+        _task("T-1", status=TaskStatus.RUNNING),
+        _task("T-2", status=TaskStatus.FAILED),
+        _task("T-3", status=TaskStatus.BLOCKED),
+        _task("T-4", status=TaskStatus.SUCCEEDED),
+    ])
+    with pytest.raises(ValueError, match="不可返工"):
+        _rework_targets(board, ["T-3"])
+    with pytest.raises(ValueError, match="T-1（running）"):
+        _rework_targets(board, ["T-2", "T-1"])
+    with pytest.raises(ValueError, match="不存在"):
+        _rework_targets(board, ["T-404"])
+    assert _rework_targets(board, ["T-2", "T-4", "T-2"]) == ["T-2", "T-4"]
+
+
+async def test_human_rework_leaves_a_human_review_record(env, monkeypatch):
+    """人工打回必须留 ``ReviewRecord(layer="human")``（spec §10.3）。
+
+    它同时是 §14.3 报告「人工驳回」计数的唯一来源 —— 没有它，那一行永远是 0，
+    而永远为零的行读起来像证据。留痕要落盘（这里从 tasks.json 读回）。
+    """
+    monkeypatch.setenv("AGENTCREW_GATE", "delivery")
+    prompter = _StubPrompter(
+        deliveries=[
+            DeliveryDecision(action="rework", task_ids=["T-002"]),
+            DeliveryDecision(action="accept"),
+        ]
+    )
+    crew = Crew(Settings.load(), prompter=prompter)
+    rec = await crew.run("做一个 Todo 应用")
+    assert rec.status is RunStatus.COMPLETED
+    board = crew.checkpoint.load_board()
+    human = [r for r in board.get("T-002").reviews if r.layer == "human"]
+    assert len(human) == 1
+    assert human[0].verdict == "reject"
+    assert human[0].reviewer == "human:delivery"
+    assert human[0].round == 2 and human[0].issues and human[0].fix_hints
+    assert "人工驳回 1" in crew.delivery_summary(rec)
+    # 未被打回的任务不多留痕
+    assert not [r for r in board.get("T-001").reviews if r.layer == "human"]
 
 
 # ── 停滞 ──────────────────────────────────────────────────────────────────

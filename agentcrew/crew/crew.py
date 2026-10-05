@@ -65,7 +65,13 @@ from agentcrew.task.planner import (
     validate_plan,
     with_final_task,
 )
-from agentcrew.task.task import RunStats, StatusChange, Task, TaskStatus
+from agentcrew.task.task import (
+    ReviewRecord,
+    RunStats,
+    StatusChange,
+    Task,
+    TaskStatus,
+)
 from agentcrew.task.task_board import TaskBoard
 from agentcrew.utils.files import atomic_write_text
 
@@ -87,6 +93,33 @@ _DELIVERY_GATES: frozenset[str] = frozenset({"delivery", "both"})
 
 #: ``RoleSpec.model`` 的哨兵值：字面量 ``"default"`` 表示按三级优先级解析。
 _DEFAULT_ALIAS = "default"
+
+#: 交付卡点可以打回的状态：``FAILED``（``reset_failed``）与 ``SUCCEEDED``
+#: （快照层置回 ``READY``）。其余状态要么已经在返工队列里，要么没有合法的回退路径。
+_REWORKABLE_STATUSES: frozenset[TaskStatus] = frozenset(
+    {TaskStatus.FAILED, TaskStatus.SUCCEEDED}
+)
+
+#: 人工打回留痕的 ``reviewer`` 标识（与 ``static:contract`` 同族，spec §5.3）。
+_HUMAN_REVIEWER = "human:delivery"
+
+#: 人工打回的 issue / fix_hint：前者进报告，后者经 ``Scheduler._fix_hints`` 回灌给
+#: 重新执行的任务（返工的唯一解释必须到执行者手里）。
+_HUMAN_REWORK_ISSUE = "交付卡点人工打回：本次交付未被接受"
+_HUMAN_REWORK_HINT = "按交付要求修正后重新提交"
+
+#: 停滞判定里的「已定局」状态：终态 + ``BLOCKED``。``BLOCKED`` 在状态机里不是终态
+#: （它留着 ``BLOCKED → READY`` 的人工恢复边），但在 run 的结局上已经定局 —— 它的
+#: 上游永久失败/取消，spontaneous 恢复不可能发生。
+_SETTLED_STATUSES: frozenset[TaskStatus] = frozenset(
+    {
+        TaskStatus.SUCCEEDED,
+        TaskStatus.FAILED,
+        TaskStatus.BLOCKED,
+        TaskStatus.CANCELLED,
+        TaskStatus.SKIPPED,
+    }
+)
 
 #: 模型别名解析的优先级（spec §12.2）：角色级 → ``role_bindings`` → 默认模型。
 #: 与 ``BaseAgent._resolve_alias`` 同一口径 —— 预算校验必须校验**真正会跑**的别名。
@@ -319,7 +352,12 @@ class Crew:
             if resume_board is None:
                 board = await self._plan_phase(run)
             else:
-                board = resume_board
+                # 重建而不是直接复用 load_board() 的面板：on_change 回调（每次
+                # 状态跃迁即落盘）只在构造函数上挂得进去，而 load_board 建的面板
+                # 没有它。缺了它，resume 后 READY→RUNNING 那次 attempts 扣除要等到
+                # 下一个完成事件才落盘，硬中断会丢掉这次扣除 —— §13.3 靠「派发即
+                # 消耗一次尝试」把「中断→resume→中断」变成有界循环，丢了就不是。
+                board = self._build_board(run, resume_board.all())
                 self._board = board
                 checkpoint.save_tasks(board)   # 修复后的状态立即落盘
             return await self._execute(run, board)
@@ -368,6 +406,9 @@ class Crew:
             )
         if decision.action == "edit":
             board = self._build_board(run, self._accepted_plan(decision.tasks or []))
+        # 规划一成功就落盘：进程死在执行开始之前时，resume 仍有面板可续（否则
+        # load_board 抛 FileNotFoundError，只能整轮重拆）。
+        run.checkpoint.save_tasks(board)
         return board
 
     async def _decompose(self, run: _Run) -> list[Task]:
@@ -415,6 +456,10 @@ class Crew:
 
         每轮循环重建 ``Gatekeeper`` / ``Scheduler``：它们绑定面板，而交付打回
         可能整体替换面板（``SUCCEEDED → READY`` 无状态机出边，只能重建）。
+
+        **交付卡点只在终局为 COMPLETED 时打开**（spec §10.3「全部任务 SUCCEEDED、
+        封版以前」）。失败 / 停滞的 run 问「接受交付？」既没有意义，又让 ``abort``
+        把 FAILED 记成 CANCELLED（退出码 1 被改写成 130，真实结局被掩盖）。
         """
         decisions_path = run.checkpoint.run_dir / "context" / "decisions.jsonl"
         bus = ContextBus(
@@ -438,11 +483,14 @@ class Crew:
                 on_event=self._on_event,
             )
             await scheduler.run()
-            if scheduler.deadlock_report is not None:
+            if scheduler.deadlock_report is not None and _is_stalled(board):
                 self._stalled = True
                 self._write_stall_report(run, scheduler.deadlock_report)
             saved = self._flush_decisions(run, bus, board, decisions_path, saved)
             self._sync_stats(run)
+            outcome = self._final_status(board)
+            if outcome is not RunStatus.COMPLETED:
+                return self._finalize(run, outcome)
             decision = await gatekeeper.human_delivery_gate(run.record)
             if self._gate_enabled(_DELIVERY_GATES):
                 run.ledger.emit(
@@ -454,13 +502,11 @@ class Crew:
             if decision.action == "abort":
                 return self._finalize(run, RunStatus.CANCELLED)
             if decision.action != "rework" or not decision.task_ids:
-                break
+                return self._finalize(run, outcome)
             board, replaced = self._apply_rework(run, board, decision.task_ids)
             self._board = board
-            run.checkpoint.save_tasks(board)
             if replaced:
                 bus = self._clone_bus(run, bus, board)
-        return self._finalize(run, self._final_status(board))
 
     def _apply_rework(
         self, run: _Run, board: TaskBoard, task_ids: Sequence[str]
@@ -470,44 +516,45 @@ class Crew:
         ``FAILED`` 走 ``TaskBoard.reset_failed``（``FAILED`` 无出边的显式人工入口）；
         ``SUCCEEDED`` 也没有出边，只能在快照层人工置回 ``READY``（与 ``reset_failed``
         同类的绕过），并显式留下 ``reason="delivery-rework"`` 的历史 —— 这是引擎
-        唯一一处直接改状态的代码，它必须可见。
+        唯一一处直接改状态的代码，它必须可见。每条打回另留一条 ``layer="human"``
+        的评审记录（spec §10.3 的人工留痕）。
         """
-        known = board.map()
-        unknown = sorted({task_id for task_id in task_ids if task_id not in known})
-        if unknown:
-            raise ValueError(f"交付卡点指定了不存在的任务 id：{'、'.join(unknown)}")
-        for task_id in dict.fromkeys(task_ids):
+        targets = _rework_targets(board, task_ids)
+        for task_id in targets:
             if board.get(task_id).status is TaskStatus.FAILED:
                 board.reset_failed(task_id)
         succeeded = [
             task_id
-            for task_id in dict.fromkeys(task_ids)
+            for task_id in targets
             if board.get(task_id).status is TaskStatus.SUCCEEDED
         ]
-        if not succeeded:
-            return board, False
-        now = datetime.now()
-        tasks = [
-            task
-            if task.id not in succeeded
-            else task.model_copy(
-                update={
-                    "status": TaskStatus.READY,
-                    "updated_at": now,
-                    "status_history": [
-                        *task.status_history,
-                        StatusChange(
-                            from_status=TaskStatus.SUCCEEDED,
-                            to_status=TaskStatus.READY,
-                            reason="delivery-rework",
-                            at=now,
-                        ),
-                    ],
-                }
-            )
-            for task in board.all()
-        ]
-        return self._build_board(run, tasks), True
+        if succeeded:
+            now = datetime.now()
+            tasks = [
+                task
+                if task.id not in succeeded
+                else task.model_copy(
+                    update={
+                        "status": TaskStatus.READY,
+                        "updated_at": now,
+                        "status_history": [
+                            *task.status_history,
+                            StatusChange(
+                                from_status=TaskStatus.SUCCEEDED,
+                                to_status=TaskStatus.READY,
+                                reason="delivery-rework",
+                                at=now,
+                            ),
+                        ],
+                    }
+                )
+                for task in board.all()
+            ]
+            board = self._build_board(run, tasks)
+        _record_human_rework(board, targets)
+        # record_review 不触发 on_change（没有 StatusChange）：人工留痕必须自己补落盘。
+        run.checkpoint.save_tasks(board)
+        return board, bool(succeeded)
 
     def _flush_decisions(
         self,
@@ -549,12 +596,19 @@ class Crew:
     # ── 装配与善后 ────────────────────────────────────────────────────────
 
     def _build_board(self, run: _Run, tasks: Sequence[Task]) -> TaskBoard:
-        """建面板并把每次状态跃迁落盘（spec §13.2 的 per-transition checkpoint）。"""
+        """建面板并把每次状态跃迁落盘：``tasks.json`` + ``MANIFEST.json``。
+
+        spec §13.2 要求状态跃迁后立即落盘。MANIFEST 也在这里刷新，而不是只在收尾
+        写一次：硬杀（Ctrl-C／断电）之后 resume 靠 ``load_manifest`` 重建产物记录，
+        只在收尾写的话，被杀那一刻盘上有文件、清单里一条记录都没有 —— 重建恰好
+        在最需要它的时候失明，§9.2 的跨任务冲突检测与返工清理跟着一起失效。
+        """
         board: TaskBoard | None = None
 
         def _on_change(_task: Task, _change: StatusChange) -> None:
             if board is not None:
                 run.checkpoint.save_tasks(board)
+                run.store.write_manifest()
 
         board = TaskBoard(tasks, on_change=_on_change)
         return board
@@ -733,6 +787,77 @@ def _fixtures_dir() -> Path:
     ``agentcrew.models.factory.DEFAULT_FIXTURES_DIR`` 注入临时夹具。
     """
     return Path(model_factory.DEFAULT_FIXTURES_DIR)
+
+
+def _rework_targets(board: TaskBoard, task_ids: Sequence[str]) -> list[str]:
+    """校验并归一化交付卡点指定的任务 id（去重保序）；不可返工一律 ``ValueError``。
+
+    不存在与「存在但状态不可返工」都必须报错，不能静默跳过：跳过会让操作者以为
+    打回生效，下一次交付卡点又把同一批 id 端上来 —— 无限循环，且每次都不说为什么。
+    """
+    known = board.map()
+    unknown = sorted({task_id for task_id in task_ids if task_id not in known})
+    if unknown:
+        raise ValueError(f"交付卡点指定了不存在的任务 id：{'、'.join(unknown)}")
+    targets = list(dict.fromkeys(task_ids))
+    unwelcome = [
+        (task_id, board.get(task_id).status.value)
+        for task_id in targets
+        if board.get(task_id).status not in _REWORKABLE_STATUSES
+    ]
+    if unwelcome:
+        detail = "、".join(f"{task_id}（{status}）" for task_id, status in unwelcome)
+        raise ValueError(
+            "交付卡点只能打回 FAILED / SUCCEEDED 的任务，以下任务不可返工："
+            f"{detail}"
+        )
+    return targets
+
+
+def _is_stalled(board: TaskBoard) -> bool:
+    """调度器退出时是否构成**真**停滞（spec §7.4 的退出码 4）。
+
+    调度器在「无就绪、无在跑」时就留报告，而那条路径同时覆盖两种结局：
+
+    - **失败传播**：任务 ``FAILED`` 后下游全部 ``BLOCKED``。板上仍有非终态
+      （``BLOCKED`` 留了人工恢复边），但这是**失败**的结局 —— spec §7.4 明列
+      「存在 FAILED / BLOCKED → 1」，此时报死锁会把退出码 1 改写成 4，掩盖真因。
+    - **真停滞**：还有任务既没跑完、也没有失败上游把它定死（例如 ``RUNNING``
+      却没有对应 worker）。这才是 4。
+
+    判据取「是否还有未定局的任务」，而不是 ``board.is_terminal()``：后者把
+    ``BLOCKED`` 当未终结，于是每一次失败传播都会被误判成死锁。
+    """
+    stats = board.stats()
+    if stats.failed or stats.blocked or stats.skipped:
+        return False   # 失败传播的结局是退出码 1
+    return any(task.status not in _SETTLED_STATUSES for task in board.all())
+
+
+def _record_human_rework(board: TaskBoard, task_ids: Sequence[str]) -> None:
+    """每条人工打回落一条 ``ReviewRecord(layer="human")``（spec §10.3）。
+
+    人工裁决必须完整留痕，且这是 §14.3 报告里「人工驳回」计数的**唯一**来源 ——
+    不写它，报告那一行永远是 0，而「永远为零」的一行读起来像证据，比没有更糟。
+    ``fix_hints`` 同时是返工任务下次执行时看到的解释（``Scheduler._fix_hints``
+    取最近一轮驳回的提示）。``record_review`` 不触发 ``on_change``，调用方负责补落盘。
+    """
+    now = datetime.now()
+    for task_id in task_ids:
+        task = board.get(task_id)
+        board.record_review(
+            task_id,
+            ReviewRecord(
+                task_id=task_id,
+                round=max((review.round for review in task.reviews), default=0) + 1,
+                layer="human",
+                verdict="reject",
+                issues=[_HUMAN_REWORK_ISSUE],
+                fix_hints=[_HUMAN_REWORK_HINT],
+                reviewer=_HUMAN_REVIEWER,
+                created_at=now,
+            ),
+        )
 
 
 def _format_tokens(count: int) -> str:
