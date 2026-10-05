@@ -7,6 +7,7 @@
   完整清单，早退会把一次返工拖成 N 次。
 - **空任务**：无交付物且无产出的任务必须 approve（不能凭空报错）。
 - **可选产物只在缺失时豁免**：可选产物一旦落盘，照样过内容检查。
+- **解析错误 issue 以路径开头**：``issues`` 会被 G3 报告与跨层聚合单独读取，必须自包含。
 
 ``test_oversize_file_rejected`` 按控制器裁定改为
 ``test_file_within_max_bytes_is_not_size_flagged``：``max_bytes`` 是
@@ -17,6 +18,7 @@
 
 import pytest
 
+from agentcrew.artifacts.contract import parse_check
 from agentcrew.artifacts.spec import ArtifactSpec
 from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.gate.static_checks import STATIC_REVIEWER, run_static
@@ -108,6 +110,26 @@ def test_syntax_error_rejected(store):
     commit(store, t, t.deliverables[0], "def f(\n  pass\n")
     r = run_static(t, store, round_no=1)
     assert r.verdict == "reject" and any("语法错误" in i for i in r.issues)
+
+
+def test_parse_error_issue_leads_with_path(store):
+    """解析器消息前必须带产物路径：issues 会被 G3 终端报告与跨层聚合**单独**读取，
+    一个任务常声明半打产物，``语法错误：line 5`` 必须说得出是哪个文件。"""
+    t = task_with(py("app/main.py"))
+    commit(store, t, t.deliverables[0], "def f(\n")
+    r = run_static(t, store, round_no=1)
+    assert len(r.issues) == 1
+    assert r.issues[0].startswith("app/main.py 语法错误：")
+    assert r.issues[0] == f"app/main.py {parse_check('python', 'def f(\n')}"
+
+
+def test_json_parse_error_issue_leads_with_path(store):
+    """非 python 的解析消息同样以路径开头（其余 kind 的消息不带任何位置信息）。"""
+    t = task_with(ArtifactSpec(path="docs/api.json", kind="json", description="d"))
+    commit(store, t, t.deliverables[0], "{")
+    r = run_static(t, store, round_no=1)
+    assert len(r.issues) == 1
+    assert r.issues[0].startswith("docs/api.json JSON 解析失败：")
 
 
 def test_missing_must_contain_symbol_rejected(store):

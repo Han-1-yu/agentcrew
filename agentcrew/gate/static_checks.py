@@ -11,7 +11,7 @@ issue 说「哪里不对」，配对的 ``fix_hint`` 说「去做什么」。检
 1. 缺必需产物（``required=True`` 而未落盘）→ ``缺少必需产物：{path}``
 2. 契约外产物 → ``产出未在契约中声明的文件：{path}``
 3. 尺寸下界（``size < min_bytes``）→ ``{path} 为空文件``
-4. 按 ``kind`` 的结构解析 → ``parse_check`` 返回的消息
+4. 按 ``kind`` 的结构解析 → ``{path} {parse_check 返回的消息}``
 5. 占位内容 → ``{path} 仅含占位内容``
 6. 必需符号缺失 → ``{path} 缺少必需符号：{needle}``
 
@@ -24,8 +24,10 @@ issue 说「哪里不对」，配对的 ``fix_hint`` 说「去做什么」。检
   ``FileNotFoundError``：必需缺失已由检查 1 报出并跳过检查 3–6，可选缺失本就
   合法。已落盘的产物（含 ``required=False`` 的）则一律照跑内容检查。
 
-第 4 条按控制器裁定把解析器消息**原样**当 issue（spec §10.1 的示例消息带路径
-前缀，但裁定优先）：解析器消息不总含路径，路径由配对的 ``fix_hint`` 补足。
+第 4 条把解析器消息前缀上产物路径（``{path} {msg}``，消息原话一字不改）：
+``issues`` 会被 Task 30 的终端报告与 Task 27 的跨层聚合**单独**读取，而一个
+任务常声明半打产物 —— 消息不带路径就说不出是哪个文件；spec §10.1 的示例
+消息也正是路径在前的形式。
 """
 
 from datetime import datetime
@@ -107,7 +109,10 @@ def _content_findings(spec: ArtifactSpec, content: str) -> list[_Finding]:
         ))
     parse_error = parse_check(spec.kind, content)
     if parse_error is not None:
-        findings.append((parse_error, f"修正 {spec.path} 的语法错误后重新产出"))
+        findings.append((
+            f"{spec.path} {parse_error}",
+            f"修正 {spec.path} 的语法错误后重新产出",
+        ))
     if has_placeholder(content):
         findings.append((
             f"{spec.path} 仅含占位内容",
