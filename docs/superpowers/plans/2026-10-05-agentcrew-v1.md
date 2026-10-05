@@ -1494,7 +1494,12 @@ Expected: FAIL — `ImportError`
 - `toml` → `tomllib.loads`（Python 3.11+；3.10 用 `tomli` 不可用，故 **3.10 下降级为「跳过检查」并在返回的 dict 中标记不校验** —— 实现为：`sys.version_info < (3,11)` 时 `toml` 解析器直接返回 `None`）
 - `markdown`/`text`/`html`/`css`/`js`/`sql`/`shell`/`dockerfile` → 恒返回 `None`（结构检查由 G1 的占位符检查覆盖）
 
-`has_placeholder(content)` 返回 True 当：出现任一 `PLACEHOLDER_MARKERS`（大小写不敏感）；或存在**整行仅为 `...`** 或 `…`（去除缩进后）；或内容去空白后长度 < 30 字符且不含 `=`/`:`/`(`/`{` 等结构字符。
+`has_placeholder(content)` 返回 True 当**任一**成立：
+1. 出现任一 `PLACEHOLDER_MARKERS`（大小写不敏感）；
+2. 存在**整行仅为 `...`** 或 `…`（去除缩进后）；
+3. 内容折叠空白后**长度 < 40 字符**，且**不含**任何结构字符 `= : ( ) { } [ ] ; " '`。
+
+> 阈值 40 与结构字符表是共同标定的：HTML 桩 `<html><body>placeholder</body></html>`（37 字符、无结构字符）必须被判为占位，而真实内容（如 `# Todo App FastAPI service with CRUD endpoints.`，47 字符）不能。**不得**把裸词 `placeholder` 加进 `PLACEHOLDER_MARKERS` —— 那会误伤合法的 HTML 属性 `<input placeholder="Add a todo">`。
 
 `PLACEHOLDER_MARKERS = ("TODO", "<placeholder>", "FIXME", "your code here", "your implementation", "待补充", "待实现", "占位")`。
 
