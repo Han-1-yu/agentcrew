@@ -1,3 +1,23 @@
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+# ── 静态检查起步配置（spec §17.5）────────────────────────────────────────
+# 宽松起步：用来在本地先挡住明显问题，不作为提交闸门。需要更严的规则时按需加，
+# 不要一次性打开全部规则集。
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["examples/fixtures", "output", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = ["E501"]  # 行长由 formatter / 评审把关，起步阶段不设硬线
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+follow_imports = "silent"
+warn_unused_configs = true
+warn_redundant_casts = true
