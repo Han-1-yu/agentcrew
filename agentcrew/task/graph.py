@@ -5,19 +5,17 @@
 调度器（Task 28）共用本模块的结果，故所有输出都保持确定性。
 
 方向约定：边 ``dep -> task`` 表示 ``task`` 依赖 ``dep``（``dep`` 先跑）。
-``deps[task]`` 是直接前置，``dependents[task]`` 是直接后继；
-``cycles()`` / ``topo_order()`` 返回的 id 序列都沿 ``dependents`` 方向。
+``deps[task]`` 是直接前置，``dependents_map[task]`` 是直接后继；
+``topo_order()`` 返回的 id 序列沿 ``dependents`` 方向。
 
-接口细节：brief 同时要求「``dependents`` 字段是 ``dict``」与「方法
-``dependents(task_id)``」，而 Python 里实例属性必然遮蔽同名方法。为同时满足
-两种用法，该字段用 :class:`_DependentsIndex`——一个 ``dict`` 子类，既可按
-``g.dependents[id]`` 访问全图映射，也可按 ``g.dependents(id)`` 取单点。
+接口细节：依赖映射字段名为 ``dependents_map``——``dependents`` 这个名字留给
+``dependents(task_id)`` 方法（实例属性会遮蔽同名方法，故字段加 ``_map`` 后缀）。
 """
 
 from __future__ import annotations
 
 import heapq
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from agentcrew.task.task import Task, TaskStatus
@@ -40,18 +38,6 @@ def _is_blocking_dep(tasks: Mapping[str, Task], dep: str) -> bool:
     return task is not None and task.status in _BLOCKING_DEP_STATES
 
 
-class _DependentsIndex(dict[str, frozenset[str]]):
-    """``dependents`` 字段的类型：是 ``dict``，同时可当方法调用。
-
-    见模块 docstring：brief 要求 ``g.dependents["A"]`` 与 ``g.dependents("A")``
-    都可用，而实例属性会遮蔽同名方法，故用一个可调用的 ``dict`` 子类调和。
-    """
-
-    def __call__(self, task_id: str) -> frozenset[str]:
-        """``task_id`` 的直接后继；未在图中出现过的 id 抛 ``KeyError``。"""
-        return self[task_id]
-
-
 class CyclicGraphError(ValueError):
     """图存在环、无法给出拓扑序；``cycles`` 携带检测到的全部环。"""
 
@@ -64,12 +50,13 @@ class CyclicGraphError(ValueError):
 class TaskGraph:
     """任务依赖图；经 :meth:`build` 构造。
 
-    两张表的键都覆盖图中出现过的每个 id（含只作为依赖出现、自身不在
-    ``tasks`` 里的悬挂 id）：无前置的节点映射到 ``frozenset()``。
+    ``deps`` / ``dependents_map`` 两张表的键都覆盖图中出现过的每个 id（含只
+    作为依赖出现、自身不在 ``tasks`` 里的悬挂 id）：无前置的节点映射到
+    ``frozenset()``。
     """
 
     deps: dict[str, frozenset[str]]
-    dependents: _DependentsIndex
+    dependents_map: dict[str, frozenset[str]]
 
     @classmethod
     def build(cls, tasks: Sequence[Task]) -> TaskGraph:
@@ -93,14 +80,18 @@ class TaskGraph:
                 dependents[dep].add(task.id)
         return cls(
             deps={node: frozenset(edges) for node, edges in deps.items()},
-            dependents=_DependentsIndex(
-                {node: frozenset(edges) for node, edges in dependents.items()}
-            ),
+            dependents_map={
+                node: frozenset(edges) for node, edges in dependents.items()
+            },
         )
 
     def dependencies(self, task_id: str) -> frozenset[str]:
         """``task_id`` 的直接前置；未在图中出现过的 id 抛 ``KeyError``。"""
         return self.deps[task_id]
+
+    def dependents(self, task_id: str) -> frozenset[str]:
+        """直接依赖 ``task_id`` 的任务（直接后继）；未知 id 抛 ``KeyError``。"""
+        return self.dependents_map[task_id]
 
     def descendants(self, task_id: str) -> set[str]:
         """``task_id`` 的全部传递后继，不含自身；未知 id 抛 ``KeyError``。
@@ -108,13 +99,13 @@ class TaskGraph:
         带已访集合的迭代 DFS：有环输入也保证终止；输出与发现顺序无关。
         """
         seen: set[str] = {task_id}
-        stack = list(self.dependents[task_id])
+        stack = list(self.dependents_map[task_id])
         while stack:
             node = stack.pop()
             if node in seen:
                 continue
             seen.add(node)
-            stack.extend(self.dependents[node])
+            stack.extend(self.dependents_map[node])
         return seen - {task_id}
 
     def cycles(self) -> list[list[str]]:
@@ -150,7 +141,7 @@ class TaskGraph:
         while heap:
             node = heapq.heappop(heap)
             order.append(node)
-            for dependent in self.dependents[node]:
+            for dependent in self.dependents_map[node]:
                 indegree[dependent] -= 1
                 if indegree[dependent] == 0:
                     heapq.heappush(heap, dependent)
@@ -168,7 +159,7 @@ class TaskGraph:
         while ready:
             node = ready.pop()
             remaining.discard(node)
-            for dependent in self.dependents[node]:
+            for dependent in self.dependents_map[node]:
                 indegree[dependent] -= 1
                 if indegree[dependent] == 0:
                     ready.append(dependent)
@@ -179,28 +170,39 @@ class TaskGraph:
 
         限定起点为路径最小 id 且只走 id ≥ 起点的节点：每个简单环只从其
         最小 id 节点被发现一次，既去重又让输出顺序稳定。
+
+        栈帧用「节点 + 下一个待试后继的下标」表示，不用迭代器对象、不用
+        异常控制流：循环体足够朴素，长环上跑几千万次也不依赖生成器协议。
         """
         cycles: list[list[str]] = []
+        # 环上的节点的后继仍在 remaining 中（Kahn 剥离的闭包性质），
+        # 这里仍逐帧复查 ``nxt in remaining``，防御性兜底。
+        successors: dict[str, list[str]] = {
+            node: sorted(self.dependents_map[node]) for node in remaining
+        }
         for start in sorted(remaining):
-            path: list[str] = [start]
+            path: list[str] = [start]  # 同时也是节点栈
+            indices: list[int] = [0]  # 与 path 等长：各帧已试到第几个后继
             on_path: set[str] = {start}
-            # 不变式：len(stack) == len(path)，栈顶迭代器对应 path[-1] 的出边。
-            stack: list[Iterator[str]] = [iter(sorted(self.dependents[start]))]
-            while stack:
-                try:
-                    nxt = next(stack[-1])
-                except StopIteration:
-                    stack.pop()
-                    on_path.discard(path.pop())
+            while path:
+                node = path[-1]
+                candidates = successors[node]
+                index = indices[-1]
+                if index >= len(candidates):
+                    path.pop()
+                    indices.pop()
+                    on_path.discard(node)
                     continue
-                if nxt not in remaining or nxt < start:
+                indices[-1] = index + 1
+                nxt = candidates[index]
+                if nxt < start or nxt not in remaining:
                     continue
                 if nxt == start:
                     cycles.append(list(path))  # path 是简单路径，接回起点即成环
                 elif nxt not in on_path:
                     path.append(nxt)
+                    indices.append(0)
                     on_path.add(nxt)
-                    stack.append(iter(sorted(self.dependents[nxt])))
         return cycles
 
 

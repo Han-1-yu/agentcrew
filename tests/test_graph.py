@@ -124,7 +124,9 @@ def test_dangling_dependency_becomes_sourceless_node():
 def test_leaf_task_is_a_key_with_empty_dependents():
     g = TaskGraph.build([mk("A"), mk("B", ["A"])])
     assert g.dependents("B") == frozenset()
-    assert set(g.dependents) == {"A", "B"}
+    # 映射在 dependents_map 上（dependents 是方法），且是普通 dict
+    assert type(g.dependents_map) is dict
+    assert g.dependents_map == {"A": frozenset({"B"}), "B": frozenset()}
 
 def test_build_does_not_mutate_input_tasks():
     tasks = [mk("A"), mk("B", ["A"])]
@@ -139,7 +141,7 @@ def test_descendants_terminates_on_cyclic_graph():
 def test_empty_graph_has_no_nodes_and_no_cycles():
     g = TaskGraph.build([])
     assert g.topo_order() == [] and g.cycles() == []
-    assert set(g.deps) == set(g.dependents) == set()
+    assert set(g.deps) == set(g.dependents_map) == set()
 
 
 # ---- 就绪 / 阻塞集的补充行为 ----
