@@ -6,14 +6,17 @@
 """
 
 import os
+import re
 import sys
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from agentcrew.models.config import PROVIDER_PRESETS, ProviderPreset
 
 GateMode = Literal["both", "plan", "delivery", "none"]
 
@@ -51,6 +54,41 @@ _YAML_SCALAR_KEYS = ("max_concurrency", "context_budget_tokens", "gate", "roles_
 
 #: 分层合并时按 key 覆盖而非整体替换的字段。
 _MAPPING_FIELDS = ("role_bindings", "provider_overrides")
+
+#: ``provider_overrides.<provider>`` 允许出现的键 = ``ProviderPreset`` 的字段。
+#: 引擎只读这些（``parse_alias._apply_override``）；别的键会被静默忽略，
+#: 因此宁可在这里报错（见 :meth:`Settings._validate_provider_overrides`）。
+_OVERRIDE_KEYS: frozenset[str] = frozenset(ProviderPreset.model_fields)
+
+#: 名字命中这些词的覆盖键按「疑似密钥」拒绝：真正的 API Key 只从环境变量读
+#: （spec §17.2），而 ``provider_overrides`` 会进 ``run.json`` 的配置快照。
+_SECRET_KEY_RE = re.compile(
+    r"key|token|secret|password|passwd|credential|auth", re.IGNORECASE)
+
+#: 脱敏后的占位值（配置快照与 ``resume`` 的差异行共用）。
+REDACTED = "***"
+
+
+def redact_overrides(value: Any) -> Any:
+    """把 ``provider_overrides`` 形状的映射里名字像密钥的字段值换成 ``***``。
+
+    两层防御里的第二层：读取时的校验（:meth:`Settings._validate_provider_overrides`）
+    已经拒掉了新配置里的密钥字段，但**旧的 ``run.json``** 可能是修复之前写下的，
+    明文照旧躺在盘上 —— ``resume`` 的配置差异行会把它打到 stderr，所以打印前
+    再抹一次。非映射值原样返回（调用方拿到的类型不变）。
+    """
+    if not isinstance(value, Mapping):
+        return value
+    redacted: dict[str, Any] = {}
+    for provider, patch in value.items():
+        if isinstance(patch, Mapping):
+            redacted[provider] = {
+                field: (REDACTED if _SECRET_KEY_RE.search(str(field)) else item)
+                for field, item in patch.items()
+            }
+        else:
+            redacted[provider] = patch
+    return redacted
 
 
 def _default_gate() -> GateMode:
@@ -134,6 +172,53 @@ class Settings(BaseModel):
     def _resolve_output_dir(cls, value: Path) -> Path:
         return value.resolve()
 
+    @field_validator("provider_overrides")
+    @classmethod
+    def _validate_provider_overrides(
+        cls, value: dict[str, dict]
+    ) -> dict[str, dict]:
+        """在**配置读取处**校验 ``agentcrew.yaml`` 的 ``models.providers``。
+
+        Task 17 的 carry-forward：这个字段是唯一一处「自由形状的用户输入直接
+        进引擎」的地方，而它在修复前是**双输**的 ——
+
+        - 未知字段被静默忽略（``parse_alias`` 只读 ``ProviderPreset`` 的字段，
+          ``_apply_override`` 的 ``model_copy`` 不校验也不拦截）：写错了什么
+          都不会发生，操作者以为生效了；
+        - 名字像密钥的字段（``api_key`` / ``token`` …）会被原样写进
+          ``run.json`` 的 ``config_snapshot``**明文**落盘，并被 ``resume`` 的
+          配置差异行打到 stderr。
+
+        真正的 API Key 只从环境变量读（spec §17.2），因此这里直接报错。
+        报错消息只点名**字段名**、绝不回显字段值：把密钥抄进异常消息等于换个
+        地方泄漏（它会进终端与 CI 日志）。
+        """
+        available = "、".join(sorted(_OVERRIDE_KEYS))
+        for provider, patch in value.items():
+            if provider not in PROVIDER_PRESETS:
+                known = "、".join(sorted(PROVIDER_PRESETS))
+                raise ValueError(
+                    f"provider_overrides 含未知 provider {provider!r}；"
+                    f"可用 provider：{known}")
+            if not isinstance(patch, Mapping):
+                raise ValueError(
+                    f"provider_overrides.{provider} 必须是映射（字段 → 值），"
+                    f"实际是 {type(patch).__name__}")
+            for field in patch:
+                if field in _OVERRIDE_KEYS:
+                    continue
+                if _SECRET_KEY_RE.search(str(field)):
+                    raise ValueError(
+                        f"provider_overrides.{provider}.{field} 疑似密钥字段："
+                        "API Key 只从环境变量读取（spec §17.2），"
+                        "provider_overrides 会明文进 run.json 的配置快照；"
+                        f"请删除该字段。可覆盖字段：{available}")
+                raise ValueError(
+                    f"provider_overrides.{provider} 含未知字段 {field!r}："
+                    f"它不会被任何代码读取（静默忽略只会让人以为生效了）；"
+                    f"可覆盖字段：{available}")
+        return value
+
     @classmethod
     def load(cls, **cli_overrides: object) -> "Settings":
         """按五级优先级合并出 ``Settings``（spec §17.1）。"""
@@ -143,6 +228,17 @@ class Settings(BaseModel):
         _merge(values, _env_values())
         _merge(values, cli_overrides)
         return cls(**values)
+
+    def config_snapshot(self) -> dict[str, Any]:
+        """``run.json`` 的 ``config_snapshot``：``provider_overrides`` 脱敏后落盘。
+
+        ``model_dump`` 原样输出这个自由形状的映射，密钥字段一旦混进来就是明文
+        落盘（``resume`` 的差异行还会把它打到 stderr）。读取时的校验已经拦住了
+        新配置，这里再抹一层：快照是文件，写出去就收不回来了。
+        """
+        data = self.model_dump(mode="json")
+        data["provider_overrides"] = redact_overrides(self.provider_overrides)
+        return data
 
     def secret_values(self) -> list[str]:
         """所有已配置的非空 API Key 值，供日志脱敏使用。"""

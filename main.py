@@ -38,7 +38,7 @@ from typing import Any, TextIO
 from rich.console import Console
 from rich.text import Text
 
-from agentcrew.config import GateMode, Settings
+from agentcrew.config import GateMode, Settings, redact_overrides
 from agentcrew.crew.crew import (
     EXIT_CODES,
     Crew,
@@ -628,13 +628,24 @@ def _invalid_numbers(args: argparse.Namespace) -> str | None:
 
 
 def _config_diff(snapshot: dict[str, Any], settings: Settings) -> list[str]:
-    """配置快照 vs 当前配置的差异行（空列表 = 可比，spec §13.3 第 3 步）。"""
-    current = settings.model_dump(mode="json")
+    """配置快照 vs 当前配置的差异行（空列表 = 可比，spec §13.3 第 3 步）。
+
+    两侧都过 :func:`~agentcrew.config.redact_overrides`：这条差异行会**打印到
+    stderr**（还常常被重定向进 CI 日志），而 ``provider_overrides`` 是自由形状
+    的用户输入 —— 旧 run.json 里可能留着本次修复之前写下的明文密钥。
+    """
+    current = settings.config_snapshot()
     return [
-        f"{key}: {snapshot.get(key)!r} -> {current.get(key)!r}"
+        f"{key}: {_redacted(snapshot.get(key))!r} -> "
+        f"{_redacted(current.get(key))!r}"
         for key in _COMPARABLE_KEYS
-        if snapshot.get(key) != current.get(key)
+        if _redacted(snapshot.get(key)) != _redacted(current.get(key))
     ]
+
+
+def _redacted(value: Any) -> Any:
+    """映射值先抹掉疑似密钥再比较/打印；其余类型原样返回。"""
+    return redact_overrides(value) if isinstance(value, dict) else value
 
 
 def _run_dir(settings: Settings, run_id: str) -> Path:

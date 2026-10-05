@@ -27,6 +27,7 @@ import pytest
 from rich.console import Console
 
 import main as cli
+from agentcrew.config import Settings
 from agentcrew.crew.crew import EXIT_CODES, PlanFailedError, RunCancelled
 from agentcrew.gate.cli_prompter import CliPrompter
 from agentcrew.gate.gatekeeper import NullPrompter
@@ -205,6 +206,51 @@ def test_clean_dry_run_lists_runs(tmp_path, monkeypatch, capsys):
 
 
 # ── 完整流程 ──────────────────────────────────────────────────────────────
+
+
+def test_yaml_api_key_never_reaches_output_or_stderr(tmp_path, monkeypatch, capfd):
+    """I1：``agentcrew.yaml`` 里写的密钥不能出现在任何落盘文件或终端里。
+
+    ``provider_overrides`` 是自由形状的用户输入，修复前它会**明文**进
+    ``run.json`` 的 ``config_snapshot``（第一处泄漏），而 ``resume`` 的配置差异行
+    会把它打到 stderr（第二处）。这里从 CLI 顶层走一遍：配置读取期就该被拒，
+    退出码 3，密钥在 stdout/stderr 与 ``output/`` 下任何文件里都找不到。
+    """
+    secret = "sk-YAMLSECRET_0123456789abcdef"
+    cfg = tmp_path / "agentcrew.yaml"
+    cfg.write_text(
+        f"models:\n  providers:\n    openai:\n      api_key: {secret}\n",
+        encoding="utf-8")
+    monkeypatch.setenv("AGENTCREW_CONFIG", str(cfg))
+    monkeypatch.setenv("AGENTCREW_OUTPUT_DIR", str(tmp_path / "o"))
+    monkeypatch.chdir(ROOT)
+
+    code = cli.main(["run", "--demo", "--mock", "--auto", "--no-live"])
+    captured = capfd.readouterr()
+
+    assert code == EXIT_CODES["config"] == 3
+    assert secret not in captured.out and secret not in captured.err
+    assert "api_key" in captured.err          # 报错必须点名是哪个字段
+    output_dir = tmp_path / "o"
+    leaked = [
+        str(path)
+        for path in (output_dir.rglob("*") if output_dir.exists() else [])
+        if path.is_file()
+        and secret in path.read_text(encoding="utf-8", errors="replace")
+    ]
+    assert leaked == [], f"密钥落进了这些文件：{leaked}"
+
+
+def test_config_diff_redacts_secrets_in_an_old_snapshot(tmp_path, monkeypatch):
+    """第二处泄漏点：``resume`` 把差异行打到 stderr，旧快照可能是明文。"""
+    secret = "sk-OLDSNAPSHOT_0123456789abcdef"
+    old = {"provider_overrides": {"openai": {"api_key": secret}}}
+    current = Settings.load().model_copy(update={
+        "provider_overrides": {"openai": {"implementation": "mock"}}})
+    lines = cli._config_diff(old, current)
+    assert lines, "两边的 provider_overrides 不同，差异行不该为空"
+    assert secret not in "\n".join(lines)
+    assert "***" in "\n".join(lines)
 
 
 def test_demo_mock_run_end_to_end(tmp_path, monkeypatch):

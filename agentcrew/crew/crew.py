@@ -273,7 +273,7 @@ class Crew:
             checkpoint = CheckpointStore.create(
                 self._settings.output_dir,
                 project_goal=goal,
-                config_snapshot=self._settings.model_dump(mode="json"),
+                config_snapshot=self._settings.config_snapshot(),
             )
             return await self._start(checkpoint, goal=goal, resume_board=None)
         finally:

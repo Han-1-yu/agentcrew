@@ -419,6 +419,12 @@ YAML 只识别以下键；`output_dir` / `mock` / `log_level` 等请用环境变
 | `models.role_bindings.<role_key>` | 按角色覆盖模型 |
 | `models.providers.<provider>` | 覆盖内置 provider 预设：`base_url` / `capabilities`（逐位合并） / `implementation` |
 
+`models.providers.<provider>` 下的键会被**校验**：未知 provider、未知字段，以及
+名字像密钥的字段（`api_key` / `token` / `secret` …）一律在读取配置时报错并退出码 3
+—— 这些字段过去被静默忽略（引擎只读上面那三个），却会明文写进 `run.json` 的
+`config_snapshot`。**API Key 只从环境变量读取**（见「模型绑定」一节），不要写进
+`agentcrew.yaml`。
+
 ```yaml
 max_concurrency: 4
 context_budget_tokens: 24000
