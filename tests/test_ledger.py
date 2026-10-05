@@ -234,6 +234,36 @@ def test_events_filter_applies_redaction_like_storage(tmp_path):
     assert lg.count("leak-supersecret") == 1
 
 
+def test_run_id_secret_is_redacted_in_file(tmp_path):
+    lg = Ledger(tmp_path / "l.jsonl", run_id="sk-abc123456", secrets=["sk-abc123456"])
+    ev = lg.emit("a")
+    raw = (tmp_path / "l.jsonl").read_text(encoding="utf-8")
+    assert "sk-abc123456" not in raw
+    assert ev.run_id == "***"
+
+
+def test_returned_event_data_has_no_secret_for_non_serializable_values(tmp_path):
+    class Payload:
+        def __str__(self):
+            return "Authorization: Bearer supersecret"
+
+    lg = Ledger(tmp_path / "l.jsonl", run_id="R-1", secrets=["supersecret"])
+    ev = lg.emit("x", as_set={"supersecret"}, as_bytes=b"supersecret", obj=Payload())
+    # 消费方（看板/报告）直接渲染 event.data：返回的事件必须与文件同样干净
+    assert "supersecret" not in repr(ev.data)
+    assert ev.data["as_set"] == "{'***'}"
+    assert ev.data["as_bytes"] == "b'***'"
+    assert ev.data["obj"] == "Authorization: ***"
+
+
+def test_returned_event_data_agrees_with_file_for_nested_dict(tmp_path):
+    lg = Ledger(tmp_path / "l.jsonl", run_id="R-1", secrets=["supersecret"])
+    ev = lg.emit("x", nested={"a": [1, {"k": "supersecret"}], "b": True})
+    stored = json.loads((tmp_path / "l.jsonl").read_text(encoding="utf-8"))
+    assert stored["data"] == ev.data
+    assert ev.data == {"nested": {"a": [1, {"k": "***"}], "b": True}}
+
+
 def test_redaction_preserves_non_string_types(ledger, tmp_path):
     ledger.emit("x", count=3, ratio=0.5, ok=True, nothing=None)
     data = json.loads((tmp_path / "ledger.jsonl").read_text(encoding="utf-8"))["data"]

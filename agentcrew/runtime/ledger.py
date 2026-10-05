@@ -21,9 +21,12 @@
 - **序列化**：``json.dumps(..., ensure_ascii=False, default=...)``。``ensure_ascii``
   保证中文在文件里可读；不可直接序列化的值（``Path``/``datetime``/``set``/``bytes``/
   自定义对象）由 ``default`` 回调 ``str()`` 后**再脱敏一次**才落盘——递归脱敏只覆盖
-  字符串与容器，这些值会绕过它，而审计文件是密钥最不该留下的地方。``str`` 混入
-  枚举如 ``TaskStatus`` 被 json 原生按其值写出；``int``/``bool``/``None`` 保持原生
-  JSON 类型。
+  字符串与容器，这些值会绕过它，而审计文件是密钥最不该留下的地方。注意：
+  ``set``/``bytes``/任意对象的安全**只由序列化器的这个兜底提供**，不在
+  ``_redact_value`` 里；将来任何绕过 :meth:`Ledger.emit` 的导出路径若自行序列化
+  ``record.data``，必须自带同样的 ``default`` 脱敏，否则这个口子会重新打开。
+  ``str`` 混入枚举如 ``TaskStatus`` 被 json 原生按其值写出；``int``/``bool``/``None``
+  保持原生 JSON 类型。
 """
 
 from __future__ import annotations
@@ -108,22 +111,22 @@ class Ledger:
 
         每次调用 ``open(path, "a", encoding="utf-8")`` 独立追加一行，写后
         ``flush()`` 再 ``os.fsync()``：函数返回时事件已落盘，不依赖 ``close()``。
-        返回的对象即写入内容，供看板等实时消费方使用——调用方拿到的应当是脱敏
-        后的数据，不能因为「还没落盘」而泄露原值。
+        返回的是**从刚写入的那一行重建**的事件：``run_id``、事件名、``data`` 与
+        文件逐字节一致（``default`` 兜底与字符串化的效果也在其中）。消费方
+        （看板、报告）直接渲染 ``event.data`` 不会打印文件里已被替换掉的原值。
         """
         if self._closed:
             raise RuntimeError("Ledger 已关闭")
         record = LedgerEvent(
             ts=datetime.now(),
-            run_id=self._run_id,
+            run_id=redact(self._run_id, self._secrets),
             event=redact(event, self._secrets),
             data=_redact_value(data, self._secrets),
         )
-        payload = record.model_dump()
         # default 只接住不可序列化的值（set/bytes/自定义对象…）：它们绕过
         # _redact_value，必须在字符串化的这一刻补一次脱敏，否则密钥原样落盘。
         line = json.dumps(
-            payload,
+            record.model_dump(),
             ensure_ascii=False,
             default=lambda value: redact(str(value), self._secrets),
         ) + "\n"
@@ -131,7 +134,9 @@ class Ledger:
             file.write(line)
             file.flush()
             os.fsync(file.fileno())
-        return record
+        # 直接返回上面的 record 不够：它里面的 set/bytes/自定义对象仍是原值，
+        # 只有序列化器兜底才把它们脱敏。重建自写入行，返回值与文件不可能漂移。
+        return LedgerEvent.model_validate_json(line)
 
     def events(self, event: str | None = None) -> Iterator[LedgerEvent]:
         """逐行产出事件；``event`` 非 None 时只产出同名事件。
