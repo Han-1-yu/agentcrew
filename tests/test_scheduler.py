@@ -29,6 +29,7 @@ import json
 
 import pytest
 
+from agentcrew.agents.registry import AgentFactory
 from agentcrew.artifacts.spec import ArtifactSpec
 from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.config import Settings
@@ -37,12 +38,12 @@ from agentcrew.crew.scheduler import Scheduler
 from agentcrew.gate.gatekeeper import Gatekeeper, NullPrompter
 from agentcrew.gate.reviewer import Reviewer
 from agentcrew.models.factory import ModelFactory
-from agentcrew.agents.registry import AgentFactory
-from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.roles.builtin import BUILTIN_ROLES
+from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.runtime.checkpoint import CheckpointStore
 from agentcrew.runtime.ledger import Ledger
-from agentcrew.task.task import Task, TaskStatus as S
+from agentcrew.task.task import Task
+from agentcrew.task.task import TaskStatus as S
 from agentcrew.task.task_board import TaskBoard
 
 GOOD = {"verdict": "approve", "score": 0.95, "issues": [], "fix_hints": []}
@@ -437,3 +438,28 @@ async def test_gate_evaluates_after_task_slot_release(env):
     await sch.run()
     assert board.get("A").status is S.SUCCEEDED
     assert locked_during_gate == [False]
+
+
+# ── 重试必须带上失败原因，否则就是原样重放 ──
+
+def test_retry_transition_carries_the_error_and_next_dispatch_sees_it(env):
+    from agentcrew.crew.scheduler import _RETRY_REASON_PREFIX
+
+    board = TaskBoard([mk("A")])
+    store = env["store"]
+    agents = env["agents"]
+    gk = Gatekeeper(env["reviewer"], store, board, gate="none",
+                    ledger=env["ledger"], prompter=NullPrompter())
+    bus = ContextBus("g", board, store)
+    sch = Scheduler(board, agents, gk, bus, ledger=env["ledger"])
+
+    board.transition("A", S.READY)
+    board.take_ready(limit=1)                       # → RUNNING，attempts=1
+    sch._handle_error("A", "模型回复被输出上限截断：请精简内容")
+
+    t = board.get("A")
+    assert t.status is S.READY
+    assert t.status_history[-1].reason.startswith(_RETRY_REASON_PREFIX)
+
+    hints = sch._fix_hints(t)
+    assert hints and "截断" in hints[0]

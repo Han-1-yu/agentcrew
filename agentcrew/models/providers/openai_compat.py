@@ -207,6 +207,7 @@ class OpenAICompatProvider(BaseProvider):
             prompt_tokens=int(getattr(usage, "prompt_tokens", 0) or 0),
             completion_tokens=int(getattr(usage, "completion_tokens", 0) or 0),
             latency_ms=latency_ms,
+            finish_reason=getattr(response.choices[0], "finish_reason", None),
         )
 
     async def _create(self, kwargs: dict[str, Any]) -> Any:

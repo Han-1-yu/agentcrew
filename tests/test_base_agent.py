@@ -8,27 +8,27 @@
 上下文由 Agent 自己设置（含返工轮次的夹具编号）。
 """
 
-import pytest
+# 补充用例需要（brief 的 import 块保持原样）
+from datetime import datetime
 from pathlib import Path
-from agentcrew.agents.base_agent import BaseAgent, AgentExecutionError
+
+import pytest
+
+from agentcrew.agents.base_agent import AgentExecutionError, BaseAgent
 from agentcrew.agents.generic import GenericAgent
-from agentcrew.agents.registry import AgentFactory, AGENT_CLASSES
+from agentcrew.agents.registry import AGENT_CLASSES, AgentFactory
 from agentcrew.artifacts.spec import ArtifactSpec
 from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.config import Settings
-from agentcrew.context.context_bus import ContextBus
+from agentcrew.context.context_bus import TRUNCATION_NOTICE, ContextBus
 from agentcrew.models.factory import ModelFactory
 from agentcrew.models.providers.mock import set_purpose
 from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.roles.spec import RoleSpec
 from agentcrew.runtime.ledger import Ledger
-from agentcrew.task.task import Task, TaskStatus as S
+from agentcrew.task.task import Task, TaskResult
+from agentcrew.task.task import TaskStatus as S
 from agentcrew.task.task_board import TaskBoard
-
-# 补充用例需要（brief 的 import 块保持原样）
-from datetime import datetime
-from agentcrew.context.context_bus import TRUNCATION_NOTICE
-from agentcrew.task.task import TaskResult
 
 
 @pytest.fixture
@@ -524,3 +524,44 @@ def test_deliverables_section_declares_itself_authoritative(env):
     text = _render_deliverables(env["task"])
     assert "唯一权威" in text
     assert "以本清单为准" in text
+
+
+# ── 输出截断：与「模型写砸了」必须区分开 ──
+
+def test_is_truncated_recognises_both_provider_spellings():
+    from types import SimpleNamespace
+
+    from agentcrew.agents.base_agent import _is_truncated
+
+    assert _is_truncated(SimpleNamespace(finish_reason="length"))       # OpenAI 兼容
+    assert _is_truncated(SimpleNamespace(finish_reason="max_tokens"))   # Anthropic
+    assert _is_truncated(SimpleNamespace(finish_reason="LENGTH"))       # 大小写
+    assert not _is_truncated(SimpleNamespace(finish_reason="stop"))
+    assert not _is_truncated(SimpleNamespace(finish_reason=None))
+    assert not _is_truncated(SimpleNamespace())                         # 替身没有该字段
+
+
+async def test_execute_reports_truncation_as_truncation_not_parse_failure(env, tmp_path):
+    """实测架构师连续 3 次停在 8192 token，每次都被判「解析失败」，重试三次全废。
+
+    截断必须报成截断 —— 否则同上限重试只会再截断一次，模型也无从知道要精简。
+    """
+
+    from agentcrew.models.providers.base import CompletionResult
+
+    fx = tmp_path / "fx"
+    write_fixture(fx, GOOD_A)
+    agent = make_agent(env, fx)
+
+    async def fake_call(alias, messages, **kw):
+        return CompletionResult(
+            text="```python file=a.py\ndef f():\n",   # 明显未闭合
+            provider="mock", model="m", prompt_tokens=1, completion_tokens=8192,
+            latency_ms=0, finish_reason="length")
+
+    agent._models.call = fake_call
+    with pytest.raises(AgentExecutionError) as exc:
+        await agent.execute(env["task"], env["bus"].build(env["task"]))
+    msg = str(exc.value)
+    assert "截断" in msg and "8192" in msg
+    assert "未闭合" not in msg      # 不能报成格式错误

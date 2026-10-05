@@ -104,6 +104,8 @@ class AnthropicProvider(BaseProvider):
             prompt_tokens=int(getattr(usage, "input_tokens", 0) or 0),
             completion_tokens=int(getattr(usage, "output_tokens", 0) or 0),
             latency_ms=latency_ms,
+            # Anthropic 用 ``stop_reason``，达到上限时是 ``"max_tokens"``。
+            finish_reason=getattr(response, "stop_reason", None),
         )
 
     async def _create(self, kwargs: dict[str, Any]) -> Any:

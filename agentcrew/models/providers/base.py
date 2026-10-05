@@ -44,6 +44,12 @@ class CompletionResult(BaseModel):
     prompt_tokens: int
     completion_tokens: int
     latency_ms: int
+    #: provider 给出的停止原因（OpenAI 兼容端点 ``choices[0].finish_reason``，
+    #: Anthropic ``stop_reason``）。``"length"`` / ``"max_tokens"`` 表示回复是
+    #: **被输出上限截断的**，不是模型写完了 —— 实测真实运行里架构师的回复正好
+    #: 停在 8192，围栏因此未闭合，而平台把它当成「格式错误」，用同一个上限重试
+    #: 三次，三次都必然失败。留下这个字段，上层才能区分「写砸了」和「没写完」。
+    finish_reason: str | None = None
 
 
 class BaseProvider(ABC):

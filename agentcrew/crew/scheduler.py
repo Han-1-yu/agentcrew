@@ -71,6 +71,11 @@ from agentcrew.task.task_board import TaskBoard
 #: 带 ``类型名: `` 前缀，不会与这个裸串相等。
 CANCELLED_ERROR = "cancelled"
 
+#: 执行失败重试时写进跃迁理由的前缀。理由随 ``status_history`` 持久化进
+#: ``tasks.json``，下一次派发由 :meth:`Scheduler._fix_hints` 取出来交给模型 ——
+#: 这是让重试「有的可改」而不是原样重放的唯一通道。
+_RETRY_REASON_PREFIX = "retry: "
+
 
 class WorkerOutcome(BaseModel):
     """一个 worker 的终局：执行结果、门禁裁决与错误（至多一个非空）。
@@ -370,7 +375,15 @@ class Scheduler:
         if task.status is TaskStatus.RUNNING:
             self._emit_error("agent.execute", task_id, error)
             if task.attempts < task.max_attempts:
-                self._transition(task_id, TaskStatus.READY, reason="retry")
+                # 把失败原因**写进跃迁理由**：它会随 status_history 落进
+                # tasks.json，下一次派发时由 _fix_hints 取出来交给模型。
+                # 没有这一条，重试就是原样重放 —— 实测架构师的回复连续 3 次被
+                # 输出上限截断，模型每次都在做同一件徒劳的事。
+                self._transition(
+                    task_id,
+                    TaskStatus.READY,
+                    reason=f"{_RETRY_REASON_PREFIX}{error[:400]}",
+                )
             else:
                 self._transition(
                     task_id, TaskStatus.FAILED, reason="attempts-exhausted"
@@ -410,22 +423,32 @@ class Scheduler:
         return sum(1 for r in task.reviews if r.layer == "static") + 1
 
     def _fix_hints(self, task: Task) -> list[str]:
-        """返工任务的修复建议：最后一次驳回轮次的 ``fix_hints``（去重保序）。
+        """这次派发给模型的提示，按重要性排序，去重保序。
 
-        首次执行没有驳回历史 → 空列表。同一轮里 G1、G2 的记录取并集（round 相同）。
+        两个来源：
+
+        1. **执行失败的原因**（``retry:`` 前缀的跃迁理由）—— 没有它，重试只是
+           把同一件事原样重放。实测架构师的回复连续 3 次撞上输出上限被截断，
+           而模型每次都看不到任何反馈，三次失败方式完全一致。
+        2. **最后一次驳回轮次的 ``fix_hints``**（返工）—— 同一轮里 G1/G2 取并集。
         """
+        hints: list[str] = []
+        for change in reversed(task.status_history):
+            if change.reason.startswith(_RETRY_REASON_PREFIX):
+                error = change.reason[len(_RETRY_REASON_PREFIX):].strip()
+                if error:
+                    hints.append(f"上次执行失败，请据此修正：{error}")
+                break
         rejected = [r for r in task.reviews if r.verdict == "reject"]
-        if not rejected:
-            return []
-        last_round = max(r.round for r in rejected)
-        return list(
-            dict.fromkeys(
+        if rejected:
+            last_round = max(r.round for r in rejected)
+            hints.extend(
                 hint
                 for record in rejected
                 if record.round == last_round
                 for hint in record.fix_hints
             )
-        )
+        return list(dict.fromkeys(hints))
 
     def _transition(self, task_id: str, to: TaskStatus, *, reason: str) -> None:
         """经 ``TaskBoard`` 跃迁并落一条 ``task_transition`` 审计事件。

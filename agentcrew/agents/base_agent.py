@@ -192,6 +192,18 @@ class BaseAgent(ABC):
             role=self.spec.key,
         )
 
+        if _is_truncated(completion):
+            # 回复是**被输出上限截断**的，不是模型写完了。此时围栏必然未闭合，
+            # 而按「格式错误」重试毫无意义 —— 同一个上限、同一段内容，只会再
+            # 截断一次。实测真实运行里架构师连续 3 次都停在 8192，每次都被判成
+            # 「解析失败」，重试三次全废。这里必须把病因说清楚，让重试有得改。
+            self._fail(
+                task,
+                f"模型回复被输出上限截断（finish_reason={completion.finish_reason}，"
+                f"已输出 {completion.completion_tokens} token）：请精简内容，"
+                f"或把交付物拆成更小的几次输出后重试。",
+            )
+
         parsed = self._parse(completion.text, task)
         notes = _join_notes(parsed.notes, *_language_notes(completion.text, task))
         self._emit_notes(task, notes)
@@ -235,6 +247,11 @@ class BaseAgent(ABC):
                 self.spec.system_prompt,
                 f"## 输出规范\n{self.spec.output_contract}",
                 _ARTIFACT_FORMAT,
+                # 明说 token 预算：撞上上限时回复会被**截断**，围栏随之未闭合，
+                # 整次输出全废。实测架构师连写三版 8000 token 的文档全部撞线。
+                f"## 输出长度\n本次回复的全部内容（含围栏与说明文字）上限约 "
+                f"{self.spec.max_output_tokens} token。宁可写紧凑、写到要点为止，"
+                f"也不要写满被截断——一旦截断，本次输出整体作废。",
             )
         )
         return [
@@ -478,6 +495,21 @@ def _render_deliverables(task: Task) -> str:
             line += f"｜必须包含：{'、'.join(spec.must_contain)}"
         lines.append(line)
     return "\n".join(lines)
+
+
+#: provider 表示「回复撞上输出上限」的停止原因：OpenAI 兼容端点是 ``length``，
+#: Anthropic 是 ``max_tokens``。两者含义相同，都必须与「模型写完了」区分开。
+_TRUNCATED_FINISH_REASONS = frozenset({"length", "max_tokens"})
+
+
+def _is_truncated(completion: object) -> bool:
+    """这次回复是不是被输出上限截断的？
+
+    用 ``getattr`` 而不是类型标注，是为了让测试替身（只有 ``text``/``usage`` 的
+    假 provider）也能走同一条路径。
+    """
+    reason = getattr(completion, "finish_reason", None) or ""
+    return str(reason).lower() in _TRUNCATED_FINISH_REASONS
 
 
 def _render_upstream(digests: Sequence[UpstreamDigest]) -> str:
