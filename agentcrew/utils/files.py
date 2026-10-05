@@ -109,17 +109,23 @@ def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _is_link_like(path: Path) -> bool:
+def is_link_like(path: Path) -> bool:
     """符号链接，或 Windows 重解析点（目录联接、挂载点等）。
 
     ``is_symlink`` 对目录联接（junction）返回 False，必须查 ``lstat`` 的
     ``st_file_attributes`` 重解析位；该属性与对应常量均为 Windows 专有，
     POSIX 上取不到（回退 0，等价于只认 ``is_symlink``）。
+
+    ``ArtifactStore.resolve`` 也用它逐段拒绝写入路径上的链接，故为公开接口。
     """
     if path.is_symlink():
         return True
     attributes = getattr(path.lstat(), "st_file_attributes", 0)
     return bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+
+
+#: 旧私有名保留为别名：模块内引用已改用公开名，导出时保留以防既有外部引用断裂。
+_is_link_like = is_link_like
 
 
 def tree(root: Path, max_entries: int = 300) -> list[str]:
@@ -139,7 +145,7 @@ def tree(root: Path, max_entries: int = 300) -> list[str]:
         except OSError:
             continue  # 目录不存在或不可读：跳过，不中断整次列举
         for child in children:
-            if _is_link_like(child):
+            if is_link_like(child):
                 continue
             if child.is_dir():
                 pending.append(child)
