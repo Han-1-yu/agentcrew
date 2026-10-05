@@ -222,30 +222,39 @@ _STUB_MAX_CHARS = 400
 def has_placeholder(content: str) -> bool:
     """内容是否为**只有**占位信号（标记 / 整行省略号 / 无结构的超短文本）。
 
-    消息是「仅含占位内容」，判定就必须真的看**是否仅含** —— 规则 1、2 因此都带
-    长度上界 :data:`_STUB_MAX_CHARS`：只有短文里的标记与省略号才说明「这篇东西
-    还没写」，长文里的它们是**正常内容**（代码示例里的 `...` 省略、真实代码里的
-    `TODO` 注释）。
+    消息是「仅含占位内容」，判定就必须真的看**是否仅含**。因此**规则 1、2 共用
+    同一个长度上界** :data:`_STUB_MAX_CHARS`：占位是**一条短桩**的特征，不是
+    「文中某处出现过标记词」。长文里的标记与省略号都是正常内容 —— 代码示例里的
+    ``...`` 省略、真实代码里的 ``TODO`` 注释、文档末尾的 ``## TODO`` 小节、
+    「后续工作」里的「待实现」。
 
-    实测教训：一篇 2092 字的完整中文 README（标题/依赖/启动/环境变量/示例俱全）
-    因为 bash 示例里有一行 `...` 被判成占位，连续两次驳回把返工额度烧光、任务
-    FAILED。上界就是为这个加的。
+    实测教训（两次，代价都是整个任务）：
+
+    - 一篇 2092 字的完整中文 README 因 bash 示例里一行 ``...`` 被判占位，连续
+      两次驳回烧光返工额度、任务 FAILED；
+    - 同一次真实模型运行里，另一份 619 字、含 ``## TODO`` 小节的 README 仍然
+      被判占位 —— 上界当时只加在规则 2 上，规则 1 漏了。**「文档越完整越可能
+      正经提到这些词」意味着无上界的标记匹配方向是反的。**
+
+    规则 1 设上界**不会**削弱返工演示：T-005 的两份桩产物只有 87 与 40 字符，
+    远在上界之内，照常命中。
 
     三条规则的标定见 :data:`_STUB_MAX_CHARS`、:data:`_PLACEHOLDER_MAX_CHARS`
     与 :data:`_CASE_SENSITIVE_MARKERS`；改动其中一条都会让标定失效。
     """
     collapsed = " ".join(content.split())
-    if len(collapsed) < _STUB_MAX_CHARS:
-        lowered = content.lower()
-        for marker in PLACEHOLDER_MARKERS:
-            if marker in _CASE_SENSITIVE_MARKERS:
-                if marker in content:
-                    return True
-            elif marker.lower() in lowered:
+    if len(collapsed) >= _STUB_MAX_CHARS:
+        return False
+    lowered = content.lower()
+    for marker in PLACEHOLDER_MARKERS:
+        if marker in _CASE_SENSITIVE_MARKERS:
+            if marker in content:
                 return True
-        for line in content.split("\n"):
-            if line.strip() in _ELLIPSIS_LINES:
-                return True
+        elif marker.lower() in lowered:
+            return True
+    for line in content.split("\n"):
+        if line.strip() in _ELLIPSIS_LINES:
+            return True
     if len(collapsed) >= _PLACEHOLDER_MAX_CHARS:
         return False
     return not any(char in collapsed for char in _STRUCTURE_CHARS)

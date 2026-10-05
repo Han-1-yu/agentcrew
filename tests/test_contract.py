@@ -354,3 +354,26 @@ def test_empty_and_whitespace_only_content_are_placeholder():
     """空内容没有结构也没有实质内容，判为占位（与契约的 ``min_bytes`` 同向）。"""
     assert has_placeholder("")
     assert has_placeholder("   \n\n  \t\n")
+
+
+def test_long_document_with_an_ellipsis_in_a_code_example_is_not_a_placeholder():
+    """实测真实运行：一篇 2092 字的完整中文 README 因 bash 示例里一行 ``...``
+    被判「仅含占位内容」，连续两次驳回烧光返工额度、任务 FAILED。
+
+    长文里的 ``...`` 几乎总是示例语法，不是「没写完」——规则 2 因此带长度上界。
+    规则 1（标记）刻意不带，见下一条。
+    """
+    body = (
+        "# Todo List 后端\n\n"
+        "基于 Flask 的 Todo List REST API，数据持久化在服务端 JSON 文件。\n\n"
+        "## 依赖\n\n- Python 3.9+\n- Flask 3.x\n\n"
+        "安装依赖：\n\n```bash\npip install -r requirements.txt\n...\n```\n\n"
+        "## 启动\n\n```bash\npython app.py\n```\n"
+    ) * 4
+    assert "..." in body                      # 确实含整行省略号
+    assert not has_placeholder(body)          # 但它不是占位文档
+
+
+def test_todo_marker_is_still_detected_in_long_content():
+    """与上一条相对：``TODO`` 标记**不设上界** —— T-005 的返工夹具依赖它。"""
+    assert has_placeholder("x = 1\n" * 200 + "# TODO: 实现真正的逻辑\n")
