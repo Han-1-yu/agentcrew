@@ -10,7 +10,8 @@
   落盘、要么根本不出现。
 - **崩溃后的截断尾行是预期状态**：:meth:`Ledger.events` / :meth:`Ledger.count`
   逐行读取，空行直接跳过，``json.JSONDecodeError`` 的坏行记 ``logging.warning``
-  后跳过，绝不中断读取（那会让整个 run 的历史不可读）。
+  后跳过，绝不中断读取（那会让整个 run 的历史不可读）；读到一半的多字节字符
+  也按坏行处理，不抛 ``UnicodeDecodeError``。
 - **脱敏先于序列化**：``event`` 名、``data`` 里所有字符串（递归到嵌套容器）以及
   字典键都过 :func:`agentcrew.utils.logger.redact`；非字符串类型原样保留，不提前
   字符串化，否则 JSON 里的 int/bool 会变成字符串（spec 全局约束：API Key 绝不
@@ -115,11 +116,14 @@ class Ledger:
         """逐行产出事件；``event`` 非 None 时只产出同名事件。
 
         空行跳过；``json.JSONDecodeError`` 的坏行（如崩溃留下的截断尾行）记
-        ``logging.warning`` 后跳过——读取过程绝不因坏行中断。合法 JSON 但字段
-        不符合 :class:`LedgerEvent` 结构的行会抛 pydantic 校验错误：文件只由
-        :meth:`emit` 写入，那意味着有人手工改写了审计文件，应当暴露而非静默。
+        ``logging.warning`` 后跳过——读取过程绝不因坏行中断。``errors="replace"``
+        把「写到一半的多字节字符」这种字节级截断也变成坏行而非
+        ``UnicodeDecodeError``：崩溃时先死在字符中间，同样不能中断读取。合法
+        JSON 但字段不符合 :class:`LedgerEvent` 结构的行会抛 pydantic 校验错误：
+        文件只由 :meth:`emit` 写入，那意味着有人手工改写了审计文件，应当暴露
+        而非静默。
         """
-        with open(self._path, "r", encoding="utf-8") as file:
+        with open(self._path, "r", encoding="utf-8", errors="replace") as file:
             for number, line in enumerate(file, start=1):
                 stripped = line.strip()
                 if not stripped:

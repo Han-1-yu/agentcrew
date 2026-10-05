@@ -104,6 +104,16 @@ def test_malformed_tail_is_skipped_not_raised(ledger, tmp_path, caplog):
     assert any(record.levelno == logging.WARNING for record in caplog.records)
 
 
+def test_truncated_multibyte_tail_is_skipped_not_raised(ledger, tmp_path, caplog):
+    ledger.emit("a", text="修复登录问题")
+    with open(tmp_path / "ledger.jsonl", "ab") as file:
+        file.write("修".encode("utf-8")[:2])  # 崩溃时写到一半的多字节字符
+    with caplog.at_level(logging.WARNING):
+        assert [e.event for e in ledger.events()] == ["a"]
+        assert ledger.count("a") == 1
+    assert any(record.levelno == logging.WARNING for record in caplog.records)
+
+
 def test_malformed_line_excerpt_is_redacted(tmp_path, caplog):
     lg = Ledger(tmp_path / "l.jsonl", run_id="R-1", secrets=["supersecret"])
     with open(tmp_path / "l.jsonl", "a", encoding="utf-8") as file:
