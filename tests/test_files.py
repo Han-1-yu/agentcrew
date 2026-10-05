@@ -93,7 +93,8 @@ def test_atomic_write_leaves_no_temp_files(tmp_path):
 
 def test_atomic_write_overwrites_existing(tmp_path):
     p = tmp_path / "x.txt"
-    atomic_write_text(p, "old"); atomic_write_text(p, "new")
+    atomic_write_text(p, "old")
+    atomic_write_text(p, "new")
     assert read_text(p) == "new"
 
 
@@ -127,7 +128,8 @@ def _make_dir_link(link: Path, target: Path) -> bool:
 
 
 def test_tree_lists_relative_posix_paths(tmp_path):
-    (tmp_path / "a").mkdir(); (tmp_path / "a" / "b.txt").write_text("x")
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "b.txt").write_text("x")
     assert tree(tmp_path) == ["a/b.txt"]
 
 
@@ -155,7 +157,7 @@ def test_atomic_write_text_is_utf8_without_bom(tmp_path):
     p = tmp_path / "x.txt"
     atomic_write_text(p, "中文")
     raw = p.read_bytes()
-    assert raw == "中文".encode("utf-8")
+    assert raw == "中文".encode()
     assert not raw.startswith(b"\xef\xbb\xbf")
 
 
@@ -175,7 +177,7 @@ def test_tree_respects_max_entries(tmp_path):
 
 
 def test_sha256_bytes_is_lowercase_hex_digest():
-    data = "hello 世界".encode("utf-8")
+    data = "hello 世界".encode()
     assert sha256_bytes(data) == hashlib.sha256(data).hexdigest()
     assert sha256_bytes(b"") == (
         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"

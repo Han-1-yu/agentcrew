@@ -37,7 +37,8 @@ from agentcrew.models.factory import ModelFactory
 from agentcrew.roles.builtin import BUILTIN_ROLES
 from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.runtime.ledger import Ledger
-from agentcrew.task.task import Task, TaskStatus as S
+from agentcrew.task.task import Task
+from agentcrew.task.task import TaskStatus as S
 from agentcrew.task.task_board import TaskBoard
 
 GOOD = {"verdict": "approve", "score": 0.9, "issues": [], "fix_hints": []}
@@ -57,7 +58,8 @@ def env(tmp_path, monkeypatch):
                 deliverables=[ArtifactSpec(path="a.py", kind="python",
                                            description="d", must_contain=["def f"])])
     board = TaskBoard([task])
-    board.transition("T-2", S.READY); board.transition("T-2", S.RUNNING)
+    board.transition("T-2", S.READY)
+    board.transition("T-2", S.RUNNING)
     board.transition("T-2", S.REVIEW)
     return dict(settings=s, ledger=lg, store=store, task=task, board=board,
                 tmp_path=tmp_path)
@@ -69,7 +71,8 @@ def commit(env, content):
 
 
 def gk(env, reviews, tmp_path, gate="none"):
-    fx = tmp_path / "fx"; fx.mkdir(exist_ok=True)
+    fx = tmp_path / "fx"
+    fx.mkdir(exist_ok=True)
     (fx / "reviews.json").write_text(json.dumps(reviews), encoding="utf-8")
     models = ModelFactory(env["settings"], ledger=env["ledger"], fixtures_dir=fx)
     rev = Reviewer(models, RoleCatalog(BUILTIN_ROLES), env["store"], env["ledger"])
@@ -179,7 +182,8 @@ def _gk(env, tmp_path, *, gate="none", prompter=None, context_bus=None,
         reviews=None) -> Gatekeeper:
     """可指定 gate / prompter / context_bus 的构造器（brief 的 ``gk`` 固定
     NullPrompter，覆盖不到这些维度）。"""
-    fx = tmp_path / "fx"; fx.mkdir(exist_ok=True)
+    fx = tmp_path / "fx"
+    fx.mkdir(exist_ok=True)
     reviews = {"T-2": GOOD} if reviews is None else reviews
     (fx / "reviews.json").write_text(json.dumps(reviews), encoding="utf-8")
     models = ModelFactory(env["settings"], ledger=env["ledger"], fixtures_dir=fx)

@@ -1,11 +1,16 @@
 """状态机跃迁表的行为测试（spec §6.1）。"""
 
 import pytest
-from agentcrew.task.task import TaskStatus as S
+
 from agentcrew.task.state_machine import (
-    IllegalTransitionError, ALLOWED_TRANSITIONS, can_transition,
-    assert_transition, is_terminal,
+    ALLOWED_TRANSITIONS,
+    IllegalTransitionError,
+    assert_transition,
+    can_transition,
+    is_terminal,
 )
+from agentcrew.task.task import TaskStatus as S
+
 
 def test_every_status_has_an_entry():
     assert set(ALLOWED_TRANSITIONS) == set(S)

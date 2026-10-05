@@ -1,0 +1,19 @@
+status=failed attempts=1 rework=2
+契约:
+   backend/app.py                     kind=python    must=['GET', 'POST', 'PUT', 'DELETE', '/todos']
+   backend/requirements.txt           kind=text      must=['flask']
+   backend/README.md                  kind=markdown  must=['启动', '依赖']
+round=1 static approve :: []
+round=1 llm reject :: ['验收标准 2/3/4/5 要求的路由是 GET/POST/PUT/DELETE /todos 与 /todos/{id}，但实现只注册了 /api/todos 与 /api/todos/<todo_id>，未提供 /todos 前缀路由，按验收标准逐条核对不满足。', '验收标准 6 要求数据持久化在服务端且重启不丢失：实现使用单文件 JSON 并每次请求全量读写，虽可持久化，但未提供并发/多进程部署下的安全说明，且 _load 在 JSON 损坏时静默返回空列表，存在数据丢失风险，持久化健壮性不足。', '验收标准 7 要求对无效请求返回明确的错误码与错误信息：PUT 在缺少 completed 时默认置为 false，属于隐式行为而非明确错误；PATCH 对未知字段静默忽略；DELETE 对不存在 id 返回 404 但未区分资源不存在与路由不存在，错误语义不够明确。', '验收标准 1 要求提供可运行的启动方式与依赖说明：README 与 requirements.txt 已提供，但未说明 Python 版本与 Flask 版本兼容性验证，也未提供健康检查或启动自检，启动可运行性证据不足。']
+round=2 static reject :: ['backend/README.md 仅含占位内容']
+round=3 static reject :: ['backend/README.md 仅含占位内容']
+
+=== 落盘的 backend/README.md ===
+[2092 字符] 判定 had_placeholder=True
+'# Todo List 后端\n\n基于 Flask 的 Todo List REST API，数据持久化在服务端 JSON 文件（默认 `data/todos.json`），重启服务后数据不丢失。\n\n## 依赖\n\n- Python 3.9+（推荐 3.11）\n- Flask 3.x（见 `requirements.txt`）\n\n安装依赖：\n\n```bash\ncd backend\npython -m venv .venv\nsource .venv/bin/activate        # Windows: .venv\\Scripts\\activate\npip install -r requirements.txt\n```\n\n## 启动\n\n```bash\ncd backend\npython app.py\n```\n\n默认监听 `0.0.0.0:5000`。可用环境变量覆盖：\n\n- `PORT`：监听端口，默认 `5000`\n- `DATA_DIR`：数据目录，默认 `backend/data`\n\n示例：\n\n```bash\nPORT=8000 DATA_DIR=/var/lib/todo py'
+
+=== T-BE 的门禁记录 ===
+static approve []
+llm reject ['验收标准 2/3/4/5 要求的路由是 GET/POST/PUT/DELETE /todos 与 /todos/{id}，但实现只注册了 /api/todos 与 /api/todos/<todo_id>，未提供 /todos 前缀路由，按验收标准逐条核对不满足。', '验收标准 6 要求数据持久化在服务端且重启不丢失：实现使用单文件 JSON 并每次请求全量读写，虽可持久化，但未提供并发/多进程部署下的安全说明，且 _load 在 JSON 损坏时静默返回空列表，存在数据丢失风险，持久化健壮性不足。', '验收标准 7 要求对无效请求返回明确的错误码与错误信息：PUT 在缺少 completed 时默认置为 false，属于隐式行为而非明确错误；PATCH 对未知字段静默忽略；DELETE 对不存在 id 返回 404 但未区分资源不存在与路由不存在，错误语义不够明确。', '验收标准 1 要求提供可运行的启动方式与依赖说明：README 与 requirements.txt 已提供，但未说明 Python 版本与 Flask 版本兼容性验证，也未提供健康检查或启动自检，启动可运行性证据不足。']
+static reject ['backend/README.md 仅含占位内容']
+static reject ['backend/README.md 仅含占位内容']

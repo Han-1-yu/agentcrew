@@ -173,7 +173,7 @@ def test_review_entries_are_schema_valid():
     assert reviews, "reviews.json 不能为空"
     default = reviews.get("_default")
     assert default is not None, "reviews.json 必须提供 _default 兜底裁决"
-    for key, verdict in reviews.items():
+    for verdict in reviews.values():
         ReviewVerdict.model_validate(verdict)     # 含 _default：漂移即失败
     assert not _is_malformed(ReviewVerdict.model_validate(default)), (
         "兜底裁决是「reject 却不带 issues」——评审器会把它当格式错误而放行")
@@ -189,9 +189,9 @@ def test_plan_has_no_duplicate_artifact_paths():
 
 
 def test_plan_is_acyclic_and_roles_known():
-    from agentcrew.task.planner import PlanOutput, to_tasks, validate_plan
-    from agentcrew.roles.catalog import RoleCatalog
     from agentcrew.roles.builtin import BUILTIN_ROLES
+    from agentcrew.roles.catalog import RoleCatalog
+    from agentcrew.task.planner import PlanOutput, to_tasks, validate_plan
     validate_plan(to_tasks(PlanOutput.model_validate(PLAN)), RoleCatalog(BUILTIN_ROLES))
 
 

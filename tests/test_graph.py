@@ -1,8 +1,11 @@
 """DAG 图算法行为测试（spec §6.2）。"""
 
 import pytest
-from agentcrew.task.task import Task, TaskStatus as S
-from agentcrew.task.graph import TaskGraph, CyclicGraphError, ready_ids, blocked_ids
+
+from agentcrew.task.graph import CyclicGraphError, TaskGraph, blocked_ids, ready_ids
+from agentcrew.task.task import Task
+from agentcrew.task.task import TaskStatus as S
+
 
 def mk(tid, deps=(), status=S.PENDING):
     return Task(id=tid, title=tid, description="d", role="backend_dev",
@@ -81,7 +84,7 @@ def test_each_cycle_is_a_closed_path_in_dependents_direction():
     g = TaskGraph.build([mk("A", ["C"]), mk("B", ["A"]), mk("C", ["B"])])
     (cycle,) = g.cycles()
     assert len(cycle) == 3
-    for src, dst in zip(cycle, cycle[1:] + cycle[:1]):
+    for src, dst in zip(cycle, cycle[1:] + cycle[:1], strict=True):
         assert dst in g.dependents(src)
 
 def test_figure_eight_reports_one_entry_per_simple_cycle():

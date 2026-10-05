@@ -118,13 +118,13 @@ def test_read_max_bytes_does_not_split_a_character(store):
 
 def test_path_traversal_blocked(store, tmp_path):
     evil = ArtifactSpec(path="ok.txt", kind="text", description="d")
-    with pytest.raises(Exception):
+    with pytest.raises(UnsafePathError):
         store.commit("../outside.txt", "x", spec=evil, task=mk_task())
     assert not (tmp_path / "outside.txt").exists()
 
 
 def test_absolute_path_blocked(store):
-    with pytest.raises(Exception):
+    with pytest.raises(UnsafePathError):
         store.commit("/etc/passwd", "x",
                      spec=ArtifactSpec(path="x", kind="text", description="d"),
                      task=mk_task())
@@ -133,20 +133,24 @@ def test_absolute_path_blocked(store):
 def test_symlinked_parent_rejected(tmp_path):
     if sys.platform == "win32":
         pytest.skip("Windows 建符号链接需管理员权限")
-    root = tmp_path / "artifacts"; root.mkdir()
-    outside = tmp_path / "outside"; outside.mkdir()
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
     os.symlink(outside, root / "link")
     st = ArtifactStore(root, run_id="R-1")
     s = ArtifactSpec(path="link/pwned.py", kind="python", description="d")
-    with pytest.raises(Exception):
+    with pytest.raises(UnsafePathError):
         st.commit("link/pwned.py", "x", spec=s, task=mk_task())
     assert not (outside / "pwned.py").exists()
 
 
 def test_junction_parent_rejected(tmp_path):
     """junction 也是重解析点：``is_symlink()`` 返回 False，必须单独识别。"""
-    root = tmp_path / "artifacts"; root.mkdir()
-    outside = tmp_path / "outside"; outside.mkdir()
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
     if not _make_dir_link(root / "link", outside):
         pytest.skip("当前平台无法创建目录链接/联接")
     st = ArtifactStore(root, run_id="R-1")
@@ -158,7 +162,8 @@ def test_junction_parent_rejected(tmp_path):
 
 def test_junction_to_inside_root_is_also_rejected(tmp_path):
     """指向 root 内部的链接同样拒绝：逐段检查不区分链接的目标。"""
-    root = tmp_path / "artifacts"; root.mkdir()
+    root = tmp_path / "artifacts"
+    root.mkdir()
     (root / "real").mkdir()
     if not _make_dir_link(root / "inner", root / "real"):
         pytest.skip("当前平台无法创建目录链接/联接")

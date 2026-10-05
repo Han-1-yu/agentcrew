@@ -19,7 +19,6 @@ from agentcrew.artifacts.parser import (
 )
 from agentcrew.artifacts.spec import ArtifactKind
 
-
 # ── brief 指定的用例 ──────────────────────────────────────────────
 
 

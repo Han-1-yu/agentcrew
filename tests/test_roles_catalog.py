@@ -1,6 +1,7 @@
 """角色目录测试：8 个内置角色的完整性、评审人映射与 YAML 加载（spec §8.2）。"""
 
 import pytest
+from pydantic import ValidationError
 
 from agentcrew.roles.builtin import BUILTIN_ROLES
 from agentcrew.roles.catalog import DuplicateRoleError, RoleCatalog, UnknownRoleError
@@ -90,7 +91,8 @@ def test_all_reviewers_exist_in_catalog():
 
 
 def test_load_dir_reads_yaml(tmp_path):
-    d = tmp_path / "roles.d"; d.mkdir()
+    d = tmp_path / "roles.d"
+    d.mkdir()
     (d / "wizard.yaml").write_text(
         "key: wizard\ntitle: 魔法师\ngoal: g\nbackstory: b\n"
         "responsibilities: [施法]\nboundaries: [不写代码]\n"
@@ -126,8 +128,9 @@ def test_load_dir_missing_path_returns_zero(tmp_path):
 
 
 def test_load_dir_reports_invalid_yaml(tmp_path):
-    d = tmp_path / "roles.d"; d.mkdir()
+    d = tmp_path / "roles.d"
+    d.mkdir()
     (d / "bad.yaml").write_text("key: bad\n", encoding="utf-8")
     c = RoleCatalog()
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         c.load_dir(d)

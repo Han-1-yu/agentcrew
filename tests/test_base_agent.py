@@ -62,7 +62,8 @@ def make_agent(env, fixtures_dir=None):
 
 
 async def test_execute_writes_contract_artifact(env, tmp_path):
-    fx = tmp_path / "fx"; (fx / "responses" / "T-1").mkdir(parents=True)
+    fx = tmp_path / "fx"
+    (fx / "responses" / "T-1").mkdir(parents=True)
     (fx / "responses" / "T-1" / "attempt-1.md").write_text(
         "```python file=a.py\ndef f():\n    return 1\n```\n", encoding="utf-8")
     agent = make_agent(env, fx)
@@ -73,7 +74,8 @@ async def test_execute_writes_contract_artifact(env, tmp_path):
 
 
 async def test_execute_raises_when_contract_path_missing(env, tmp_path):
-    fx = tmp_path / "fx"; (fx / "responses" / "T-1").mkdir(parents=True)
+    fx = tmp_path / "fx"
+    (fx / "responses" / "T-1").mkdir(parents=True)
     (fx / "responses" / "T-1" / "attempt-1.md").write_text(
         "```python file=wrong.py\nx = 1\n```\n", encoding="utf-8")
     agent = make_agent(env, fx)
@@ -82,7 +84,8 @@ async def test_execute_raises_when_contract_path_missing(env, tmp_path):
 
 
 async def test_execute_raises_on_unparseable_output(env, tmp_path):
-    fx = tmp_path / "fx"; (fx / "responses" / "T-1").mkdir(parents=True)
+    fx = tmp_path / "fx"
+    (fx / "responses" / "T-1").mkdir(parents=True)
     (fx / "responses" / "T-1" / "attempt-1.md").write_text(
         "```python file=a.py\ndef f():\n", encoding="utf-8")     # 未闭合
     agent = make_agent(env, fx)
@@ -91,7 +94,8 @@ async def test_execute_raises_on_unparseable_output(env, tmp_path):
 
 
 async def test_execute_records_notes_from_prose(env, tmp_path):
-    fx = tmp_path / "fx"; (fx / "responses" / "T-1").mkdir(parents=True)
+    fx = tmp_path / "fx"
+    (fx / "responses" / "T-1").mkdir(parents=True)
     (fx / "responses" / "T-1" / "attempt-1.md").write_text(
         "我实现了 f。\n```python file=a.py\ndef f():\n    return 1\n```\n", encoding="utf-8")
     agent = make_agent(env, fx)
@@ -101,7 +105,8 @@ async def test_execute_records_notes_from_prose(env, tmp_path):
 
 
 async def test_fix_hints_reach_the_model(env, tmp_path):
-    fx = tmp_path / "fx"; (fx / "responses" / "T-1").mkdir(parents=True)
+    fx = tmp_path / "fx"
+    (fx / "responses" / "T-1").mkdir(parents=True)
     (fx / "responses" / "T-1" / "attempt-1.md").write_text(
         "```python file=a.py\ndef f():\n    return 1\n```\n", encoding="utf-8")
     agent = make_agent(env, fx)
@@ -114,7 +119,8 @@ async def test_fix_hints_reach_the_model(env, tmp_path):
 
 
 async def test_duration_and_timestamps_set(env, tmp_path):
-    fx = tmp_path / "fx"; (fx / "responses" / "T-1").mkdir(parents=True)
+    fx = tmp_path / "fx"
+    (fx / "responses" / "T-1").mkdir(parents=True)
     (fx / "responses" / "T-1" / "attempt-1.md").write_text(
         "```python file=a.py\ndef f():\n    return 1\n```\n", encoding="utf-8")
     agent = make_agent(env, fx)
@@ -127,7 +133,8 @@ async def test_subclass_hook_is_used(env, tmp_path):
         def parse_output(self, raw, task):
             from agentcrew.artifacts.parser import ParsedOutput
             return ParsedOutput(files={"a.py": "def f():\n    return 1\n"}, notes="hooked")
-    fx = tmp_path / "fx"; (fx / "responses" / "T-1").mkdir(parents=True)
+    fx = tmp_path / "fx"
+    (fx / "responses" / "T-1").mkdir(parents=True)
     (fx / "responses" / "T-1" / "attempt-1.md").write_text("whatever", encoding="utf-8")
     models = ModelFactory(env["settings"], ledger=env["ledger"], fixtures_dir=fx)
     agent = Upper(role(), models=models, store=env["store"],
@@ -179,7 +186,8 @@ async def test_model_alias_precedence(env, tmp_path, monkeypatch,
         return await orig(alias, *a, **kw)
     monkeypatch.setattr(models, "call", spy)
 
-    r = role(); r.model = role_model
+    r = role()
+    r.model = role_model
     agent = GenericAgent(r, models=models, store=env["store"],
                          ledger=env["ledger"], project_goal="目标")
     await agent.execute(env["task"], env["bus"].build(env["task"]))

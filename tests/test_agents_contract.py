@@ -351,12 +351,18 @@ def test_import_chain_is_acyclic_in_fresh_interpreter(first):
 
 def test_builtin_roles_are_the_agent_module_roles():
     """``BUILTIN_ROLES`` 必须是各模块 ``ROLE`` 的同一对象，不得有第二份副本。"""
-    from agentcrew.agents import (architect, backend_dev, devops_engineer,
-                                  frontend_dev, product_manager,
-                                  project_manager, qa_engineer,
-                                  technical_writer)
+    from agentcrew.agents import (
+        architect,
+        backend_dev,
+        devops_engineer,
+        frontend_dev,
+        product_manager,
+        project_manager,
+        qa_engineer,
+        technical_writer,
+    )
     modules = (project_manager, product_manager, architect, backend_dev,
                frontend_dev, qa_engineer, devops_engineer, technical_writer)
     assert BUILTIN_ROLES == tuple(module.ROLE for module in modules)
-    for role, module in zip(BUILTIN_ROLES, modules):
+    for role, module in zip(BUILTIN_ROLES, modules, strict=True):
         assert role is module.ROLE

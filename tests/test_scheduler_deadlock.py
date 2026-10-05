@@ -6,7 +6,6 @@
 """
 import asyncio
 import json
-from pathlib import Path
 
 import pytest
 
@@ -22,7 +21,8 @@ from agentcrew.models.factory import ModelFactory
 from agentcrew.roles.builtin import BUILTIN_ROLES
 from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.runtime.ledger import Ledger
-from agentcrew.task.task import Task, TaskStatus as S
+from agentcrew.task.task import Task
+from agentcrew.task.task import TaskStatus as S
 from agentcrew.task.task_board import TaskBoard
 
 APPROVE = {"verdict": "approve", "score": 0.95, "issues": [], "fix_hints": []}

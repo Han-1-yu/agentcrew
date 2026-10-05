@@ -113,8 +113,10 @@ def build_slow(env, tasks, *, latency_ms, max_concurrency=4):
 
 
 async def test_runs_diamond_to_completion(env):
-    write_fixture(env["fx"], "A"); write_fixture(env["fx"], "B")
-    write_fixture(env["fx"], "C"); write_fixture(env["fx"], "D")
+    write_fixture(env["fx"], "A")
+    write_fixture(env["fx"], "B")
+    write_fixture(env["fx"], "C")
+    write_fixture(env["fx"], "D")
     board, sch = build(env, [mk("A"), mk("B", ["A"]), mk("C", ["A"]), mk("D", ["B", "C"])])
     await sch.run()
     assert all(board.get(t).status is S.SUCCEEDED for t in "ABCD")
@@ -142,7 +144,9 @@ async def test_failure_blocks_downstream(env):
     for i in (1, 2, 3):
         write_fixture(env["fx"], "A", attempt=i, bad=True)
     write_fixture(env["fx"], "B")
-    a = mk("A"); a.max_attempts = 1; a.max_reworks = 0
+    a = mk("A")
+    a.max_attempts = 1
+    a.max_reworks = 0
     board, sch = build(env, [a, mk("B", ["A"])])
     await sch.run()
     assert board.get("A").status is S.FAILED
@@ -153,7 +157,9 @@ async def test_unrelated_branch_still_completes_after_failure(env):
     for i in (1, 2, 3):
         write_fixture(env["fx"], "A", attempt=i, bad=True)
     write_fixture(env["fx"], "C")
-    a = mk("A"); a.max_attempts = 1; a.max_reworks = 0
+    a = mk("A")
+    a.max_attempts = 1
+    a.max_reworks = 0
     board, sch = build(env, [a, mk("B", ["A"]), mk("C")])
     await sch.run()
     assert board.get("C").status is S.SUCCEEDED
@@ -178,7 +184,8 @@ async def test_cancel_stops_dispatching_new_tasks(env):
                             max_concurrency=1)
 
     async def canceller():
-        await asyncio.sleep(0.01); sch.cancel()
+        await asyncio.sleep(0.01)
+        sch.cancel()
 
     await asyncio.gather(sch.run(), canceller())
     assert not board.is_terminal()
@@ -187,7 +194,8 @@ async def test_cancel_stops_dispatching_new_tasks(env):
 
 async def test_deadlock_reported_when_no_ready_and_no_running(env):
     board = TaskBoard([mk("A"), mk("B", ["A"])])
-    board.transition("A", S.READY); board.transition("A", S.RUNNING)
+    board.transition("A", S.READY)
+    board.transition("A", S.RUNNING)
     board.transition("A", S.REVIEW)
     board.transition("A", S.REWORK)
     board.get("A").status = S.SUCCEEDED          # 人为制造不可达状态
@@ -239,7 +247,8 @@ async def test_parse_error_retries_without_spending_rework(env):
 
 async def test_parse_error_exhausts_attempts_then_fails(env):
     """执行错误烧完 ``max_attempts`` → FAILED（``attempts`` 在派发时自增）。"""
-    a = mk("A"); a.max_attempts = 2
+    a = mk("A")
+    a.max_attempts = 2
     write_unclosed_fixture(env["fx"], "A", attempt=1)
     board, sch = build(env, [a])
     await sch.run()
@@ -351,7 +360,8 @@ async def test_peak_concurrency_reaches_limit_across_eight_dispatches(env):
 
 async def test_peak_concurrency_tracks_actual_workers_below_limit(env):
     """任务数少于上限时峰值为真实并发数（不是回读配置）。"""
-    write_fixture(env["fx"], "A"); write_fixture(env["fx"], "B")
+    write_fixture(env["fx"], "A")
+    write_fixture(env["fx"], "B")
     board, sch = build(env, [mk("A"), mk("B")], max_concurrency=4)
     await sch.run()
     assert board.get("A").status is S.SUCCEEDED
@@ -362,12 +372,14 @@ async def test_peak_concurrency_tracks_actual_workers_below_limit(env):
 # ── 取消语义（软/硬）──
 
 async def test_soft_cancel_lets_inflight_worker_finish(env):
-    write_fixture(env["fx"], "A"); write_fixture(env["fx"], "B")
+    write_fixture(env["fx"], "A")
+    write_fixture(env["fx"], "B")
     board, sch = build_slow(env, [mk("A"), mk("B")], latency_ms=150,
                             max_concurrency=1)
 
     async def canceller():
-        await asyncio.sleep(0.02); sch.cancel()
+        await asyncio.sleep(0.02)
+        sch.cancel()
 
     await asyncio.wait_for(asyncio.gather(sch.run(), canceller()), timeout=3)
     assert board.get("A").status is S.SUCCEEDED     # 在跑的让它跑完
@@ -375,12 +387,14 @@ async def test_soft_cancel_lets_inflight_worker_finish(env):
 
 
 async def test_hard_cancel_cancels_inflight_worker(env):
-    write_fixture(env["fx"], "A"); write_fixture(env["fx"], "B")
+    write_fixture(env["fx"], "A")
+    write_fixture(env["fx"], "B")
     board, sch = build_slow(env, [mk("A"), mk("B")], latency_ms=150,
                             max_concurrency=1)
 
     async def canceller():
-        await asyncio.sleep(0.02); sch.cancel(hard=True)
+        await asyncio.sleep(0.02)
+        sch.cancel(hard=True)
 
     await asyncio.wait_for(asyncio.gather(sch.run(), canceller()), timeout=3)
     assert board.get("A").status is S.CANCELLED

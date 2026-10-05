@@ -436,8 +436,8 @@ def test_json_word_present_in_injected_instruction(level):
     msgs = _messages_for_level([{"role": "user", "content": "go"}], Answer, level)
     system = next(m for m in msgs if m["role"] == "system")
     assert "json" in system["content"].lower(), (
-        "第 %d 级注入的指令丢了 'json' 字面词；部分 OpenAI 兼容 provider"
-        "（如 deepseek）的 json_object 模式会因此返回 400" % level
+        f"第 {level} 级注入的指令丢了 'json' 字面词；部分 OpenAI 兼容 provider"
+        "（如 deepseek）的 json_object 模式会因此返回 400"
     )
 
 

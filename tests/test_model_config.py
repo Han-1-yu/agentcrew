@@ -2,8 +2,6 @@ import pytest
 
 from agentcrew.models.config import (
     PROVIDER_PRESETS,
-    ModelBinding,
-    ProviderCapabilities,
     UnknownProviderError,
     parse_alias,
 )

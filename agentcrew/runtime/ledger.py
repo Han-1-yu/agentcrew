@@ -153,7 +153,7 @@ class Ledger:
         if event is not None:
             event = redact(event, self._secrets)
         try:
-            file = open(self._path, "r", encoding="utf-8", errors="replace")
+            file = open(self._path, encoding="utf-8", errors="replace")
         except FileNotFoundError:
             return  # 从未 emit 过（或 run 目录被清理）：零事件是诚实的答案
         with file:

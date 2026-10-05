@@ -23,12 +23,16 @@ def test_emit_appends_one_json_line(ledger, tmp_path):
 
 
 def test_events_filters_by_name(ledger):
-    ledger.emit("a"); ledger.emit("b"); ledger.emit("a")
+    ledger.emit("a")
+    ledger.emit("b")
+    ledger.emit("a")
     assert [e.event for e in ledger.events("a")] == ["a", "a"]
 
 
 def test_count(ledger):
-    ledger.emit("a"); ledger.emit("a"); ledger.emit("b")
+    ledger.emit("a")
+    ledger.emit("a")
+    ledger.emit("b")
     assert ledger.count("a") == 2 and ledger.count("zzz") == 0
 
 
@@ -54,7 +58,7 @@ def test_non_serializable_values_are_stringified(ledger, tmp_path):
 
 def test_emit_after_close_raises(ledger):
     ledger.close()
-    with pytest.raises(Exception):
+    with pytest.raises(RuntimeError):
         ledger.emit("x")
 
 
@@ -107,7 +111,7 @@ def test_malformed_tail_is_skipped_not_raised(ledger, tmp_path, caplog):
 def test_truncated_multibyte_tail_is_skipped_not_raised(ledger, tmp_path, caplog):
     ledger.emit("a", text="修复登录问题")
     with open(tmp_path / "ledger.jsonl", "ab") as file:
-        file.write("修".encode("utf-8")[:2])  # 崩溃时写到一半的多字节字符
+        file.write("修".encode()[:2])  # 崩溃时写到一半的多字节字符
     with caplog.at_level(logging.WARNING):
         assert [e.event for e in ledger.events()] == ["a"]
         assert ledger.count("a") == 1

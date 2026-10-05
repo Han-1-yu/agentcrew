@@ -18,13 +18,13 @@ import json
 from datetime import datetime
 
 import pytest
+from pydantic import ValidationError
 
 from agentcrew.artifacts.spec import ArtifactSpec
 from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.config import Settings
 from agentcrew.gate.reviewer import Reviewer, ReviewVerdict
 from agentcrew.models.factory import ModelFactory
-from agentcrew.models.providers.mock import set_purpose
 from agentcrew.roles.builtin import BUILTIN_ROLES
 from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.roles.spec import RoleSpec
@@ -52,7 +52,8 @@ def env(tmp_path, monkeypatch):
 
 
 def reviewer(env, reviews: dict, tmp_path):
-    fx = tmp_path / "fx"; fx.mkdir(exist_ok=True)
+    fx = tmp_path / "fx"
+    fx.mkdir(exist_ok=True)
     (fx / "reviews.json").write_text(json.dumps(reviews), encoding="utf-8")
     models = ModelFactory(env["settings"], ledger=env["ledger"], fixtures_dir=fx)
     return Reviewer(models, RoleCatalog(BUILTIN_ROLES), env["store"], env["ledger"])
@@ -111,7 +112,7 @@ async def test_missing_fixture_falls_back_not_crash(env, tmp_path):
 
 
 def test_review_verdict_rejects_extra_fields():
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         ReviewVerdict(verdict="approve", score=1.0, issues=[], fix_hints=[], bonus=1)
 
 
@@ -144,7 +145,8 @@ class _FakeModels:
 
 def _reviewer(env, reviews: dict, tmp_path, **kwargs) -> Reviewer:
     """与 brief 的 ``reviewer`` 同形，但可传构造参数、fixtures 换一个目录。"""
-    fx = tmp_path / "fx2"; fx.mkdir(exist_ok=True)
+    fx = tmp_path / "fx2"
+    fx.mkdir(exist_ok=True)
     (fx / "reviews.json").write_text(json.dumps(reviews), encoding="utf-8")
     models = ModelFactory(env["settings"], ledger=env["ledger"], fixtures_dir=fx)
     return Reviewer(models, RoleCatalog(BUILTIN_ROLES), env["store"], env["ledger"],
@@ -197,7 +199,8 @@ async def test_no_reviewer_approves_without_llm_call(env, tmp_path):
         key="lone_wolf", title="独行侠", goal="g", backstory="b",
         responsibilities=["r"], boundaries=["b"], output_contract="o",
         system_prompt="s")])
-    fx = tmp_path / "fx"; fx.mkdir(exist_ok=True)
+    fx = tmp_path / "fx"
+    fx.mkdir(exist_ok=True)
     models = ModelFactory(env["settings"], ledger=env["ledger"], fixtures_dir=fx)
     r = await Reviewer(models, catalog, env["store"], env["ledger"]).review(
         task, round_no=1)
@@ -259,7 +262,8 @@ async def test_all_approve_aggregates_min_score(env, tmp_path):
 
 async def test_llm_calls_are_governed_and_attributed(env, tmp_path):
     """spec §7.3/§14.3：评审调用走工厂受治理入口，purpose/role 落 ledger。"""
-    fx = tmp_path / "fx"; fx.mkdir(exist_ok=True)
+    fx = tmp_path / "fx"
+    fx.mkdir(exist_ok=True)
     (fx / "reviews.json").write_text(json.dumps({"T-2": APPROVE}), encoding="utf-8")
     models = ModelFactory(env["settings"], ledger=env["ledger"], fixtures_dir=fx)
     rev = Reviewer(models, RoleCatalog(BUILTIN_ROLES), env["store"], env["ledger"])

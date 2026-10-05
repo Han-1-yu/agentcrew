@@ -120,7 +120,10 @@ def test_parse_error_issue_leads_with_path(store):
     r = run_static(t, store, round_no=1)
     assert len(r.issues) == 1
     assert r.issues[0].startswith("app/main.py 语法错误：")
-    assert r.issues[0] == f"app/main.py {parse_check('python', 'def f(\n')}"
+    # 注意：调用必须提到 f-string 之外 —— 替换字段里的反斜杠是 PEP 701 特性，
+    # 3.12 才允许，写进去会让整个测试文件在 3.10/3.11 上无法解析
+    detail = parse_check("python", "def f(\n")
+    assert r.issues[0] == f"app/main.py {detail}"
 
 
 def test_json_parse_error_issue_leads_with_path(store):
@@ -210,7 +213,7 @@ def test_fix_hints_pair_with_issues(store):
     commit(store, t, t.deliverables[0], "TODO\n")
     r = run_static(t, store, round_no=1)
     assert len(r.fix_hints) == len(r.issues) == 2
-    assert all(hint != issue for issue, hint in zip(r.issues, r.fix_hints))
+    assert all(hint != issue for issue, hint in zip(r.issues, r.fix_hints, strict=True))
 
 
 def test_must_contain_matching_is_case_insensitive(store):

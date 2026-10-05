@@ -22,7 +22,8 @@ from agentcrew.runtime.checkpoint import (
     clean,
     repair_statuses,
 )
-from agentcrew.task.task import Task, TaskStatus as S
+from agentcrew.task.task import Task
+from agentcrew.task.task import TaskStatus as S
 from agentcrew.task.task_board import TaskBoard
 
 
@@ -129,7 +130,8 @@ def test_save_and_load_record_roundtrip(cs):
 
 def test_save_and_load_board_roundtrip(cs):
     b = TaskBoard([mk("A"), mk("B", ["A"])])
-    b.transition("A", S.READY); b.transition("A", S.RUNNING)
+    b.transition("A", S.READY)
+    b.transition("A", S.RUNNING)
     cs.save_tasks(b)
     assert cs.load_board().get("A").status is S.RUNNING
 
@@ -141,7 +143,8 @@ def test_schema_mismatch_raises(cs, tmp_path):
                              updated_at=__import__("datetime").datetime.now(),
                              config_snapshot={}))
     p = cs.run_dir / "run.json"
-    d = json.loads(p.read_text(encoding="utf-8")); d["schema_version"] = 99
+    d = json.loads(p.read_text(encoding="utf-8"))
+    d["schema_version"] = 99
     p.write_text(json.dumps(d), encoding="utf-8")
     with pytest.raises(SchemaMismatchError):
         cs.load_record()
@@ -150,7 +153,8 @@ def test_schema_mismatch_raises(cs, tmp_path):
 def test_schema_version_missing_is_mismatch(cs):
     """缺失的 schema_version 同样是「不认识的格式」，必须报错而非猜默认值。"""
     p = cs.run_dir / "run.json"
-    d = json.loads(p.read_text(encoding="utf-8")); del d["schema_version"]
+    d = json.loads(p.read_text(encoding="utf-8"))
+    del d["schema_version"]
     p.write_text(json.dumps(d), encoding="utf-8")
     with pytest.raises(SchemaMismatchError):
         cs.load_record()
@@ -233,7 +237,8 @@ def test_repair_rework_stays_rework(cs):
     即可续跑；若这里调用 ``transition`` 会抛 ``IllegalTransitionError``。
     """
     b = TaskBoard([mk("A", status=S.READY)])
-    b.transition("A", S.RUNNING); b.transition("A", S.REVIEW)
+    b.transition("A", S.RUNNING)
+    b.transition("A", S.REVIEW)
     b.transition("A", S.REWORK)
     n = repair_statuses(b)
     assert n == 0
@@ -245,7 +250,8 @@ def test_repair_rework_stays_rework(cs):
 
 def test_repair_review_stays_review(cs):
     b = TaskBoard([mk("A", status=S.READY)])
-    b.transition("A", S.RUNNING); b.transition("A", S.REVIEW)
+    b.transition("A", S.RUNNING)
+    b.transition("A", S.REVIEW)
     repair_statuses(b)
     assert b.get("A").status is S.REVIEW
 
@@ -289,7 +295,8 @@ def test_repair_all_ten_statuses_only_running_moves(cs):
 
 def test_repair_does_not_reset_rework_count(cs):
     b = TaskBoard([mk("A", status=S.READY)])
-    b.transition("A", S.RUNNING); b.transition("A", S.REVIEW)
+    b.transition("A", S.RUNNING)
+    b.transition("A", S.REVIEW)
     b.bump_rework("A")
     b.transition("A", S.REWORK)
     repair_statuses(b)
@@ -369,7 +376,8 @@ def test_clean_dry_run_removes_nothing(tmp_path):
 
 
 def test_clean_skips_dirs_without_run_json(tmp_path):
-    o = tmp_path / "o"; o.mkdir()
+    o = tmp_path / "o"
+    o.mkdir()
     (o / "random-dir").mkdir()
     (o / "not-a-run.txt").write_text("x", encoding="utf-8")
     assert clean(o, keep=0) == []
@@ -398,7 +406,8 @@ def test_clean_refuses_linked_dir(tmp_path):
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "run.json").write_text("{}", encoding="utf-8")
-    o = tmp_path / "o"; o.mkdir()
+    o = tmp_path / "o"
+    o.mkdir()
     link = o / "20260101-000000-aaaa"
     if not _make_dir_link(link, outside):
         pytest.skip("当前环境不允许创建目录链接")
@@ -462,6 +471,7 @@ def test_clean_validation_runs_in_dry_run_too(tmp_path, monkeypatch):
 
 
 def test_clean_rejects_negative_keep(tmp_path):
-    o = tmp_path / "o"; o.mkdir()
+    o = tmp_path / "o"
+    o.mkdir()
     with pytest.raises(ValueError):
         clean(o, keep=-1)

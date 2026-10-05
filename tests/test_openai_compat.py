@@ -21,10 +21,13 @@ import pytest
 
 from agentcrew.models.config import parse_alias
 from agentcrew.models.providers.openai_compat import (
-    MAX_RETRY_AFTER_SECONDS, RETRY_AFTER_CLAMPED_ATTR, OpenAICompatProvider,
-    classify_http_error, retry_after_seconds,
+    MAX_RETRY_AFTER_SECONDS,
+    RETRY_AFTER_CLAMPED_ATTR,
+    OpenAICompatProvider,
+    classify_http_error,
+    retry_after_seconds,
 )
-from agentcrew.utils.retry import TransientError, PermanentError
+from agentcrew.utils.retry import PermanentError, TransientError
 
 
 @pytest.fixture(autouse=True)
@@ -51,7 +54,8 @@ class FakeClient:
         self.chat = type("Chat", (), {"completions": self})()
     async def create(self, **kw):
         self.calls.append(kw)
-        if self._error: raise self._error
+        if self._error:
+            raise self._error
         return self._result
 
 async def test_happy_path_returns_text_and_usage():

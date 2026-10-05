@@ -24,7 +24,7 @@ import pytest
 from pydantic import BaseModel
 
 from agentcrew.config import Settings
-from agentcrew.models.config import parse_alias
+from agentcrew.models.config import UnknownProviderError, parse_alias
 from agentcrew.models.factory import (
     DEFAULT_FIXTURES_DIR,
     ModelFactory,
@@ -81,7 +81,7 @@ def test_mock_alias_returns_mock_provider(settings):
 
 
 def test_unknown_alias_raises(settings):
-    with pytest.raises(Exception):
+    with pytest.raises(UnknownProviderError):
         ModelFactory(settings).get("wizard:merlin")
 
 
@@ -100,7 +100,8 @@ async def test_call_records_tokens_and_cost(settings, tmp_path):
 async def test_call_emits_purpose_and_role(settings, tmp_path):
     lg = Ledger(tmp_path / "l.jsonl", run_id="R")
     f = ModelFactory(settings, ledger=lg)
-    p = f.get("mock:m"); set_purpose(p, "review", role="architect", task_id="T-1", attempt=1)
+    p = f.get("mock:m")
+    set_purpose(p, "review", role="architect", task_id="T-1", attempt=1)
     await f.call("mock:m", [{"role": "user", "content": "x"}],
                  temperature=0, max_tokens=10, purpose="review", role="architect")
     ev = list(lg.events("llm_call"))[-1]
@@ -117,7 +118,8 @@ async def test_semaphore_caps_concurrency(settings, tmp_path):
 
     async def slow(*a, **kw):
         nonlocal peak, live
-        live += 1; peak = max(peak, live)
+        live += 1
+        peak = max(peak, live)
         await asyncio.sleep(0.02)
         live -= 1
         return await orig(*a, **kw)
@@ -133,7 +135,8 @@ async def test_semaphore_caps_concurrency(settings, tmp_path):
 
 async def test_reset_stats_zeroes_counters(settings, tmp_path):
     f = ModelFactory(settings)
-    p = f.get("mock:m"); set_purpose(p, "execute", role="r", task_id="T-1", attempt=1)
+    p = f.get("mock:m")
+    set_purpose(p, "execute", role="r", task_id="T-1", attempt=1)
     await f.call("mock:m", [{"role": "user", "content": "x"}],
                  temperature=0, max_tokens=10, purpose="execute", role="r")
     f.reset_stats()
@@ -190,7 +193,8 @@ def test_context_budget_checks_every_bound_alias(settings, monkeypatch):
 
 def test_fallback_event_emitted_for_missing_fixture(settings, tmp_path):
     lg = Ledger(tmp_path / "l.jsonl", run_id="R")
-    fx = tmp_path / "fx"; (fx / "responses").mkdir(parents=True)
+    fx = tmp_path / "fx"
+    (fx / "responses").mkdir(parents=True)
     f = ModelFactory(settings, ledger=lg, fixtures_dir=fx)
     p = f.get("mock:m")
     set_purpose(p, "execute", role="r", task_id="MISSING", attempt=1)
@@ -343,7 +347,8 @@ def test_stats_are_per_instance(settings, tmp_path):
     """计数器属实例，不共享（两个 ModelFactory 各自记账）。"""
     f1 = ModelFactory(settings)
     f2 = ModelFactory(settings)
-    p = f1.get("mock:m"); set_purpose(p, "execute", role="r", task_id="T-1", attempt=1)
+    p = f1.get("mock:m")
+    set_purpose(p, "execute", role="r", task_id="T-1", attempt=1)
     asyncio.run(f1.call("mock:m", [{"role": "user", "content": "x"}],
                         temperature=0, max_tokens=10, purpose="execute", role="r"))
     assert f1.llm_calls == 1

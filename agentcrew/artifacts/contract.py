@@ -22,7 +22,8 @@ import ast
 import json
 import sys
 import warnings
-from typing import Callable, get_args
+from collections.abc import Callable
+from typing import get_args
 
 import yaml
 

@@ -3,10 +3,11 @@ from pathlib import Path
 
 from rich.console import Console
 
-from agentcrew.runtime.board_view import BoardView, STATUS_STYLE
+from agentcrew.runtime.board_view import STATUS_STYLE, BoardView
 from agentcrew.runtime.checkpoint import RunRecord, RunStatus
 from agentcrew.runtime.ledger import LedgerEvent
-from agentcrew.task.task import Task, TaskStatus as S, RunStats
+from agentcrew.task.task import RunStats, Task
+from agentcrew.task.task import TaskStatus as S
 from agentcrew.task.task_board import TaskBoard
 
 

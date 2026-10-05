@@ -2,7 +2,7 @@ import io
 import logging
 import sys
 
-from agentcrew.utils.logger import redact, setup_logging, get_logger
+from agentcrew.utils.logger import get_logger, redact, setup_logging
 
 
 def test_redacts_sk_prefix():

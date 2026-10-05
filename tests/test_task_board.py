@@ -3,9 +3,13 @@
 from datetime import datetime
 
 import pytest
-from agentcrew.task.task import Task, TaskStatus as S, ReviewRecord, TaskResult
-from agentcrew.task.task_board import TaskBoard
+from pydantic import ValidationError
+
 from agentcrew.task.state_machine import IllegalTransitionError
+from agentcrew.task.task import ReviewRecord, Task, TaskResult
+from agentcrew.task.task import TaskStatus as S
+from agentcrew.task.task_board import TaskBoard
+
 
 def mk(tid, deps=(), status=S.PENDING, priority=5):
     return Task(id=tid, title=tid, description="d", role="backend_dev",
@@ -40,9 +44,11 @@ def test_refresh_promotes_ready_and_blocks_failed_downstream():
 
 def test_refresh_unblocks_when_upstream_recovers():
     b = TaskBoard([mk("A", status=S.FAILED), mk("B", ["A"])])
-    b.refresh(); assert b.get("B").status is S.BLOCKED
+    b.refresh()
+    assert b.get("B").status is S.BLOCKED
     b.get("A").status = S.SUCCEEDED           # 模拟人工修复
-    b.refresh(); assert b.get("B").status is S.READY
+    b.refresh()
+    assert b.get("B").status is S.READY
 
 def test_take_ready_orders_by_priority_then_id_and_marks_running():
     b = TaskBoard([mk("B", priority=1), mk("A", priority=1), mk("C", priority=9)])
@@ -64,8 +70,10 @@ def test_bump_rework_increments_without_changing_status():
 def test_is_terminal_true_only_when_all_settled():
     b = TaskBoard([mk("A", status=S.SUCCEEDED), mk("B")])
     assert not b.is_terminal()
-    b.transition("B", S.READY); b.transition("B", S.RUNNING)
-    b.transition("B", S.REVIEW); b.transition("B", S.SUCCEEDED)
+    b.transition("B", S.READY)
+    b.transition("B", S.RUNNING)
+    b.transition("B", S.REVIEW)
+    b.transition("B", S.SUCCEEDED)
     assert b.is_terminal()
 
 def test_stats_counts_by_status():
@@ -82,7 +90,9 @@ def test_explain_stall_mentions_blocking_upstream():
 
 def test_snapshot_roundtrip_preserves_state():
     b = TaskBoard([mk("A"), mk("B", ["A"], priority=2)])
-    b.transition("A", S.READY); b.transition("A", S.RUNNING); b.bump_attempt("A")
+    b.transition("A", S.READY)
+    b.transition("A", S.RUNNING)
+    b.bump_attempt("A")
     b.record_review("A", ReviewRecord(task_id="A", round=1, layer="static",
                                       verdict="approve", issues=[], fix_hints=[],
                                       reviewer="static:contract",
@@ -94,7 +104,7 @@ def test_snapshot_roundtrip_preserves_state():
     assert b2.get("B").priority == 2
 
 def test_from_snapshot_rejects_unknown_status():
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         TaskBoard.from_snapshot([{"id": "A", "title": "t", "description": "d",
                                   "role": "r", "acceptance_criteria": [],
                                   "deliverables": [], "status": "bogus"}])
@@ -200,9 +210,11 @@ def test_explain_stall_reports_dangling_dependency():
 
 def test_from_snapshot_board_can_keep_transitioning():
     b = TaskBoard([mk("A")])
-    b.transition("A", S.READY); b.transition("A", S.RUNNING)
+    b.transition("A", S.READY)
+    b.transition("A", S.RUNNING)
     b2 = TaskBoard.from_snapshot(b.snapshot())
-    b2.transition("A", S.REVIEW); b2.transition("A", S.SUCCEEDED)
+    b2.transition("A", S.REVIEW)
+    b2.transition("A", S.SUCCEEDED)
     assert b2.is_terminal()
     assert len(b2.get("A").status_history) == 4
 
@@ -265,8 +277,10 @@ def test_transitively_blocked_chain_recovers_step_by_step():
 
 def test_rework_task_is_redispatched_by_take_ready():
     b = TaskBoard([mk("A")])
-    b.transition("A", S.READY); b.transition("A", S.RUNNING)
-    b.transition("A", S.REVIEW); b.transition("A", S.REWORK)
+    b.transition("A", S.READY)
+    b.transition("A", S.RUNNING)
+    b.transition("A", S.REVIEW)
+    b.transition("A", S.REWORK)
     b.bump_rework("A")
     assert b.get("A").rework_count == 1
     taken = b.take_ready(limit=1)
@@ -296,8 +310,10 @@ def test_rework_dispatch_does_not_consume_attempts():
 
 def test_rework_loop_redispatches_then_reaches_succeeded():
     b = TaskBoard([mk("A")])
-    b.transition("A", S.READY); b.transition("A", S.RUNNING)
-    b.transition("A", S.REVIEW); b.transition("A", S.REWORK)
+    b.transition("A", S.READY)
+    b.transition("A", S.RUNNING)
+    b.transition("A", S.REVIEW)
+    b.transition("A", S.REWORK)
     b.bump_rework("A")
     (redispatched,) = b.take_ready(limit=1)
     assert redispatched.status is S.RUNNING

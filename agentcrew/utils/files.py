@@ -100,7 +100,7 @@ def read_text(path: Path) -> str:
     ``newline=""`` 关闭通用换行转换（``Path.read_text`` 到 3.13 才有该参数）：
     否则写回 ``"a\\r\\nb"`` 会读成 ``"a\\nb"``。
     """
-    with open(path, "r", encoding="utf-8", newline="") as file:
+    with open(path, encoding="utf-8", newline="") as file:
         return file.read()
 
 

@@ -7,15 +7,21 @@
 from datetime import datetime
 
 import pytest
+
 from agentcrew.artifacts.spec import ArtifactSpec
 from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.context.budget import TokenBudget
-from agentcrew.context.context_bus import (
-    ContextBus, ContextPack, DecisionRecord, TRUNCATION_NOTICE,
-)
+
 # 白盒：第 2 级按 _digest_text 的实际大小计费，测试需要复算这个口径
-from agentcrew.context.context_bus import _digest_text
-from agentcrew.task.task import Task, TaskStatus as S
+from agentcrew.context.context_bus import (
+    TRUNCATION_NOTICE,
+    ContextBus,
+    ContextPack,
+    DecisionRecord,
+    _digest_text,
+)
+from agentcrew.task.task import Task
+from agentcrew.task.task import TaskStatus as S
 from agentcrew.task.task_board import TaskBoard
 from agentcrew.utils.tokens import estimate_tokens
 

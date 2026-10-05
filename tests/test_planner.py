@@ -93,7 +93,8 @@ def test_cycle_rejected(catalog):
 
 
 def test_empty_acceptance_criteria_rejected(catalog):
-    d = draft("T-1"); d.acceptance_criteria = []
+    d = draft("T-1")
+    d.acceptance_criteria = []
     with pytest.raises(PlanValidationError) as ei:
         validate_plan(to_tasks(PlanOutput(tasks=[d])), catalog)
     assert any("验收标准" in e for e in ei.value.errors)
@@ -191,7 +192,8 @@ def test_unsafe_artifact_path_rejected_at_model_level(bad):
 
 # ── 校验 7：acceptance_criteria 非空 ──
 def test_missing_acceptance_criteria_error_names_task(catalog):
-    d = draft("T-1"); d.acceptance_criteria = []
+    d = draft("T-1")
+    d.acceptance_criteria = []
     with pytest.raises(PlanValidationError) as ei:
         validate_plan(to_tasks(PlanOutput(tasks=[d])), catalog)
     assert any("验收标准" in e and "T-1" in e for e in ei.value.errors)

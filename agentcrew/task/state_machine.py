@@ -7,7 +7,7 @@
 ``TaskBoard.reset_failed()`` 的显式接口（记录 ``reason="manual-retry"``）。
 """
 
-from typing import Mapping
+from collections.abc import Mapping
 
 from agentcrew.task.task import TaskStatus
 

@@ -15,7 +15,6 @@ from agentcrew.artifacts import contract
 from agentcrew.artifacts.contract import KIND_PARSERS, has_placeholder, parse_check
 from agentcrew.artifacts.spec import ArtifactKind
 
-
 # ── brief 指定的用例 ──────────────────────────────────────────────
 
 

@@ -43,7 +43,8 @@ class FakeClient:
         self.messages = self
     async def create(self, **kw):
         self.calls.append(kw)
-        if self._error: raise self._error
+        if self._error:
+            raise self._error
         return self._result
 
 def binding():

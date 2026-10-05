@@ -246,7 +246,7 @@ class ContextBus:
         path = Path(path)
         if not path.exists():
             return
-        with open(path, "r", encoding="utf-8") as handle:
+        with open(path, encoding="utf-8") as handle:
             for number, line in enumerate(handle, start=1):
                 if not line.strip():
                     continue
