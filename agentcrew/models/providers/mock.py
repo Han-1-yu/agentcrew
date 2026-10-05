@@ -6,7 +6,9 @@
 - ``review`` → ``fixtures_dir/reviews.json`` 的 ``data[task_id]``；无该键时用
   ``data["_default"]``
 - ``execute``（默认）→ ``fixtures_dir/responses/<task_id>/attempt-<attempt>.md``；
-  该文件不存在时回退到 ``attempt-1.md``；再不存在则返回占位回复
+  缺失时回退到 ``attempt-1.md``（**并上报**，这是真实替换）；若连 ``attempt-1.md``
+  都没有、但存在其他 ``attempt-*.md``，取编号最小者（spec §16.1 的「任何尝试都
+  返回同一内容」语义，不属回退、不上报）；再没有则返回占位回复
 
 fixture **文件**缺失一律不抛异常：走回退/占位路径并调用 ``_on_fallback``
 上报（绝不静默）。``MockFixtureMissing`` 仅在 ``fixtures_dir is None`` 且
@@ -15,6 +17,7 @@ purpose 为 plan/review（二者无法伪造回复）时抛出。
 
 import asyncio
 import json
+import re
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -31,13 +34,21 @@ _PLAN = "plan"
 _REVIEW = "review"
 _EXECUTE = "execute"
 
+#: 形如 ``attempt-7.md`` 的夹具文件名。
+_ATTEMPT_RE = re.compile(r"attempt-(\d+)\.md\Z")
+
 
 class MockFixtureMissing(RuntimeError):
     """plan/review 回放需要 ``fixtures_dir``，但构造时未提供。"""
 
 
 class MockProvider(BaseProvider):
-    """离线确定性回放 Provider（无网络、无 SDK）。"""
+    """离线确定性回放 Provider（无网络、无 SDK）。
+
+    execute 回放的四级顺序：精确 ``attempt-<n>.md`` → ``attempt-1.md``（替换，
+    上报）→ 编号最小的其他 ``attempt-*.md``（「任何尝试同一内容」，不上报）→
+    占位回复（上报）。详见模块 docstring。
+    """
 
     def __init__(
         self,
@@ -120,29 +131,49 @@ class MockProvider(BaseProvider):
         if self._fixtures_dir is None:
             return self._fallback("execute fixture 不可用：fixtures_dir 未配置")
         base = self._fixtures_dir / "responses" / str(self._task_id)
-        candidates = [base / f"attempt-{self._attempt}.md"]
+        exact = base / f"attempt-{self._attempt}.md"
+        if exact.is_file():
+            return exact.read_text(encoding="utf-8")
         if self._attempt != 1:
-            candidates.append(base / "attempt-1.md")
-        for candidate in candidates:
-            if candidate.is_file():
-                return candidate.read_text(encoding="utf-8")
-        return self._fallback(
-            "execute fixture 不存在：" + "、".join(str(c) for c in candidates))
+            first = base / "attempt-1.md"
+            if first.is_file():
+                self._report(
+                    f"mock fixture 替换：{exact.name} 不存在，改用 attempt-1.md（{base}）")
+                return first.read_text(encoding="utf-8")
+        shared = self._lowest_attempt(base)
+        if shared is not None:
+            # spec §16.1：只有非 1 号 attempt 文件时视为「任何尝试都返回同一内容」，
+            # 这是正常回放而非回退，因此**不上报**（上报会淹没真实替换）。
+            return shared.read_text(encoding="utf-8")
+        return self._fallback(f"execute fixture 不存在：{base} 下没有可用的 attempt-*.md")
 
     # ── 辅助 ──────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _lowest_attempt(base: Path) -> Path | None:
+        """``base`` 下编号最小的 ``attempt-<n>.md``（无则 ``None``，确定性排序）。"""
+        numbered = sorted(
+            (int(m.group(1)), candidate)
+            for candidate in base.glob("attempt-*.md")
+            if candidate.is_file() and (m := _ATTEMPT_RE.match(candidate.name))
+        )
+        return numbered[0][1] if numbered else None
 
     def _require_fixtures_dir(self, purpose: str) -> Path:
         if self._fixtures_dir is None:
             raise MockFixtureMissing(f"purpose={purpose!r} 需要 fixtures_dir，但未配置")
         return self._fixtures_dir
 
+    def _report(self, message: str) -> None:
+        """把一条上报消息交给 ``_on_fallback``（未接线回调时丢弃）。"""
+        if self._on_fallback is not None:
+            self._on_fallback(
+                f"{message}（purpose={self._purpose}, task={self._task_id}, "
+                f"attempt={self._attempt}）")
+
     def _fallback(self, reason: str) -> str:
         """上报缺失并返回占位回复（绝不静默返回空串）。"""
-        message = (f"mock fixture 缺失：{reason}"
-                   f"（purpose={self._purpose}, task={self._task_id}, "
-                   f"attempt={self._attempt}）")
-        if self._on_fallback is not None:
-            self._on_fallback(message)
+        self._report(f"mock fixture 缺失：{reason}")
         return f"# 占位回复（fixture 缺失）\ntask={self._task_id} attempt={self._attempt}\n"
 
 
