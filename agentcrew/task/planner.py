@@ -128,7 +128,9 @@ def validate_plan(tasks: Sequence[Task], catalog: RoleCatalog) -> None:
     4. ``TaskGraph.cycles()`` 为空；
     5. 产物路径跨任务、任务内都两两唯一；
     6. 路径安全 —— 已由 ``ArtifactSpec`` 的 validator 保证，此处不重复；
-    7. ``acceptance_criteria`` 非空。
+    7. ``acceptance_criteria`` 非空；
+    8. 要求文档的验收标准必须有对应的文档类交付物（见
+       :func:`_check_criteria_have_deliverables`）。
 
     ``tasks`` 为 ``Sequence`` 而非 ``list``：Task 25/31 会传入元组或切片。
     """
@@ -141,6 +143,7 @@ def validate_plan(tasks: Sequence[Task], catalog: RoleCatalog) -> None:
     errors.extend(_check_cycles(tasks))
     errors.extend(_check_artifact_paths(tasks))
     errors.extend(_check_acceptance_criteria(tasks))
+    errors.extend(_check_criteria_have_deliverables(tasks))
     if errors:
         raise PlanValidationError(errors)
 
@@ -226,6 +229,74 @@ def _check_acceptance_criteria(tasks: Sequence[Task]) -> list[str]:
         for task in tasks
         if not task.acceptance_criteria
     ]
+
+
+#: 验收标准里出现这些词，就认为该标准**要求一份文档**。这是定向的 lint 关键词表，
+#: 不是通用语义分析 —— 它针对的是一个实测到、且会让整条交付链死掉的失败类。
+#:
+#: **不要加 ``docs``**：它是 ``docs/api-spec.yaml`` 这类**路径**的常见前缀，裸子串
+#: 匹配会把「全局路径与 docs/api-spec.yaml 一致」这种标准误判成「要求文档」。实测
+#: 就这么误伤过演示夹具的 T-003。``文档``/``说明``/``documentation`` 已覆盖原意。
+_DOC_DEMANDING_KEYWORDS = (
+    "说明", "文档", "手册", "指南", "readme", "documentation", "manual", "guide",
+)
+
+#: 能充当「文档」的产物类型。
+_DOC_ARTIFACT_KINDS = frozenset({"markdown", "text", "html"})
+
+#: 但 ``kind=text`` 不都是文档：依赖清单与锁文件既不是说明、也证明不了「启动方法」。
+#: 真实运行里 ``T-BACKEND`` 正是靠一份 ``backend/requirements.txt``（kind=text）
+#: 让「已有文档交付物」成立，从而躲过检查的 —— 而它确实没有启动说明。
+_NOT_A_DOCUMENT = (
+    "requirements.txt", "requirements-dev.txt", "package.json", "package-lock.json",
+    "pyproject.toml", "pipfile", "pipfile.lock", "poetry.lock", "cargo.toml",
+    "go.mod", "pom.xml", "build.gradle",
+)
+
+
+def _counts_as_document(path: str, kind: str) -> bool:
+    """该产物能否用来证明一条「需要文档」的验收标准。"""
+    if kind not in _DOC_ARTIFACT_KINDS:
+        return False
+    name = path.rsplit("/", 1)[-1].lower()
+    return name not in _NOT_A_DOCUMENT
+
+
+def _check_criteria_have_deliverables(tasks: Sequence[Task]) -> list[str]:
+    """校验 8：要求文档的验收标准，必须有一份文档类交付物来证明它。
+
+    **这是针对实测失败类的定向检查，不是通用语义分析。** 真实模型运行
+    （``output/realrun6``）里 ``T-BACKEND`` 的验收标准第 7 条要求「提供启动方法与
+    依赖说明」，但它的交付物只声明了 ``backend/app.py`` 与 ``backend/requirements.txt``。
+    于是 agent 被夹死在两条规则之间：
+
+    - 写出 ``backend/README.md`` → G1 判「产出未在契约中声明的文件」而驳回；
+    - 不写 → G2 按第 7 条判「缺少启动说明」而驳回。
+
+    **两条路都堵死，该任务永远不可能通过。** 证据吻合：那条问题在**三轮评审里每轮
+    都在**（其余问题在被逐个修掉，所以问题数 7→12→8 在变），返工额度烧光后
+    ``FAILED``，下游 5 个任务全部阻塞。
+
+    根因在计划期：PM 写了一条它的交付物契约无法满足的验收标准，而校验里没有
+    任何一条会发现这件事。检查很窄 —— 标准里出现文档类词、且该任务的 deliverables
+    里没有任何 ``markdown``/``text``/``html`` → 报错，交回 PM 重新拆解。
+    """
+    errors: list[str] = []
+    for task in tasks:
+        if any(_counts_as_document(spec.path, spec.kind) for spec in task.deliverables):
+            continue
+        for criterion in task.acceptance_criteria:
+            lowered = criterion.lower()
+            hit = next((word for word in _DOC_DEMANDING_KEYWORDS if word in lowered), None)
+            if hit is None:
+                continue
+            errors.append(
+                f"任务 {task.id} 的验收标准要求文档（含「{hit}」）：{criterion!r}，"
+                f"但该任务的交付物里没有任何 markdown/text/html 文件 —— "
+                f"写出文档会被 G1 判「未在契约中声明」而驳回，不写又被这条标准驳回，"
+                f"该任务不可能通过。请为它补一个文档类交付物，或删掉这条标准。"
+            )
+    return errors
 
 
 def with_final_task(tasks: Sequence[Task]) -> list[Task]:

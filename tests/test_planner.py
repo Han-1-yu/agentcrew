@@ -22,7 +22,7 @@ from agentcrew.task.planner import (
     validate_plan,
     with_final_task,
 )
-from agentcrew.task.task import TaskStatus
+from agentcrew.task.task import Task, TaskStatus
 
 
 def draft(tid, role="backend_dev", deps=(), paths=("backend/app/main.py",), priority=5):
@@ -360,3 +360,78 @@ def test_validate_plan_rejects_empty_plan(catalog):
     with pytest.raises(PlanValidationError) as ei:
         validate_plan([], catalog)
     assert any("空" in error for error in ei.value.errors)
+
+
+# ── 校验 8：要求文档的验收标准，必须有文档类交付物 ─────────────────────────
+# 真实模型运行 output/realrun6 的 T-BACKEND：标准第 7 条要求「提供启动命令与依赖
+# 说明」，而契约只声明了 app.py 与 requirements.txt —— agent 写 README 会被 G1 判
+# 「未在契约中声明」驳回，不写又被 G2 按这条标准驳回，两条路都堵死，该任务永远
+# 不可能通过（三轮评审里这条问题每轮都在，返工额度烧光后 FAILED、下游 5 个阻塞）。
+
+
+def _task(tid, criteria, deliverables):
+    return Task(id=tid, title=tid, description="d", role="backend_dev",
+                acceptance_criteria=criteria, deliverables=deliverables)
+
+
+def _py(path):
+    return ArtifactSpec(path=path, kind="python", description="d")
+
+
+def _md(path):
+    return ArtifactSpec(path=path, kind="markdown", description="d")
+
+
+def _txt(path):
+    return ArtifactSpec(path=path, kind="text", description="d")
+
+
+def test_doc_criterion_without_doc_deliverable_is_rejected(catalog):
+    """真实 run6 的复现：要求「启动命令与依赖说明」，却只声明了代码与依赖清单。"""
+    t = _task("T-BE", ["代码可运行，提供启动命令与依赖说明"],
+              [_py("backend/app.py"), _txt("backend/requirements.txt")])
+    with pytest.raises(PlanValidationError) as ei:
+        validate_plan([t], catalog)
+    msg = " ".join(ei.value.errors)
+    assert "T-BE" in msg
+    assert "说明" in msg                       # 指名是哪条标准
+    assert "T-BE 不可能通过" in msg or "不可能通过" in msg   # 说明后果
+
+
+def test_doc_criterion_with_markdown_deliverable_passes(catalog):
+    t = _task("T-BE", ["提供启动说明"],
+              [_py("backend/app.py"), _md("backend/README.md")])
+    validate_plan([t], catalog)
+
+
+def test_requirements_txt_does_not_count_as_a_document(catalog):
+    """``kind=text`` 不都是文档：依赖清单证明不了「启动说明」。
+
+    这一条是被真实数据逼出来的 —— 第一版校验把 ``text`` 一律当文档，于是
+    ``requirements.txt`` 让「已有文档交付物」成立，真实失败案例从校验下溜了过去。
+    """
+    t = _task("T-BE", ["提供依赖说明"], [_txt("backend/requirements.txt")])
+    with pytest.raises(PlanValidationError):
+        validate_plan([t], catalog)
+
+
+def test_docs_path_inside_criterion_is_not_a_document_demand(catalog):
+    """标准里**提到** ``docs/...`` 路径不等于「要求文档」。
+
+    第二个被真实数据逼出来的修正：``docs`` 曾是关键词之一，于是演示夹具 T-003 的
+    「全局路径与 ``docs/api-spec.yaml`` 一致」被误判成「要求文档」而整份计划被拒。
+    """
+    t = _task("T-003", ["全局路径与 docs/api-spec.yaml 一致"], [_py("backend/app.py")])
+    validate_plan([t], catalog)
+
+
+def test_english_docs_keyword_is_gone(catalog):
+    """``docs`` 已从关键词表移除；``documentation`` 仍在。"""
+    from agentcrew.task.planner import _DOC_DEMANDING_KEYWORDS
+    assert "docs" not in _DOC_DEMANDING_KEYWORDS
+    assert "documentation" in _DOC_DEMANDING_KEYWORDS
+
+
+def test_code_only_criterion_without_docs_passes(catalog):
+    t = _task("T-003", ["实现 GET /todos 返回任务列表"], [_py("backend/app.py")])
+    validate_plan([t], catalog)
