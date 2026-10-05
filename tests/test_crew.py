@@ -40,7 +40,7 @@ from agentcrew.models.factory import ContextBudgetError, ModelFactory
 from agentcrew.roles.spec import RoleSpec
 from agentcrew.runtime.checkpoint import CheckpointStore, RunStatus
 from agentcrew.runtime.ledger import Ledger
-from agentcrew.task.planner import PlanOutput
+from agentcrew.task.planner import PlanOutput, to_tasks, with_final_task
 from agentcrew.task.task import Task, TaskStatus
 from agentcrew.task.task_board import TaskBoard
 
@@ -1208,3 +1208,78 @@ async def test_sanctioned_status_writer_is_recognized(env, monkeypatch):
 
     assert hits == [("model_copy", "task_board.py", "reset_failed")]
     assert ("task_board.py", "reset_failed") in _SANCTIONED_STATUS_WRITERS
+
+
+async def test_custom_role_is_actually_dispatched_end_to_end(
+    tmp_path, monkeypatch, clean_agent_classes
+):
+    """S7 的完整闭环：自定义角色不仅要能**加载**，还要真的被**派发执行**。
+
+    验收报告指出：mock 的计划来自预置夹具、里面只有内置角色，所以「注册了自定义
+    角色、run 退出 0」只验证了加载链路 —— 自定义角色永远不会被 PM 选中、不会被执行、
+    不会落盘。这条测试用一个含自定义角色任务的临时计划跑完整 run，断言
+    **拆解 → 派发 → 门禁 → 落盘** 全程打通，而且引擎代码零改动。
+    """
+    monkeypatch.setenv("AGENTCREW_MOCK", "true")
+    monkeypatch.setenv("AGENTCREW_OUTPUT_DIR", str(tmp_path / "o"))
+    monkeypatch.setenv("AGENTCREW_GATE", "none")
+
+    custom = RoleSpec(
+        key="security_auditor", title="安全审计师", goal="审计接口安全性",
+        backstory="十年渗透测试经验", responsibilities=["审计鉴权与输入校验"],
+        boundaries=["不写业务代码"], output_contract="输出 markdown 审计报告",
+        system_prompt="你是安全审计师，只输出审计结论与依据，不改动业务代码。")
+
+    plan = {"tasks": [{
+        "id": "T-001", "title": "安全审计", "description": "审计 Todo 接口",
+        "role": "security_auditor", "acceptance_criteria": ["给出审计结论"],
+        "dependencies": [], "priority": 1, "brief": "审计",
+        "deliverables": [{"path": "docs/audit.md", "kind": "markdown",
+                          "description": "审计报告"}],
+    }]}
+
+    fx = tmp_path / "fx"
+    fx.mkdir()
+    (fx / "plan_todo.json").write_text(json.dumps(plan), encoding="utf-8")
+
+    # review 夹具按**最终任务列表**逐条生成：judgement 数必须等于该任务的标准条数，
+    # `_default` 兜底在这里不成立（T-001 一条、T-FINAL 两条）。
+    plan_obj = PlanOutput.model_validate(plan)
+    final_tasks = with_final_task(to_tasks(plan_obj))
+    (fx / "reviews.json").write_text(json.dumps({
+        t.id: {
+            "judgements": [
+                {"criterion_index": i, "satisfied": True, "evidence": f"已满足：{c}"}
+                for i, c in enumerate(t.acceptance_criteria)
+            ],
+            "suggestions": [], "score": 0.9,
+        } for t in final_tasks
+    }), encoding="utf-8")
+
+    for tid, path, body in [
+        ("T-001", "docs/audit.md",
+         "# 安全审计报告\n\n"
+         "## 审计范围\n\n对 Todo 接口的鉴权、输入校验与错误处理做静态审计。\n\n"
+         "## 结论\n\n鉴权：本轮为单用户本地服务，无鉴权面，不适用。\n"
+         "输入校验：title 非空、长度上限、completed 类型检查均已覆盖。\n"
+         "错误处理：不存在 id 返回 404，非法载荷返回 422，语义明确。\n\n"
+         "## 遗留风险\n\n内存存储重启即丢，生产部署需替换为持久化实现。\n"),
+        ("T-FINAL", "DELIVERY.md", DELIVERY_BODY),
+    ]:
+        d = fx / "responses" / tid
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "attempt-1.md").write_text(
+            _response(path.split(".")[-1], path, body), encoding="utf-8")
+
+    monkeypatch.setattr("agentcrew.models.factory.DEFAULT_FIXTURES_DIR", fx)
+
+    crew = Crew(Settings.load())
+    crew.register_role(custom)          # ← 唯一的「接入」动作，引擎零改动
+    record = await crew.run("对现有 Todo 接口做一次安全审计")
+
+    assert record.status is RunStatus.COMPLETED
+    board = crew.checkpoint.load_board()
+    assert board.get("T-001").role == "security_auditor"
+    assert board.get("T-001").status is TaskStatus.SUCCEEDED
+    # 产物真的落盘了 —— 这是「被派发执行」而不是「被跳过」的证据
+    assert (crew.checkpoint.artifacts_dir / "docs" / "audit.md").is_file()
