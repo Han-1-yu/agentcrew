@@ -139,6 +139,32 @@ def test_g2_llm_review_ran_for_every_task(offline_run):
     )
 
 
+def test_g2_never_fell_back_to_format_error(offline_run):
+    """G2 的裁决必须是**真裁决**，不能是「评审器返回格式错误，已放行」。
+
+    上面的覆盖断言只看事件层：夹具漂移出 ``ReviewVerdict``（或缺失）时，
+    ``MockProvider`` 的回放进不了 schema，``Reviewer`` 走格式错误通道放行，
+    ``layer="llm"`` 的 ``gate_result`` 与 ``purpose="review"`` 的 ``llm_call``
+    一样照常产生 —— 一次「全绿却没有一次真评审」的 run 因此能骗过全部断言。
+    这里直接读裁决里的 issues：真裁决不会带这条放行说明。
+    """
+    from agentcrew.gate.reviewer import _FORMAT_ERROR_ISSUE
+
+    llm_verdicts = [
+        e for e in offline_run.ledger.events("gate_result")
+        if e.data.get("layer") == "llm"
+    ]
+    assert llm_verdicts
+    fell_back = [
+        e.data.get("task_id")
+        for e in llm_verdicts
+        if _FORMAT_ERROR_ISSUE in (e.data.get("issues") or [])
+    ]
+    assert fell_back == [], (
+        f"这些任务的 G2 走了「格式错误放行」通道：{sorted(fell_back)} —— "
+        "评审夹具已漂移出 ReviewVerdict")
+
+
 def test_no_mock_fixture_fallback(offline_run):
     """一次干净的演示不允许出现任何 fixture 回退（spec §16.1：绝不静默）。
 

@@ -159,12 +159,26 @@ def test_reviews_fixture_covers_all_tasks_and_final():
 
 
 def test_review_entries_are_schema_valid():
-    from agentcrew.gate.reviewer import ReviewVerdict
+    """``reviews.json`` 的**每一条**（含兜底键 ``_default``）都必须满足 ``ReviewVerdict``。
+
+    过去这条守卫跳过 ``_`` 前缀的键，而演示夹具里 ``reviews.json`` **只有**
+    ``_default`` —— 于是唯一的形状校验在空转。夹具漂移出 schema 的后果不是报错
+    而是**静默放行**：回放内容进不了 ``ReviewVerdict``，``structured`` 阶梯判它
+    格式错误，``Reviewer._opinion`` 走「评审器返回格式错误，已放行」通道，
+    每个任务照样通过、整套测试照样绿。所以这里既验形状，也验「兜底裁决真的是
+    一份可用的裁决」（格式错误的 reject 与 JSON 解析失败走的是同一条放行通道）。
+    """
+    from agentcrew.gate.reviewer import ReviewVerdict, _is_malformed
     reviews = json.loads((FIX / "reviews.json").read_text(encoding="utf-8"))
-    for key, v in reviews.items():
-        if key.startswith("_"):
-            continue
-        ReviewVerdict.model_validate(v)
+    assert reviews, "reviews.json 不能为空"
+    default = reviews.get("_default")
+    assert default is not None, "reviews.json 必须提供 _default 兜底裁决"
+    for key, verdict in reviews.items():
+        ReviewVerdict.model_validate(verdict)     # 含 _default：漂移即失败
+    assert not _is_malformed(ReviewVerdict.model_validate(default)), (
+        "兜底裁决是「reject 却不带 issues」——评审器会把它当格式错误而放行")
+    assert default["verdict"] == "approve", (
+        "演示夹具的兜底裁决必须是 approve：一次干净的 run 不该有 G2 驳回")
 
 
 def test_plan_has_no_duplicate_artifact_paths():
