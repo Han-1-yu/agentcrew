@@ -964,7 +964,9 @@ from agentcrew.artifacts.spec import ArtifactSpec
 from agentcrew.roles.spec import RoleSpec
 from agentcrew.roles.catalog import RoleCatalog
 
-def draft(tid, role="backend_dev", deps=(), paths=("backend/app/main.py",)):
+def draft(tid, role="backend_dev", deps=(), paths=None):
+    # 默认路径按 tid 派生，保证不同任务的产物路径天然唯一（校验 5 会拒绝重复路径）
+    paths = paths if paths is not None else (f"src/{tid}.py",)
     return TaskDraft(id=tid, title=tid, description="d", role=role,
                      acceptance_criteria=["ok"],
                      deliverables=[ArtifactSpec(path=p, kind="python", description="x")
@@ -1049,12 +1051,25 @@ def test_same_task_may_not_declare_same_path_twice(catalog):
         ])), catalog)
 
 def test_with_final_task_appends_sink(catalog):
-    tasks = to_tasks(PlanOutput(tasks=[draft("T-1"), draft("T-2", deps=["T-1"])]))
+    # 两个**并列**任务 → 两个叶子，T-FINAL 依赖二者
+    tasks = to_tasks(PlanOutput(tasks=[draft("T-1"), draft("T-2")]))
     out = with_final_task(tasks)
     final = [t for t in out if t.id == FINAL_TASK_ID][0]
     assert final.role == "project_manager"
     assert set(final.dependencies) == {"T-1", "T-2"}     # 所有叶子
     assert any(d.path == "DELIVERY.md" for d in final.deliverables)
+
+def test_with_final_task_on_a_chain_uses_only_the_tail(catalog):
+    # 链式：只有 T-2 无下游，所以 T-FINAL 只依赖 T-2
+    tasks = to_tasks(PlanOutput(tasks=[draft("T-1"), draft("T-2", deps=["T-1"])]))
+    final = [t for t in with_final_task(tasks) if t.id == FINAL_TASK_ID][0]
+    assert set(final.dependencies) == {"T-2"}
+
+def test_with_final_task_is_idempotent(catalog):
+    once = with_final_task(to_tasks(PlanOutput(tasks=[draft("T-1")])))
+    twice = with_final_task(once)
+    assert len([t for t in twice if t.id == FINAL_TASK_ID]) == 1
+    assert FINAL_TASK_ID not in twice[-1].dependencies     # 不自依赖
 ```
 
 - [ ] **Step 2: 运行测试确认失败**
