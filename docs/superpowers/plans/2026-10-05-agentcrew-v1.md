@@ -2248,7 +2248,11 @@ Expected: FAIL — `ImportError`
 `complete()` 查找顺序：
 - `purpose == "plan"` → `fixtures_dir/plan_todo.json` 的**原始文本**
 - `purpose == "review"` → `fixtures_dir/reviews.json` 中 `data[task_id]` 的 JSON 文本；无 `task_id` 键时用 `data["_default"]`
-- `purpose == "execute"` → `fixtures_dir/responses/<task_id>/attempt-<attempt>.md`；不存在则**回退**到 `attempt-1.md`；再不存在则生成占位回复 `f"# 占位回复（fixture 缺失）\ntask={task_id} attempt={attempt}\n"` 并调 `_on_fallback(message)`
+- `purpose == "execute"` → 按此顺序（四支都要有测试）：
+  1. `responses/<task_id>/attempt-<attempt>.md` 存在 → 直接用，**不上报**
+  2. 不存在但 `attempt-1.md` 存在 → 用 attempt-1，**并调用 `_on_fallback` 上报**（这是一次真实替换，§16.1 的「绝不静默」适用）
+  3. 两者都不存在但存在任意 `attempt-*.md` → 用**编号最小**的那个，**不上报**（这是 spec §16.1:1048 的「任何尝试都返回同一内容」语义，不是回退，上报只会训练读者忽略回调）
+  4. 一个都没有 → 占位回复 + 上报
 - 任何路径都读不到 → 不抛异常（`MockFixtureMissing` 仅在 `fixtures_dir` 本身为 `None` 且 purpose 为 plan/review 时抛出）
 
 `prompt_tokens` 用 `estimate_tokens` 累加所有 messages 的 content；`completion_tokens` 用 `estimate_tokens(result_text)`。
