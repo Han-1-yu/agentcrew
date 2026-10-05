@@ -118,8 +118,14 @@ def _content_findings(spec: ArtifactSpec, content: str) -> list[_Finding]:
             f"{spec.path} 仅含占位内容",
             f"用真实实现替换 {spec.path} 中的占位内容",
         ))
+    lowered = content.lower()
     for needle in spec.must_contain:
-        if needle not in content:
+        # 大小写**不敏感**地匹配。实测真实模型产出 `Flask==3.0.3`，而 PM 定的
+        # must_contain 是 `flask`：大小写敏感的 `in` 会让一个完全正确的产物连续
+        # 失败多轮，而失败信息只说「缺少必需符号：flask」—— 文件里明明写着 Flask，
+        # 从症状根本推不出病因。假阳性（把 `DEF F()` 认成 `def f()`）的风险远小于
+        # 假阴性，而符号语义真错时 G2 的 LLM 评审仍会把关。
+        if needle.lower() not in lowered:
             findings.append((
                 f"{spec.path} 缺少必需符号：{needle}",
                 f"在 {spec.path} 中定义 {needle}",

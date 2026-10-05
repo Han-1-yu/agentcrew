@@ -211,3 +211,33 @@ def test_fix_hints_pair_with_issues(store):
     r = run_static(t, store, round_no=1)
     assert len(r.fix_hints) == len(r.issues) == 2
     assert all(hint != issue for issue, hint in zip(r.issues, r.fix_hints))
+
+
+def test_must_contain_matching_is_case_insensitive(store):
+    """真实模型写 `Flask==3.0.3`，而 PM 定的 must_contain 是 `flask`。
+
+    大小写敏感时这个**完全正确**的产物会连续失败多轮，且失败信息只说
+    「缺少必需符号：flask」—— 文件里明明写着 Flask，从症状推不出病因。
+    """
+    t = task_with(ArtifactSpec(path="backend/requirements.txt", kind="text",
+                               description="d", must_contain=["flask"]))
+    commit(store, t, t.deliverables[0], "Flask==3.0.3\n")
+    r = run_static(t, store, round_no=1)
+    assert r.verdict == "approve", r.issues
+
+
+def test_must_contain_case_insensitive_also_matches_upper(store):
+    t = task_with(ArtifactSpec(path="a.py", kind="python", description="d",
+                               must_contain=["def F"]))
+    commit(store, t, t.deliverables[0], "def f():\n    return 1\n")
+    assert run_static(t, store, round_no=1).verdict == "approve"
+
+
+def test_must_contain_still_reports_a_genuinely_absent_symbol(store):
+    """宽容的是大小写，不是缺失 —— 真没有就还得报。"""
+    t = task_with(ArtifactSpec(path="a.py", kind="python", description="d",
+                               must_contain=["django"]))
+    commit(store, t, t.deliverables[0], "def f():\n    return 1\n")
+    r = run_static(t, store, round_no=1)
+    assert r.verdict == "reject"
+    assert any("django" in i for i in r.issues)
