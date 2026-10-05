@@ -123,9 +123,14 @@ class ArtifactStore:
         3. :meth:`resolve` 的根目录包含性与链接检查；
         4. 同路径已由**其他任务**写入 → :class:`ArtifactConflictError`；同一任务
            返工重写则覆盖原记录（spec §9.2）；
-        5. 编码后字节数对 ``spec.max_bytes``/``spec.min_bytes`` 校验；
+        5. 编码后字节数对 ``spec.max_bytes`` 校验（→ :class:`ArtifactTooLargeError`）；
         6. ``mkdir(parents=True, exist_ok=True)`` 后原子写；
         7. 更新内存记录并（有 ledger 时）发 ``artifact_written`` 事件。
+
+        ``spec.min_bytes`` **故意不在这里校验**：它是「欠尺寸 = 质量缺陷」的判据，
+        归 G1 静态门禁，好让产物先落盘、由 G1 出 ``fix_hints`` 走返工通道；若在
+        ``commit`` 抛错，Agent 会把它当执行失败烧掉一次 attempt。``max_bytes`` 则是
+        「防模型跑飞」的资源上限（spec §5.2），字节不该落盘，故留在写入前。
         """
         normalized = safe_relpath(rel).as_posix()
         if normalized != spec.path:
@@ -145,10 +150,7 @@ class ArtifactStore:
         data = content.encode("utf-8")
         if len(data) > spec.max_bytes:
             raise ArtifactTooLargeError(normalized, len(data), spec.max_bytes)
-        if len(data) < spec.min_bytes:
-            raise ValueError(
-                f"产物 {normalized} 大小 {len(data)} 字节低于下限 {spec.min_bytes} 字节"
-            )
+        # 只有上限在这里：min_bytes 是 G1 的质量判据，见 docstring。
 
         target.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_text(target, content)

@@ -227,17 +227,22 @@ def test_oversize_rejected(store):
     assert (ei.value.path, ei.value.size, ei.value.limit) == ("big.txt", 100, 10)
 
 
-def test_undersize_rejected(store):
+def test_undersize_content_still_commits_for_g1(store):
+    """``min_bytes`` 归 G1：欠尺寸产物必须落盘且可读，门禁才能出 fix_hints 走返工。"""
     s = ArtifactSpec(path="a.py", kind="python", description="d", min_bytes=5)
-    with pytest.raises(ValueError):
-        store.commit("a.py", "x", spec=s, task=mk_task())
+    rec = store.commit("a.py", "x", spec=s, task=mk_task())
+    assert rec.size_bytes == 1
+    assert store.read("a.py") == "x"
+    assert [r.path for r in store.by_task("T-1")] == ["a.py"]
 
 
 def test_size_measured_in_utf8_bytes(store):
-    """尺寸按编码后字节数：3 个汉字 = 9 字节，不能按字符数判。"""
-    s = ArtifactSpec(path="c.md", kind="markdown", description="d",
-                     min_bytes=9, max_bytes=9)
-    store.commit("c.md", "中文中", spec=s, task=mk_task())
+    """上限按编码后字节数：3 个汉字 = 9 字节，按字符数判会漏掉超限。"""
+    s = ArtifactSpec(path="c.md", kind="markdown", description="d", max_bytes=8)
+    with pytest.raises(ArtifactTooLargeError):
+        store.commit("c.md", "中文中", spec=s, task=mk_task())
+    exact = ArtifactSpec(path="c.md", kind="markdown", description="d", max_bytes=9)
+    store.commit("c.md", "中文中", spec=exact, task=mk_task())
 
 
 # ── 冲突与返工 ──
@@ -281,19 +286,15 @@ def test_rewrite_updates_manifest_sha(tmp_path):
 # ── 全或无 ──
 
 def _rejection_case(case):
-    """(契约 spec, 待写 rel, 内容)：三类必被拒的输入。"""
+    """(契约 spec, 待写 rel, 内容)：两类必被拒的输入。"""
     if case == "undeclared":
         return spec("sub/dir/declared.py"), "sub/dir/hack.py", "x = 1\n"
-    if case == "oversize":
-        s = ArtifactSpec(path="sub/dir/big.txt", kind="text", description="d",
-                         max_bytes=3)
-        return s, "sub/dir/big.txt", "xxxx"
-    s = ArtifactSpec(path="sub/dir/a.py", kind="python", description="d",
-                     min_bytes=10)
-    return s, "sub/dir/a.py", "x = 1\n"
+    s = ArtifactSpec(path="sub/dir/big.txt", kind="text", description="d",
+                     max_bytes=3)
+    return s, "sub/dir/big.txt", "xxxx"
 
 
-@pytest.mark.parametrize("case", ["undeclared", "oversize", "undersize"])
+@pytest.mark.parametrize("case", ["undeclared", "oversize"])
 def test_rejected_commit_leaves_nothing_behind(tmp_path, case):
     """任何一项校验失败：不建目录、不写文件、不留记录。"""
     root = tmp_path / "artifacts"
