@@ -23,14 +23,15 @@ _FIXED_PATTERNS: tuple[re.Pattern[str], ...] = (_SK_KEY, _BEARER)
 
 
 def _compile_patterns(secrets: Sequence[str]) -> tuple[re.Pattern[str], ...]:
-    """已知密钥转义为字面量 pattern，按长度降序（短串先替换会破坏长串匹配）。
+    """固定规则在前，已知密钥字面量在后（按长度降序，短串先替换会破坏长串匹配）。
 
-    空串跳过：空 pattern 会匹配一切。密钥 pattern 排在固定规则之前，使已配置的
-    密钥即使跨越规则边界也能被整体抹掉。
+    空串跳过：空 pattern 会匹配一切。固定规则先跑，像 ``sk-`` 这样的规则会把
+    含密钥的整段吃掉；若字面量先替换，会在 ``sk-supersecretkey123456`` 中间插入
+    ``***``，剩余后缀就再也匹配不到 ``sk-`` 规则了。
     """
     unique = list(dict.fromkeys(secret for secret in secrets if secret))
     unique.sort(key=len, reverse=True)
-    return (*(re.compile(re.escape(secret)) for secret in unique), *_FIXED_PATTERNS)
+    return (*_FIXED_PATTERNS, *(re.compile(re.escape(secret)) for secret in unique))
 
 
 def _apply(text: str, patterns: Sequence[re.Pattern[str]]) -> str:
@@ -76,9 +77,10 @@ class _RedactingFilter(logging.Filter):
 
     def _redact_exception(self, record: logging.LogRecord) -> None:
         if record.exc_info:
-            # Formatter 优先使用已设置的 exc_text，无需改动 Formatter。
+            # Formatter 优先使用已设置的 exc_text，无需改动 Formatter；
+            # rstrip 对齐 Formatter.formatException（它同样去掉末尾换行）
             text = "".join(traceback.format_exception(*record.exc_info))
-            record.exc_text = _apply(text, self._patterns)
+            record.exc_text = _apply(text, self._patterns).rstrip("\n")
         elif record.exc_text:
             record.exc_text = _apply(record.exc_text, self._patterns)
         if record.stack_info:

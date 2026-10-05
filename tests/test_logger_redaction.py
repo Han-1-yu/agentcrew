@@ -72,6 +72,33 @@ def test_exception_traceback_is_redacted(capsys):
     assert "sk-supersecretkey123456" not in (out.out + out.err)
 
 
+def test_exception_log_ends_with_single_newline(capsys):
+    # Formatter.formatException 会去掉 traceback 末尾的换行；exc_text 若不照做，
+    # 每条异常日志都会多出一个空行
+    setup_logging("INFO", [])
+    try:
+        raise RuntimeError("plain failure")
+    except RuntimeError:
+        get_logger("t").exception("boom")
+    for handler in logging.getLogger().handlers:
+        handler.flush()
+    out = capsys.readouterr()
+    assert out.err.endswith("RuntimeError: plain failure\n")
+
+
+def test_overlapping_configured_secret_leaves_no_key_suffix(capsys):
+    # 运行时 settings.secret_values() 常包含正在被脱敏的那把密钥；若字面量先替换，
+    # 会在密钥中间插入 ***，sk- 规则就吃不掉剩余后缀
+    setup_logging("INFO", ["supersecret"])
+    get_logger("t").info("boom sk-supersecretkey123456")
+    for handler in logging.getLogger().handlers:
+        handler.flush()
+    out = capsys.readouterr()
+    assert "sk-supersecretkey123456" not in out.err
+    assert "key123456" not in out.err  # 后缀也不能残留
+    assert out.err == "boom ***\n"  # 整条消息只剩占位符
+
+
 def test_redacts_key_inside_non_str_arg(capsys):
     setup_logging("INFO", ["supersecret"])
 
