@@ -205,7 +205,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command is None:
-        parser.print_help()
+        _print_bare_invocation(parser)
         return EXIT_CODES["ok"]
     handler = _HANDLERS[args.command]
     try:
@@ -214,6 +214,35 @@ def main(argv: Sequence[str] | None = None) -> int:
         # 第二次 Ctrl-C（第一次已在 _drive 里打印 resume 提示）：静默收尾，不留 traceback。
         print("已中断。", file=sys.stderr)
         return EXIT_CODES["cancelled"]
+
+
+def _print_bare_invocation(parser: argparse.ArgumentParser) -> None:
+    """无子命令时的默认入口：帮助 + 已注册角色数 + 最近 3 次 run 概览（spec §15.1）。
+
+    这是 CLI 的默认发现路径（Task 34 的 README 指向它），所以不只打 help：角色数
+    用 ``BUILTIN_ROLES``，最近 run 用 ``CheckpointStore.list_runs``（与 ``clean``
+    同一份列表，new→old，取前三条）。配置坏了也照常返回帮助：这里的目标是「告诉
+    用户有哪些工具」，不该因为一个坏 YAML 变成非零退出。
+    """
+    parser.print_help()
+    console = Console()
+    _out(
+        console,
+        f"已注册角色 {len(BUILTIN_ROLES)} 个"
+        "（python main.py roles 可看职责 / 边界 / 产出）",
+    )
+    try:
+        output_dir = Settings.load().output_dir
+    except (OSError, ValueError) as exc:
+        _out(console, f"最近 3 次 run：（配置不可用，略过：{exc}）")
+        return
+    runs = CheckpointStore.list_runs(output_dir)[:3]
+    if not runs:
+        _out(console, f"最近 3 次 run：无（{output_dir} 下还没有 run）")
+        return
+    _out(console, f"最近 3 次 run（{output_dir}）：")
+    for run_id in runs:
+        _out(console, f"  {run_id}")
 
 
 # ── run / resume ──────────────────────────────────────────────────────────
@@ -334,12 +363,16 @@ def _drive(
 
 
 def _run_exit_code(crew: Crew, record: RunRecord) -> int:
-    """结束状态 → 退出码；数字全部取自 :data:`EXIT_CODES`。"""
+    """结束状态 → 退出码；数字全部取自 :data:`EXIT_CODES`。
+
+    判定顺序与 ``Crew._exit_code``（``run_finished`` 事件里 ``exit_code`` 的来源）
+    保持同一口径：停滞 → 终局状态 → 失败。状态先于统计，是因为**两条路径必须给出
+    同一个数**：一个带失败任务、随后又被取消的 run，审计记录写 130，进程就不能退
+    1。``COMPLETED`` 蕴含「无失败」，由 ``Crew._final_status`` 保证（有 failed /
+    blocked / skipped 或未终结时它返回 ``FAILED``）。
+    """
     if crew.stalled:
         return EXIT_CODES["stalled"]
-    stats = record.stats
-    if stats.failed or stats.blocked or stats.skipped:
-        return EXIT_CODES["failed"]
     if record.status is RunStatus.COMPLETED:
         return EXIT_CODES["ok"]
     if record.status in (RunStatus.CANCELLED, RunStatus.INTERRUPTED):

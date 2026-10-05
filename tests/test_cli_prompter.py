@@ -93,6 +93,13 @@ async def test_plan_edit_validation_failure_reasks():
     assert (await p.ask_plan([mk("T-1")])).action == "cancel"
 
 
+async def test_plan_eof_cancels():
+    """Ctrl-D / Ctrl-Z 结束输入 = 选 ``q``：普通操作，不该留 traceback。"""
+    def eof(_):
+        raise EOFError()
+    assert (await CliPrompter(input_fn=eof).ask_plan([mk("T-1")])).action == "cancel"
+
+
 # ── 交付卡点 ──────────────────────────────────────────────────────────────
 
 
@@ -121,6 +128,24 @@ async def test_delivery_empty_input_defaults_to_accept():
 async def test_delivery_reasks_on_invalid_input():
     d = await prompter(["nope", "a"]).ask_delivery(record())
     assert d.action == "accept"
+
+
+async def test_delivery_eof_aborts():
+    def eof(_):
+        raise EOFError()
+    assert (await CliPrompter(input_fn=eof).ask_delivery(record())).action == "abort"
+
+
+async def test_delivery_eof_at_task_id_prompt_aborts():
+    """任务 id 子提示处的 EOF 同样按「放弃」收尾，不是崩溃。"""
+    it = iter(["r"])
+
+    def ask(_):
+        try:
+            return next(it)
+        except StopIteration:
+            raise EOFError() from None
+    assert (await CliPrompter(input_fn=ask).ask_delivery(record())).action == "abort"
 
 
 # ── 编辑器路径 ────────────────────────────────────────────────────────────
@@ -167,6 +192,36 @@ def test_edit_tasks_in_editor_raises_on_broken_json(monkeypatch):
     monkeypatch.setattr(cli_prompter.subprocess, "run", fake_run)
     with pytest.raises(PlanValidationError):
         edit_tasks_in_editor([mk("T-001")], editor="ed")
+
+
+def test_edit_tasks_in_editor_raises_on_non_utf8_plan(monkeypatch):
+    """编辑器把文件存成 GBK（或其他编码）时，读回失败也要收敛为 PlanValidationError。"""
+    def fake_run(cmd, **kwargs):
+        Path(cmd[1]).write_bytes('{"tasks": []}'.encode("gbk") + "中文".encode("gbk"))
+        return subprocess.CompletedProcess(cmd, 0)
+    monkeypatch.setattr(cli_prompter.subprocess, "run", fake_run)
+    with pytest.raises(PlanValidationError):
+        edit_tasks_in_editor([mk("T-001")], editor="ed")
+
+
+def test_edit_tasks_in_editor_raises_when_editor_removes_file(monkeypatch):
+    def fake_run(cmd, **kwargs):
+        Path(cmd[1]).unlink()
+        return subprocess.CompletedProcess(cmd, 0)
+    monkeypatch.setattr(cli_prompter.subprocess, "run", fake_run)
+    with pytest.raises(PlanValidationError):
+        edit_tasks_in_editor([mk("T-001")], editor="ed")
+
+
+async def test_plan_edit_unreadable_plan_reasks(monkeypatch):
+    """读回失败走的是「打印错误 + 重新提示」，不是异常逃逸（默认编辑路径）。"""
+    def fake_run(cmd, **kwargs):
+        Path(cmd[1]).unlink()
+        return subprocess.CompletedProcess(cmd, 0)
+    monkeypatch.setattr(cli_prompter.subprocess, "run", fake_run)
+    it = iter(["e", "q"])
+    p = CliPrompter(input_fn=lambda _: next(it), edit_fn=edit_tasks_in_editor)
+    assert (await p.ask_plan([mk("T-1")])).action == "cancel"
 
 
 def test_edit_tasks_in_editor_raises_on_conflict(monkeypatch):

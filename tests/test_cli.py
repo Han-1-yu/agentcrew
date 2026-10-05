@@ -70,6 +70,28 @@ def test_no_args_prints_help(capsys):
     assert "usage" in capsys.readouterr().out.lower()
 
 
+def test_no_args_shows_role_count_and_recent_runs(tmp_path, monkeypatch, capsys):
+    """spec §15.1：裸命令 = 帮助 + 已注册角色数 + 最近 3 次 run 概览。"""
+    monkeypatch.setenv("AGENTCREW_OUTPUT_DIR", str(tmp_path / "o"))
+    for run_id in ("20260101-000000-aaaa", "20260102-000000-bbbb",
+                   "20260103-000000-cccc", "20260104-000000-dddd"):
+        _fake_run_dir(tmp_path / "o", run_id)
+    assert cli.main([]) == 0
+    out = capsys.readouterr().out
+    assert "usage" in out.lower()
+    assert "已注册角色 8 个" in out
+    for run_id in ("20260104-000000-dddd", "20260103-000000-cccc",
+                   "20260102-000000-bbbb"):
+        assert run_id in out
+    assert "20260101-000000-aaaa" not in out          # 只列最近 3 个
+
+
+def test_no_args_without_any_run_still_returns_0(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("AGENTCREW_OUTPUT_DIR", str(tmp_path / "o"))
+    assert cli.main([]) == 0
+    assert "最近 3 次 run" in capsys.readouterr().out
+
+
 def test_unknown_command_is_rejected():
     """未知子命令交给 argparse（退出码 2），绝不静默当成 ``run``。"""
     with pytest.raises(SystemExit) as exc:
@@ -248,12 +270,23 @@ def test_run_failed_tasks_map_to_1():
 
 def test_run_blocked_tasks_map_to_1():
     assert cli._run_exit_code(
-        _StubCrew(), _record(RunStatus.COMPLETED, blocked=1)) == 1
+        _StubCrew(), _record(RunStatus.FAILED, blocked=1)) == 1
 
 
 def test_completed_run_maps_to_0():
     assert cli._run_exit_code(
         _StubCrew(), _record(RunStatus.COMPLETED, succeeded=3)) == EXIT_CODES["ok"] == 0
+
+
+def test_cancelled_run_with_prior_failures_exits_130():
+    """判定顺序必须先看状态：审计记录里 run_finished 写的是 130，进程不能退 1。"""
+    record = _record(RunStatus.CANCELLED, failed=2, blocked=1, skipped=1)
+    assert cli._run_exit_code(_StubCrew(), record) == EXIT_CODES["cancelled"] == 130
+
+
+def test_interrupted_run_exits_130():
+    assert cli._run_exit_code(
+        _StubCrew(), _record(RunStatus.INTERRUPTED, failed=1)) == 130
 
 
 def test_stalled_maps_to_4():

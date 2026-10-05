@@ -84,11 +84,16 @@ class CliPrompter:
     # ── 卡点一：计划 ─────────────────────────────────────────────────────
 
     async def ask_plan(self, tasks: Sequence[Task]) -> PlanDecision:
-        """展示拆解并询问是否执行；``e`` 走编辑器后重校验（失败则重新提示）。"""
+        """展示拆解并询问是否执行；``e`` 走编辑器后重校验（失败则重新提示）。
+
+        EOF（Ctrl-D / Ctrl-Z）等同 ``[q] 取消``：结束输入是普通操作，不该用 traceback
+        结束整次 run —— 它走与选 ``q`` 完全相同的收尾路径。
+        """
         planned = list(tasks)
         self._print_plan(planned)
         while True:
-            choice = self._choose(_PLAN_MENU, _PLAN_CHOICES, default="a")
+            choice = self._choose(
+                _PLAN_MENU, _PLAN_CHOICES, default="a", eof_label="取消")
             if choice == "a":
                 return PlanDecision(action="approve", tasks=planned)
             if choice == "e":
@@ -105,25 +110,40 @@ class CliPrompter:
     # ── 卡点二：交付 ─────────────────────────────────────────────────────
 
     async def ask_delivery(self, record: RunRecord | None) -> DeliveryDecision:
-        """展示交付并询问是否接受；``r`` 收集任务 id，空列表重新提示。"""
+        """展示交付并询问是否接受；``r`` 收集任务 id，空列表重新提示。
+
+        EOF 在任一提示处都等同 ``[q] 放弃``（含任务 id 子提示）。
+        """
         self._print_delivery(record)
         while True:
-            choice = self._choose(_DELIVERY_MENU, _DELIVERY_CHOICES, default="a")
+            choice = self._choose(
+                _DELIVERY_MENU, _DELIVERY_CHOICES, default="a", eof_label="放弃")
             if choice == "a":
                 return DeliveryDecision(action="accept")
             if choice == "q":
                 return DeliveryDecision(action="abort")
             task_ids = self._ask_task_ids()
+            if task_ids is None:
+                return DeliveryDecision(action="abort")
             if task_ids:
                 return DeliveryDecision(action="rework", task_ids=task_ids)
             self._console.print(Text("没有解析到任务 id，请重新选择。"), soft_wrap=True)
 
     # ── 提示 ─────────────────────────────────────────────────────────────
 
-    def _choose(self, menu: str, choices: str, *, default: str) -> str:
-        """循环提示直到拿到 ``choices`` 中的选项；空输入取 ``default``。"""
+    def _choose(self, menu: str, choices: str, *, default: str, eof_label: str) -> str:
+        """循环提示直到拿到 ``choices`` 中的选项；空输入取 ``default``，EOF 取 ``q``。
+
+        ``eof_label`` 只用于把「按哪个选项处理」说清楚（计划卡点是取消、交付卡点是
+        放弃）——``q`` 在两个菜单里都是收尾项，所以返回同一个字符。
+        """
         while True:
-            raw = self._input(f"{menu} > ").strip().lower()
+            try:
+                raw = self._input(f"{menu} > ").strip().lower()
+            except EOFError:
+                self._console.print(
+                    Text(f"输入已结束（Ctrl-D），按「{eof_label}」处理。"), soft_wrap=True)
+                return "q"
             if not raw:
                 return default
             if raw in choices:
@@ -131,9 +151,14 @@ class CliPrompter:
             self._console.print(
                 Text(f"请输入 {'/'.join(choices)} 之一。"), soft_wrap=True)
 
-    def _ask_task_ids(self) -> list[str]:
-        """读一行逗号分隔的任务 id；去空白、丢空段（空结果由调用方重新提示）。"""
-        raw = self._input("要返工的任务 id（逗号分隔）> ")
+    def _ask_task_ids(self) -> list[str] | None:
+        """读一行逗号分隔的任务 id；去空白、丢空段；EOF 返回 ``None``（按放弃收尾）。"""
+        try:
+            raw = self._input("要返工的任务 id（逗号分隔）> ")
+        except EOFError:
+            self._console.print(
+                Text("输入已结束（Ctrl-D），按「放弃」处理。"), soft_wrap=True)
+            return None
         return [part.strip() for part in raw.split(",") if part.strip()]
 
     def _print_errors(self, errors: Sequence[str]) -> None:
@@ -204,8 +229,10 @@ def edit_tasks_in_editor(
     解析直接拒掉。``T-FINAL`` 不写进文件：它是平台追加的保留任务，
     :func:`with_final_task` 会按编辑后的依赖关系重建。
 
-    任何失败（编辑器起不来、退出码非 0、JSON 坏了、字段不合法、路径冲突）都收敛成
-    :class:`PlanValidationError`，调用方据此打印错误并重新提示，不会让整次 run 崩掉。
+    任何失败（编辑器起不来、退出码非 0、文件被删/被改成非 UTF-8、JSON 坏了、
+    字段不合法、路径冲突、临时文件清不掉）都收敛成 :class:`PlanValidationError`，
+    调用方据此打印错误并重新提示，不会让整次 run 崩掉 —— 「所有失败都重新提示」
+    包括**读回**这一步，不只是校验那一步。
     """
     payload = json.dumps(
         {"tasks": [_draft(task) for task in tasks if task.id != FINAL_TASK_ID]},
@@ -213,6 +240,24 @@ def edit_tasks_in_editor(
         indent=2,
     )
     command = _editor_command(editor)
+    try:
+        raw = _edit_via_editor(command, payload)
+    except PlanValidationError:
+        raise
+    except OSError as exc:
+        # TemporaryDirectory 的清理在 Windows 上会因编辑器未放手而抛 PermissionError。
+        raise PlanValidationError([f"编辑器临时文件无法清理：{exc}"]) from exc
+    try:
+        plan = PlanOutput.model_validate_json(raw)
+    except ValueError as exc:  # JSONDecodeError 与 pydantic ValidationError 都是 ValueError
+        raise PlanValidationError([f"编辑后的拆解无法解析：{exc}"]) from exc
+    validated = with_final_task(to_tasks(plan))
+    validate_plan(validated, RoleCatalog(BUILTIN_ROLES))
+    return validated
+
+
+def _edit_via_editor(command: str, payload: str) -> str:
+    """写临时文件 → 起编辑器 → 读回文本；失败一律转成 :class:`PlanValidationError`。"""
     with tempfile.TemporaryDirectory(prefix="agentcrew-plan-") as tmp:
         path = Path(tmp) / "plan.json"
         path.write_text(payload, encoding="utf-8")
@@ -226,14 +271,12 @@ def edit_tasks_in_editor(
             raise PlanValidationError(
                 [f"编辑器 {command!r} 退出码 {result.returncode}，本次编辑作废"]
             )
-        raw = path.read_text(encoding="utf-8")
-    try:
-        plan = PlanOutput.model_validate_json(raw)
-    except ValueError as exc:  # JSONDecodeError 与 pydantic ValidationError 都是 ValueError
-        raise PlanValidationError([f"编辑后的拆解无法解析：{exc}"]) from exc
-    validated = with_final_task(to_tasks(plan))
-    validate_plan(validated, RoleCatalog(BUILTIN_ROLES))
-    return validated
+        try:
+            return path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise PlanValidationError(
+                [f"无法读取编辑结果（文件被删除或不是 UTF-8 文本）：{exc}"]
+            ) from exc
 
 
 def _editor_command(editor: str | None) -> str:
