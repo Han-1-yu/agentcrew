@@ -661,7 +661,7 @@ git add -A && git commit -m "feat: 任务状态机跃迁表"
 **Interfaces:**
 - Consumes: Task 5 的 `Task`/`TaskStatus`
 - Produces:
-  - `agentcrew.task.graph.TaskGraph` — frozen dataclass，字段 `deps: dict[str, frozenset[str]]`、`dependents: dict[str, frozenset[str]]`
+  - `agentcrew.task.graph.TaskGraph` — frozen dataclass，字段 `deps: dict[str, frozenset[str]]`、`dependents_map: dict[str, frozenset[str]]`（**注意：字段名带 `_map` 后缀**，因为 `dependents` 这个名字归方法所有——同名的实例属性会遮蔽方法）
   - `TaskGraph.build(tasks: Sequence[Task]) -> TaskGraph`
   - `TaskGraph.dependencies(task_id) -> frozenset[str]`
   - `TaskGraph.descendants(task_id) -> set[str]`
