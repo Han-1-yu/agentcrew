@@ -247,6 +247,29 @@ async def test_run_creates_artifacts_and_manifest(env):
     }
 
 
+async def test_empty_plan_is_rejected_not_reported_as_success(env):
+    """PM 返回 ``{"tasks": []}`` 必须报错，而不是产出一次「成功」的空交付（I6）。
+
+    修复前：``validate_plan([])`` 通过、``with_final_task([])`` 只追加一个
+    ``T-FINAL``，run 以 COMPLETED 收尾、退出码 0、报告写着「成功 1 个」——
+    一次什么都没做的 run 被当成交付。校验对象是**追加之前**的那份计划。
+    """
+    (env["fx"] / "plan_todo.json").write_text(
+        json.dumps({"tasks": []}), encoding="utf-8")
+    with pytest.raises(PlanFailedError) as ei:
+        await Crew(env["settings"]).run("做一个 Todo 应用")
+    assert any("空" in error for error in ei.value.errors)
+    run_dir = next(iter(env["settings"].output_dir.iterdir()))
+    record = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    assert record["status"] == "failed"        # 退出码 2（plan）
+    assert record["stats"]["succeeded"] == 0
+    assert not (run_dir / "artifacts" / "DELIVERY.md").exists()
+    # 错误回灌给 PM 重拆：两次尝试、两次都点名「空计划」
+    rejected = list(_ledger(env["settings"], run_dir.name).events("plan_rejected"))
+    assert len(rejected) == 2
+    assert all("空" in error for event in rejected for error in event.data["errors"])
+
+
 async def test_plan_validation_failure_retries_then_raises(env, monkeypatch):
     bad = {
         "tasks": [

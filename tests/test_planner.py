@@ -332,7 +332,29 @@ def test_with_final_task_returns_new_list_and_leaves_input_untouched(catalog):
     assert all(t.id != FINAL_TASK_ID for t in tasks)
 
 
-def test_with_final_task_on_empty_plan():
-    out = with_final_task([])
-    assert [t.id for t in out] == [FINAL_TASK_ID]
-    assert out[0].dependencies == []
+def test_with_final_task_on_empty_plan_raises():
+    """空拆解必须报错，而不是「只追加一个 T-FINAL」（I6）。
+
+    引擎追加的 ``T-FINAL`` 是**汇总**任务，不是交付：空计划放行的话，PM 返回
+    ``{"tasks": []}`` 会产出一个只有 ``DELIVERY.md`` 的 run，退出码 0、报告写着
+    「成功」—— 一次什么都没做的 run 被当成交付。
+    """
+    with pytest.raises(PlanValidationError) as ei:
+        with_final_task([])
+    assert any("空" in error for error in ei.value.errors)
+
+
+def test_with_final_task_rejects_a_plan_containing_only_the_final_task():
+    """只交回 ``T-FINAL`` 的拆解同样等于空计划（它会被摘掉再重建）。"""
+    only_final = with_final_task(to_tasks(PlanOutput(
+        tasks=[draft("T-1", paths=("a.py",))])))
+    final = [task for task in only_final if task.id == FINAL_TASK_ID]
+    with pytest.raises(PlanValidationError):
+        with_final_task(final)
+
+
+def test_validate_plan_rejects_empty_plan(catalog):
+    """``validate_plan([])`` 过去是通过的 —— 空列表因此一路走到成功。"""
+    with pytest.raises(PlanValidationError) as ei:
+        validate_plan([], catalog)
+    assert any("空" in error for error in ei.value.errors)

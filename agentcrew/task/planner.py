@@ -42,6 +42,18 @@ class PlanValidationError(ValueError):
         super().__init__("\n".join(self.errors))
 
 
+#: 空拆解的错误消息（PM 交回 ``{"tasks": []}`` 时）。
+_EMPTY_PLAN_ERROR = (
+    "拆解结果为空：必须至少有一个真实任务 —— 引擎追加的收尾任务 T-FINAL 只负责"
+    "汇总，空计划会产出一次只有 DELIVERY.md 的 run（那不是交付）"
+)
+
+
+def _drafts(tasks: Sequence[Task]) -> list[Task]:
+    """拆解里**真实的**任务（``T-FINAL`` 是平台保留 id，由引擎追加，不算数）。"""
+    return [task for task in tasks if task.id != FINAL_TASK_ID]
+
+
 class TaskDraft(BaseModel):
     """PM 返回的单个任务草案；与 ``Task`` 的差异是只含 PM 能决定的字段。
 
@@ -105,8 +117,11 @@ def validate_plan(tasks: Sequence[Task], catalog: RoleCatalog) -> None:
     """按 spec §7.2 校验拆解方案；任一条不过则抛 :class:`PlanValidationError`。
 
     收集全部错误后一次性抛出，消息为中文且指名具体的任务 id / 角色 / 路径，
-    便于直接回灌 PM。7 条校验：
+    便于直接回灌 PM。8 条校验：
 
+    0. 计划非空（``_EMPTY_PLAN_ERROR``）：空列表过去**通过**，于是
+       ``with_final_task`` 只追加一个 ``T-FINAL``，run 交出一个只有
+       ``DELIVERY.md`` 的「成功」结局 —— 空计划必须是错误，不是交付（I6）；
     1. ``id`` 非空且唯一（重复的每个 id 各报一条）；
     2. ``role`` 命中 ``catalog``；
     3. 依赖 id 存在于本次拆解、且不自引用；
@@ -118,6 +133,8 @@ def validate_plan(tasks: Sequence[Task], catalog: RoleCatalog) -> None:
     ``tasks`` 为 ``Sequence`` 而非 ``list``：Task 25/31 会传入元组或切片。
     """
     errors: list[str] = []
+    if not _drafts(tasks):
+        errors.append(_EMPTY_PLAN_ERROR)
     errors.extend(_check_ids(tasks))
     errors.extend(_check_roles(tasks, catalog))
     errors.extend(_check_dependencies(tasks))
@@ -218,8 +235,15 @@ def with_final_task(tasks: Sequence[Task]) -> list[Task]:
     其他任务依赖它的任务，经 ``TaskGraph.dependents`` 计算），产物为
     ``DELIVERY.md``，``priority=9`` 保证最后执行。幂等：若输入已含 ``T-FINAL``
     则先摘掉再重建，重复调用不会出现两个收尾任务或自依赖。
+
+    ``tasks`` 里没有**真实**任务时抛 :class:`PlanValidationError`（I6）：这是
+    唯一看得见「追加之前那份计划」的地方，而三个入口（Crew 拆解、G3 计划编辑、
+    CLI 编辑器校验）都从这里过 —— 空计划在这里被拦下，就不会变成一次只有
+    ``DELIVERY.md`` 的「成功」run。只含 ``T-FINAL`` 的输入同理（它会被摘掉）。
     """
-    base = [task for task in tasks if task.id != FINAL_TASK_ID]
+    base = _drafts(tasks)
+    if not base:
+        raise PlanValidationError([_EMPTY_PLAN_ERROR])
     graph = TaskGraph.build(base)
     leaves = [task.id for task in base if not graph.dependents(task.id)]
     final = Task(
