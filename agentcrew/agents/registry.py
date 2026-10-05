@@ -1,7 +1,7 @@
 """``AgentFactory``：role key → Agent 实例（spec §8.1/§8.3）。
 
-``AGENT_CLASSES`` 是模块级的「role key → 专用 Agent 类」注册表：Task 25 填入 8 个
-内置角色，Task 29 的 ``Crew.register_role`` 为自定义角色追加。**未注册的 key 一律
+``AGENT_CLASSES`` 是模块级的「role key → 专用 Agent 类」注册表：8 个内置角色的
+类在此登记（Task 25），Task 29 的 ``Crew.register_role`` 为自定义角色追加。**未注册的 key 一律
 回落到** :class:`~agentcrew.agents.generic.GenericAgent` —— 这正是 §8.3 的实现：
 角色是数据（``RoleSpec``），只有需要特殊输出解析的角色才需要一个类。
 
@@ -9,18 +9,35 @@
 复用安全），调度器每个任务都要取一次 Agent，缓存省掉重复构造。
 """
 
+from agentcrew.agents.architect import ArchitectAgent
+from agentcrew.agents.backend_dev import BackendDevAgent
 from agentcrew.agents.base_agent import BaseAgent
+from agentcrew.agents.devops_engineer import DevopsEngineerAgent
+from agentcrew.agents.frontend_dev import FrontendDevAgent
 from agentcrew.agents.generic import GenericAgent
+from agentcrew.agents.product_manager import ProductManagerAgent
+from agentcrew.agents.project_manager import ProjectManagerAgent
+from agentcrew.agents.qa_engineer import QaEngineerAgent
+from agentcrew.agents.technical_writer import TechnicalWriterAgent
 from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.models.factory import ModelFactory
 from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.roles.spec import RoleSpec
 from agentcrew.runtime.ledger import Ledger
 
-#: role key → 专用 Agent 类。Task 25 用 8 个内置角色的类填充它；空字典时全部
-#: key 都走 ``GenericAgent``。字典本身是模块级单例，``AgentFactory.register``
-#: **不写**它（见该方法 docstring）。
-AGENT_CLASSES: dict[str, type[BaseAgent]] = {}
+#: role key → 专用 Agent 类。8 个内置角色在此登记（键顺序与 ``BUILTIN_ROLES``
+#: 一致）；未登记的 key 一律回落到 ``GenericAgent``。字典本身是模块级单例，
+#: ``AgentFactory.register`` **不写**它（见该方法 docstring）。
+AGENT_CLASSES: dict[str, type[BaseAgent]] = {
+    "project_manager": ProjectManagerAgent,
+    "product_manager": ProductManagerAgent,
+    "architect": ArchitectAgent,
+    "backend_dev": BackendDevAgent,
+    "frontend_dev": FrontendDevAgent,
+    "qa_engineer": QaEngineerAgent,
+    "devops_engineer": DevopsEngineerAgent,
+    "technical_writer": TechnicalWriterAgent,
+}
 
 
 def _generic_spec(role_key: str) -> RoleSpec:

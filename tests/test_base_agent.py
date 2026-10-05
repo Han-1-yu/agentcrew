@@ -464,9 +464,11 @@ def test_register_overrides_class_and_invalidates_cache(env):
 
     models = ModelFactory(env["settings"], ledger=env["ledger"])
     f = AgentFactory(models, env["store"], env["ledger"], "目标", RoleCatalog())
-    assert type(f.get("devops_engineer")) is GenericAgent
-    f.register("devops_engineer", Special)
-    assert type(f.get("devops_engineer")) is Special
+    # 用未登记的自定义 key：8 个内置 key 由 Task 25 的 AGENT_CLASSES 解析到各自的
+    # 角色类（见 tests/test_agents_contract.py），不再是 GenericAgent 兜底。
+    assert type(f.get("custom_role")) is GenericAgent
+    f.register("custom_role", Special)
+    assert type(f.get("custom_role")) is Special
 
 
 def test_register_does_not_pollute_module_registry(env):
