@@ -227,12 +227,12 @@ def test_oversize_rejected(store):
     assert (ei.value.path, ei.value.size, ei.value.limit) == ("big.txt", 100, 10)
 
 
-def test_undersize_content_still_commits_for_g1(store):
-    """``min_bytes`` 归 G1：欠尺寸产物必须落盘且可读，门禁才能出 fix_hints 走返工。"""
+def test_undersize_content_commits_so_g1_can_see_it(store):
+    # 过小是质量问题，不是执行失败：必须落盘，由 G1 报「空文件」并驱动 REWORK
     s = ArtifactSpec(path="a.py", kind="python", description="d", min_bytes=5)
     rec = store.commit("a.py", "x", spec=s, task=mk_task())
-    assert rec.size_bytes == 1
     assert store.read("a.py") == "x"
+    assert rec.size_bytes == 1
     assert [r.path for r in store.by_task("T-1")] == ["a.py"]
 
 
