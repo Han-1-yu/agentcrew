@@ -10,7 +10,9 @@
 - resume 的 ``RUNNING → READY`` 修复、``attempts`` 不重置、MANIFEST 记录重建
   （§9.2 冲突检测跨 resume 的前提）、决策 JSONL 只追加新增行；
 - 交付卡点 abort / rework（含 ``SUCCEEDED → READY`` 的人工打回）；
-- 停滞时写 ``diagnostics/stall-report.md`` 且 run_finished 带退出码 4。
+- 停滞时写 ``diagnostics/stall-report.md`` 且 run_finished 带退出码 4；
+- prompter 不被静默替换：人工卡点 + 无 prompter 一律 ``ValueError``（Task 27 的
+  构造期守卫原样生效），``gate="none"`` 与显式 ``NullPrompter()`` 两条出口照常。
 """
 
 import asyncio
@@ -26,7 +28,7 @@ from agentcrew.artifacts.spec import ArtifactSpec
 from agentcrew.artifacts.store import ArtifactConflictError, ArtifactStore
 from agentcrew.config import Settings
 from agentcrew.crew.crew import EXIT_CODES, Crew, PlanFailedError, RunCancelled
-from agentcrew.gate.gatekeeper import DeliveryDecision, PlanDecision
+from agentcrew.gate.gatekeeper import DeliveryDecision, NullPrompter, PlanDecision
 from agentcrew.models.factory import ContextBudgetError
 from agentcrew.roles.spec import RoleSpec
 from agentcrew.runtime.checkpoint import RunStatus
@@ -410,8 +412,9 @@ async def test_plan_gate_save_exit_is_resumable_without_replanning(env, monkeypa
     assert crew.checkpoint.load_record().status is RunStatus.INTERRUPTED
     board = crew.checkpoint.load_board()
     assert {task.id for task in board.all()} == {"T-001", "T-002", "T-FINAL"}
-    # resume 跳过规划与计划闸门，直接执行已保存的计划
-    resumed = Crew.resume_from(Settings.load(), run_id)
+    # resume 跳过规划与计划闸门，直接执行已保存的计划；gate=plan 仍要求接线
+    # prompter（构造期规则与卡点无关），测试环境里用显式 NullPrompter 声明全自动。
+    resumed = Crew.resume_from(Settings.load(), run_id, prompter=NullPrompter())
     rec = await resumed.resume()
     assert rec.status is RunStatus.COMPLETED and rec.stats.succeeded == 3
     assert resumed.checkpoint.load_board().get("T-001").attempts == 1
@@ -438,6 +441,41 @@ async def test_malformed_model_alias_is_a_config_error(env, monkeypatch):
     run_dir = next(iter(env["settings"].output_dir.iterdir()))
     finished = list(_ledger(env["settings"], run_dir.name).events("run_finished"))
     assert finished[-1].data["exit_code"] == EXIT_CODES["config"]
+
+
+# ── G3 prompter 守卫（Task 27 的规则必须原样生效）─────────────────────────
+
+
+@pytest.mark.parametrize("mode", ["plan", "delivery", "both"])
+async def test_human_gate_without_prompter_raises(env, monkeypatch, mode):
+    """配了人工卡点却没 prompter：一律报错。
+
+    Crew 不替调用方塞 ``NullPrompter`` —— 那会把「忘了接线」重新变成「自动
+    放行」，正是 Task 27 的构造期守卫要拦的事。错误在 run 装配 Gatekeeper 时
+    抛出（计划阶段每次都会重建它），Crew 既不捕获也不降级。
+    """
+    monkeypatch.setenv("AGENTCREW_GATE", mode)
+    with pytest.raises(ValueError) as ei:
+        await Crew(Settings.load()).run("做一个 Todo 应用")
+    assert "prompter" in str(ei.value)
+    # 没有静默放行：一个产物都不该落盘
+    assert all(
+        not any(_artifacts(env["settings"], run_dir.name).iterdir())
+        for run_dir in env["settings"].output_dir.iterdir()
+    )
+
+
+async def test_explicit_null_prompter_is_the_automated_opt_in(env, monkeypatch):
+    """显式传 ``NullPrompter()`` 是「我知道这里没有人」的声明：gate=both 也放行。"""
+    monkeypatch.setenv("AGENTCREW_GATE", "both")
+    rec = await Crew(Settings.load(), prompter=NullPrompter()).run("做一个 Todo 应用")
+    assert rec.status is RunStatus.COMPLETED and rec.stats.succeeded == 3
+
+
+async def test_gate_none_without_prompter_runs_fully_automatically(env):
+    """``gate="none"``（``--auto`` 的路径）不需要 prompter，全自动跑完。"""
+    rec = await Crew(env["settings"]).run("做一个 Todo 应用")
+    assert rec.status is RunStatus.COMPLETED and rec.stats.succeeded == 3
 
 
 # ── resume ────────────────────────────────────────────────────────────────

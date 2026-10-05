@@ -16,7 +16,10 @@ G3 人工闸门的两个卡点都由 ``Gatekeeper`` 询问：计划卡点在**�
 打开；``edit`` 结果重新追加 T-FINAL 并重跑 §7.2 校验，``rework`` 把指定任务送回
 调度（``FAILED`` 走 ``TaskBoard.reset_failed``，``SUCCEEDED`` 因状态机无出边而经
 重建面板人工置回 ``READY`` —— 与 ``reset_failed`` 同类的显式绕过，历史里留下
-``reason="delivery-rework"``）。
+``reason="delivery-rework"``）。``prompter`` 一律**原样透传**：开了人工卡点却没接线
+时由 ``Gatekeeper`` 在构造期抛 ``ValueError``（Task 27），Crew 不做静默兜底 ——
+替调用方塞一个 ``NullPrompter`` 会把「忘了接」重新变成「自动放行」，且离错误更远、
+更难看见。合法出口只有两个显式声明：``gate="none"`` 或显式传入 ``NullPrompter()``。
 
 resume（spec §13.3）跳过规划与计划卡点，只修复状态后重入执行段；两处
 carry-forward 是 load-bearing 的：``ArtifactStore.load_manifest`` 重建产物记录
@@ -30,7 +33,6 @@ carry-forward 是 load-bearing 的：``ArtifactStore.load_manifest`` 重建产�
 from __future__ import annotations
 
 import asyncio
-import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -44,12 +46,7 @@ from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.config import Settings
 from agentcrew.context.context_bus import ContextBus
 from agentcrew.crew.scheduler import Scheduler
-from agentcrew.gate.gatekeeper import (
-    Gatekeeper,
-    NullPrompter,
-    Prompter,
-    Reviewer,
-)
+from agentcrew.gate.gatekeeper import Gatekeeper, Prompter, Reviewer
 from agentcrew.models import factory as model_factory
 from agentcrew.models.factory import ModelFactory, ModelFactoryError
 from agentcrew.roles.builtin import BUILTIN_ROLES
@@ -71,8 +68,6 @@ from agentcrew.task.planner import (
 from agentcrew.task.task import RunStats, StatusChange, Task, TaskStatus
 from agentcrew.task.task_board import TaskBoard
 from agentcrew.utils.files import atomic_write_text
-
-_logger = logging.getLogger(__name__)
 
 #: run 级退出码（spec §7.4）；Task 32 的 CLI 直接消费本表。
 EXIT_CODES: dict[str, int] = {
@@ -156,7 +151,14 @@ class Crew:
         prompter: Prompter | None = None,
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> None:
-        """``catalog`` / ``store`` / ``prompter`` 缺省由本类按需构造。
+        """``catalog`` / ``store`` 缺省由本类按需构造；``prompter`` **原样透传**。
+
+        ``prompter`` 没有默认实现，也不会被替换成 ``NullPrompter``：``gate`` 含
+        人工卡点而这里为 ``None`` 时，``Gatekeeper`` 在构造期抛 ``ValueError``
+        （Task 27），不会被吞掉或降级。合法出口只有两个显式声明 —— 配
+        ``gate="none"``（全自动路径）或显式传入 ``NullPrompter()``。
+        该错误在 ``run()`` / ``resume()`` 装配 ``Gatekeeper`` 时浮现（计划阶段
+        每次都会重建它），而不是 ``Crew.__init__``：构造期还没有面板可绑定。
 
         ``checkpoint`` 只服务于 :meth:`resume_from`（``run()`` 每个 run 都必须有
         自己的 run 目录，总是新建）。``on_event`` 是调度事件的观察接口
@@ -560,20 +562,14 @@ class Crew:
     def _build_gatekeeper(
         self, run: _Run, board: TaskBoard, bus: ContextBus | None
     ) -> Gatekeeper:
-        """每轮按面板重装门禁编排器；``prompter`` 缺省用 ``NullPrompter``。
+        """每轮按面板重装门禁编排器；``prompter`` **原样透传**（可为 ``None``）。
 
-        ``Gatekeeper`` 在开启人工卡点却不给 prompter 时构造期抛 ``ValueError``
-        （Task 27）：Crew 的默认是**显式**传入 ``NullPrompter``（全自动路径），
-        而不是让构造失败 —— 但要留下一条 warning，免得「以为有人工卡点」。
+        Task 27 的守卫在这里必须原样生效：``gate`` 含人工卡点却没给 prompter 时
+        ``Gatekeeper`` 构造期抛 ``ValueError``，Crew **不替调用方兜底**。静默塞一个
+        ``NullPrompter`` 会把「忘了接线」重新变成「自动放行」——正是那个守卫要拦的
+        事，且在离错误更远的一层，更难看见。两条合法出口都是显式声明：``gate="none"``
+        （全自动路径，即 ``--auto``）或显式传入 ``NullPrompter()``。
         """
-        prompter = self._prompter
-        if prompter is None:
-            if self._settings.gate in (_PLAN_GATES | _DELIVERY_GATES):
-                _logger.warning(
-                    "gate=%s 含人工卡点但未提供 prompter，本次 run 以 NullPrompter "
-                    "全自动放行", self._settings.gate,
-                )
-            prompter = NullPrompter()
         reviewer = Reviewer(run.models, self._catalog, run.store, run.ledger)
         return Gatekeeper(
             reviewer,
@@ -581,7 +577,7 @@ class Crew:
             board,
             gate=self._settings.gate,
             ledger=run.ledger,
-            prompter=prompter,
+            prompter=self._prompter,
             context_bus=bus,
         )
 
