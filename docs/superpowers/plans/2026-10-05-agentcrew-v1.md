@@ -308,7 +308,7 @@ def test_rejects_unsafe_paths(bad):
     "a/b/c/d.txt", "deep/nested/dir/file.js", "UPPER/Case.MD",
 ])
 def test_accepts_safe_paths(ok):
-    assert safe_relpath(ok) == Path(ok).as_posix()
+    assert safe_relpath(ok).as_posix() == Path(ok).as_posix()
 
 def test_normalizes_backslashes_and_duplicate_separators():
     assert safe_relpath("a\\b//c.txt").as_posix() == "a/b/c.txt"
