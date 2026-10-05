@@ -21,7 +21,11 @@
   顺序颠倒会把本轮的返工意见静默丢掉。
 - **人工闸门由 gate 模式开关**：``none`` 直接返回放行裁决且**不触碰 prompter**
   （``NullPrompter`` 是零 IO 的全自动实现，但真正抑制提示的是模式判断）；
-  ``plan`` / ``delivery`` 各只开一个卡点，``both`` 两个都开。
+  ``plan`` / ``delivery`` 各只开一个卡点，``both`` 两个都开。**开了卡点却没传
+  prompter 是构造期错误**（``__init__`` 抛 ``ValueError``）：人工闸门静默降级为
+  自动放行比没有闸门更危险 —— 操作者会照着「有人工卡点」去规划，实际却一次都
+  没问过。显式传入 ``NullPrompter`` 仍然合法：那是「我知道自己在跑全自动」的
+  明示选择，被拒的只有「忘了传」。
 
 每条门禁裁决都落两处账：``board.record_review``（任务历史，每层都记）与**每层
 恰好一条** ``gate_result`` 审计事件（spec §14.1 的 ``layer``/``verdict``/``score``/
@@ -133,6 +137,12 @@ class Gatekeeper:
         prompter: Prompter | None = None,
         context_bus: ContextBus | None = None,
     ) -> None:
+        if prompter is None and (gate in _PLAN_GATES or gate in _DELIVERY_GATES):
+            raise ValueError(
+                f"gate={gate!r} 包含人工卡点，但没有传入 prompter："
+                "人工闸门不得静默降级为自动放行；请传入 Prompter，"
+                "或改用 gate=\"none\"（全自动路径）"
+            )
         self._reviewer = reviewer
         self._store = store
         self._board = board
@@ -177,14 +187,21 @@ class Gatekeeper:
     # ---- 人工闸门（G3）----
 
     async def human_plan_gate(self, tasks: Sequence[Task]) -> PlanDecision:
-        """计划卡点：``gate`` 开启且确有 prompter 时询问，否则放行原拆解。"""
+        """计划卡点：``gate`` 开启时询问 prompter，否则放行原拆解。
+
+        「``gate`` 开启而 prompter 为空」在构造期已被 ``ValueError`` 挡掉，
+        这里的 ``None`` 判断只是类型收窄，不是运行期的降级路径。
+        """
         planned = list(tasks)
         if self._gate in _PLAN_GATES and self._prompter is not None:
             return await self._prompter.ask_plan(planned)
         return PlanDecision(action="approve", tasks=planned)
 
     async def human_delivery_gate(self, record: RunRecord | None) -> DeliveryDecision:
-        """交付卡点：``gate`` 开启且确有 prompter 时询问，否则直接接受。"""
+        """交付卡点：``gate`` 开启时询问 prompter，否则直接接受。
+
+        同 :meth:`human_plan_gate`：``prompter=None`` + 开关开启的组合不可达。
+        """
         if self._gate in _DELIVERY_GATES and self._prompter is not None:
             return await self._prompter.ask_delivery(record)
         return DeliveryDecision(action="accept")

@@ -233,6 +233,32 @@ async def test_gate_none_never_touches_prompter(env, tmp_path):
     assert delivery.action == "accept" and delivery.task_ids == []
 
 
+@pytest.mark.parametrize("gate", ["plan", "delivery", "both"])
+def test_human_gate_without_prompter_raises_at_construction(env, tmp_path, gate):
+    """开了人工卡点却没有 prompter：构造期炸响，不得静默放行。
+
+    spec §10.3 的 CLI 卡点是用户明示要的三层门禁之一。静默降级成自动放行比
+    没有闸门更危险 —— 操作者会照着「有人工卡点」去规划，而实际上一次都没问过。
+    """
+    with pytest.raises(ValueError, match="prompter"):
+        _gk(env, tmp_path, gate=gate, prompter=None)
+
+
+async def test_gate_none_without_prompter_stays_fully_automatic(env, tmp_path):
+    """全自动路径（``gate="none"``）不要求 prompter：构造成功且只回放行裁决。"""
+    gatekeeper = _gk(env, tmp_path, gate="none", prompter=None)
+    assert (await gatekeeper.human_plan_gate([env["task"]])).action == "approve"
+    assert (await gatekeeper.human_delivery_gate(None)).action == "accept"
+
+
+async def test_null_prompter_stays_legal_under_human_gate(env, tmp_path):
+    """被拒的只有「忘了传」；显式传入 ``NullPrompter`` 是明示的全自动选择
+    （brief 的 ``test_gate_plan_approve_returns_same_tasks`` 也这么用）。"""
+    gatekeeper = _gk(env, tmp_path, gate="both", prompter=NullPrompter())
+    assert (await gatekeeper.human_plan_gate([env["task"]])).action == "approve"
+    assert (await gatekeeper.human_delivery_gate(None)).action == "accept"
+
+
 async def test_gate_mode_matrix_and_decision_passthrough(env, tmp_path):
     plan_only = _RecordingPrompter()
     gk_plan = _gk(env, tmp_path, gate="plan", prompter=plan_only)
