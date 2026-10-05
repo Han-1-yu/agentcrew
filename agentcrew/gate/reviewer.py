@@ -120,12 +120,10 @@ class Reviewer:
         """评审一个任务，返回本轮的 ``ReviewRecord``（``layer="llm"``）。
 
         评审人是 ``catalog.reviewer_for(task.role)`` 的全部角色，按目录顺序
-        **串行**评审：同一轮里多个评审人的材料完全相同，聚合语义（全 approve
-        才 approve）要求逐人收集完整意见，并发省下的那点时间换不回「哪个评审人
-        说了什么」的可追溯性，而评审调用本身已受全局信号量限流。
-
-        回放上下文的隔离由 ``set_purpose`` 的 contextvar 保证（C1）：即使并发
-        也不会读到别的评审人的夹具。
+        **串行**评审：聚合语义（全 approve 才 approve）与「哪个评审人说了什么」
+        都要求逐人拿到完整意见；mock 回放上下文的隔离已由 ``set_purpose`` 的
+        contextvar 保证（C1），故串行是刻意保留的现有形状，不再是并发安全性的
+        妥协（评审调用本身也已受全局信号量限流）。
         """
         reviewer_keys = self._catalog.reviewer_for(task.role)
         if not reviewer_keys:

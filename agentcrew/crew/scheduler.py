@@ -237,10 +237,9 @@ class Scheduler:
         ``REVIEW → {SUCCEEDED|REWORK|FAILED}``，异常收敛成错误结局回流。
         """
         try:
+            task = self._board.get(task_id)
             decision = await self._gatekeeper.evaluate(
-                self._board.get(task_id), round_no=self._round_no(
-                    self._board.get(task_id))
-            )
+                task, round_no=self._round_no(task))
             outcome = WorkerOutcome(task_id=task_id, decision=decision)
         except asyncio.CancelledError:
             self._completion_queue.put_nowait(
