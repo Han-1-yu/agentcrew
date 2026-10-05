@@ -56,8 +56,8 @@ async def retry_async(
     调用 ``on_retry(attempt_index, exc, delay)``，``attempt_index`` 从 1 起。
 
     若提供了 ``retry_after`` 且其返回非 ``None``，该值（服务端 ``Retry-After``）
-    覆盖本轮计算出的退避时长。``base_delay=0`` 是即时模式（测试用）：引擎完全不
-    等待，连 ``retry_after`` 的覆盖值也不 sleep，但传给 ``on_retry`` 的仍是覆盖值。
+    覆盖本轮计算出的退避时长并照常等待。``base_delay=0`` 只让引擎自身计算的退避
+    为 0（测试用即时模式），不会关闭对 ``Retry-After`` 的尊重。
     """
     if attempts < 1:
         raise ValueError(f"attempts 必须 >= 1，收到 {attempts}")
@@ -79,7 +79,7 @@ async def retry_async(
                     delay = override
             if on_retry is not None:
                 on_retry(attempt_index, exc, delay)
-            # base_delay=0 表示不等待；否则只在本轮确实需要等待时才 sleep。
-            if base_delay > 0 and delay > 0:
+            # 只在本轮解析出的等待时长 > 0 时 sleep。
+            if delay > 0:
                 await asyncio.sleep(delay)
     raise AssertionError("unreachable")  # pragma: no cover
