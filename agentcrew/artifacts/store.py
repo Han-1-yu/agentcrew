@@ -267,6 +267,33 @@ class ArtifactStore:
         atomic_write_text(path, payload + "\n")
         return path
 
+    def load_manifest(self, path: Path | None = None) -> int:
+        """从 ``MANIFEST.json`` 重建内存记录，返回载入条数（resume 用）。
+
+        ``path`` 缺省为 ``root/MANIFEST.json``。文件不存在返回 0：封版之前被中断
+        的 run 本就没有已确认的清单（``write_manifest`` 只在 run 收尾时调用）。
+
+        为什么必须有这个入口：进程重启后内存记录是空的，而**盘上的文件还在**。
+        冲突检测（``commit`` 的跨任务同路径拒绝）与 ``discard_task``（返工前清理
+        旧产物）都以记录为准 —— 不重建记录，spec §9.2 的跨 resume 保护会静默
+        失效：另一个任务可以覆盖别人的产物，返工也清不掉自己上次多写的文件。
+
+        记录**整体替换**（幂等），不合并：清单是磁盘产物的权威快照，合并会留下
+        指向已删除文件的幽灵记录（``discard_task`` 正是删文件又删记录的）。
+        ``run_id`` 不一致的清单直接报错 —— 载入他次 run 的记录比不载入更危险。
+        """
+        path = self._root / "MANIFEST.json" if path is None else Path(path)
+        if not path.is_file():
+            return 0
+        manifest = Manifest.model_validate(json.loads(read_text(path)))
+        if manifest.run_id != self._run_id:
+            raise ValueError(
+                f"MANIFEST.run_id={manifest.run_id!r} 与本次 run_id="
+                f"{self._run_id!r} 不一致，拒绝载入：{path}"
+            )
+        self._records = list(manifest.entries)
+        return len(self._records)
+
     def file_tree(self) -> list[str]:
         """``root`` 下全部文件的 POSIX 相对路径（截断惯例见 ``files.tree``）。"""
         return tree(self._root)
