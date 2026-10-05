@@ -4954,7 +4954,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'main'`
 - `roles`：遍历 `BUILTIN_ROLES` 打印表格（`key / title / 职责 / 边界 / 产出`）
 - `clean`：调 `CheckpointStore.clean`
 - `cancel <run_id>`：改 `run.json` 的 `status` 为 `CANCELLED`
-- 无参数：打印 help 返回 0
+- 无参数：打印帮助 **+ 已注册角色数 + 最近 3 次 run 概览**（spec §15.1:1008），返回 0。这是 CLI 的默认发现路径，README 会指向它
 
 `on_event` 接到 `BoardView`；`--no-live` 时 `BoardView(enabled=False)`。
 
