@@ -123,6 +123,15 @@ class ContextBus:
         self._tree_max_entries = tree_max_entries
         self._decisions: list[DecisionRecord] = []
 
+    @property
+    def store(self) -> ArtifactStore:
+        """本 run 的产物仓库（组装上下文包时读取节选所用的那一个）。
+
+        调度器在派发返工任务前要清理该任务的旧产物（``discard_task``），必须用
+        与门禁、Agent 完全相同的仓库实例；它就是这里持有的这一个。
+        """
+        return self._store
+
     # ---- 组装 ----
 
     def build(self, task: Task, *, fix_hints: Sequence[str] = ()) -> ContextPack:

@@ -205,6 +205,54 @@ class ArtifactStore:
         """某个任务产出的记录（G1 用它对照契约）。"""
         return [r for r in self._records if r.produced_by_task == task_id]
 
+    def discard_task(self, task_id: str, *, delete_files: bool = True) -> int:
+        """丢弃某个任务的全部产物：删记录（必要时连文件），返回清除的记录数。
+
+        供调度器在派发返工任务**之前**调用（Task 13 的 carry-forward）：本类没有
+        删除 API 时，模型一次多产出的文件会一直挂在 :meth:`by_task` 上，此后每一次
+        返工都产出正确的产物集，却仍被 G1 的「契约外产物」检查驳回 —— 任务烧完
+        ``max_reworks`` 后 ``FAILED``，一个多余文件就把任务判死且无路可回。
+
+        删除是安全的：``commit`` 的冲突规则已保证同一路径只属于一个任务，被丢弃
+        的记录与文件不可能属于其他任务。
+
+        **失败原子性的方向是「记录跟着文件走」**：先删文件，成功（或文件本就不
+        存在）才删记录；删文件失败（如 Windows 上的占用/权限）时**保留**该记录。
+        真正的危险状态是「文件已删、记录还在」—— G1 以记录为准，会拿着记录去
+        :meth:`read` 一个不存在的文件并抛 ``FileNotFoundError``。这里保证任何
+        时刻都不存在指向已删除文件的记录；删不掉的文件连同记录留在原地，由下一次
+        返工派发再试。
+
+        ``delete_files=False`` 只清记录、保留文件（记录驱动的检查即刻不再看到它们，
+        文件留给人工处置）。
+        """
+        kept: list[ArtifactRecord] = []
+        removed = 0
+        for record in self._records:
+            if record.produced_by_task != task_id:
+                kept.append(record)
+                continue
+            if delete_files and not self._delete_file(record.path):
+                kept.append(record)  # 文件删不掉：记录必须继续指向真实存在的文件
+                continue
+            removed += 1
+        self._records = kept
+        return removed
+
+    def _delete_file(self, rel: str) -> bool:
+        """删除一个产物文件；已不存在视为成功，删除失败返回 ``False``（不抛）。
+
+        路径来自本类写入的记录，构造时已过 :func:`safe_relpath`，因此
+        :meth:`resolve` 的校验不会失败。
+        """
+        try:
+            self.resolve(rel).unlink()
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        return True
+
     def write_manifest(self) -> Path:
         """把当前记录原子写成 ``root/MANIFEST.json``，返回清单路径。"""
         manifest = Manifest(

@@ -9,6 +9,7 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -436,3 +437,85 @@ def test_ledger_silent_on_rejected_commit(tmp_path):
     with pytest.raises(UndeclaredArtifactError):
         st.commit("hack.py", "x", spec=spec("declared.py"), task=mk_task())
     assert ledger.events == []
+
+
+# ── discard_task（Task 28 的死亡螺旋修复）──
+
+def _task_with(path, tid="T-1"):
+    return Task(id=tid, title="t", description="d", role="backend_dev",
+                acceptance_criteria=["a"], deliverables=[spec(path)])
+
+
+def test_discard_task_removes_records_and_files(store, tmp_path):
+    store.commit("a.py", "a=1\n", spec=spec("a.py"), task=mk_task("T-1"))
+    store.commit("b.py", "b=1\n", spec=spec("b.py"), task=mk_task("T-1"))
+    store.commit("c.py", "c=1\n", spec=spec("c.py"), task=mk_task("T-2"))
+
+    assert store.discard_task("T-1") == 2
+
+    assert store.by_task("T-1") == []
+    assert [r.path for r in store.by_task("T-2")] == ["c.py"]
+    assert not (tmp_path / "artifacts" / "a.py").exists()
+    assert not (tmp_path / "artifacts" / "b.py").exists()
+    assert (tmp_path / "artifacts" / "c.py").read_text(encoding="utf-8") == "c=1\n"
+
+
+def test_discard_task_unknown_task_is_noop(store):
+    assert store.discard_task("T-404") == 0
+
+
+def test_discard_task_keeps_files_when_asked(store, tmp_path):
+    store.commit("a.py", "a=1\n", spec=spec("a.py"), task=mk_task("T-1"))
+    assert store.discard_task("T-1", delete_files=False) == 1
+    assert store.by_task("T-1") == []
+    assert (tmp_path / "artifacts" / "a.py").is_file()
+
+
+def test_discard_task_tolerates_already_missing_file(store, tmp_path):
+    """记录还在但文件已被外部删除：不抛错，记录一并清掉。"""
+    store.commit("a.py", "a=1\n", spec=spec("a.py"), task=mk_task("T-1"))
+    (tmp_path / "artifacts" / "a.py").unlink()
+    assert store.discard_task("T-1") == 1
+    assert store.by_task("T-1") == []
+
+
+def test_discard_task_keeps_record_when_file_cannot_be_deleted(
+    store, tmp_path, monkeypatch
+):
+    """删文件失败时必须保留记录：记录不得指向一个已不存在的文件。
+
+    否则 G1 的「以记录为准」守卫会 ``store.read`` 一个被删掉的文件并抛
+    ``FileNotFoundError``。同一次调用里其余可删的记录照常清理。
+    """
+    store.commit("locked.py", "x=1\n", spec=spec("locked.py"), task=mk_task("T-1"))
+    store.commit("free.py", "y=1\n", spec=spec("free.py"), task=mk_task("T-1"))
+    original_unlink = Path.unlink
+
+    def fake_unlink(self, *args, **kwargs):
+        if self.name == "locked.py":
+            raise PermissionError("locked")
+        return original_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fake_unlink)
+
+    assert store.discard_task("T-1") == 1
+    assert [r.path for r in store.by_task("T-1")] == ["locked.py"]
+    assert (tmp_path / "artifacts" / "locked.py").is_file()
+    assert not (tmp_path / "artifacts" / "free.py").exists()
+
+
+def test_discard_task_keeps_g1_record_file_invariant(store):
+    """丢弃后重跑 G1：不得因「记录在、文件没了」抛 FileNotFoundError。"""
+    from agentcrew.gate.static_checks import run_static
+
+    task = _task_with("app/main.py")
+    store.commit("app/main.py", "x = 1\n", spec=task.deliverables[0], task=task)
+    store.commit("app/hack.py", "y = 1\n",
+                 spec=spec("app/hack.py"), task=task)
+
+    assert store.discard_task(task.id) == 2
+
+    record = run_static(task, store, round_no=1)  # 不得抛 FileNotFoundError
+    assert record.verdict == "reject"             # 缺必需产物 app/main.py
+    assert any("app/main.py" in issue for issue in record.issues)
+    assert not any("hack" in issue for issue in record.issues)
