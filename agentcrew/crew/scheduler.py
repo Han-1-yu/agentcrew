@@ -106,6 +106,7 @@ class Scheduler:
         checkpoint: CheckpointStore | None = None,
         max_concurrency: int = 4,
         on_event: Callable[[str, dict], None] | None = None,
+        on_checkpoint: Callable[[], None] | None = None,
     ) -> None:
         if max_concurrency < 1:
             raise ValueError(f"max_concurrency 必须 >= 1：{max_concurrency}")
@@ -116,6 +117,9 @@ class Scheduler:
         self._ledger = ledger
         self._checkpoint = checkpoint
         self._on_event = on_event
+        #: 每次 checkpoint 落盘后的回调（Task 29 的 Crew 用它同步 ``run.json``
+        #: 的统计，见 :meth:`_save_checkpoint`）；未接线时零开销。
+        self._on_checkpoint = on_checkpoint
         #: 产物仓库与门禁、Agent 共用同一个实例（从 ContextBus 取，见其 docstring）。
         self._store: ArtifactStore = context_bus.store
         self._max_concurrency = max_concurrency
@@ -441,9 +445,18 @@ class Scheduler:
         )
 
     def _save_checkpoint(self) -> None:
-        """每处理完一个完成事件就落一次 ``tasks.json``（崩溃至多丢一个任务）。"""
+        """每处理完一个完成事件就落一次 checkpoint（``tasks.json`` + 回调）。
+
+        ``on_checkpoint`` 在这里被调用**正是为了 ``run.json``**：它的统计只在
+        run/resume 开始与收尾写的话，硬杀之后盘上的 ``stats.llm_calls`` 会停在 0，
+        而 ledger 里已经躺着几条 ``llm_call``（token 已经花掉了）—— resume 以那份
+        陈旧记录为基线，被中断那一段的开销就永久从 run.json 里消失，而 ``status``
+        与运行报告读的正是 run.json。
+        """
         if self._checkpoint is not None:
             self._checkpoint.save_tasks(self._board)
+        if self._on_checkpoint is not None:
+            self._on_checkpoint()
 
     def _notify(self, event: str, **data: Any) -> None:
         """把一条调度事件交给可选的 ``on_event`` 观察者（未接线时零开销）。"""

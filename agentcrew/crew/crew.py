@@ -486,6 +486,7 @@ class Crew:
                 checkpoint=run.checkpoint,
                 max_concurrency=self._settings.max_concurrency,
                 on_event=self._on_event,
+                on_checkpoint=lambda: self._persist_record(run),
             )
             await scheduler.run()
             if scheduler.deadlock_report is not None and _is_stalled(board):
@@ -658,11 +659,16 @@ class Crew:
         except ValueError as exc:
             raise ModelFactoryError(f"模型绑定非法：{exc}") from exc
 
-    def _sync_stats(self, run: _Run) -> None:
+    def _sync_stats(self, run: _Run, *, finished: bool = True) -> None:
         """把面板统计与 LLM 用量写回 ``record.stats``（可重复调用，不重复计数）。
 
         以 ``base_stats``（本次 run 开始时已落盘的累计，resume 后即上次的账）为
         基线重算：多次调用得到同一个结果，跨 resume 的 token/成本也不会丢。
+
+        ``finished=False`` 用于**周期性**落盘（:meth:`_persist_record`）：那次写盘
+        不代表 run 结束，``finished_at`` 必须保持原值（None 或上一次收尾的时刻），
+        否则一份跑到一半的 run.json 会声称自己「已经结束」，而 ``status`` 与报告
+        正是从这份记录里读耗时的。
         """
         board = self._board
         stats = board.stats() if board is not None else RunStats()
@@ -677,8 +683,21 @@ class Crew:
             run.base_stats.estimated_cost_usd + run.models.total_cost_usd
         )
         stats.started_at = run.base_stats.started_at or run.record.created_at
-        stats.finished_at = datetime.now()
+        stats.finished_at = (
+            datetime.now() if finished else run.record.stats.finished_at)
         run.record.stats = stats
+
+    def _persist_record(self, run: _Run) -> None:
+        """周期性把 ``run.json`` 的统计同步落盘（``Scheduler.on_checkpoint``，I4）。
+
+        与 ``tasks.json`` 同一个节拍写：两条记录必须描述同一个瞬间，只写其中一条
+        会让盘上出现「任务都跑完了、统计还是 0」这种自相矛盾的快照。统计走
+        ``_sync_stats``（可重复调用、以 ``base_stats`` 为基线，不重复计数），因此
+        每次落盘的都是一份完整自洽的账；硬杀最多丢一个完成事件的开销。
+        """
+        self._sync_stats(run, finished=False)
+        run.record.updated_at = datetime.now()
+        run.checkpoint.save_record(run.record)
 
     def _final_status(self, board: TaskBoard) -> RunStatus:
         """终局判定（spec §7.4）：有失败/阻塞/跳过或未终结即 FAILED。"""

@@ -715,6 +715,60 @@ async def test_resume_regates_task_stuck_in_review(env):
     )
 
 
+def test_run_json_stats_track_the_ledger_across_a_hard_kill(env):
+    """硬杀之后 ``run.json`` 的统计必须和 ledger 对得上，resume 也不会丢掉那段开销。
+
+    ``run.json`` 只在 run/resume 开始与收尾写的话，被杀那一刻盘上的
+    ``stats.llm_calls`` 会停在 0，而 ledger 里已经躺着好几条 ``llm_call`` ——
+    token 已经花掉了。resume 以那份陈旧记录为基线，被中断那一段的开销就**永久**
+    从 run.json 里消失（ledger 里却还在），而 ``status`` 与运行报告读的正是
+    run.json。
+
+    用 ``asyncio.run`` 而不是 ``await``（本文件其余用例都是 async）：硬杀是**进程**
+    死亡，事件循环跟着消失；直接在一个还在跑的事件循环里抛异常，刚 ``create_task``
+    出来的 worker 会变成孤儿继续写同一份 ledger，测出来的差异就不是 run.json 的账。
+    """
+    class Boom(RuntimeError):
+        """模拟进程被硬杀（异常穿出调度循环，收尾代码不再执行）。"""
+
+    dispatches: list[str] = []
+    killed_at: list[int] = []
+
+    def ledger_now() -> int:
+        run_dir = next(iter(env["settings"].output_dir.iterdir()))
+        return Ledger(
+            run_dir / "ledger.jsonl", run_id=run_dir.name,
+        ).count("llm_call")
+
+    def on_event(name, data):
+        if name == "task_dispatched":
+            dispatches.append(data["task_id"])
+            if len(dispatches) == 2:
+                # 第二个任务的派发 = 前一个完成事件的 checkpoint 已经落盘，
+                # 此刻 ledger 里的账就是 run.json 该有的账。
+                killed_at.append(ledger_now())
+                raise Boom("硬杀")
+
+    with pytest.raises(Boom):
+        asyncio.run(
+            Crew(env["settings"], on_event=on_event).run("做一个 Todo 应用"))
+
+    run_dir = next(iter(env["settings"].output_dir.iterdir()))
+    ledger = _ledger(env["settings"], run_dir.name)
+    stored = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))["stats"]
+    assert killed_at and killed_at[0] > 0
+    assert stored["llm_calls"] == killed_at[0], "run.json 的统计落后于 ledger"
+    assert stored["prompt_tokens"] > 0
+
+    # 被杀那一段的账已经落盘 → resume 以它为基线，这段开销不会丢
+    killed_ledger = ledger.count("llm_call")
+    resumed = Crew.resume_from(Settings.load(), run_dir.name)
+    out = asyncio.run(resumed.resume())
+    assert out.status is RunStatus.COMPLETED
+    resumed_calls = ledger.count("llm_call") - killed_ledger
+    assert out.stats.llm_calls == stored["llm_calls"] + resumed_calls
+
+
 async def test_resume_rehydrates_artifact_records_from_manifest(env):
     """resume 必须重建产物记录：否则 §9.2 的跨任务冲突检测在重启后失明。"""
     rec = await Crew(env["settings"]).run("做一个 Todo 应用")
