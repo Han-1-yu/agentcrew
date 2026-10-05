@@ -25,10 +25,12 @@ def fixtures(tmp_path):
                                "role": "backend_dev", "acceptance_criteria": ["a"],
                                "deliverables": [], "dependencies": []}]}),
         encoding="utf-8")
-    (d / "reviews.json").write_text(json.dumps({"T-001": {"verdict": "approve",
-                                                          "score": 0.9,
-                                                          "issues": [], "fix_hints": []}}),
-                                    encoding="utf-8")
+    (d / "reviews.json").write_text(
+        json.dumps({"T-001": {
+            "judgements": [{"criterion_index": 0, "satisfied": True,
+                            "evidence": "a.py 中 x = 1"}],
+            "suggestions": [], "score": 0.9}}),
+        encoding="utf-8")
     return d
 
 
@@ -73,7 +75,7 @@ async def test_review_purpose_reads_reviews_fixture(provider):
     set_purpose(provider, "review", role="architect", task_id="T-001", attempt=1)
     r = await provider.complete([{"role": "user", "content": "x"}],
                                 temperature=0, max_tokens=10)
-    assert "approve" in r.text
+    assert '"criterion_index": 0' in r.text and '"satisfied": true' in r.text
 
 
 async def test_missing_fixture_falls_back_and_reports(provider):

@@ -1,10 +1,9 @@
 """Scheduler 调度引擎（Task 28，spec §7.3）。
 
-brief 用例原样保留，只改一处夹具键：``reviews.json`` 用 ``_default`` 而非
-``"*"``（与 ``MockProvider._review_text`` 的查找顺序一致 —— 它按
-``data[task_id]`` → ``data["_default"]`` 查找；写成 ``"*"`` 会落到占位回复并
-触发 Task 26 的「评审器格式错误」放行路径，run 仍能成功但评审夹具的
-verdict/score 永不生效。仓库已就此改过一版计划文档，见 commit 738e8d9）。
+brief 用例原样保留，只改一处夹具形状：``reviews.json`` 按 task_id 提供逐条
+judgement（``ReviewVerdict`` 已改为「逐条判定既定验收标准」，judgement 条数
+按任务而定 —— 兜底键 ``_default`` 不再可用；条数对不上会被 ``_is_malformed``
+判成格式错误而放行，run 仍能成功但评审夹具的 score/判定永不生效）。
 
 在其之上补：
 
@@ -46,7 +45,10 @@ from agentcrew.task.task import Task
 from agentcrew.task.task import TaskStatus as S
 from agentcrew.task.task_board import TaskBoard
 
-GOOD = {"verdict": "approve", "score": 0.95, "issues": [], "fix_hints": []}
+#: G2 夹具：``mk`` 的任务都只有 1 条验收标准（"ok"），judgement 恰好 1 条序号 0。
+GOOD = {"judgements": [{"criterion_index": 0, "satisfied": True,
+                        "evidence": "产物已满足唯一一条验收标准"}],
+        "suggestions": [], "score": 0.95}
 
 
 def mk(tid, deps=(), role="backend_dev", priority=5):
@@ -77,7 +79,10 @@ def env(tmp_path, monkeypatch):
     store = ArtifactStore(tmp_path / "o" / "art", run_id="R", ledger=lg)
     fx = tmp_path / "fx"
     fx.mkdir()
-    (fx / "reviews.json").write_text(json.dumps({"_default": GOOD}), encoding="utf-8")
+    # 评审夹具按 task_id 查找；judgement 条数按任务而定，``_default`` 兜底不再
+    # 可用 —— 本套用例的任务 id 只来自 "ABCDEFGH"，逐个写一条。
+    (fx / "reviews.json").write_text(
+        json.dumps({tid: GOOD for tid in "ABCDEFGH"}), encoding="utf-8")
     models = ModelFactory(s, ledger=lg, fixtures_dir=fx)
     catalog = RoleCatalog(BUILTIN_ROLES)
     agents = AgentFactory(models, store, lg, "目标", catalog)
@@ -404,7 +409,7 @@ async def test_hard_cancel_cancels_inflight_worker(env):
 # ── 夹具与事件的可观测性 ──
 
 async def test_llm_gate_uses_review_fixture(env):
-    """G2 的 approve 裁决来自 ``_default`` 夹具（score=0.95），不是格式错误放行。"""
+    """G2 的 approve 裁决来自任务 A 自己的评审夹具（score=0.95），不是格式错误放行。"""
     write_fixture(env["fx"], "A")
     board, sch = build(env, [mk("A")])
     await sch.run()

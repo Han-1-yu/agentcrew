@@ -41,9 +41,14 @@ from agentcrew.task.task import Task
 from agentcrew.task.task import TaskStatus as S
 from agentcrew.task.task_board import TaskBoard
 
-GOOD = {"verdict": "approve", "score": 0.9, "issues": [], "fix_hints": []}
-BAD = {"verdict": "reject", "score": 0.2,
-       "issues": ["实现过于简单"], "fix_hints": ["补充业务规则"]}
+#: G2 夹具：T-2 只有 1 条验收标准（"a"），judgement 必须恰好 1 条且序号为 0。
+GOOD = {"judgements": [{"criterion_index": 0, "satisfied": True,
+                        "evidence": "a.py 已定义 def f"}],
+        "suggestions": [], "score": 0.9}
+#: 唯一一条标准不满足；evidence 成为返工方看到的 fix_hints。
+BAD = {"judgements": [{"criterion_index": 0, "satisfied": False,
+                       "evidence": "补充业务规则"}],
+       "suggestions": [], "score": 0.2}
 
 
 @pytest.fixture
@@ -99,6 +104,8 @@ async def test_llm_rejection_leads_to_rework_with_hints(env, tmp_path):
     commit(env, "def f():\n    return 1\n")
     d = await gk(env, {"T-2": BAD}, tmp_path).evaluate(env["task"], round_no=1)
     assert d.verdict == "reject" and d.next_status is S.REWORK
+    # issues 引用任务里那条标准的原文，fix_hints 是模型给的返工依据
+    assert d.record.issues == ["未满足验收标准：a —— 补充业务规则"]
     assert d.fix_hints == ["补充业务规则"]
 
 

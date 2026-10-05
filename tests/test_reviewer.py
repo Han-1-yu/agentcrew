@@ -1,17 +1,26 @@
-"""G2 LLM 评审：格式错误重试、多评审人聚合与受治理调用（spec §10.2/§7.3/§13.2）。
+"""G2 LLM 评审：逐条判定验收标准、格式错误重试、多评审人聚合与受治理调用
+（spec §10.2/§7.3/§13.2）。
 
-brief 用例原样保留；在其之上补五件事：
+``ReviewVerdict`` 已从「开放式 verdict/issues」改为「逐条 criterion judgement」：
+裁决由 :func:`agentcrew.gate.reviewer.derive_review` 推导 —— **有一条验收标准
+不满足才 reject**，``issues`` 回填的是**任务契约里的标准原文**而非模型复述，
+``suggestions`` 只进 ledger、永不引发返工。用例相应改写，钉死：
 
+- **reject 的唯一来源是不满足的判定**：``issues`` 引用任务里的标准原文 +
+  模型给的 evidence；``suggestions`` 再多也不进 ``issues``、不阻挡 approve；
+- **malformed 的四种形状**：漏判一条、多判/越界、重复序号、判了不满足却不给
+  evidence —— 都走「重试 → 放行」通道；
 - **重试次数可数**：``format_retry_attempts=1`` 表示「首次 + 1 次重试 = 2 次
   结构化调用」，默认 2 表示 3 次 —— ledger 的 ``llm_call`` 条数把它钉死；
-- **聚合语义**：任一 ``reject`` 即整体 ``reject``，``issues``/``fix_hints``
-  取并集（去重保序）、``score`` 取最小值 —— mock 的 review 夹具按 task_id
-  查找、区分不了评审人，因此这两条用按 role 返回裁决的工厂替身；
+- **聚合语义**：任一评审人 reject 即整体 reject，``issues``/``fix_hints``/
+  ``suggestions`` 取并集（去重保序）、``score`` 取最小值 —— mock 的 review
+  夹具按 task_id 查找、区分不了评审人，因此这两条用按 role 返回裁决的工厂替身；
 - **受治理入口**：``purpose="review"`` 与评审角色 key 必须随 ``llm_call``
   落到 ledger（spec §7.3 的限额与 §14.3 的报告都靠它），且工厂计数递增；
 - **无评审人**：零 token 放行，且 ``gate_result`` 同样留痕；
-- **评审材料**：任务描述、验收标准、产物内容（经 ``store.read``、按
-  ``excerpt_budget_tokens`` 截断）与返工历史都进提示词。
+- **评审材料与提示词**：任务描述、验收标准、产物内容（经 ``store.read``、按
+  ``excerpt_budget_tokens`` 截断）与返工历史都进提示词；系统提示词要求用
+  ``criterion_index`` 逐条全覆盖，并写明 suggestions 不构成不满足、不会导致返工。
 """
 
 import json
@@ -32,9 +41,57 @@ from agentcrew.runtime.ledger import Ledger
 from agentcrew.task.task import ReviewRecord, Task
 from agentcrew.utils.tokens import estimate_tokens
 
-APPROVE = {"verdict": "approve", "score": 0.9, "issues": [], "fix_hints": []}
-REJECT = {"verdict": "reject", "score": 0.3,
-          "issues": ["缺少输入校验"], "fix_hints": ["给 title 加非空校验"]}
+#: ``env`` 任务的验收标准原文（``derive_review`` 必须回填这两条，而非模型措辞）。
+CRITERION_OK = "支持增删改查"
+CRITERION_UNMET = "输入有校验"
+
+#: 模型给出的不满足依据：措辞与标准原文完全不同，用来证明 issues 引用的是任务文本。
+UNMET_EVIDENCE = "a.py 未对 title 做非空校验，请补上并给出覆盖用例"
+
+#: 格式错误重试耗尽后的放行说明（与 reviewer._FORMAT_ERROR_ISSUE 一致）。
+FORMAT_ERROR_ISSUE = "评审器返回格式错误，已放行"
+
+
+def _judgement(index: int, *, satisfied: bool = True,
+               evidence: str = "产物中已有对应实现") -> dict:
+    return {"criterion_index": index, "satisfied": satisfied, "evidence": evidence}
+
+
+#: 全覆盖且全部满足：2 条标准各一条 judgement。
+APPROVE = {
+    "judgements": [
+        _judgement(0, evidence="a.py 提供增删改查四个入口"),
+        _judgement(1, evidence="a.py 对空 title 抛 ValueError"),
+    ],
+    "suggestions": [],
+    "score": 0.9,
+}
+
+#: 唯一的不满足落在 index 1 —— 整体 reject，且只驳回那一条。
+REJECT = {
+    "judgements": [
+        _judgement(0, evidence="a.py 提供增删改查四个入口"),
+        _judgement(1, satisfied=False, evidence=UNMET_EVIDENCE),
+    ],
+    "suggestions": ["命名可以再统一一些"],
+    "score": 0.3,
+}
+
+#: 全部满足但带着一堆改进意见：仍然 approve、issues 为空。
+SUGGESTING = {
+    "judgements": [
+        _judgement(0, evidence="a.py 提供增删改查四个入口"),
+        _judgement(1, evidence="a.py 对空 title 抛 ValueError"),
+    ],
+    "suggestions": ["接口可以拆得更小", "建议补类型注解"],
+    "score": 0.85,
+}
+
+#: 漏判第 1 条：覆盖集合 {0} ≠ {0, 1} → malformed。
+MISSING_INDEX = {
+    "judgements": [_judgement(0, evidence="只判了第 0 条")],
+    "score": 0.5,
+}
 
 
 @pytest.fixture
@@ -45,7 +102,7 @@ def env(tmp_path, monkeypatch):
     lg = Ledger(tmp_path / "l.jsonl", run_id="R")
     store = ArtifactStore(tmp_path / "o" / "art", run_id="R", ledger=lg)
     task = Task(id="T-2", title="后端 API", description="实现 CRUD", role="backend_dev",
-                acceptance_criteria=["支持增删改查", "输入有校验"],
+                acceptance_criteria=[CRITERION_OK, CRITERION_UNMET],
                 deliverables=[ArtifactSpec(path="a.py", kind="python", description="d")])
     store.commit("a.py", "def f():\n    return 1\n", spec=task.deliverables[0], task=task)
     return dict(settings=s, ledger=lg, store=store, task=task, tmp_path=tmp_path)
@@ -63,28 +120,45 @@ async def test_approve_produces_record(env, tmp_path):
     r = await reviewer(env, {"T-2": APPROVE}, tmp_path).review(env["task"], round_no=1)
     assert r.verdict == "approve" and r.layer == "llm"
     assert r.score == 0.9 and r.round == 1
-    assert r.reviewer == "architect"           # backend_dev 的评审人
+    assert r.issues == [] and r.fix_hints == []   # 全满足：没有驳回理由
+    assert r.reviewer == "architect"              # backend_dev 的评审人
 
 
-async def test_reject_carries_issues_and_hints(env, tmp_path):
+async def test_reject_quotes_task_criterion_text(env, tmp_path):
+    """reject 只因 index 1 不满足；issues 引用**任务契约里的标准原文**。
+
+    模型只给 evidence（措辞与标准原文毫无重叠）—— 若 issues 是模型复述的，
+    标准原文就不可能原样出现。同时证明满足的第 0 条不进 issues。
+    """
     r = await reviewer(env, {"T-2": REJECT}, tmp_path).review(env["task"], round_no=1)
     assert r.verdict == "reject"
-    assert r.issues == ["缺少输入校验"]
-    assert r.fix_hints == ["给 title 加非空校验"]
+    assert r.issues == [f"未满足验收标准：{CRITERION_UNMET} —— {UNMET_EVIDENCE}"]
+    assert r.fix_hints == [UNMET_EVIDENCE]        # fix_hints 就是 evidence
+    assert r.score == 0.3
+    assert CRITERION_UNMET in r.issues[0] and CRITERION_UNMET not in UNMET_EVIDENCE
+    assert CRITERION_OK not in "".join(r.issues)
 
 
-async def test_reject_without_issues_is_treated_as_format_error(env, tmp_path):
-    """spec §10.2：reject 必须带 issues，否则重试评审。"""
-    bad = {"verdict": "reject", "score": 0.1, "issues": [], "fix_hints": []}
-    rev = reviewer(env, {"T-2": bad}, tmp_path)
+async def test_suggestions_never_block_approval(env, tmp_path):
+    """标准之外的意见只进 ledger：全满足 + 一堆 suggestions 仍是 approve、issues 为空。"""
+    r = await reviewer(env, {"T-2": SUGGESTING}, tmp_path).review(env["task"], round_no=1)
+    assert r.verdict == "approve" and r.issues == [] and r.fix_hints == []
+    event = list(env["ledger"].events("gate_result"))[-1]
+    assert event.data["suggestions"] == ["接口可以拆得更小", "建议补类型注解"]
+    assert all(s not in "".join(r.issues) for s in SUGGESTING["suggestions"])
+
+
+async def test_missing_criterion_index_is_malformed(env, tmp_path):
+    """漏判一条标准 = 覆盖率不达标：重试耗尽后放行，理由进 issues。"""
+    rev = reviewer(env, {"T-2": MISSING_INDEX}, tmp_path)
     r = await rev.review(env["task"], round_no=1)
     assert r.verdict == "approve"              # 格式错误重试耗尽后放行
-    assert any("格式" in i or "warning" in i.lower() for i in r.issues) or r.score is not None
+    assert r.issues == [FORMAT_ERROR_ISSUE]
+    assert r.fix_hints == [] and r.score is None
 
 
 async def test_format_error_does_not_consume_rework_quota(env, tmp_path):
-    bad = {"verdict": "reject", "score": 0.1, "issues": [], "fix_hints": []}
-    rev = reviewer(env, {"T-2": bad}, tmp_path)
+    rev = reviewer(env, {"T-2": MISSING_INDEX}, tmp_path)
     before = env["task"].rework_count
     await rev.review(env["task"], round_no=1)
     assert env["task"].rework_count == before
@@ -96,9 +170,12 @@ async def test_reviewer_role_recorded(env, tmp_path):
 
 
 async def test_pm_task_reviewed_by_two_roles(env, tmp_path):
+    """project_manager 有两位评审人：两人都拿到同一份 mock 裁决并各自被调用。"""
     env["task"].role = "project_manager"
     r = await reviewer(env, {"T-2": APPROVE}, tmp_path).review(env["task"], round_no=1)
-    assert "+" in r.reviewer or r.reviewer in ("architect", "product_manager")
+    assert r.reviewer == "architect+product_manager"
+    roles = [e.data["role"] for e in env["ledger"].events("llm_call")]
+    assert roles == ["architect", "product_manager"]
 
 
 async def test_review_emits_ledger_event(env, tmp_path):
@@ -111,9 +188,14 @@ async def test_missing_fixture_falls_back_not_crash(env, tmp_path):
     assert r.verdict in ("approve", "reject")
 
 
-def test_review_verdict_rejects_extra_fields():
+def test_review_verdict_rejects_old_and_extra_fields():
+    """旧 schema 的字段（verdict/issues/fix_hints）与未知字段一律被拒。"""
     with pytest.raises(ValidationError):
-        ReviewVerdict(verdict="approve", score=1.0, issues=[], fix_hints=[], bonus=1)
+        ReviewVerdict(verdict="approve", score=1.0, issues=[], fix_hints=[])
+    with pytest.raises(ValidationError):
+        ReviewVerdict(judgements=[_judgement(0)], bonus=1)
+    verdict = ReviewVerdict(judgements=[_judgement(0)])
+    assert verdict.suggestions == [] and verdict.score == 0.0   # 新 schema 的默认值
 
 
 # ── 以下是 brief 之外的补充用例 ──────────────────────────────────────────
@@ -153,26 +235,51 @@ def _reviewer(env, reviews: dict, tmp_path, **kwargs) -> Reviewer:
                     **kwargs)
 
 
-async def test_malformed_reject_appends_verbatim_issue(env, tmp_path):
-    bad = {"verdict": "reject", "score": 0.1, "issues": [], "fix_hints": []}
-    r = await _reviewer(env, {"T-2": bad}, tmp_path).review(env["task"], round_no=1)
+async def test_malformed_missing_index_appends_verbatim_issue(env, tmp_path):
+    r = await _reviewer(env, {"T-2": MISSING_INDEX}, tmp_path).review(
+        env["task"], round_no=1)
     assert r.verdict == "approve"
-    assert r.issues == ["评审器返回格式错误，已放行"]
+    assert r.issues == [FORMAT_ERROR_ISSUE]
     assert r.fix_hints == []
     assert r.score is None                     # 评审器失败，没有可信的质量分
 
 
-async def test_malformed_reject_retries_configured_times(env, tmp_path):
-    bad = {"verdict": "reject", "score": 0.1, "issues": [], "fix_hints": []}
-    rev = _reviewer(env, {"T-2": bad}, tmp_path, format_retry_attempts=1)
+@pytest.mark.parametrize("judgements", [
+    [_judgement(0), _judgement(1), _judgement(2, evidence="多判了一条")],
+    [_judgement(0), _judgement(0, evidence="重复序号")],
+    [_judgement(0), _judgement(5, evidence="越界序号")],
+], ids=["extra", "duplicate", "out-of-range"])
+async def test_extra_duplicate_or_out_of_range_index_is_malformed(
+        env, tmp_path, judgements):
+    """覆盖率必须恰好是 0..N-1：多判、重复、越界都没有裁决边界，一律按格式错误。"""
+    r = await _reviewer(
+        env, {"T-2": {"judgements": judgements, "score": 0.4}}, tmp_path
+    ).review(env["task"], round_no=1)
+    assert r.verdict == "approve"
+    assert r.issues == [FORMAT_ERROR_ISSUE]
+    assert r.score is None
+
+
+async def test_unsatisfied_blank_evidence_is_malformed(env, tmp_path):
+    """判了不满足却不给依据 = 旧版的「reject 无 issues」：返工方无从下手。"""
+    bad = {"judgements": [_judgement(0), _judgement(1, satisfied=False, evidence="   ")],
+           "score": 0.2}
+    r = await _reviewer(env, {"T-2": bad}, tmp_path).review(env["task"], round_no=1)
+    assert r.verdict == "approve"
+    assert r.issues == [FORMAT_ERROR_ISSUE]
+    assert r.score is None
+
+
+async def test_malformed_missing_index_retries_configured_times(env, tmp_path):
+    rev = _reviewer(env, {"T-2": MISSING_INDEX}, tmp_path, format_retry_attempts=1)
     await rev.review(env["task"], round_no=1)
     # 首次 + 1 次重试 = 2 次结构化调用，每次一条 llm_call（mock 回放）
     assert env["ledger"].count("llm_call") == 2
 
 
-async def test_malformed_reject_default_retries(env, tmp_path):
-    bad = {"verdict": "reject", "score": 0.1, "issues": [], "fix_hints": []}
-    await _reviewer(env, {"T-2": bad}, tmp_path).review(env["task"], round_no=1)
+async def test_malformed_missing_index_default_retries(env, tmp_path):
+    await _reviewer(env, {"T-2": MISSING_INDEX}, tmp_path).review(
+        env["task"], round_no=1)
     # 默认 format_retry_attempts=2：首次 + 2 次重试 = 3 次结构化调用
     assert env["ledger"].count("llm_call") == 3
 
@@ -181,7 +288,7 @@ async def test_missing_fixture_releases_with_format_issue(env, tmp_path):
     """夹具缺失 = 结构化输出彻底失败：按格式错误放行，理由进 issues。"""
     r = await reviewer(env, {}, tmp_path).review(env["task"], round_no=1)
     assert r.verdict == "approve"
-    assert r.issues == ["评审器返回格式错误，已放行"]
+    assert r.issues == [FORMAT_ERROR_ISSUE]
 
 
 async def test_review_never_bumps_rework_count(env, tmp_path):
@@ -212,46 +319,68 @@ async def test_no_reviewer_approves_without_llm_call(env, tmp_path):
 
 
 async def test_dual_reviewer_reject_unions_issues_and_takes_min_score(env, tmp_path):
+    """两人各自的不满足判定取并集（同一条只留一份），score 取最小值。"""
     env["task"].role = "project_manager"
     fake = _FakeModels({
-        "architect": {"verdict": "reject", "score": 0.6,
-                      "issues": ["接口缺少错误语义", "命名不一致"],
-                      "fix_hints": ["补充错误码表"]},
-        "product_manager": {"verdict": "reject", "score": 0.2,
-                            "issues": ["命名不一致", "验收标准覆盖不足"],
-                            "fix_hints": ["统一命名规范", "补充错误码表"]},
+        "architect": {
+            "judgements": [
+                _judgement(0, satisfied=False, evidence="接口缺少错误语义"),
+                _judgement(1, evidence="已有非空校验"),
+            ],
+            "suggestions": ["错误码表可以更完整"],
+            "score": 0.6},
+        "product_manager": {
+            "judgements": [
+                _judgement(0, satisfied=False, evidence="接口缺少错误语义"),
+                _judgement(1, satisfied=False, evidence="校验未覆盖空字符串"),
+            ],
+            "suggestions": ["命名可再统一", "错误码表可以更完整"],
+            "score": 0.2},
     }, env["settings"])
     r = await Reviewer(fake, RoleCatalog(BUILTIN_ROLES), env["store"],
                        env["ledger"]).review(env["task"], round_no=1)
     assert r.verdict == "reject"
     assert r.score == 0.2                                    # 最小值
-    assert r.issues == ["接口缺少错误语义", "命名不一致", "验收标准覆盖不足"]   # 并集去重保序
-    assert r.fix_hints == ["补充错误码表", "统一命名规范"]
+    # 并集去重保序：两人对 index 0 的同一判定只留一份，index 1 来自 PM
+    assert r.issues == [
+        f"未满足验收标准：{CRITERION_OK} —— 接口缺少错误语义",
+        f"未满足验收标准：{CRITERION_UNMET} —— 校验未覆盖空字符串",
+    ]
+    assert r.fix_hints == ["接口缺少错误语义", "校验未覆盖空字符串"]
     assert r.reviewer == "architect+product_manager"
     assert [c["role"] for c in fake.calls] == ["architect", "product_manager"]
+    # suggestions 并集只进 ledger，一条都不许混进 issues
+    event = list(env["ledger"].events("gate_result"))[-1]
+    assert event.data["suggestions"] == ["错误码表可以更完整", "命名可再统一"]
+    assert all(s not in "".join(r.issues) for s in event.data["suggestions"])
 
 
 async def test_one_reject_among_two_approvals_rejects(env, tmp_path):
     env["task"].role = "project_manager"
     fake = _FakeModels({
-        "architect": {"verdict": "approve", "score": 0.9, "issues": [], "fix_hints": []},
-        "product_manager": {"verdict": "reject", "score": 0.3,
-                            "issues": ["缺少输入校验"], "fix_hints": ["给 title 加非空校验"]},
+        "architect": {
+            "judgements": [_judgement(0), _judgement(1)], "score": 0.9},
+        "product_manager": {
+            "judgements": [
+                _judgement(0, evidence="已有增删改查"),
+                _judgement(1, satisfied=False, evidence="缺空值校验"),
+            ],
+            "score": 0.3},
     }, env["settings"])
     r = await Reviewer(fake, RoleCatalog(BUILTIN_ROLES), env["store"],
                        env["ledger"]).review(env["task"], round_no=1)
     assert r.verdict == "reject"                 # 一票否决
     assert r.score == 0.3
-    assert r.issues == ["缺少输入校验"]
+    assert r.issues == [f"未满足验收标准：{CRITERION_UNMET} —— 缺空值校验"]
 
 
 async def test_all_approve_aggregates_min_score(env, tmp_path):
     env["task"].role = "project_manager"
     fake = _FakeModels({
-        "architect": {"verdict": "approve", "score": 0.9, "issues": [],
-                      "fix_hints": []},
-        "product_manager": {"verdict": "approve", "score": 0.7, "issues": [],
-                            "fix_hints": []},
+        "architect": {
+            "judgements": [_judgement(0), _judgement(1)], "score": 0.9},
+        "product_manager": {
+            "judgements": [_judgement(0), _judgement(1)], "score": 0.7},
     }, env["settings"])
     r = await Reviewer(fake, RoleCatalog(BUILTIN_ROLES), env["store"],
                        env["ledger"]).review(env["task"], round_no=1)
@@ -286,8 +415,10 @@ async def test_gate_result_carries_llm_verdict(env, tmp_path):
     assert data["layer"] == "llm"
     assert data["verdict"] == "reject"
     assert data["score"] == 0.3
-    assert data["issues"] == ["缺少输入校验"]
+    assert data["issues"] == [f"未满足验收标准：{CRITERION_UNMET} —— {UNMET_EVIDENCE}"]
+    assert data["suggestions"] == ["命名可以再统一一些"]   # 只进 ledger，不算驳回
     assert data["reviewer"] == "architect"
+    assert all(s not in "".join(data["issues"]) for s in data["suggestions"])
 
 
 async def test_prompt_carries_criteria_and_artifact_content(env, tmp_path):
@@ -299,6 +430,12 @@ async def test_prompt_carries_criteria_and_artifact_content(env, tmp_path):
     assert system["role"] == "system" and user["role"] == "user"
     assert "只输出 JSON" in system["content"]
     assert "验收标准" in system["content"]        # 逐条核对验收标准
+    # 提示词必须点名序号、要求全覆盖（一条不能漏/也不能多）、并给 suggestions 出路
+    assert "criterion_index" in system["content"]
+    assert "从 0 起" in system["content"]
+    assert "一条都不能漏" in system["content"] and "也不要多" in system["content"]
+    assert "suggestions" in system["content"]
+    assert "不会导致返工" in system["content"]
     assert call["schema"] is ReviewVerdict
     assert call["purpose"] == "review"
     for text in ("实现 CRUD", "支持增删改查", "输入有校验", "return 1"):

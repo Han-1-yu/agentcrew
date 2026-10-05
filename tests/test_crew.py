@@ -111,13 +111,35 @@ DELIVERY_BODY = (
     "uvicorn app.main:app --reload\n"
 )
 
-APPROVE = {"verdict": "approve", "score": 0.9, "issues": [], "fix_hints": []}
-REJECT = {
-    "verdict": "reject",
-    "score": 0.3,
-    "issues": ["功能清单缺失"],
-    "fix_hints": ["补充功能清单"],
+def _review_approve(count: int) -> dict:
+    """G2 夹具：判定条数必须等于该任务的验收标准条数（``_is_malformed`` 强制全覆盖）。"""
+    return {
+        "judgements": [
+            {"criterion_index": i, "satisfied": True,
+             "evidence": f"产物已满足第 {i + 1} 条验收标准"}
+            for i in range(count)
+        ],
+        "suggestions": [],
+        "score": 0.9,
+    }
+
+
+#: 每个 task_id 一条 —— 兜底键 ``_default`` 在「条数按任务而定」之后不再可用：
+#: 内置拆解 T-001/T-002 各 1 条标准，引擎追加的 T-FINAL 有 2 条。
+REVIEWS = {
+    "T-001": _review_approve(1),
+    "T-002": _review_approve(1),
+    "T-FINAL": _review_approve(2),
 }
+#: T-001 的唯一一条标准不满足：evidence 直接成为返工方的 fix_hints。
+REJECT_T001 = {
+    "judgements": [{"criterion_index": 0, "satisfied": False,
+                    "evidence": "docs/PRD.md 缺少功能清单"}],
+    "suggestions": [],
+    "score": 0.3,
+}
+#: 「T-001 被驳回、其余任务照常通过」的整套夹具。
+REJECT_REVIEWS = {**REVIEWS, "T-001": REJECT_T001}
 
 #: 真实演示夹具（9 个任务，含一次 T-005 返工）；Task 33 的端到端套件共用。
 DEMO_FIXTURES = Path(__file__).resolve().parents[1] / "examples" / "fixtures"
@@ -149,7 +171,7 @@ def env(tmp_path, monkeypatch):
     fx.mkdir()
     (fx / "plan_todo.json").write_text(json.dumps(PLAN), encoding="utf-8")
     (fx / "reviews.json").write_text(
-        json.dumps({"_default": APPROVE}), encoding="utf-8")
+        json.dumps(REVIEWS), encoding="utf-8")
     for tid, path, body in [
         ("T-001", "docs/PRD.md", PRD_BODY),
         ("T-002", "backend/app/main.py", MAIN_BODY),
@@ -823,7 +845,7 @@ async def test_resume_rehydrates_artifact_records_from_manifest(env):
 async def test_resume_does_not_duplicate_decision_lines(env):
     """``save_decisions`` 是朴素追加器：resume 后只能追加**新增**决策行。"""
     (env["fx"] / "reviews.json").write_text(
-        json.dumps({"T-001": REJECT, "_default": APPROVE}), encoding="utf-8")
+        json.dumps(REJECT_REVIEWS), encoding="utf-8")
     rec = await Crew(env["settings"]).run("做一个 Todo 应用")
     path = _run_dir(env["settings"], rec.run_id) / "context" / "decisions.jsonl"
     first = [line for line in path.read_text(encoding="utf-8").splitlines() if line]
@@ -913,7 +935,7 @@ async def test_delivery_gate_does_not_open_on_failed_run(env, monkeypatch):
     """
     monkeypatch.setenv("AGENTCREW_GATE", "delivery")
     (env["fx"] / "reviews.json").write_text(
-        json.dumps({"T-001": REJECT, "_default": APPROVE}), encoding="utf-8")
+        json.dumps(REJECT_REVIEWS), encoding="utf-8")
     prompter = _StubPrompter(deliveries=[DeliveryDecision(action="abort")])
     rec = await Crew(Settings.load(), prompter=prompter).run("做一个 Todo 应用")
     assert prompter.delivery_records == []

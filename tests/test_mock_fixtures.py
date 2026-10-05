@@ -2,9 +2,10 @@
 
 与 brief 的两处必要校正（其余断言逐字保留）：
 
-1. ``reviews.json`` 的兜底键是 ``"_default"`` —— ``MockProvider._review_text``
-   按 ``data[task_id]`` → ``data["_default"]`` 查找；写成 ``"*"`` 会查不到、落到
-   占位回复，G2 静默走「评审器格式错误，已放行」通道。
+1. ``reviews.json`` 按 task_id 提供逐条 judgement —— 新的 ``ReviewVerdict`` 要求
+   判定 ``acceptance_criteria`` 的每一条（序号恰好 0..N-1），judgement 条数按
+   任务而定，兜底键 ``_default`` 不再可用。条目缺失或条数对不上，G2 都会静默
+   走「评审器格式错误，已放行」通道。
 2. ``parse_blocks`` 采用与 ``agentcrew.artifacts.parser`` 相同的 **CommonMark
    围栏语义**（闭栏不短于开栏）。README.md / docs/usage.md 这类内嵌代码示例的
    产物必须以 4 个反引号开栏，否则内层的 3 反引号会在运行时提前截断产物 ——
@@ -153,32 +154,40 @@ def test_rework_loop_first_attempt_fails_second_passes():
 
 
 def test_reviews_fixture_covers_all_tasks_and_final():
+    """每个计划任务与引擎追加的 T-FINAL 都必须在 ``reviews.json`` 里有条目。"""
     reviews = json.loads((FIX / "reviews.json").read_text(encoding="utf-8"))
     for t in PLAN["tasks"]:
-        assert t["id"] in reviews or "_default" in reviews
+        assert t["id"] in reviews
+    assert "T-FINAL" in reviews, "缺少 T-FINAL（引擎追加任务）的评审夹具"
 
 
 def test_review_entries_are_schema_valid():
-    """``reviews.json`` 的**每一条**（含兜底键 ``_default``）都必须满足 ``ReviewVerdict``。
+    """``reviews.json`` 的**每一条**都必须按对应任务的验收标准完整覆盖。
 
-    过去这条守卫跳过 ``_`` 前缀的键，而演示夹具里 ``reviews.json`` **只有**
-    ``_default`` —— 于是唯一的形状校验在空转。夹具漂移出 schema 的后果不是报错
-    而是**静默放行**：回放内容进不了 ``ReviewVerdict``，``structured`` 阶梯判它
-    格式错误，``Reviewer._opinion`` 走「评审器返回格式错误，已放行」通道，
-    每个任务照样通过、整套测试照样绿。所以这里既验形状，也验「兜底裁决真的是
-    一份可用的裁决」（格式错误的 reject 与 JSON 解析失败走的是同一条放行通道）。
+    漂移的后果不是报错而是**静默放行**：回放内容进不了 ``ReviewVerdict``（或
+    judgement 条数与任务的标准条数对不上），``structured`` 阶梯判它格式错误，
+    ``Reviewer._opinion`` 走「评审器格式错误，已放行」通道，每个任务照样通过、
+    整套测试照样绿。所以这里既验 schema 形状，也验覆盖率与「不存在兜底键」
+    （条数按任务而定，``_default`` 无法再兜住任何任务）。
     """
     from agentcrew.gate.reviewer import ReviewVerdict, _is_malformed
+    from agentcrew.task.planner import PlanOutput, to_tasks, with_final_task
+
     reviews = json.loads((FIX / "reviews.json").read_text(encoding="utf-8"))
     assert reviews, "reviews.json 不能为空"
-    default = reviews.get("_default")
-    assert default is not None, "reviews.json 必须提供 _default 兜底裁决"
-    for verdict in reviews.values():
-        ReviewVerdict.model_validate(verdict)     # 含 _default：漂移即失败
-    assert not _is_malformed(ReviewVerdict.model_validate(default)), (
-        "兜底裁决是「reject 却不带 issues」——评审器会把它当格式错误而放行")
-    assert default["verdict"] == "approve", (
-        "演示夹具的兜底裁决必须是 approve：一次干净的 run 不该有 G2 驳回")
+    tasks = with_final_task(to_tasks(PlanOutput.model_validate(PLAN)))
+    assert set(reviews) == {task.id for task in tasks}, (
+        "reviews.json 必须恰好覆盖全部任务（含 T-FINAL）："
+        "条数按任务而定，既不能留兜底键，也不能有陈旧条目")
+    for task in tasks:
+        verdict = ReviewVerdict.model_validate(reviews[task.id])
+        assert len(verdict.judgements) == len(task.acceptance_criteria), (
+            f"{task.id} 的 judgement 条数必须等于其验收标准条数")
+        assert not _is_malformed(verdict, task), (
+            f"{task.id} 的评审条目会被判格式错误而静默放行")
+        # 演示夹具是一次干净的 run：全部判定都必须满足（G2 不得驳回）
+        assert all(j.satisfied for j in verdict.judgements), (
+            f"{task.id} 的演示评审出现不满足判定：一次干净的 run 不该有 G2 驳回")
 
 
 def test_plan_has_no_duplicate_artifact_paths():

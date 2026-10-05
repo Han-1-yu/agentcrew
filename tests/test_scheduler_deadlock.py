@@ -25,7 +25,9 @@ from agentcrew.task.task import Task
 from agentcrew.task.task import TaskStatus as S
 from agentcrew.task.task_board import TaskBoard
 
-APPROVE = {"verdict": "approve", "score": 0.95, "issues": [], "fix_hints": []}
+APPROVE = {"judgements": [{"criterion_index": 0, "satisfied": True,
+                           "evidence": "app.py 已定义 create_app"}],
+           "suggestions": [], "score": 0.95}
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
@@ -41,8 +43,9 @@ def env(tmp_path, monkeypatch):
     (fx / "responses" / "T-1" / "attempt-1.md").write_text(
         "```python file=app.py\ndef create_app():\n    return None\n```\n",
         encoding="utf-8")
-    # 夹具键必须是 _default（MockProvider 的查找顺序是 data[task_id] → _default）
-    (fx / "reviews.json").write_text(json.dumps({"_default": APPROVE}), encoding="utf-8")
+    # 评审夹具按 task_id 查找：判定条数按任务而定，兜底键 _default 不再可用
+    (fx / "reviews.json").write_text(
+        json.dumps({"T-1": APPROVE}), encoding="utf-8")
 
     models = ModelFactory(settings, ledger=ledger, fixtures_dir=fx)
     catalog = RoleCatalog(BUILTIN_ROLES)
