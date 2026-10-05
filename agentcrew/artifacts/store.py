@@ -62,8 +62,8 @@ class UndeclaredArtifactError(ValueError):
 class LedgerLike(Protocol):
     """Task 14 ``Ledger`` 的结构化子集；用 ``Protocol`` 避免反向依赖运行时包。"""
 
-    def emit(self, event: str, **data: Any) -> None:
-        """记录一次事件。"""
+    def emit(self, event: str, **data: Any) -> object:
+        """记录一次事件；返回值不在本协议的契约内（``Ledger`` 会返回事件对象）。"""
         ...
 
 

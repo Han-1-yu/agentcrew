@@ -209,24 +209,43 @@ _ELLIPSIS_LINES = ("...", "…")
 _PLACEHOLDER_MAX_CHARS = 40
 _STRUCTURE_CHARS = frozenset("=:(){}[];\"'")
 
+#: 规则 1、2（标记 / 整行省略号）的长度上界：只有**短文**里的这些信号才说明
+#: 「这篇还没写」。长文里的它们是正常内容 —— 代码示例里的 `...` 省略、真实代码
+#: 里的 `TODO` 注释。
+#:
+#: 实测标定：一篇 2092 字的完整中文 README（标题/依赖/启动/环境变量/示例俱全）
+#: 因 bash 示例里一行 `...` 被判占位，连续两次驳回烧光返工额度、任务 FAILED。
+#: 400 取值只需满足两点：比任何真实文档短、比任何桩长（桩通常是几行）。
+_STUB_MAX_CHARS = 400
+
 
 def has_placeholder(content: str) -> bool:
-    """内容是否为占位：命中标记、整行省略号、无结构的超短文本，任一即真。
+    """内容是否为**只有**占位信号（标记 / 整行省略号 / 无结构的超短文本）。
 
-    三条规则的标定见 :data:`_PLACEHOLDER_MAX_CHARS` 与
-    :data:`_CASE_SENSITIVE_MARKERS`；改动其中一条都会让标定失效。
+    消息是「仅含占位内容」，判定就必须真的看**是否仅含** —— 规则 1、2 因此都带
+    长度上界 :data:`_STUB_MAX_CHARS`：只有短文里的标记与省略号才说明「这篇东西
+    还没写」，长文里的它们是**正常内容**（代码示例里的 `...` 省略、真实代码里的
+    `TODO` 注释）。
+
+    实测教训：一篇 2092 字的完整中文 README（标题/依赖/启动/环境变量/示例俱全）
+    因为 bash 示例里有一行 `...` 被判成占位，连续两次驳回把返工额度烧光、任务
+    FAILED。上界就是为这个加的。
+
+    三条规则的标定见 :data:`_STUB_MAX_CHARS`、:data:`_PLACEHOLDER_MAX_CHARS`
+    与 :data:`_CASE_SENSITIVE_MARKERS`；改动其中一条都会让标定失效。
     """
-    lowered = content.lower()
-    for marker in PLACEHOLDER_MARKERS:
-        if marker in _CASE_SENSITIVE_MARKERS:
-            if marker in content:
-                return True
-        elif marker.lower() in lowered:
-            return True
-    for line in content.split("\n"):
-        if line.strip() in _ELLIPSIS_LINES:
-            return True
     collapsed = " ".join(content.split())
+    if len(collapsed) < _STUB_MAX_CHARS:
+        lowered = content.lower()
+        for marker in PLACEHOLDER_MARKERS:
+            if marker in _CASE_SENSITIVE_MARKERS:
+                if marker in content:
+                    return True
+            elif marker.lower() in lowered:
+                return True
+        for line in content.split("\n"):
+            if line.strip() in _ELLIPSIS_LINES:
+                return True
     if len(collapsed) >= _PLACEHOLDER_MAX_CHARS:
         return False
     return not any(char in collapsed for char in _STRUCTURE_CHARS)

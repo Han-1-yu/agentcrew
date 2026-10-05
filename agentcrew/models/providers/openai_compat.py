@@ -224,7 +224,9 @@ class OpenAICompatProvider(BaseProvider):
 
     def _prepare_messages(self, messages: Sequence[Message]) -> list[dict[str, str]]:
         """``supports_system_role=False`` 时把 system 内容并入首条 user 消息。"""
-        prepared = [dict(message) for message in messages]
+        prepared: list[dict[str, str]] = [
+            {"role": m["role"], "content": m["content"]} for m in messages
+        ]
         if self.capabilities.supports_system_role:
             return prepared
         system_parts = [m["content"] for m in prepared if m["role"] == "system"]

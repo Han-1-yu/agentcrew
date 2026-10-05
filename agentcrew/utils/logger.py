@@ -87,7 +87,10 @@ class _RedactingFilter(logging.Filter):
             record.stack_info = _apply(record.stack_info, self._patterns)
 
 
-def _redact_args(args: object, patterns: Sequence[re.Pattern[str]]) -> object:
+def _redact_args(
+    args: tuple[object, ...] | Mapping[str, object] | None,
+    patterns: Sequence[re.Pattern[str]],
+) -> tuple[object, ...] | Mapping[str, object] | None:
     """``record.args``：单映射时为 dict 本体，多参数时为 tuple（logging 语义）。"""
     if isinstance(args, Mapping):
         return {key: _redact_value(value, patterns) for key, value in args.items()}

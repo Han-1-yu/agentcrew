@@ -126,7 +126,11 @@ class AnthropicProvider(BaseProvider):
     ) -> tuple[str | None, list[dict[str, str]]]:
         """拆出 system 内容（多条以空行拼接）与其余消息；无 system 时返回 ``None``。"""
         system_parts = [m["content"] for m in messages if m["role"] == "system"]
-        chat_messages = [dict(m) for m in messages if m["role"] != "system"]
+        chat_messages: list[dict[str, str]] = [
+            {"role": m["role"], "content": m["content"]}
+            for m in messages
+            if m["role"] != "system"
+        ]
         if not system_parts:
             return None, chat_messages
         return "\n\n".join(system_parts), chat_messages
