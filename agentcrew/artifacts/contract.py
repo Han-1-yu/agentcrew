@@ -262,11 +262,13 @@ _CASE_SENSITIVE_MARKERS = frozenset({"TODO"})
 #: 整行（去缩进后）只是省略号也算占位；``x = compute(...)`` 不算。
 _ELLIPSIS_LINES = ("...", "…")
 
-#: 规则 3：折叠空白后短于该长度、且不含结构字符 → 判为占位。阈值 40 与下面的
-#: 结构字符表是共同标定的：HTML 桩 ``<html><body>placeholder</body></html>``
-#: （37 字符、无结构字符）必须命中，而真实内容 ``# Todo App ... endpoints.``
-#: （47 字符）不能。
-_PLACEHOLDER_MAX_CHARS = 40
+#: 规则 3：折叠空白后的**信息量**短于该阈值、且不含结构字符 → 判为占位。
+#: 阈值 40 与下面的结构字符表是共同标定的：HTML 桩
+#: ``<html><body>placeholder</body></html>``（37 字符、无结构字符）必须命中，
+#: 而真实内容 ``# Todo App ... endpoints.``（47 字符）不能。
+#:
+#: **单位是信息量而非字符数**，见 :func:`_content_units`。
+_PLACEHOLDER_MAX_UNITS = 40
 _STRUCTURE_CHARS = frozenset("=:(){}[];\"'")
 
 #: 规则 1、2（标记 / 整行省略号）的长度上界：只有**短文**里的这些信号才说明
@@ -276,14 +278,54 @@ _STRUCTURE_CHARS = frozenset("=:(){}[];\"'")
 #: 实测标定：一篇 2092 字的完整中文 README（标题/依赖/启动/环境变量/示例俱全）
 #: 因 bash 示例里一行 `...` 被判占位，连续两次驳回烧光返工额度、任务 FAILED。
 #: 400 取值只需满足两点：比任何真实文档短、比任何桩长（桩通常是几行）。
-_STUB_MAX_CHARS = 400
+#:
+#: 单位同样是信息量（:func:`_content_units`）。
+_STUB_MAX_UNITS = 400
+
+#: 一个 CJK 字符折合多少「信息量单位」。
+#:
+#: 拉丁字母平均 5 个字符一个词，而中文一个字大致就是一个词 —— 同一个意思，中文
+#: 所需的字符数只有英文的三分之一左右。两个阈值都是在 ASCII 上标定的（37 vs 47），
+#: 若直接拿它们比**中文字符数**，就会系统性误杀中文：「本模块负责产物契约与安全
+#: 落盘。」（15 字，一句完整的话）会被判成占位，而它在信息量上与 45 字符的英文等价。
+_CJK_WEIGHT = 3
+
+#: 按权重计的 CJK 码点区间：汉字、假名、谚文、CJK 标点与全角形式。
+#: 标点与全角形式一并计入 —— 它们同样是双宽字符，且只出现在 CJK 文本里。
+_CJK_RANGES = (
+    (0x3000, 0x303F),   # CJK 标点（。、：；「」）
+    (0x3040, 0x30FF),   # 平假名 / 片假名
+    (0x3400, 0x4DBF),   # 汉字扩展 A
+    (0x4E00, 0x9FFF),   # 汉字基本区
+    (0xAC00, 0xD7AF),   # 谚文音节
+    (0xF900, 0xFAFF),   # 汉字兼容表意
+    (0xFF00, 0xFFEF),   # 全角形式（：（）％等）
+)
+
+
+def _content_units(text: str) -> int:
+    """内容长度，单位是**信息量**：一个 CJK 字符记 :data:`_CJK_WEIGHT` 个单位。
+
+    两个长度阈值（:data:`_PLACEHOLDER_MAX_UNITS` 与 :data:`_STUB_MAX_UNITS`）回答
+    的是同一个问题 ——「这段内容是不是短得不像真东西」。字符数不是这个问题的合适
+    单位：中文的信息密度约为拉丁字母的三倍，同样的意思只需三分之一的字符。折算
+    之后，两种文字的有效阈值才可比。
+    """
+    units = 0
+    for char in text:
+        codepoint = ord(char)
+        if any(low <= codepoint <= high for low, high in _CJK_RANGES):
+            units += _CJK_WEIGHT
+        else:
+            units += 1
+    return units
 
 
 def has_placeholder(content: str) -> bool:
     """内容是否为**只有**占位信号（标记 / 整行省略号 / 无结构的超短文本）。
 
     消息是「仅含占位内容」，判定就必须真的看**是否仅含**。因此**规则 1、2 共用
-    同一个长度上界** :data:`_STUB_MAX_CHARS`：占位是**一条短桩**的特征，不是
+    同一个长度上界** :data:`_STUB_MAX_UNITS`：占位是**一条短桩**的特征，不是
     「文中某处出现过标记词」。长文里的标记与省略号都是正常内容 —— 代码示例里的
     ``...`` 省略、真实代码里的 ``TODO`` 注释、文档末尾的 ``## TODO`` 小节、
     「后续工作」里的「待实现」。
@@ -299,11 +341,14 @@ def has_placeholder(content: str) -> bool:
     规则 1 设上界**不会**削弱返工演示：T-005 的两份桩产物只有 87 与 40 字符，
     远在上界之内，照常命中。
 
-    三条规则的标定见 :data:`_STUB_MAX_CHARS`、:data:`_PLACEHOLDER_MAX_CHARS`
+    三条规则的标定见 :data:`_STUB_MAX_UNITS`、:data:`_PLACEHOLDER_MAX_UNITS`
     与 :data:`_CASE_SENSITIVE_MARKERS`；改动其中一条都会让标定失效。
+
+    两个长度阈值的单位是**信息量**而非字符数（:func:`_content_units`）—— 直接按
+    字符数比较会系统性误杀中文，因为中文一个字符约等于一个词。
     """
     collapsed = " ".join(content.split())
-    if len(collapsed) >= _STUB_MAX_CHARS:
+    if _content_units(collapsed) >= _STUB_MAX_UNITS:
         return False
     lowered = content.lower()
     for marker in PLACEHOLDER_MARKERS:
@@ -315,6 +360,6 @@ def has_placeholder(content: str) -> bool:
     for line in content.split("\n"):
         if line.strip() in _ELLIPSIS_LINES:
             return True
-    if len(collapsed) >= _PLACEHOLDER_MAX_CHARS:
+    if _content_units(collapsed) >= _PLACEHOLDER_MAX_UNITS:
         return False
     return not any(char in collapsed for char in _STRUCTURE_CHARS)
