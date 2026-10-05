@@ -169,6 +169,51 @@ def test_python_lone_surrogate_reports_instead_of_raising():
     assert parse_check("python", "x = '\ud800'\n") is not None
 
 
+def test_python_syntax_error_with_line_number_keeps_position():
+    """行号拿得到时消息必须带行号（G1 的返工提示靠它定位）。"""
+    msg = parse_check("python", "def f(\n  pass\n")
+    assert msg is not None and "line 1" in msg
+
+
+def test_python_null_byte_reports_instead_of_raising():
+    """NUL 字节：3.12 起是 SyntaxError 且 ``lineno is None``，≤3.11 是裸 ValueError。
+
+    两种解释器（目标运行时是 3.10+）都必须得到消息：前者走 SyntaxError 分支、
+    后者走 ValueError 分支。拿不到行号时消息不得渲染成 ``line None``。
+    """
+    msg = parse_check("python", "x = 1\x00\n")
+    assert isinstance(msg, str)
+    assert "语法错误" in msg and "None" not in msg
+
+
+def test_python_parser_value_error_is_reported(monkeypatch):
+    """``ast.parse`` 抛裸 ``ValueError`` 的路径（≤3.11 的真实行为）在 3.12 上只能模拟。
+
+    替换的是 ``contract`` 模块里的 ``ast`` 引用，不是 stdlib 的 ``ast`` 模块本身
+    —— 后者会被 pytest 自己的 traceback 渲染用到，替换它会把测试会话搞崩。
+    """
+    class _FakeAst:
+        @staticmethod
+        def parse(source: str) -> object:
+            raise ValueError("source code string cannot contain null bytes")
+
+    monkeypatch.setattr(contract, "ast", _FakeAst)
+    msg = contract.parse_check("python", "x = 1\n")
+    assert isinstance(msg, str) and "语法错误" in msg and "None" not in msg
+
+
+def test_syntax_message_renders_position_only_when_known():
+    """行号拿得到才渲染：``line None`` 对返工的模型毫无帮助。"""
+    with_line = SyntaxError(
+        "'(' was never closed", ("<unknown>", 3, 6, "def f(", 1, 0))
+    assert contract._syntax_message(with_line) == "语法错误：line 3: '(' was never closed"
+    no_line = SyntaxError("source code string cannot contain null bytes")
+    assert contract._syntax_message(no_line) == (
+        "语法错误：source code string cannot contain null bytes")
+    bare = ValueError("Exceeds the limit (4300 digits) for integer string conversion")
+    assert contract._syntax_message(bare).startswith("语法错误：Exceeds the limit")
+
+
 def test_python_invalid_escape_verdict_is_filter_independent():
     """无效转义序列是 SyntaxWarning，不是语法错误：判决不能随警告过滤器翻转。
 

@@ -10,9 +10,11 @@
 给出了的话）行列号。除各解析器的常规异常外，还有三类穿透样本必须显式接住：
 孤立代理项让 ``ast.parse`` 抛 ``UnicodeEncodeError``；上千层嵌套让四种解析器
 都抛 ``RecursionError``；超过 4300 位的整数让 json/toml/yaml 抛裸 ``ValueError``
-（int 转换上限）—— 三者都已实测，并各有对应测试。python 分支另外压掉
-``SyntaxWarning``：无效转义序列在 ``-W error`` 下会从「解析成功」翻成
-``SyntaxError``，判决不能随环境变。
+（int 转换上限）；python 分支同样接 ``ValueError`` —— 3.12 起 null 字节是
+``SyntaxError``，≤3.11 上却是裸 ``ValueError``，而目标运行时是 3.10+。以上
+都在 3.12.10 上实测（≤3.11 的 ``ValueError`` 路径由 monkeypatch 覆盖），
+并各有对应测试。python 分支另外压掉 ``SyntaxWarning``：无效转义序列在
+``-W error`` 下会从「解析成功」翻成 ``SyntaxError``，判决不能随环境变。
 """
 
 import ast
@@ -51,6 +53,21 @@ def parse_check(kind: str, content: str) -> str | None:
     return parser(content)
 
 
+def _syntax_message(exc: Exception) -> str:
+    """语法错误 → 消息：**行号拿得到才渲染**。
+
+    ``SyntaxError`` 只在编译器知道位置时才带 ``lineno`` —— 3.12 上 null 字节的
+    ``SyntaxError`` 就是 ``lineno is None``；≤3.11 上 null 字节与 int 转换上限
+    抛的裸 ``ValueError`` 更是什么位置都没有。渲染成 ``line None`` 对要返工的
+    模型毫无帮助。
+    """
+    reason = getattr(exc, "msg", None) or str(exc)
+    lineno = getattr(exc, "lineno", None)
+    if lineno is None:
+        return f"语法错误：{reason}"
+    return f"语法错误：line {lineno}: {reason}"
+
+
 def _check_python(content: str) -> str | None:
     """``ast.parse`` 校验语法；错误消息带行号（G1 直接当返工提示用）。"""
     try:
@@ -62,10 +79,14 @@ def _check_python(content: str) -> str | None:
             warnings.simplefilter("ignore", SyntaxWarning)
             ast.parse(content)
     except SyntaxError as exc:
-        return f"语法错误：line {exc.lineno}: {exc.msg}"
+        return _syntax_message(exc)
     except UnicodeError:
         # 孤立代理项：ast.parse 先按 UTF-8 编码源码，抛 UnicodeEncodeError
         return "语法错误：源码含无法编码的孤立代理项"
+    except ValueError as exc:
+        # ≤3.11：null 字节与 int 转换上限抛的是裸 ValueError（3.12 把前者改判成
+        # SyntaxError）。UnicodeError 是 ValueError 子类，故其分支必须排在前。
+        return _syntax_message(exc)
     except RecursionError:
         return _TOO_DEEP
     return None
