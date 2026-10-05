@@ -58,6 +58,58 @@ def test_empty_secret_is_ignored():
     assert redact("hello", ["", "hunter2"]) == "hello"
 
 
+def test_exception_traceback_is_redacted(capsys):
+    setup_logging("INFO", ["supersecret"])
+    try:
+        raise RuntimeError("boom sk-supersecretkey123456")
+    except RuntimeError:
+        get_logger("t").exception("request failed")
+    for handler in logging.getLogger().handlers:
+        handler.flush()
+    out = capsys.readouterr()
+    assert "request failed" in out.err  # 消息本身仍正常输出
+    assert "Traceback (most recent call last)" in out.err  # 异常文本确实被渲染
+    assert "sk-supersecretkey123456" not in (out.out + out.err)
+
+
+def test_redacts_key_inside_non_str_arg(capsys):
+    setup_logging("INFO", ["supersecret"])
+
+    class Payload:
+        def __str__(self):
+            return "boom sk-supersecretkey123456"
+
+    get_logger("t").error("failed: %s", Payload())
+    for handler in logging.getLogger().handlers:
+        handler.flush()
+    out = capsys.readouterr()
+    assert "failed:" in out.err
+    assert "sk-supersecretkey123456" not in (out.out + out.err)
+
+
+def test_redacts_split_arg_secret(capsys):
+    # 逐参数脱敏时 "sk-abc" 与 "123" 单独都不匹配，拼起来才是密钥
+    setup_logging("INFO", ["supersecret"])
+    get_logger("t").info("%s%s", "sk-abc", "123")
+    for handler in logging.getLogger().handlers:
+        handler.flush()
+    out = capsys.readouterr()
+    assert "sk-abc123" not in (out.out + out.err)
+
+
+def test_malformed_args_do_not_escape_filter(capsys, monkeypatch):
+    # 渲染消息失败（格式串与参数不匹配）时，filter 不能把异常抛给调用方。
+    # pytest 的 handler 会按 raiseExceptions 重抛 emit 失败，故关掉它来观察
+    # logging 原生的“报告错误但不打断调用方”行为。
+    monkeypatch.setattr(logging, "raiseExceptions", False)
+    setup_logging("INFO", ["supersecret"])
+    get_logger("t").info("%d", "supersecret")
+    for handler in logging.getLogger().handlers:
+        handler.flush()
+    out = capsys.readouterr()
+    assert "supersecret" not in (out.out + out.err)
+
+
 def test_setup_logging_reuses_handler_and_follows_stderr(monkeypatch):
     root = logging.getLogger()
     first, second = io.StringIO(), io.StringIO()

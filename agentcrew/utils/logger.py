@@ -2,13 +2,14 @@
 
 ``redact`` 是纯函数，未调用 ``setup_logging`` 时也可直接使用；
 ``setup_logging`` 在 root logger 上维护唯一一个 ``StreamHandler``，由挂在
-handler 上的 filter 改写 ``record.msg`` 与 ``record.args``——filter 必须挂在
-handler 上，logger 级 filter 不作用于子 logger 传播上来的记录。
+handler 上的 filter 脱敏整条记录（渲染后的消息、异常文本与栈信息）——filter
+必须挂在 handler 上，logger 级 filter 不作用于子 logger 传播上来的记录。
 """
 
 import logging
 import re
 import sys
+import traceback
 from collections.abc import Mapping, Sequence
 
 _REDACTED = "***"
@@ -44,7 +45,12 @@ def redact(text: str, secrets: Sequence[str]) -> str:
 
 
 class _RedactingFilter(logging.Filter):
-    """改写日志记录中的密钥；``filter`` 挂在 handler 上以覆盖传播记录。"""
+    """改写日志记录中的密钥；``filter`` 挂在 handler 上以覆盖传播记录。
+
+    对 ``getMessage()`` 渲染后的完整消息脱敏——非字符串参数、嵌套容器、以及
+    ``"%s%s"`` 拆分拼接出来的密钥都能覆盖——再写回 ``msg`` 并清空 ``args``。
+    异常文本与 ``stack_info`` 一并脱敏，避免 traceback 把密钥原样带出。
+    """
 
     def __init__(self, secrets: Sequence[str]) -> None:
         super().__init__()
@@ -54,10 +60,29 @@ class _RedactingFilter(logging.Filter):
         self._patterns = _compile_patterns(secrets)
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if isinstance(record.msg, str):
-            record.msg = _apply(record.msg, self._patterns)
-        record.args = _redact_args(record.args, self._patterns)
+        try:
+            rendered = record.getMessage()
+        except Exception:
+            # 格式串与参数不匹配：照旧交给 logging 的 handleError 报告，但先
+            # 退回逐成员脱敏，避免错误转储（Message/Arguments）打印原始密钥。
+            if isinstance(record.msg, str):
+                record.msg = _apply(record.msg, self._patterns)
+            record.args = _redact_args(record.args, self._patterns)
+        else:
+            record.msg = _apply(rendered, self._patterns)
+            record.args = None
+        self._redact_exception(record)
         return True
+
+    def _redact_exception(self, record: logging.LogRecord) -> None:
+        if record.exc_info:
+            # Formatter 优先使用已设置的 exc_text，无需改动 Formatter。
+            text = "".join(traceback.format_exception(*record.exc_info))
+            record.exc_text = _apply(text, self._patterns)
+        elif record.exc_text:
+            record.exc_text = _apply(record.exc_text, self._patterns)
+        if record.stack_info:
+            record.stack_info = _apply(record.stack_info, self._patterns)
 
 
 def _redact_args(args: object, patterns: Sequence[re.Pattern[str]]) -> object:
