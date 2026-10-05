@@ -7,10 +7,12 @@
 2. 仅 ``supports_json_object`` → ``response_format={"type": "json_object"}``，
    并把 ``json.dumps(schema.model_json_schema(), ensure_ascii=False)`` 内嵌进
    提示词 —— ``json_object`` 模式不携带 schema，不内嵌模型就不知道要吐什么形状；
-3. 两者都不支持 → 不传 ``response_format``，靠提示词约束 + :func:`extract_json`
-   提取（真实模型高频把 JSON 包在围栏里或前后加解释文字，Review Focus #2）；
-   解析/校验失败进入**修复循环**：把校验错误作为新的 ``user`` 轮追加（保留原
-   对话），最多 ``repair_attempts`` 次（默认 2，即最多 3 次 LLM 调用）。
+3. 两者都不支持 → 不传 ``response_format``，**同样把 schema 内嵌进提示词**
+   （纯文本模式连 ``json_object`` 都没有，提示词是模型知道形状的唯一来源），
+   靠提示词约束 + :func:`extract_json` 提取（真实模型高频把 JSON 包在围栏里或
+   前后加解释文字，Review Focus #2）；解析/校验失败进入**修复循环**：把校验错误
+   作为新的 ``user`` 轮追加（保留原对话），最多 ``repair_attempts`` 次
+   （默认 2，即最多 3 次 LLM 调用）。
 
 设计决定（控制器分辨率）：
 
@@ -229,11 +231,14 @@ def _messages_for_level(
 ) -> list[Message]:
     """构造本次调用实际发送的消息（每次返回新列表，绝不就地修改对话）。
 
-    第 2 级（``json_object``）不携带 schema，必须把
-    ``json.dumps(schema.model_json_schema(), ensure_ascii=False)`` 内嵌进提示词；
-    第 1 级由 ``response_format`` 携带，第 3 级靠修复循环纠形，都不注入。
+    第 2/3 级都要把 ``json.dumps(schema.model_json_schema(),
+    ensure_ascii=False)`` 内嵌进提示词：第 2 级 ``json_object`` 不携带 schema；
+    第 3 级连 ``json_object`` 都没有，**更是**只能从提示词得知形状（这是
+    PM 拆解与 G2 评审在 anthropic/ernie 上的默认路径，不内嵌会把每次结构化
+    调用都推成 2~3 次）。第 1 级由 API 的 ``json_schema`` 参数携带，不注入 ——
+    重复一遍只浪费上下文。
     """
-    if level != _LEVEL_JSON_OBJECT:
+    if level == _LEVEL_JSON_SCHEMA:
         return list(conversation)
     instruction = (
         "你必须只返回一个 JSON 对象，不要任何解释文字。"

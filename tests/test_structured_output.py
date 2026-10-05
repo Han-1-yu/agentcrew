@@ -9,6 +9,8 @@ brief 用例原样保留；在其之上补控制器分辨率与自审清单要�
   （分辨率 2 的「failure」不限于 provider 异常）；
 - 修复循环：修复提示逐字包含校验错误、原对话保留且不被就地修改、
   ``repair_attempts=0`` 只调用一次、默认 2 时最多 3 次调用、耗尽时 diagnostics 完整；
+- schema 内嵌提示词：第 2/3 级注入（第 3 级最需要——provider 什么都没有），
+  第 1 级不注入（API 的 json_schema 参数已携带，重复占上下文）；
 - ``on_degrade`` 只在真实降级时触发，修复重试绝不触发；
 - 第 3 级的 provider 异常不进修复循环，原样上抛（分辨率 9 的选择）。
 """
@@ -275,6 +277,18 @@ async def test_level1_does_not_inject_schema_into_prompt():
     await complete_structured(p, [{"role": "user", "content": "x"}], Answer,
                               temperature=0, max_tokens=10)
     assert p.messages_seen[0] == [{"role": "user", "content": "x"}]
+    joined = " ".join(m["content"] for m in p.messages_seen[0])
+    assert json.dumps(Answer.model_json_schema(), ensure_ascii=False) not in joined
+
+
+async def test_level3_injects_schema_into_prompt():
+    b = parse_alias("ernie:ernie-4")
+    p = DegradingProvider(b, [VALID])
+    await complete_structured(p, [{"role": "user", "content": "x"}], Answer,
+                              temperature=0, max_tokens=10)
+    joined = " ".join(m["content"] for m in p.messages_seen[0])
+    assert '"score"' in joined
+    assert json.dumps(Answer.model_json_schema(), ensure_ascii=False) in joined
 
 
 # ── 修复循环 ──
@@ -320,8 +334,13 @@ async def test_repair_turn_preserves_conversation_and_exact_prompt():
     p = Capturing(b, ['{"verdict": "approve"}', VALID])
     original = [{"role": "system", "content": "S"}, {"role": "user", "content": "x"}]
     await complete_structured(p, original, Answer, temperature=0, max_tokens=10)
-    assert captured[0] == original                     # 原对话原样保留
-    assert [m["role"] for m in captured[1]] == ["system", "user", "user"]
+    # 第 3 级首调用 = 注入的 schema system 消息 + 原对话（新列表，绝不就地改原对话）
+    assert [m["role"] for m in captured[0]] == ["system", "system", "user"]
+    assert captured[0][1:] == original
+    assert original == [{"role": "system", "content": "S"}, {"role": "user", "content": "x"}]
+    # 修复轮追加在末尾，之前的对话原样保留
+    assert [m["role"] for m in captured[1]] == ["system", "system", "user", "user"]
+    assert captured[1][1:3] == original
     repair_content = captured[1][-1]["content"]
     assert repair_content.startswith("你上次的输出校验失败：\n")
     assert repair_content.endswith("\n请仅返回修正后的 JSON，不要任何解释文字。")
