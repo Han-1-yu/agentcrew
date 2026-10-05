@@ -734,7 +734,7 @@ class ArtifactStore:
 |---|---|
 | 契约中每个 `required=True` 的产物都已产出 | `缺少必需产物：backend/app/main.py` |
 | 未声明产物未出现 | `产出未在契约中声明的文件：backend/hack.py` |
-| 文件字节数 `≥ min_bytes` 且 `≤ max_bytes` | `backend/app/main.py 为空文件` |
+| 文件字节数 `≥ min_bytes` | `backend/app/main.py 为空文件` |
 | `.py` → `ast.parse()` 通过 | `backend/app/main.py 语法错误：line 12: invalid syntax` |
 | `.json` / `.yaml` / `.toml` → 可解析 | `docs/api-spec.yaml 解析失败：...` |
 | `.html/.css/.js` → 非空且不含纯占位符（`TODO`、`<placeholder>`、`...`） | `frontend/index.html 仅含占位内容` |

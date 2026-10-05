@@ -1312,10 +1312,11 @@ def test_oversize_rejected(store):
     with pytest.raises(ArtifactTooLargeError):
         store.commit("big.txt", "x" * 100, spec=s, task=mk_task())
 
-def test_undersize_rejected(store):
+def test_undersize_content_commits_so_g1_can_see_it(store):
+    # 过小是质量问题，不是执行失败：必须落盘，由 G1 报「空文件」并驱动 REWORK
     s = ArtifactSpec(path="a.py", kind="python", description="d", min_bytes=5)
-    with pytest.raises(ValueError):
-        store.commit("a.py", "x", spec=s, task=mk_task())
+    store.commit("a.py", "x", spec=s, task=mk_task())
+    assert store.read("a.py") == "x"
 
 def test_conflict_when_other_task_already_wrote_path(tmp_path):
     st = ArtifactStore(tmp_path / "artifacts", run_id="R-1")
@@ -1383,7 +1384,7 @@ Expected: FAIL — `ImportError`
 1. `rel` 规范化后必须**等于** `spec.path`（不等 → `UndeclaredArtifactError`）
 2. `resolve(rel)`
 3. 已存在同路径记录且 `produced_by_task != task.id` → `ArtifactConflictError`
-4. 编码后长度对 `spec.max_bytes` / `spec.min_bytes` 校验
+4. **超出 `spec.max_bytes` → 抛 `ArtifactTooLargeError`**（写入期硬上限，spec §5.2「单文件上限，防模型跑飞」）。**不检查 `min_bytes`** —— 文件过小是**质量**问题，不是执行失败，必须落盘让 G1 看见并驱动返工（见下方说明）。
 5. `mkdir(parents=True, exist_ok=True)`；`atomic_write_text`
 6. 更新内存 `records`（同 `(path, task_id)` 覆盖，不追加）
 7. `ledger.emit("artifact_written", task_id=..., path=..., size_bytes=..., sha256=...)`（`ledger` 为 `None` 时跳过）
@@ -1649,7 +1650,7 @@ Expected: FAIL — `ImportError`
 检查顺序与消息模板：
 1. 缺必需产物 → `f"缺少必需产物：{path}"`
 2. 多余产物（该任务写入了不在 `task.deliverables` 中的路径）→ `f"产出未在契约中声明的文件：{path}"`
-3. 尺寸（`size < min_bytes` → 空文件 / `> max_bytes` → 过大）
+3. 尺寸：`size < min_bytes` → `f"{path} 为空文件"`（**G1 只查下界**；`max_bytes` 是 `ArtifactStore.commit` 的写入期硬上限，越界根本落不了盘，G1 不重复检查）
 4. `parse_check(deliverable.kind, content)` 返回的消息
 5. `has_placeholder(content)` → `f"{path} 仅含占位内容"`
 6. 逐条 `must_contain` 未命中 → `f"{path} 缺少必需符号：{needle}"`
