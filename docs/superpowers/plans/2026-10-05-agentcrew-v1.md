@@ -3005,9 +3005,9 @@ Expected: FAIL — `ImportError: cannot import name 'builtin'`
 
 `reviewer_for` 按 spec §8.2 的「默认评审人」列填写，并令 `ARCHITECT.reviewer_for = ["project_manager"]`、`PRODUCT_MANAGER.reviewer_for = ["project_manager"]`、`PROJECT_MANAGER.reviewer_for = ["architect", "product_manager"]`，其余按表。
 
-`reviewer_for(role_key)` 算法：
-1. 收集所有 `r for r in specs if role_key in r.reviewer_for or "*" in r.reviewer_for`
-2. 结果为空 → `["project_manager"]`（若目录中无 `project_manager` 则返回 `[]`）
+`reviewer_for(role_key)` 算法（**方向：读目标角色自己声明的 `reviewer_for`**，不是反查谁声明了它）：
+1. 候选 = `catalog.get(role_key).reviewer_for` 中的非 `"*"` 项 ∪ 所有 `r.key where "*" in r.reviewer_for`
+2. 候选项为空 → 返回 `["project_manager"]`（若目录中无 `project_manager` 则返回 `[]`）
 3. **过滤掉 `role_key` 自身**（防自评审）
 4. 过滤掉不在目录中的 key
 5. 结果仍为空 → `[]`（调用方据此跳过 G2，直接由 G1 决定）
