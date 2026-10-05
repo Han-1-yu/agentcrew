@@ -89,6 +89,12 @@ def test_delay_is_capped_and_jittered():
     assert 2.8 <= d <= 5.2
 
 
+def test_delay_is_never_negative(monkeypatch):
+    # 极端抖动因子（|multiplier| > 1 且为负）下结果被夹到 0。
+    monkeypatch.setattr("agentcrew.utils.retry.random.uniform", lambda a, b: -2.0)
+    assert compute_delay(1, base_delay=1.0, max_delay=30.0, jitter=1.5) == 0.0
+
+
 async def test_retry_after_overrides_computed_backoff():
     delays = []
 
