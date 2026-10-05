@@ -68,8 +68,14 @@ def test_no_blocks_returns_empty_files_and_full_note():
 
 
 def test_four_backtick_fence_is_not_confused():
-    raw = '````python file=a.py\nx=1\n````'      # 4 个反引号
-    with pytest.raises(ArtifactParseError):
+    """4 反引号开块、只有 3 反引号收尾 → 3 < 4 不算闭合 → 未闭合报错。
+
+    brief 原始的 raw 以 **4** 反引号收尾，按 CommonMark「≥ 开栏数才闭合」已经是
+    合法块（见 ``test_four_backtick_block_with_matching_close_parses``）；这里把
+    收尾改成 3 反引号，保住该用例原本要保护的属性：畸形的围栏绝不被静默吞掉。
+    """
+    raw = '````python file=a.py\nx=1\n```'
+    with pytest.raises(ArtifactParseError, match="未闭合的代码块，起始行 1"):
         parse_fenced_blocks(raw)
 
 
@@ -216,22 +222,76 @@ def test_unclosed_error_names_the_opening_line():
         parse_fenced_blocks("第一行\n\n```python file=a.py\nx=1\n")
 
 
-def test_long_fence_error_message_is_explicit():
-    with pytest.raises(ArtifactParseError, match="4 个或更多反引号"):
-        parse_fenced_blocks("````python file=a.py\nx=1\n````")
+# ── CommonMark 围栏语义：N 反引号的块由「≥ N 个裸反引号」的一行闭合 ──
 
 
-@pytest.mark.parametrize("ticks", ["````", "`````"])
-def test_five_or_more_backticks_are_also_rejected(ticks):
-    with pytest.raises(ArtifactParseError, match="4 个或更多反引号"):
-        parse_fenced_blocks(f"{ticks}python file=a.py\nx=1\n{ticks}")
+def test_four_backtick_block_may_contain_three_backtick_examples():
+    """README/docs 的核心场景：4 反引号块内嵌 3 反引号示例，整块存活为一个产物。"""
+    raw = (
+        "````markdown file=README.md\n"
+        "# Todo\n"
+        "\n"
+        "```bash\n"
+        "uvicorn app.main:app --reload\n"
+        "```\n"
+        "````\n"
+    )
+    out = parse_fenced_blocks(raw)
+    assert out.files == {
+        "README.md": "# Todo\n\n```bash\nuvicorn app.main:app --reload\n```\n"
+    }
+    assert out.notes == ""
 
 
-def test_long_fence_inside_a_body_still_raises():
-    """四反引号检测是全局预扫：行为与它落在块内还是块外无关。"""
-    raw = "```python file=a.py\nx=1\n````\n```\n"
-    with pytest.raises(ArtifactParseError, match="4 个或更多反引号"):
-        parse_fenced_blocks(raw)
+def test_three_backtick_block_still_closes_at_the_first_bare_three_backtick_line():
+    """3 反引号块的行为不变：第一个裸的 3 反引号行就闭合，容不下裸围栏行。"""
+    raw = "```markdown file=README.md\n# Todo\n```\n说明"
+    out = parse_fenced_blocks(raw)
+    assert out.files == {"README.md": "# Todo\n"}
+    assert out.notes == "说明"
+
+
+def test_three_backtick_line_does_not_close_a_four_backtick_block():
+    raw = "````markdown file=README.md\n# T\n```\nmore\n````\n"
+    out = parse_fenced_blocks(raw)
+    assert out.files == {"README.md": "# T\n```\nmore\n"}
+    assert out.notes == ""
+
+
+def test_four_backtick_block_is_closed_by_a_longer_fence():
+    """闭栏只要**不短于**开栏即可：4 开、5 闭。"""
+    raw = "````python file=a.py\nx=1\n`````\n"
+    out = parse_fenced_blocks(raw)
+    assert out.files == {"a.py": "x=1\n"}
+    assert out.notes == ""
+
+
+@pytest.mark.parametrize("ticks", ["````", "`````", "``````"])
+def test_any_fence_length_of_three_or_more_is_supported(ticks):
+    raw = f"{ticks}python file=a.py\n```\nx=1\n{ticks}\n"
+    out = parse_fenced_blocks(raw)
+    assert out.files == {"a.py": "```\nx=1\n"}
+    assert out.notes == ""
+
+
+def test_four_backtick_block_with_matching_close_parses():
+    """brief 最初的 raw（4 开 4 闭）：新规则下是合法块 —— 记录这处行为变更。"""
+    out = parse_fenced_blocks('````python file=a.py\nx=1\n````')
+    assert out.files == {"a.py": "x=1\n"}
+    assert out.notes == ""
+
+
+def test_longer_bare_fence_closes_a_shorter_block():
+    """新规则的另一面：3 反引号块遇到更长的裸围栏行同样闭合（与 CommonMark 一致）。"""
+    out = parse_fenced_blocks("```python file=a.py\nx=1\n````\ny=2")
+    assert out.files == {"a.py": "x=1\n"}
+    assert out.notes == "y=2"
+
+
+def test_bare_two_backtick_line_neither_opens_nor_closes():
+    """少于 3 个反引号的两行反引号不是围栏：开不了块，也闭不了块。"""
+    out = parse_fenced_blocks("```python file=a.py\nx=1\n``\ny=2\n```")
+    assert out.files == {"a.py": "x=1\n``\ny=2\n"}
 
 
 # ── 路径的原样提取（安全校验不在这里） ───────────────────────────

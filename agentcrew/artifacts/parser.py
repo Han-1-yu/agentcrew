@@ -4,16 +4,18 @@
 代码块都是说明（``notes``），不落盘。本模块是「模型原始回复 → 待写文件」的
 唯一通路，输入是不可信的：敌对与畸形按下面钉死的规则裁决，不做猜测性修复。
 
-解析规则（与 spec §9.1 一致；两处刻意的加严/放宽已在括号中标出）：
+解析规则（与 spec §9.1 一致；刻意的加严/放宽已在括号中标出）：
 
-- 起始围栏必须**顶格**且整行匹配 ``^```lang[ file=path]``；语言名可省略。
+- 起始围栏必须**顶格**且整行匹配 ``^```lang[ file=path]``，语言名可省略。
   ``file=`` 的值取「到行尾」（非贪婪），因此允许空格与中文路径 —— spec 原文
   写 ``\\S+``，会把 ``docs/my notes.txt`` 截在第一个空格处。
-- 行首 ≥4 个反引号是**明确错误**（spec 未定义四反引号围栏）：与其让该行悄悄
-  退化成说明、使块内结构错位，不如在预扫阶段直接报错。
-- 闭合围栏必须是「去掉首尾空白后恰好三个反引号」的一行；带语言名/路径的行
-  永远是**起始候选**、绝不闭合（畸形输入因此构造不出嵌套围栏）。代价是正文
-  里裸的一行三反引号会提前闭合 —— 这种回复已经是坏回复，报错或截断都不冤。
+- 围栏按 **CommonMark 语义**判定：开栏是**顶格、行首 ≥3 个反引号**；闭栏是
+  「去掉首尾空白后**只有反引号**、且长度**不短于开栏**」的一行。于是 3 反引号
+  的块仍被第一个裸的 3 反引号行闭合（与最初一致），而 **4 反引号的块可以安全
+  地内嵌 3 反引号的代码示例** —— 这正是 README/docs 里写运行命令所必需的
+  （N 开 M 闭当且仅当 M ≥ N）。
+- 带语言名或 ``file=`` 的行永远是**起始候选**、绝不闭合（畸形输入因此构造不出
+  嵌套围栏）；少于 3 个反引号的行既开不了块也闭不了块。
 - 未闭合的块 → :class:`ArtifactParseError`，消息带起始行号（1 起）。
 - 同一个路径重复出现 → 取**最后一次**的内容，并在 ``notes`` 末尾追加一条
   **按路径去重**的告警；被覆盖块的正文既不落盘也不进 notes。
@@ -31,23 +33,21 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from agentcrew.artifacts.spec import ArtifactKind
 
-#: 起始围栏：顶格三反引号 + 可选语言名 + 可选 ``file=`` 路径（到行尾，允许空格）。
+#: 起始围栏：顶格、≥3 个反引号 + 可选语言名 + 可选 ``file=`` 路径（到行尾，
+#: 允许空格）。围栏长度记进 ``fence`` 组：闭栏必须不短于它（CommonMark）。
 #: ``path`` 用 ``.*?`` 而非 ``.+?``：``file=`` 后为空也要能匹配上，才能与
 #: ``file=   ``（只有空白）得到完全一致的裁决 —— 否则同一处坏写法会因为多一个
 #: 空格而改走另一条分支。
 _START_FENCE_RE = re.compile(
-    r"^(?P<fence>```)(?P<lang>[A-Za-z0-9_+.\-]*)(?:\s+file=(?P<path>.*?))?\s*$"
+    r"^(?P<fence>`{3,})(?P<lang>[A-Za-z0-9_+.\-]*)(?:\s+file=(?P<path>.*?))?\s*$"
 )
-
-#: 闭合围栏的字面量：一行去掉首尾空白后恰好是它。
-_CLOSE_FENCE = "```"
 
 
 class ArtifactParseError(ValueError):
-    """回复不符合围栏块协议：未闭合的块，或出现了不支持的围栏长度。
+    """回复不符合围栏块协议：围栏块一直没有闭合。
 
-    消息为中文且对未闭合块带起始行号，可直接作为失败原因回灌给模型；Task 24
-    捕获后按 ``RUNNING → READY`` 重试。
+    消息为中文且带起始行号，可直接作为失败原因回灌给模型；Task 24 捕获后按
+    ``RUNNING → READY`` 重试。
     """
 
 
@@ -127,7 +127,6 @@ def parse_fenced_blocks(raw: str) -> ParsedOutput:
     按原文顺序进 ``notes``，重复路径的告警追加在末尾。
     """
     lines = _split_lines(raw)
-    _reject_unsupported_fences(lines)
     files: dict[str, str] = {}
     note_lines: list[str] = []
     duplicated: list[str] = []
@@ -139,7 +138,9 @@ def parse_fenced_blocks(raw: str) -> ParsedOutput:
             note_lines.append(lines[index])
             index += 1
             continue
-        body, close_index = _read_block(lines, start=index)
+        body, close_index = _read_block(
+            lines, start=index, fence_length=len(match.group("fence"))
+        )
         index = close_index + 1
         path = _normalize_path(match.group("path"))
         if not path:
@@ -166,25 +167,32 @@ def _split_lines(raw: str) -> list[str]:
     return lines
 
 
-def _reject_unsupported_fences(lines: list[str]) -> None:
-    """预扫：任何以 ≥4 个反引号开头的行都是不支持的四反引号围栏，直接报错。
+def _closing_fence_length(line: str) -> int | None:
+    """该行作为闭合围栏的反引号数；不是闭合围栏则返回 ``None``。
 
-    在扫描前一次性做掉，行为与这些行落在块内还是块外无关（否则块内的长围栏
-    会被当成正文，让整段结构错位）。
+    闭合围栏必须**只有**反引号：带语言名或 ``file=`` 的行永远不闭合，畸形输入
+    因此构造不出嵌套围栏。长度够不够由调用方按开栏长度判定 —— 少于 3 个反引号
+    的行在这里就会返回 2 / 1，而开栏至少是 3，永远判不闭合。
     """
-    for line in lines:
-        if line.startswith("````"):
-            raise ArtifactParseError("不支持的围栏长度：4 个或更多反引号")
+    stripped = line.strip()
+    if stripped and stripped.strip("`") == "":
+        return len(stripped)
+    return None
 
 
-def _read_block(lines: list[str], start: int) -> tuple[list[str], int]:
+def _read_block(
+    lines: list[str], start: int, *, fence_length: int
+) -> tuple[list[str], int]:
     """从起始围栏行读到闭合围栏，返回 ``(正文行, 闭合行下标)``。
 
+    闭合条件（CommonMark）：该行去掉首尾空白后只有反引号，且**长度 ≥ 开栏
+    长度**。因此 4 反引号的块能安全内嵌 3 反引号的代码示例。
     读到结尾仍未闭合 → :class:`ArtifactParseError`，行号 1 起计。
     """
     body: list[str] = []
     for index in range(start + 1, len(lines)):
-        if lines[index].strip() == _CLOSE_FENCE:
+        length = _closing_fence_length(lines[index])
+        if length is not None and length >= fence_length:
             return body, index
         body.append(lines[index])
     raise ArtifactParseError(f"未闭合的代码块，起始行 {start + 1}")
