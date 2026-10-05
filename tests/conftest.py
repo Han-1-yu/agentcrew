@@ -29,6 +29,26 @@ DEMO_FIXTURES_DIR: Path = (
 #: 演示目标（与 ``examples/todo_web_project.py`` 同一句话）。
 DEMO_GOAL = "开发一个 Todo List Web 应用：用户可在浏览器中增删改查待办事项。"
 
+
+@pytest.fixture(autouse=True)
+def _isolate_from_developer_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """让套件不受开发者本机 ``.env`` 与 shell 里 ``AGENTCREW_*`` 的影响。
+
+    没有这个夹具时，用户照 README「快速开始」第 2 步 ``cp .env.example .env``
+    之后，``test_config.py::test_defaults`` 这类断言会直接变红 —— 测试结果
+    取决于开发者本机的私有配置，这本身就是缺陷（Task 33 的 ``offline_run``
+    早已在中和 ``load_dotenv``，这里把它提到全局）。
+
+    只中和「``.env`` 文件被自动加载进进程」这一条：``Settings.load()`` 会调用
+    ``load_dotenv()``，而它**就地改写 ``os.environ``**，于是 ``.env`` 里的值
+    泄漏给同进程的每一个测试。``api_key_for()`` 仍然从 ``os.environ`` 读 Key
+    （那是设计），所以环境变量的读取路径不动 —— 测试内用 ``monkeypatch.setenv``
+    设置的值照常生效，因为它们在本夹具之后写入。
+    """
+    monkeypatch.setattr("agentcrew.config.load_dotenv", lambda *a, **kw: None)
+    for key in [k for k in os.environ if k.startswith("AGENTCREW_")]:
+        monkeypatch.delenv(key, raising=False)
+
 #: spec §17.2 列出的全部 API Key 环境变量；「无密钥可跑」的断言要逐个删干净。
 API_KEY_ENVS: tuple[str, ...] = (
     "OPENAI_API_KEY",

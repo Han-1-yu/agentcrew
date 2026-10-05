@@ -178,3 +178,33 @@ def test_redact_overrides_keeps_other_fields_and_non_mapping_values():
         "openai": {"bogus": {"api_key": "***", "n": 1}}}
     assert redact_overrides(None) is None
     assert redact_overrides(["x"]) == ["x"]
+
+
+def test_suite_is_isolated_from_a_developer_env_file(tmp_path, monkeypatch):
+    """套件不得受开发者本机 ``.env`` 影响。
+
+    没有 ``conftest._isolate_from_developer_env`` 时，``load_dotenv()`` 会就地
+    改写 ``os.environ``，把 ``.env`` 泄漏给同进程的每一个测试 —— 于是用户照
+    README「快速开始」第 2 步 ``cp .env.example .env`` 之后，``test_defaults``
+    立刻变红。测试结果不该取决于开发者本机的私有配置。
+    """
+    (tmp_path / ".env").write_text(
+        "AGENTCREW_DEFAULT_MODEL=deepseek:deepseek-chat\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    assert "AGENTCREW_DEFAULT_MODEL" not in os.environ
+    Settings.load()
+    assert "AGENTCREW_DEFAULT_MODEL" not in os.environ, (
+        "load_dotenv() 把 .env 泄漏进了 os.environ：测试之间会互相污染，"
+        "开发者本机的 .env 会改变套件结果"
+    )
+
+
+def test_real_env_vars_still_override_defaults_under_isolation(monkeypatch):
+    """隔离夹具只挡住「``.env`` 文件被自动加载」，真实环境变量照常生效。
+
+    ``api_key_for()`` 走的正是 ``os.environ``，这条路径不能一起被挡住。
+    （注意不要试图在测试里换 ``chdir`` 来喂 ``.env``：``load_dotenv()`` 不带
+    参数时按**调用方文件位置**向上搜索，不看 CWD。）
+    """
+    monkeypatch.setenv("AGENTCREW_MAX_CONCURRENCY", "9")
+    assert Settings.load().max_concurrency == 9
