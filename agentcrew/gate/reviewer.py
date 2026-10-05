@@ -50,15 +50,45 @@ from agentcrew.task.task import ReviewRecord, Task
 from agentcrew.utils.tokens import estimate_tokens
 
 
-class ReviewVerdict(BaseModel):
-    """一次 LLM 评审的原始裁决（``complete_structured`` 的目标 schema）。"""
+class CriterionJudgement(BaseModel):
+    """对**一条**验收标准的判定。"""
 
     model_config = ConfigDict(extra="forbid")
 
-    verdict: Literal["approve", "reject"]
-    score: float
-    issues: list[str]
-    fix_hints: list[str]
+    criterion_index: int
+    """该判定对应 ``acceptance_criteria`` 里的第几条（**从 0 起**）。
+
+    用序号而非让模型逐字复述标准：改写一个字就会让文本比对失败，进而触发
+    「格式错误 → 重试 → 放行」，等于把评审悄悄关掉。序号是精确且稳健的。
+    """
+
+    satisfied: bool
+    evidence: str
+    """产物中支持该判定的具体依据（文件名 + 关键内容）。
+
+    ``satisfied=False`` 时必须写成「产物里缺什么、要改成什么」—— 它会直接成为
+    返工方看到的 ``fix_hints``，含糊的「不够好」等于没给。
+    """
+
+
+class ReviewVerdict(BaseModel):
+    """一次 LLM 评审的原始裁决（``complete_structured`` 的目标 schema）。
+
+    **刻意没有 ``verdict`` 字段。** 过去直接向模型要 approve/reject，等于让它对
+    「这份产出好不好」下开放式结论 —— 一个认真的评审员总能在两轮内挑够毛病，
+    于是**任何非平凡任务都注定 FAILED**（实测 run6：问题数 7→12→8 不收敛，
+    返工额度烧光、下游 5 个任务阻塞）。
+
+    现在只问它**逐条判定既定标准**，裁决由 :func:`derive_review` 推导：
+    有一条不满足才 reject，且必须逐条覆盖、不能多也不能少。改进意见单独放
+    ``suggestions``，**不构成不满足**、不引发返工 —— 「还能更好」不是驳回理由。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    judgements: list[CriterionJudgement]
+    suggestions: list[str] = []
+    score: float = 0.0
 
 
 #: 与 ``ReviewVerdict`` 派生自同一处定义，供需要裸 schema 的调用方使用
@@ -88,12 +118,17 @@ class _Opinion:
 
     格式错误放行时 ``score=None``：那是评审器故障，它的分数不可信，不能污染
     聚合后的最低分。
+
+    ``suggestions`` 是标准之外的改进意见：**只进 ledger 与报告，不参与裁决、
+    不引发返工**。评审员总会有意见，给它们一条不阻塞的出口，是「还能更好不是
+    驳回理由」这条规则能落地的前提。
     """
 
     approved: bool
     score: float | None
     issues: tuple[str, ...]
     fix_hints: tuple[str, ...]
+    suggestions: tuple[str, ...] = ()
 
 
 class Reviewer:
@@ -152,6 +187,8 @@ class Reviewer:
                 issue for _, opinion in opinions for issue in opinion.issues),
             fix_hints=_dedup(
                 hint for _, opinion in opinions for hint in opinion.fix_hints),
+            suggestions=_dedup(
+                item for _, opinion in opinions for item in opinion.suggestions),
             reviewer=keys[0] if len(keys) == 1 else "+".join(sorted(keys)))
 
     # ── 单个评审人 ────────────────────────────────────────────────────────
@@ -169,12 +206,14 @@ class Reviewer:
         while True:
             attempt += 1
             verdict = await self._request(alias, reviewer_key, task, messages, spec)
-            if verdict is not None and not _is_malformed(verdict):
+            if verdict is not None and not _is_malformed(verdict, task):
+                approved, issues, fix_hints = derive_review(verdict, task)
                 return _Opinion(
-                    approved=verdict.verdict == "approve",
+                    approved=approved,
                     score=verdict.score,
-                    issues=tuple(verdict.issues),
-                    fix_hints=tuple(verdict.fix_hints))
+                    issues=tuple(issues),
+                    fix_hints=tuple(fix_hints),
+                    suggestions=tuple(verdict.suggestions))
             if attempt > self._format_retry_attempts:
                 # 故障不阻塞：放行并留下可追溯的原因，让报告看得见这次降级。
                 return _Opinion(
@@ -293,8 +332,14 @@ class Reviewer:
         issues: list[str],
         fix_hints: list[str],
         reviewer: str,
+        suggestions: list[str] | None = None,
     ) -> ReviewRecord:
-        """落一条 ``gate_result`` 并组装 ``ReviewRecord``——本模块的唯一出口。"""
+        """落一条 ``gate_result`` 并组装 ``ReviewRecord``——本模块的唯一出口。
+
+        ``suggestions`` 只进 ledger：评审员在标准之外的意见需要一个不阻塞的出口，
+        但它们**不参与裁决、不写进 ``ReviewRecord.issues``** —— 一旦写进去，
+        Task 27 的 Gatekeeper 就会把它们当成返工理由，等价于恢复到「开放式评审」。
+        """
         self._ledger.emit(
             "gate_result",
             task_id=task.id,
@@ -303,6 +348,7 @@ class Reviewer:
             verdict=verdict,
             score=score,
             issues=issues,
+            suggestions=list(suggestions or ()),
             reviewer=reviewer,
         )
         return ReviewRecord(
@@ -334,11 +380,44 @@ def _resolve_alias(spec: RoleSpec, settings: Settings) -> str:
     return settings.role_bindings.get(spec.key) or settings.default_model
 
 
-def _is_malformed(verdict: ReviewVerdict) -> bool:
-    """``reject`` 却不带任何实质 ``issues``（全空白也算无）：返工方无从下手。"""
-    if verdict.verdict != "reject":
-        return False
-    return not any(issue.strip() for issue in verdict.issues)
+def derive_review(verdict: ReviewVerdict, task: Task) -> tuple[bool, list[str], list[str]]:
+    """由逐条判定推导裁决，返回 ``(approved, issues, fix_hints)``。
+
+    **有一条验收标准不满足才 reject。** 这是把 G2 从「开放式代码评审」拉回
+    spec §10.2「按验收标准评审」的那一步：评审员只能通过把某条**既定标准**判为
+    不满足来驳回，而「还能更好」进 ``suggestions``、不参与裁决。
+
+    标准原文由本函数按序号回填，不采信模型复述的文本 —— 引用的是契约里真正
+    写下的那一条，返工方看到的和 PM 写下的必然一致。
+    """
+    criteria = task.acceptance_criteria
+    unmet: list[CriterionJudgement] = []
+    for judgement in verdict.judgements:
+        if judgement.satisfied:
+            continue
+        unmet.append(judgement)
+    issues = [
+        f"未满足验收标准：{criteria[j.criterion_index]} —— {j.evidence.strip()}"
+        for j in unmet
+        if 0 <= j.criterion_index < len(criteria)
+    ]
+    hints = [j.evidence.strip() for j in unmet if 0 <= j.criterion_index < len(criteria)]
+    return (not unmet), issues, hints
+
+
+def _is_malformed(verdict: ReviewVerdict, task: Task) -> bool:
+    """判定是否**不可用**，两种情况：
+
+    1. **覆盖率不达标**：必须逐条判定 ``acceptance_criteria``，序号集合恰好等于
+       ``0..N-1``。漏一条 = 逃避判据；多一条（或越界）= 引入了标准之外的驳回
+       理由 —— 两者都会让裁决失去边界，正是过去不收敛的来源。
+    2. **判了不满足却不给依据**：返工方无从下手，等同于旧版的「reject 无 issues」。
+    """
+    expected = set(range(len(task.acceptance_criteria)))
+    got = {j.criterion_index for j in verdict.judgements}
+    if got != expected or len(verdict.judgements) != len(expected):
+        return True
+    return any(not j.satisfied and not j.evidence.strip() for j in verdict.judgements)
 
 
 def _dedup(items: Iterable[str]) -> list[str]:
@@ -360,17 +439,30 @@ def _build_messages(spec: RoleSpec, material: str) -> list[Message]:
 
 
 def _system_prompt(spec: RoleSpec) -> str:
-    """评审系统提示词（spec §10.2 的三条硬要求：逐条核对 / 具体问题与修复 / 只输出 JSON）。"""
+    """评审系统提示词（spec §10.2：G2 的判据是**验收标准**，不是开放式代码评审）。
+
+    关键是**不向模型要结论**。过去让它直接给 approve/reject，等于让它对「这份
+    产出好不好」下开放式判断 —— 一个认真的评审员每轮都能再挑出毛病，返工永远
+    收敛不了（run6 实测：问题数 7→12→8，额度烧光、下游 5 个任务阻塞）。现在只
+    问它逐条判定既定标准，裁决由 :func:`derive_review` 推导。
+    """
     return (
-        f"你是{spec.title}（{spec.key}），现在以该角色的专业视角评审另一个角色的任务产出。"
-        "评审要求：\n"
-        "1. 严格依据验收标准逐条核对，逐条说明是否满足；\n"
-        "2. 只有全部验收标准都满足时才给出 approve，否则给出 reject；\n"
-        "3. 给出 reject 时必须写明具体问题（issues）与可执行的修复建议"
-        "（fix_hints），两者都不得为空；\n"
-        "4. verdict 取 \"approve\" 或 \"reject\"，score 为 0 到 1 的质量分，"
-        "issues 与 fix_hints 为字符串列表；\n"
-        "5. 只输出 JSON，不要任何解释文字。"
+        f"你是{spec.title}（{spec.key}），现在以该角色的专业视角评审另一个角色的任务产出。\n"
+        "**你的唯一判据是本次评审材料「验收标准」一节里逐条列出的标准**，"
+        "不要扩大范围，也不要自行补充标准。\n"
+        "要求：\n"
+        "1. 对验收标准的**每一条**给出一个 judgement，用 criterion_index 指明是第几条"
+        "（**从 0 起**，与材料里的编号一致）；\n"
+        "2. **一条都不能漏，也不要多**：judgements 的数量必须与验收标准的条数完全相等；\n"
+        "3. satisfied 为 true/false；evidence 写产物中支持该判定的具体依据"
+        "（文件名 + 关键内容）；\n"
+        "4. satisfied 为 false 时，evidence 必须写清「产物里缺什么、要改成什么」，"
+        "让返工方能直接照做；含糊的「不够好」不合格；\n"
+        "5. **标准之外的任何意见**（可读性、健壮性、更优写法、性能、风格……）一律放进 "
+        "suggestions —— 它们**不构成不满足**，也不会导致返工。"
+        "「还能更好」永远不是驳回理由；\n"
+        "6. score 是 0 到 1 的诊断性质量分，**不参与裁决**；\n"
+        "7. 只输出 JSON，不要任何解释文字。"
     )
 
 

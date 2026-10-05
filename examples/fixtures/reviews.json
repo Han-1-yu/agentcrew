@@ -1,8 +1,186 @@
 {
-  "_default": {
-    "verdict": "approve",
-    "score": 0.92,
-    "issues": [],
-    "fix_hints": []
+  "T-001": {
+    "judgements": [
+      {
+        "criterion_index": 0,
+        "satisfied": true,
+        "evidence": "产物中已满足该条：PRD 覆盖目标用户、核心场景、功能范围与优先级四部分"
+      },
+      {
+        "criterion_index": 1,
+        "satisfied": true,
+        "evidence": "产物中已满足该条：验收标准逐条可判定，写明输入、行为与预期结果"
+      },
+      {
+        "criterion_index": 2,
+        "satisfied": true,
+        "evidence": "产物中已满足该条：不做技术选型、不写实现细节与测试用例"
+      }
+    ],
+    "suggestions": [],
+    "score": 0.92
+  },
+  "T-002": {
+    "judgements": [
+      {
+        "criterion_index": 0,
+        "satisfied": true,
+        "evidence": "产物中已满足该条：给出技术选型理由与被否决的方案"
+      },
+      {
+        "criterion_index": 1,
+        "satisfied": true,
+        "evidence": "产物中已满足该条：模块划分说明每个模块的职责与依赖方向"
+      },
+      {
+        "criterion_index": 2,
+        "satisfied": true,
+        "evidence": "产物中已满足该条：API 精确到路径、方法、字段、类型与错误语义"
+      }
+    ],
+    "suggestions": [],
+    "score": 0.92
+  },
+  "T-003": {
+    "judgements": [
+      {
+        "criterion_index": 0,
+        "satisfied": true,
+        "evidence": "产物中已满足该条：全部路由与 docs/api-spec.yaml 一致"
+      },
+      {
+        "criterion_index": 1,
+        "satisfied": true,
+        "evidence": "产物中已满足该条：数据保存在进程内 dict，无数据库等外部依赖"
+      },
+      {
+        "criterion_index": 2,
+        "satisfied": true,
+        "evidence": "产物中已满足该条：cd backend && uvicorn app.main:app 可直接启动"
+      }
+    ],
+    "suggestions": [],
+    "score": 0.92
+  },
+  "T-004": {
+    "judgements": [
+      {
+        "criterion_index": 0,
+        "satisfied": true,
+        "evidence": "产物中已满足该条：页面可完成新增、查看、编辑、删除与完成切换"
+      },
+      {
+        "criterion_index": 1,
+        "satisfied": true,
+        "evidence": "产物中已满足该条：覆盖加载中、出错与空数据三种状态"
+      },
+      {
+        "criterion_index": 2,
+        "satisfied": true,
+        "evidence": "产物中已满足该条：不引入构建链，浏览器直接打开或用后端托管即可使用"
+      }
+    ],
+    "suggestions": [],
+    "score": 0.92
+  },
+  "T-005": {
+    "judgements": [
+      {
+        "criterion_index": 0,
+        "satisfied": true,
+        "evidence": "产物中已满足该条：用例覆盖新增、查询、更新、删除与错误分支"
+      },
+      {
+        "criterion_index": 1,
+        "satisfied": true,
+        "evidence": "产物中已满足该条：cd artifacts && python -m pytest tests/test_api.py 可运行通过"
+      },
+      {
+        "criterion_index": 2,
+        "satisfied": true,
+        "evidence": "产物中已满足该条：测试报告写明运行命令、实际结果与未覆盖风险"
+      }
+    ],
+    "suggestions": [],
+    "score": 0.92
+  },
+  "T-006": {
+    "judgements": [
+      {
+        "criterion_index": 0,
+        "satisfied": true,
+        "evidence": "产物中已满足该条：docker compose up 可构建并启动服务"
+      },
+      {
+        "criterion_index": 1,
+        "satisfied": true,
+        "evidence": "产物中已满足该条：包含端口映射与健康检查"
+      },
+      {
+        "criterion_index": 2,
+        "satisfied": true,
+        "evidence": "产物中已满足该条：部署文档给出可照做的回滚步骤"
+      }
+    ],
+    "suggestions": [],
+    "score": 0.92
+  },
+  "T-007": {
+    "judgements": [
+      {
+        "criterion_index": 0,
+        "satisfied": true,
+        "evidence": "产物中已满足该条：README 覆盖项目定位、目录结构、安装与快速开始"
+      },
+      {
+        "criterion_index": 1,
+        "satisfied": true,
+        "evidence": "产物中已满足该条：使用文档中的命令可直接复制执行"
+      },
+      {
+        "criterion_index": 2,
+        "satisfied": true,
+        "evidence": "产物中已满足该条：示例与实现一致（端口、路径、字段均来自当前实现）"
+      }
+    ],
+    "suggestions": [],
+    "score": 0.92
+  },
+  "T-008": {
+    "judgements": [
+      {
+        "criterion_index": 0,
+        "satisfied": true,
+        "evidence": "产物中已满足该条：断言 index.html 的结构与资源引用完整"
+      },
+      {
+        "criterion_index": 1,
+        "satisfied": true,
+        "evidence": "产物中已满足该条：断言 app.js 调用 /api/todos 并提供渲染函数"
+      },
+      {
+        "criterion_index": 2,
+        "satisfied": true,
+        "evidence": "产物中已满足该条：断言 styles.css 覆盖关键类"
+      }
+    ],
+    "suggestions": [],
+    "score": 0.92
+  },
+  "T-FINAL": {
+    "judgements": [
+      {
+        "criterion_index": 0,
+        "satisfied": true,
+        "evidence": "产物中已满足该条：列出全部完成项与遗留问题"
+      },
+      {
+        "criterion_index": 1,
+        "satisfied": true,
+        "evidence": "产物中已满足该条：包含运行方式"
+      }
+    ],
+    "suggestions": [],
+    "score": 0.92
   }
 }
