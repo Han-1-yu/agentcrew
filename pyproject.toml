@@ -1,3 +1,9 @@
+[project]
+name = "agentcrew"
+version = "1.0.0"
+description = "多智能体协作平台：项目经理调度 8 个专职 Agent 完成从需求到交付的全流程"
+requires-python = ">=3.10"   # 与设计规格 §1 的目标运行时一致
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

@@ -402,3 +402,41 @@ def test_todo_marker_in_long_content_is_not_a_placeholder():
     assert "TODO" in long_readme and "待实现" in long_readme   # 两个标记确实都在
     assert len(" ".join(long_readme.split())) > 400            # 且确实超过长度上界
     assert not has_placeholder(long_readme)
+
+
+# ── 嵌套深度守卫：显式上限，不依赖解释器的 RecursionError ──────────────────
+# 依赖 RecursionError 是**版本相关**的：CPython 3.14 已能解析 3000 层一元负号而
+# 不抛异常，于是「恶意深层嵌套必须被拦」这条保证会随解释器版本漂移（同 Task 12
+# 的 DeprecationWarning：判决不该取决于跑它的解释器）。
+
+
+def test_deeply_nested_unary_minus_is_rejected_on_every_version():
+    assert parse_check("python", "-" * 3000 + "1") is not None
+
+
+def test_deeply_nested_not_chain_is_rejected():
+    assert parse_check("python", "not " * 3000 + "x") is not None
+
+
+def test_deeply_nested_brackets_are_rejected():
+    assert parse_check("python", "[" * 3000) is not None
+
+
+@pytest.mark.parametrize("src", [
+    "x = a - b - c - d - e\n",            # 二元减号链：不是嵌套，不得误判
+    "y = [[1, 2], [3, 4]]\n",             # 正常嵌套
+    "flag = not other\n",                 # 单个 not
+    "def f():\n    return -1\n",          # 普通代码
+    "d = {'a': [1, {'b': (2, 3)}]}\n",    # 混合嵌套
+])
+def test_nesting_guard_has_no_false_positives(src):
+    assert parse_check("python", src) is None
+
+
+def test_nesting_guard_survives_untokenizable_input():
+    """分词失败的输入必须退化成「不拦」并交回 ast.parse —— 守卫是辅助，不是权威。
+
+    孤立代理项会让 tokenize 抛 UnicodeEncodeError；漏捕它会让异常穿透
+    parse_check，违反「never raises」契约（test_parse_check_never_raises 抓过）。
+    """
+    assert parse_check("python", 'x = "\ud800"') is not None

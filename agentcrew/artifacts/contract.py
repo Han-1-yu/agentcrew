@@ -19,8 +19,10 @@
 """
 
 import ast
+import io
 import json
 import sys
+import tokenize
 import warnings
 from collections.abc import Callable
 from typing import get_args
@@ -70,8 +72,66 @@ def _syntax_message(exc: Exception) -> str:
     return f"语法错误：line {lineno}: {reason}"
 
 
+#: 源码嵌套深度上限（见 _check_python 的说明）。
+_MAX_NESTING_DEPTH = 100
+
+
+def _max_nesting(source: str) -> int | None:
+    """源码的嵌套深度上界；无法分词时返回 ``None``（交给 ``ast.parse`` 定夺）。
+
+    统计两样东西取较大者：
+
+    - **括号嵌套**（``((((x))))``）—— 数括号即可；
+    - **连续一元运算符**（``----1``、``not not not x``）—— 它同样把解析器推深，
+      却一个括号都没有，只数括号抓不到。
+
+    二元运算符不会误计：``a - b - c`` 的 ``-`` 之间隔着操作数，计数器会归零。
+    """
+    depth = 0
+    brackets = 0
+    unary = 0
+    try:
+        for token in tokenize.generate_tokens(io.StringIO(source).readline):
+            if token.type == tokenize.OP:
+                if token.string in "([{":
+                    brackets += 1
+                    depth = max(depth, brackets)
+                elif token.string in ")]}":
+                    brackets = max(0, brackets - 1)
+                    unary = 0
+                elif token.string in "+-~":
+                    unary += 1
+                    depth = max(depth, unary)
+                else:
+                    unary = 0
+            elif token.type == tokenize.NAME and token.string == "not":
+                unary += 1
+                depth = max(depth, unary)
+            elif token.type in (
+                tokenize.NUMBER, tokenize.STRING, tokenize.NAME,
+                tokenize.NEWLINE, tokenize.NL, tokenize.INDENT, tokenize.DEDENT,
+            ):
+                unary = 0
+    except (tokenize.TokenError, IndentationError, SyntaxError, ValueError,
+            RecursionError):
+        # 分词失败就**不下判断**，交回 ``ast.parse``：本函数是**辅助守卫**，任何
+        # 它处理不了的输入都必须退化成「不拦」，绝不能自己抛出去 ——
+        # ``parse_check`` 的契约是永不抛异常（越界判定由 ast.parse 负责）。
+        # ValueError 覆盖 UnicodeError：孤立代理项会让 tokenize 抛
+        # UnicodeEncodeError；RecursionError 覆盖 tokenize 自身被深嵌套压爆。
+        return None
+    return depth
+
+
 def _check_python(content: str) -> str | None:
     """``ast.parse`` 校验语法；错误消息带行号（G1 直接当返工提示用）。"""
+    nesting = _max_nesting(content)
+    if nesting is not None and nesting > _MAX_NESTING_DEPTH:
+        # 显式上限，**不依赖 RecursionError**：那是版本相关的行为 —— CPython 3.14
+        # 已能解析 3000 层一元负号而不抛异常，于是「恶意深层嵌套必须被拦」这条
+        # 保证会随解释器版本漂移（同一类问题：Task 12 的 DeprecationWarning）。
+        # 上限取 100：远超任何真实代码，远低于解析器的递归上限。
+        return f"{_TOO_DEEP}（约 {nesting} 层，上限 {_MAX_NESTING_DEPTH}）"
     try:
         with warnings.catch_warnings():
             # 无效转义序列（如 "\d"）是警告而非语法错误：默认只打到 stderr 并
