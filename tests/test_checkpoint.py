@@ -6,11 +6,14 @@ clean 的删除资格与删除边界。
 """
 
 import json
+import os
 import re
+import subprocess
 from datetime import datetime
 
 import pytest
 
+import agentcrew.runtime.checkpoint as checkpoint
 from agentcrew.runtime.checkpoint import (
     CheckpointStore,
     RunRecord,
@@ -21,6 +24,20 @@ from agentcrew.runtime.checkpoint import (
 )
 from agentcrew.task.task import Task, TaskStatus as S
 from agentcrew.task.task_board import TaskBoard
+
+
+def _make_dir_link(link, target):
+    """建一个指向目录的链接：Windows 用 junction（mklink /J，无需提权），其余用 symlink。"""
+    if os.name == "nt":
+        return subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+            capture_output=True,
+        ).returncode == 0
+    try:
+        os.symlink(target, link, target_is_directory=True)
+    except OSError:
+        return False
+    return True
 
 
 def mk(tid, deps=(), status=S.PENDING):
@@ -72,6 +89,32 @@ def test_constructor_missing_dir_raises(tmp_path):
 def test_run_id_format_when_generated(tmp_path):
     c = CheckpointStore.create(tmp_path / "o", project_goal="g", config_snapshot={})
     assert re.fullmatch(r"\d{8}-\d{6}-[0-9a-f]{4}", c.run_dir.name)
+
+
+def test_create_rejects_unsafe_run_id(tmp_path):
+    """命令行/显式传入的 run_id 不得逃出 output_dir（Task 32 从 argv 取值）。"""
+    o = tmp_path / "o"
+    for bad in ("../x", "..", ".", "a/b", "a\\b", "C:x", "a b", ""):
+        with pytest.raises(ValueError):
+            CheckpointStore.create(o, project_goal="g", config_snapshot={},
+                                   run_id=bad)
+    assert not (tmp_path / "x").exists()         # 穿越尝试未在 output_dir 外留下东西
+    assert not (tmp_path / "run.json").exists()
+    assert not o.exists()                        # 全部被拒，output_dir 都未创建
+
+
+def test_create_refuses_existing_run_id_without_damage(tmp_path):
+    """同名 run_id 已存在时拒绝覆盖：可能对应一个活着的 run，记录不得被重置。"""
+    o = tmp_path / "o"
+    cs = CheckpointStore.create(o, project_goal="original", config_snapshot={"a": 1},
+                                run_id="20260101-000000-aaaa")
+    before = (cs.run_dir / "run.json").read_bytes()
+    with pytest.raises(FileExistsError):
+        CheckpointStore.create(o, project_goal="hijack", config_snapshot={},
+                               run_id="20260101-000000-aaaa")
+    assert (cs.run_dir / "run.json").read_bytes() == before     # 原内容逐字节未动
+    rec = cs.load_record()
+    assert rec.project_goal == "original" and rec.config_snapshot == {"a": 1}
 
 
 def test_save_and_load_record_roundtrip(cs):
@@ -347,19 +390,75 @@ def test_clean_never_deletes_outside_output_dir(tmp_path):
 
 
 def test_clean_refuses_linked_dir(tmp_path):
-    """指向 output_dir 之外的链接（符号链接/junction）不得被 rmtree 跟进。"""
+    """指向 output_dir 之外的目录链接不得被 rmtree 跟进。
+
+    Windows 用 junction 实跑（mklink /J 无需提权）：``os.path.islink`` 对 junction
+    返回 False，而 ``shutil.rmtree`` 会跟进去删目标里的文件——最危险的一类。
+    """
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "run.json").write_text("{}", encoding="utf-8")
     o = tmp_path / "o"; o.mkdir()
     link = o / "20260101-000000-aaaa"
+    if not _make_dir_link(link, outside):
+        pytest.skip("当前环境不允许创建目录链接")
     try:
-        link.symlink_to(outside, target_is_directory=True)
-    except OSError:
-        pytest.skip("当前环境不允许创建符号链接")
+        with pytest.raises(RuntimeError):
+            clean(o, keep=0)
+        assert (outside / "run.json").is_file()
+    finally:
+        try:
+            os.rmdir(link)                  # 摘掉 junction/链接本身，不跟进目标
+        except OSError:
+            link.unlink(missing_ok=True)
+    assert not link.exists()
+
+
+def test_clean_refuses_link_like_without_calling_rmtree(tmp_path, monkeypatch):
+    """守卫的平台无关版本：``is_link_like`` 为真时必须在任何 rmtree 之前拒绝。
+
+    不依赖创建链接的权限——上面的 junction 用例在无权限环境会 skip，这条保证
+    守卫在 CI 上真的被执行过。
+    """
+    o = tmp_path / "o"
+    for rid in ("20260101-000000-aaaa", "20260102-000000-bbbb"):
+        CheckpointStore.create(o, project_goal="g", config_snapshot={}, run_id=rid)
+    monkeypatch.setattr(checkpoint, "is_link_like", lambda path: True)
+    calls = []
+    monkeypatch.setattr(checkpoint.shutil, "rmtree", lambda path: calls.append(path))
     with pytest.raises(RuntimeError):
         clean(o, keep=0)
-    assert (outside / "run.json").is_file()
+    assert calls == []                              # rmtree 一次都没被调用
+    assert len(CheckpointStore.list_runs(o)) == 2   # 一个 run 都没删
+
+
+def test_clean_partial_refusal_deletes_nothing(tmp_path, monkeypatch):
+    """先整组校验、再整组删除：排序最后的目标被拒时，前面的也不能先被删。"""
+    o = tmp_path / "o"
+    for rid in ("20260101-000000-aaaa", "20260102-000000-bbbb",
+                "20260103-000000-cccc"):
+        CheckpointStore.create(o, project_goal="g", config_snapshot={}, run_id=rid)
+    oldest = "20260101-000000-aaaa"      # 降序删除顺序里排在最后
+    monkeypatch.setattr(checkpoint, "is_link_like",
+                        lambda path: path.name == oldest)
+    calls = []
+    monkeypatch.setattr(checkpoint.shutil, "rmtree", lambda path: calls.append(path))
+    with pytest.raises(RuntimeError):
+        clean(o, keep=0)
+    assert calls == []                   # 旧实现会先删掉两个更新的，本断言钉住两阶段
+    assert CheckpointStore.list_runs(o) == [
+        "20260103-000000-cccc", "20260102-000000-bbbb", "20260101-000000-aaaa"]
+
+
+def test_clean_validation_runs_in_dry_run_too(tmp_path, monkeypatch):
+    """dry_run 同样跑校验：干跑必须能预告真跑会拒绝什么。"""
+    o = tmp_path / "o"
+    CheckpointStore.create(o, project_goal="g", config_snapshot={},
+                           run_id="20260101-000000-aaaa")
+    monkeypatch.setattr(checkpoint, "is_link_like", lambda path: True)
+    with pytest.raises(RuntimeError):
+        clean(o, keep=0, dry_run=True)
+    assert len(CheckpointStore.list_runs(o)) == 1
 
 
 def test_clean_rejects_negative_keep(tmp_path):

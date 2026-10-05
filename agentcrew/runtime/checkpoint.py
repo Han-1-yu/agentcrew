@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from datetime import datetime
 from enum import Enum
@@ -44,6 +45,9 @@ SCHEMA_VERSION = 1
 #: ``context`` 供 ContextBus 的 decisions.jsonl，``review`` / ``diagnostics`` 供
 #: 评审材料与停滞报告；它们必须在任何写入者之前就位。
 _RUN_SUBDIRS = ("artifacts", "context", "review", "diagnostics")
+
+#: 显式传入的 run_id 的允许字符集：与 ``slugify_run_id`` 的输出同族，不含任何分隔符。
+_RUN_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 class SchemaMismatchError(ValueError):
@@ -99,6 +103,23 @@ def _dump_json(data: Any) -> str:
     """统一的 JSON 落盘格式：中文可读（``ensure_ascii=False``）、两空格缩进、
     结尾换行、不可直接序列化的值由 ``default=str`` 兜底。"""
     return json.dumps(data, ensure_ascii=False, indent=2, default=str) + "\n"
+
+
+def _validated_run_id(run_id: str) -> str:
+    """校验显式传入的 ``run_id``；非法即抛 ``ValueError``，绝不拼接进路径。
+
+    run_id 会被直接 join 到 ``output_dir`` 之下，且 Task 32 的 ``resume`` /
+    ``status`` 子命令从命令行取值——不校验时 ``"../x"`` 会把 run 写到
+    ``output_dir`` 之外（``list_runs`` / ``clean`` 都看不见它），空串、盘符、
+    反斜杠同理。只放行 ``[A-Za-z0-9._-]+``，并显式拒绝 ``.`` / ``..``（字符集
+    本身允许这两个名字，但它们是路径穿越片段）。``slugify_run_id`` 生成的
+    ``YYYYMMDD-HHMMSS-<4hex>`` 天然在集内。
+    """
+    if run_id in (".", "..") or _RUN_ID_RE.fullmatch(run_id) is None:
+        raise ValueError(
+            f"非法 run_id: {run_id!r}；只允许 [A-Za-z0-9._-]+ 且不得为 '.' / '..'"
+        )
+    return run_id
 
 
 def _run_dirs(output_dir: Path) -> list[Path]:
@@ -162,12 +183,25 @@ class CheckpointStore:
         """建立完整 run 布局并落第一条 ``run.json``，返回绑定该目录的 store。
 
         ``run_id`` 缺省用 :func:`slugify_run_id` 生成（``YYYYMMDD-HHMMSS-<4hex>``）；
-        子目录 ``artifacts/`` / ``context/`` / ``review/`` / ``diagnostics/`` 一并
-        建好。初始记录**落盘**而非只留内存：``list_runs`` / ``clean`` 只认含
-        ``run.json`` 的目录，不写盘的话刚建的 run 对它们不存在。
+        显式传入时先过 :func:`_validated_run_id`（拒绝 ``../x``、分隔符等会把 run
+        写到 ``output_dir`` 之外的名字）。子目录 ``artifacts/`` / ``context/`` /
+        ``review/`` / ``diagnostics/`` 一并建好。初始记录**落盘**而非只留内存：
+        ``list_runs`` / ``clean`` 只认含 ``run.json`` 的目录，不写盘的话刚建的 run
+        对它们不存在。
+
+        目标目录已有 ``run.json`` 时抛 ``FileExistsError``：同名 run_id 可能对应
+        一个**活着**的 run，覆盖会重置它的状态与统计——宁可要求调用方换 id。
         """
         now = datetime.now()
-        run_dir = Path(output_dir) / (run_id or slugify_run_id(now))
+        if run_id is None:
+            run_id = slugify_run_id(now)
+        else:
+            run_id = _validated_run_id(run_id)
+        run_dir = Path(output_dir) / run_id
+        if (run_dir / "run.json").is_file():
+            raise FileExistsError(
+                f"run 已存在，拒绝覆盖: {run_dir}；请换一个 run_id 或先移走旧 run"
+            )
         run_dir.mkdir(parents=True, exist_ok=True)
         for name in _RUN_SUBDIRS:
             (run_dir / name).mkdir(parents=True, exist_ok=True)
@@ -287,6 +321,21 @@ def repair_statuses(board: TaskBoard) -> int:
     return repaired
 
 
+def _assert_deletable(target: Path, root: Path) -> None:
+    """删除前的边界检查；任何可疑目标抛 ``RuntimeError``（绝不静默跳过）。
+
+    用显式检查而不是 ``assert``（``python -O`` 会剥掉 assert）。``shutil.rmtree``
+    在 Windows 上会跟进 junction 并在目标里删文件（``os.path.islink`` 不认
+    junction），故链接样式的条目必须在 rmtree 之前拦住；resolve 后的严格下界
+    检查则兜住任何把目标拼出 ``output_dir`` 之外的情况。
+    """
+    if is_link_like(target):
+        raise RuntimeError(f"拒绝删除链接样式的 run 目录: {target}")
+    resolved = target.resolve()
+    if resolved == root or not resolved.is_relative_to(root):
+        raise RuntimeError(f"拒绝删除 output_dir 之外的路径: {target} -> {resolved}")
+
+
 def clean(output_dir: Path, *, keep: int, dry_run: bool = False) -> list[Path]:
     """按 run_id 倒序保留最近 ``keep`` 个 run，删除其余（spec §13.5）。
 
@@ -295,26 +344,22 @@ def clean(output_dir: Path, *, keep: int, dry_run: bool = False) -> list[Path]:
     时间从新到旧；``keep`` 为负抛 ``ValueError``；``dry_run`` 只返回将被删除的
     路径，不落任何删除（返回的是原目录路径，按从新到旧排列）。
 
-    这是删除循环，边界格外保守：链接样式的条目（符号链接 / Windows junction /
-    其他重解析点）与 resolve 后不严格位于 ``output_dir`` 之下的目标都拒绝删除并
-    抛 ``RuntimeError`` —— 用显式检查而不是 ``assert``（``python -O`` 会剥掉
-    assert），宁可不清理，也不能误删 output_dir 之外的数据。``shutil.rmtree``
-    在 Windows 上会跟进 junction 并在目标里删文件，故链接必须在 rmtree 之前拦住。
+    删除循环的失败模式是删掉用户的数据，故边界格外保守，且**先整组校验、再整组
+    删除**：``runs[keep:]`` 里任何一个目标链接样式（符号链接 / Windows junction /
+    其他重解析点）或 resolve 后不严格位于 ``output_dir`` 之下，整次 clean 就抛
+    ``RuntimeError`` 且**一个都不删**——调用方拿到的语义是「什么都没删」，而不是
+    「删了一半然后抛异常」。``dry_run`` 同样跑校验：干跑要能预告真跑会拒绝什么。
     """
     if keep < 0:
         raise ValueError(f"keep 必须 >= 0：{keep}")
     output_dir = Path(output_dir)
     root = output_dir.resolve()
     runs = sorted(_run_dirs(output_dir), key=lambda path: path.name, reverse=True)
+    targets = runs[keep:]
+    for target in targets:
+        _assert_deletable(target, root)
     removed: list[Path] = []
-    for target in runs[keep:]:
-        if is_link_like(target):
-            raise RuntimeError(f"拒绝删除链接样式的 run 目录: {target}")
-        resolved = target.resolve()
-        if resolved == root or not resolved.is_relative_to(root):
-            raise RuntimeError(
-                f"拒绝删除 output_dir 之外的路径: {target} -> {resolved}"
-            )
+    for target in targets:
         if not dry_run:
             shutil.rmtree(target)
         removed.append(target)
