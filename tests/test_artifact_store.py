@@ -1,0 +1,595 @@
+"""``ArtifactStore`` 安全落盘与清单（Task 11）。
+
+在 brief 用例之外补三类回归：目录联接（junction）父目录必须被拒（``Path.is_symlink()``
+在 Windows 3.12 上对 junction 返回 False）、解析器原样透传的 ``./a.py``/``a\\b.py``
+必须按契约命中、``ArtifactRecord.path`` 与 ``MANIFEST.json`` 里必须是规范化路径。
+"""
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from agentcrew.artifacts.parser import parse_fenced_blocks
+from agentcrew.artifacts.spec import ArtifactSpec
+from agentcrew.artifacts.store import (
+    ArtifactConflictError,
+    ArtifactStore,
+    ArtifactTooLargeError,
+    UndeclaredArtifactError,
+)
+from agentcrew.task.task import Task
+from agentcrew.utils.files import UnsafePathError, sha256_bytes
+
+
+def mk_task(tid="T-1", role="backend_dev"):
+    return Task(id=tid, title="t", description="d", role=role,
+                acceptance_criteria=["a"], deliverables=[])
+
+
+def spec(path="backend/app/main.py", **kw):
+    return ArtifactSpec(path=path, kind="python", description="x", **kw)
+
+
+@pytest.fixture
+def store(tmp_path):
+    return ArtifactStore(tmp_path / "artifacts", run_id="R-1")
+
+
+class RecordingLedger:
+    """记录 ``emit`` 调用的最小 ledger，结构上满足 ``LedgerLike``。"""
+
+    def __init__(self):
+        self.events = []
+
+    def emit(self, event, **data):
+        self.events.append((event, data))
+
+
+def _make_dir_link(link, target):
+    """建一个指向目录的链接：Windows 用 junction（mklink /J，无需提权）。"""
+    if os.name == "nt":
+        return subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+            capture_output=True,
+        ).returncode == 0
+    try:
+        os.symlink(target, link, target_is_directory=True)
+    except OSError:
+        return False
+    return True
+
+
+# ── 落盘与读取 ──
+
+def test_commit_writes_file_and_returns_record(store, tmp_path):
+    rec = store.commit("backend/app/main.py", "x = 1\n", spec=spec(), task=mk_task())
+    written = tmp_path / "artifacts" / "backend" / "app" / "main.py"
+    assert written.read_text(encoding="utf-8") == "x = 1\n"
+    assert rec.path == "backend/app/main.py" and rec.size_bytes == 6
+    assert rec.produced_by_task == "T-1" and len(rec.sha256) == 64
+
+
+def test_commit_records_role_and_sha(store):
+    task = mk_task(role="qa_engineer")
+    rec = store.commit("a.py", "x = 1\n", spec=spec("a.py"), task=task)
+    assert rec.produced_by_role == "qa_engineer"
+    assert rec.sha256 == sha256_bytes(b"x = 1\n")
+    assert rec.kind == "python"
+
+
+def test_commit_creates_parent_dirs(store):
+    s = ArtifactSpec(path="a/b/c/d.txt", kind="text", description="d")
+    store.commit("a/b/c/d.txt", "x", spec=s, task=mk_task())
+    assert store.exists("a/b/c/d.txt")
+
+
+def test_chinese_path_roundtrip(store):
+    s = ArtifactSpec(path="docs/接口文档.md", kind="markdown", description="d")
+    store.commit("docs/接口文档.md", "# 接口\n", spec=s, task=mk_task())
+    assert store.read("docs/接口文档.md") == "# 接口\n"
+
+
+def test_read_missing_raises(store):
+    with pytest.raises(FileNotFoundError):
+        store.read("nope.txt")
+
+
+def test_read_truncates_to_max_bytes(store):
+    s = ArtifactSpec(path="a.txt", kind="text", description="d")
+    store.commit("a.txt", "0123456789", spec=s, task=mk_task())
+    assert store.read("a.txt", max_bytes=4) == "0123"
+    assert store.read("a.txt") == "0123456789"
+
+
+def test_read_max_bytes_does_not_split_a_character(store):
+    s = ArtifactSpec(path="c.md", kind="markdown", description="d")
+    store.commit("c.md", "中文中文", spec=s, task=mk_task())
+    truncated = store.read("c.md", max_bytes=4)
+    assert truncated[0] == "中"  # 劈开处保留完整的“中”，残字节收成替换字符
+    assert len(truncated) == 2
+    assert store.read("c.md", max_bytes=6) == "中文"  # 恰好落在字符边界则无替换字符
+
+
+# ── 路径安全 ──
+
+def test_path_traversal_blocked(store, tmp_path):
+    evil = ArtifactSpec(path="ok.txt", kind="text", description="d")
+    with pytest.raises(UnsafePathError):
+        store.commit("../outside.txt", "x", spec=evil, task=mk_task())
+    assert not (tmp_path / "outside.txt").exists()
+
+
+def test_absolute_path_blocked(store):
+    with pytest.raises(UnsafePathError):
+        store.commit("/etc/passwd", "x",
+                     spec=ArtifactSpec(path="x", kind="text", description="d"),
+                     task=mk_task())
+
+
+def test_symlinked_parent_rejected(tmp_path):
+    if sys.platform == "win32":
+        pytest.skip("Windows 建符号链接需管理员权限")
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    os.symlink(outside, root / "link")
+    st = ArtifactStore(root, run_id="R-1")
+    s = ArtifactSpec(path="link/pwned.py", kind="python", description="d")
+    with pytest.raises(UnsafePathError):
+        st.commit("link/pwned.py", "x", spec=s, task=mk_task())
+    assert not (outside / "pwned.py").exists()
+
+
+def test_junction_parent_rejected(tmp_path):
+    """junction 也是重解析点：``is_symlink()`` 返回 False，必须单独识别。"""
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    if not _make_dir_link(root / "link", outside):
+        pytest.skip("当前平台无法创建目录链接/联接")
+    st = ArtifactStore(root, run_id="R-1")
+    s = ArtifactSpec(path="link/pwned.py", kind="python", description="d")
+    with pytest.raises(UnsafePathError):
+        st.commit("link/pwned.py", "x", spec=s, task=mk_task())
+    assert list(outside.iterdir()) == []
+
+
+def test_junction_to_inside_root_is_also_rejected(tmp_path):
+    """指向 root 内部的链接同样拒绝：逐段检查不区分链接的目标。"""
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "real").mkdir()
+    if not _make_dir_link(root / "inner", root / "real"):
+        pytest.skip("当前平台无法创建目录链接/联接")
+    st = ArtifactStore(root, run_id="R-1")
+    with pytest.raises(UnsafePathError):
+        st.commit("inner/a.py", "x = 1\n",
+                  spec=ArtifactSpec(path="inner/a.py", kind="python", description="d"),
+                  task=mk_task())
+
+
+@pytest.mark.parametrize("bad", ["../x", "/abs.txt", "a/../../b",
+                                 "C:\\Windows\\x", "a/b\x00c"])
+def test_resolve_rejects_unsafe_paths(store, bad):
+    with pytest.raises(UnsafePathError):
+        store.resolve(bad)
+
+
+def test_resolve_is_public_and_returns_path_under_root(store, tmp_path):
+    assert store.resolve("a/b.py") == (tmp_path / "artifacts" / "a" / "b.py").resolve()
+
+
+def test_exists_rejects_unsafe_path(store):
+    with pytest.raises(UnsafePathError):
+        store.exists("../x")
+
+
+def test_exists_false_for_missing_file(store):
+    assert not store.exists("nope.txt")
+
+
+# ── 契约比对（路径规范化）──
+
+def test_undeclared_path_rejected(store):
+    with pytest.raises(UndeclaredArtifactError) as ei:
+        store.commit("hack.py", "x", spec=spec("declared.py"), task=mk_task())
+    assert ei.value.path == "hack.py"
+    assert ei.value.task_id == "T-1"
+
+
+def test_dot_slash_path_matches_declared_contract(store):
+    """解析器原样透传 ``./a.py``，commit 必须规范化后再比较，否则会被误判未声明。"""
+    rec = store.commit("./a.py", "x = 1\n", spec=spec("a.py"), task=mk_task())
+    assert rec.path == "a.py"
+
+
+def test_backslash_path_matches_posix_contract(store):
+    rec = store.commit("a\\b.py", "x = 1\n", spec=spec("a/b.py"), task=mk_task())
+    assert rec.path == "a/b.py"
+    assert store.exists("a/b.py")
+
+
+def test_parsed_output_commits_against_contract(store):
+    """解析器 → commit 端到端：``file=./a.py`` 必须落地为契约里的 ``a.py``。"""
+    parsed = parse_fenced_blocks("```python file=./a.py\nx = 1\n```\n")
+    assert list(parsed.files) == ["./a.py"]
+    for rel, content in parsed.files.items():
+        rec = store.commit(rel, content, spec=spec("a.py"), task=mk_task())
+    assert rec.path == "a.py" and store.read("a.py") == "x = 1\n"
+
+
+# ── 尺寸校验 ──
+
+def test_oversize_rejected(store):
+    s = ArtifactSpec(path="big.txt", kind="text", description="d", max_bytes=10)
+    with pytest.raises(ArtifactTooLargeError) as ei:
+        store.commit("big.txt", "x" * 100, spec=s, task=mk_task())
+    assert (ei.value.path, ei.value.size, ei.value.limit) == ("big.txt", 100, 10)
+
+
+def test_undersize_content_commits_so_g1_can_see_it(store):
+    # 过小是质量问题，不是执行失败：必须落盘，由 G1 报「空文件」并驱动 REWORK
+    s = ArtifactSpec(path="a.py", kind="python", description="d", min_bytes=5)
+    rec = store.commit("a.py", "x", spec=s, task=mk_task())
+    assert store.read("a.py") == "x"
+    assert rec.size_bytes == 1
+    assert [r.path for r in store.by_task("T-1")] == ["a.py"]
+
+
+def test_size_measured_in_utf8_bytes(store):
+    """上限按编码后字节数：3 个汉字 = 9 字节，按字符数判会漏掉超限。"""
+    s = ArtifactSpec(path="c.md", kind="markdown", description="d", max_bytes=8)
+    with pytest.raises(ArtifactTooLargeError):
+        store.commit("c.md", "中文中", spec=s, task=mk_task())
+    exact = ArtifactSpec(path="c.md", kind="markdown", description="d", max_bytes=9)
+    store.commit("c.md", "中文中", spec=exact, task=mk_task())
+
+
+# ── 冲突与返工 ──
+
+def test_conflict_when_other_task_already_wrote_path(tmp_path):
+    st = ArtifactStore(tmp_path / "artifacts", run_id="R-1")
+    s = ArtifactSpec(path="shared.py", kind="python", description="d")
+    st.commit("shared.py", "a=1\n", spec=s, task=mk_task("T-1"))
+    with pytest.raises(ArtifactConflictError) as ei:
+        st.commit("shared.py", "b=2\n", spec=s, task=mk_task("T-2"))
+    assert ei.value.existing_task == "T-1" and ei.value.new_task == "T-2"
+    assert ei.value.path == "shared.py"
+
+
+def test_same_task_may_rewrite_its_own_path(tmp_path):
+    st = ArtifactStore(tmp_path / "artifacts", run_id="R-1")
+    s = ArtifactSpec(path="a.py", kind="python", description="d")
+    st.commit("a.py", "a=1\n", spec=s, task=mk_task("T-1"))
+    st.commit("a.py", "a=2\n", spec=s, task=mk_task("T-1"))
+    assert st.read("a.py") == "a=2\n"
+
+
+def test_rewrite_updates_record_not_duplicates(tmp_path):
+    st = ArtifactStore(tmp_path / "artifacts", run_id="R-1")
+    s = ArtifactSpec(path="a.py", kind="python", description="d")
+    st.commit("a.py", "a=1\n", spec=s, task=mk_task("T-1"))
+    st.commit("a.py", "a=22\n", spec=s, task=mk_task("T-1"))
+    recs = [r for r in st.records() if r.path == "a.py"]
+    assert len(recs) == 1 and recs[0].size_bytes == 5
+
+
+def test_rewrite_updates_manifest_sha(tmp_path):
+    st = ArtifactStore(tmp_path / "artifacts", run_id="R-1")
+    s = ArtifactSpec(path="a.py", kind="python", description="d")
+    st.commit("a.py", "a=1\n", spec=s, task=mk_task("T-1"))
+    st.commit("a.py", "a=22\n", spec=s, task=mk_task("T-1"))
+    entries = json.loads(st.write_manifest().read_text(encoding="utf-8"))["entries"]
+    assert [e["sha256"] for e in entries] == [sha256_bytes(b"a=22\n")]
+
+
+# ── 全或无 ──
+
+def _rejection_case(case):
+    """(契约 spec, 待写 rel, 内容)：两类必被拒的输入。"""
+    if case == "undeclared":
+        return spec("sub/dir/declared.py"), "sub/dir/hack.py", "x = 1\n"
+    s = ArtifactSpec(path="sub/dir/big.txt", kind="text", description="d",
+                     max_bytes=3)
+    return s, "sub/dir/big.txt", "xxxx"
+
+
+@pytest.mark.parametrize("case", ["undeclared", "oversize"])
+def test_rejected_commit_leaves_nothing_behind(tmp_path, case):
+    """任何一项校验失败：不建目录、不写文件、不留记录。"""
+    root = tmp_path / "artifacts"
+    st = ArtifactStore(root, run_id="R-1")
+    declared, rel, content = _rejection_case(case)
+    with pytest.raises(ValueError):
+        st.commit(rel, content, spec=declared, task=mk_task())
+    assert not root.exists()
+    assert st.records() == []
+
+
+def _record_fields(records):
+    """记录的稳定字段快照：记录对象本身可变，取值比较才有区分度。"""
+    return [(r.path, r.size_bytes, r.sha256, r.produced_by_task) for r in records]
+
+
+def test_conflict_leaves_existing_file_and_record_untouched(tmp_path):
+    root = tmp_path / "artifacts"
+    st = ArtifactStore(root, run_id="R-1")
+    s = ArtifactSpec(path="a.py", kind="python", description="d")
+    st.commit("a.py", "a=1\n", spec=s, task=mk_task("T-1"))
+    before = _record_fields(st.records())
+    with pytest.raises(ArtifactConflictError):
+        st.commit("a.py", "b=2\n", spec=s, task=mk_task("T-2"))
+    assert (root / "a.py").read_text(encoding="utf-8") == "a=1\n"
+    assert _record_fields(st.records()) == before
+
+
+def test_rejected_commit_does_not_touch_existing_manifest(tmp_path):
+    root = tmp_path / "artifacts"
+    st = ArtifactStore(root, run_id="R-1")
+    s = ArtifactSpec(path="a.py", kind="python", description="d")
+    st.commit("a.py", "a=1\n", spec=s, task=mk_task("T-1"))
+    manifest = st.write_manifest()
+    before = manifest.read_bytes()
+    with pytest.raises(ArtifactConflictError):
+        st.commit("a.py", "b=2\n", spec=s, task=mk_task("T-2"))
+    assert manifest.read_bytes() == before
+
+
+# ── 检查顺序（先报哪个错由控制器裁定钉死）──
+
+def test_unsafe_path_wins_over_undeclared(store):
+    """先过 ``safe_relpath`` 再比契约：``../`` 报 UnsafePathError 而不是未声明。"""
+    with pytest.raises(UnsafePathError):
+        store.commit("../x.py", "y", spec=spec("declared.py"), task=mk_task())
+
+
+def test_undeclared_wins_over_conflict(store):
+    store.commit("a.py", "a=1\n", spec=spec("a.py"), task=mk_task("T-1"))
+    with pytest.raises(UndeclaredArtifactError):
+        store.commit("a.py", "b=2\n", spec=spec("b.py"), task=mk_task("T-2"))
+
+
+def test_conflict_wins_over_size(store):
+    s = ArtifactSpec(path="a.py", kind="python", description="d", max_bytes=4)
+    store.commit("a.py", "a=1\n", spec=s, task=mk_task("T-1"))
+    with pytest.raises(ArtifactConflictError):
+        store.commit("a.py", "x" * 100, spec=s, task=mk_task("T-2"))
+
+
+# ── 记录查询 ──
+
+def test_by_task_filters_records(store):
+    store.commit("a.py", "a=1\n", spec=spec("a.py"), task=mk_task("T-1"))
+    store.commit("b.py", "b=1\n", spec=spec("b.py"), task=mk_task("T-2"))
+    assert [r.path for r in store.by_task("T-1")] == ["a.py"]
+    assert [r.path for r in store.by_task("T-2")] == ["b.py"]
+    assert store.by_task("T-404") == []
+
+
+def test_records_returns_a_copy(store):
+    store.commit("a.py", "a=1\n", spec=spec("a.py"), task=mk_task())
+    snapshot = store.records()
+    snapshot.clear()
+    assert len(store.records()) == 1
+
+
+# ── 清单与文件树 ──
+
+def test_manifest_roundtrip(store, tmp_path):
+    store.commit("a.py", "x=1\n", spec=spec("a.py"), task=mk_task())
+    p = store.write_manifest()
+    data = json.loads(p.read_text(encoding="utf-8"))
+    assert data["run_id"] == "R-1"
+    assert [e["path"] for e in data["entries"]] == ["a.py"]
+
+
+def test_manifest_path_is_normalized(tmp_path):
+    st = ArtifactStore(tmp_path / "artifacts", run_id="R-1")
+    st.commit("./a.py", "x = 1\n", spec=spec("a.py"), task=mk_task())
+    data = json.loads(st.write_manifest().read_text(encoding="utf-8"))
+    assert [e["path"] for e in data["entries"]] == ["a.py"]
+    assert [r.path for r in st.records()] == ["a.py"]
+
+
+def test_manifest_written_to_root_and_keeps_chinese_unescaped(tmp_path):
+    root = tmp_path / "artifacts"
+    st = ArtifactStore(root, run_id="R-1")
+    st.commit("docs/接口.md", "# 接口\n",
+              spec=ArtifactSpec(path="docs/接口.md", kind="markdown", description="d"),
+              task=mk_task())
+    p = st.write_manifest()
+    raw = p.read_text(encoding="utf-8")
+    assert p == root / "MANIFEST.json"
+    assert "docs/接口.md" in raw and "\\u63a5" not in raw
+
+
+def test_write_manifest_on_empty_store(tmp_path):
+    st = ArtifactStore(tmp_path / "artifacts", run_id="R-9")
+    data = json.loads(st.write_manifest().read_text(encoding="utf-8"))
+    assert data["run_id"] == "R-9" and data["entries"] == []
+    assert isinstance(data["generated_at"], str)
+
+
+def test_file_tree_lists_committed_files(store):
+    store.commit("a/b.py", "x=1\n", spec=spec("a/b.py"), task=mk_task())
+    assert store.file_tree() == ["a/b.py"]
+    store.write_manifest()
+    assert store.file_tree() == ["MANIFEST.json", "a/b.py"]
+
+
+# ── ledger 事件 ──
+
+def test_ledger_receives_artifact_written(tmp_path):
+    ledger = RecordingLedger()
+    st = ArtifactStore(tmp_path / "artifacts", run_id="R-1", ledger=ledger)
+    st.commit("./a.py", "x = 1\n", spec=spec("a.py"), task=mk_task("T-7"))
+    assert ledger.events == [(
+        "artifact_written",
+        {"task_id": "T-7", "path": "a.py", "size_bytes": 6,
+         "sha256": sha256_bytes(b"x = 1\n")},
+    )]
+
+
+def test_ledger_silent_on_rejected_commit(tmp_path):
+    ledger = RecordingLedger()
+    st = ArtifactStore(tmp_path / "artifacts", run_id="R-1", ledger=ledger)
+    with pytest.raises(UndeclaredArtifactError):
+        st.commit("hack.py", "x", spec=spec("declared.py"), task=mk_task())
+    assert ledger.events == []
+
+
+# ── discard_task（Task 28 的死亡螺旋修复）──
+
+def _task_with(path, tid="T-1"):
+    return Task(id=tid, title="t", description="d", role="backend_dev",
+                acceptance_criteria=["a"], deliverables=[spec(path)])
+
+
+def test_discard_task_removes_records_and_files(store, tmp_path):
+    store.commit("a.py", "a=1\n", spec=spec("a.py"), task=mk_task("T-1"))
+    store.commit("b.py", "b=1\n", spec=spec("b.py"), task=mk_task("T-1"))
+    store.commit("c.py", "c=1\n", spec=spec("c.py"), task=mk_task("T-2"))
+
+    assert store.discard_task("T-1") == 2
+
+    assert store.by_task("T-1") == []
+    assert [r.path for r in store.by_task("T-2")] == ["c.py"]
+    assert not (tmp_path / "artifacts" / "a.py").exists()
+    assert not (tmp_path / "artifacts" / "b.py").exists()
+    assert (tmp_path / "artifacts" / "c.py").read_text(encoding="utf-8") == "c=1\n"
+
+
+def test_discard_task_unknown_task_is_noop(store):
+    assert store.discard_task("T-404") == 0
+
+
+def test_discard_task_keeps_files_when_asked(store, tmp_path):
+    store.commit("a.py", "a=1\n", spec=spec("a.py"), task=mk_task("T-1"))
+    assert store.discard_task("T-1", delete_files=False) == 1
+    assert store.by_task("T-1") == []
+    assert (tmp_path / "artifacts" / "a.py").is_file()
+
+
+def test_discard_task_tolerates_already_missing_file(store, tmp_path):
+    """记录还在但文件已被外部删除：不抛错，记录一并清掉。"""
+    store.commit("a.py", "a=1\n", spec=spec("a.py"), task=mk_task("T-1"))
+    (tmp_path / "artifacts" / "a.py").unlink()
+    assert store.discard_task("T-1") == 1
+    assert store.by_task("T-1") == []
+
+
+def test_discard_task_keeps_record_when_file_cannot_be_deleted(
+    store, tmp_path, monkeypatch
+):
+    """删文件失败时必须保留记录：记录不得指向一个已不存在的文件。
+
+    否则 G1 的「以记录为准」守卫会 ``store.read`` 一个被删掉的文件并抛
+    ``FileNotFoundError``。同一次调用里其余可删的记录照常清理。
+    """
+    store.commit("locked.py", "x=1\n", spec=spec("locked.py"), task=mk_task("T-1"))
+    store.commit("free.py", "y=1\n", spec=spec("free.py"), task=mk_task("T-1"))
+    original_unlink = Path.unlink
+
+    def fake_unlink(self, *args, **kwargs):
+        if self.name == "locked.py":
+            raise PermissionError("locked")
+        return original_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fake_unlink)
+
+    assert store.discard_task("T-1") == 1
+    assert [r.path for r in store.by_task("T-1")] == ["locked.py"]
+    assert (tmp_path / "artifacts" / "locked.py").is_file()
+    assert not (tmp_path / "artifacts" / "free.py").exists()
+
+
+def test_discard_task_keeps_g1_record_file_invariant(store):
+    """丢弃后重跑 G1：不得因「记录在、文件没了」抛 FileNotFoundError。"""
+    from agentcrew.gate.static_checks import run_static
+
+    task = _task_with("app/main.py")
+    store.commit("app/main.py", "x = 1\n", spec=task.deliverables[0], task=task)
+    store.commit("app/hack.py", "y = 1\n",
+                 spec=spec("app/hack.py"), task=task)
+
+    assert store.discard_task(task.id) == 2
+
+    record = run_static(task, store, round_no=1)  # 不得抛 FileNotFoundError
+    assert record.verdict == "reject"             # 缺必需产物 app/main.py
+    assert any("app/main.py" in issue for issue in record.issues)
+    assert not any("hack" in issue for issue in record.issues)
+
+
+# ── 清单与磁盘的一致性（I3）──
+
+def test_discard_task_rewrites_manifest(tmp_path):
+    """返工丢弃必须**同时**改盘上的清单：否则幽灵记录会活过下一次 resume。
+
+    ``Scheduler.take_ready`` 是在 ``on_change`` → ``write_manifest`` **之后**才
+    调到 ``discard_task`` 的，所以只改内存的话，盘上留着的正是本方法 docstring
+    禁止的形态：清单声明了一堆已经被删掉的文件，而它不自愈 —— 下次启动
+    ``load_manifest`` 把它们载回来，G1 拿着记录去 ``read`` 不存在的文件。
+    """
+    root = tmp_path / "artifacts"
+    st = ArtifactStore(root, run_id="R-1")
+    task = _task_with("app/main.py")
+    st.commit("app/main.py", "x = 1\n", spec=task.deliverables[0], task=task)
+    st.commit("app/extra.py", "y = 1\n", spec=spec("app/extra.py"), task=task)
+    st.write_manifest()
+
+    assert st.discard_task(task.id) == 2
+
+    manifest = json.loads((root / "MANIFEST.json").read_text(encoding="utf-8"))
+    assert manifest["entries"] == []
+    assert st.file_tree() == ["MANIFEST.json"]
+
+
+def test_load_manifest_drops_records_whose_files_are_gone(tmp_path):
+    """记录指向不存在的文件 → 载入时丢弃（第二层防御），并留一条可查的事件。"""
+    root = tmp_path / "artifacts"
+    ledger = RecordingLedger()
+    st = ArtifactStore(root, run_id="R-1", ledger=ledger)
+    st.commit("a.py", "x = 1\n", spec=spec("a.py"), task=mk_task("T-1"))
+    st.commit("b.py", "y = 1\n", spec=spec("b.py"), task=mk_task("T-2"))
+    st.write_manifest()
+    (root / "a.py").unlink()            # 清单还在，文件已被删掉
+
+    fresh = ArtifactStore(root, run_id="R-1", ledger=ledger)
+    assert fresh.load_manifest() == 1
+    assert [record.path for record in fresh.records()] == ["b.py"]
+    assert ledger.events[-1] == (
+        "manifest_repaired",
+        {"path": str(root / "MANIFEST.json"), "dropped": ["a.py"]},
+    )
+
+
+def test_stale_manifest_does_not_blow_up_run_static(tmp_path):
+    """最终评审的现场：幽灵记录会让 ``run_static`` 抛 ``FileNotFoundError``。
+
+    没有这层清理时，G1 拿记录去读一个不存在的路径 —— 不是「驳回」，是把门禁
+    打崩（异常穿出 ``Gatekeeper.evaluate``）。丢弃幽灵记录之后，G1 只是如实报
+    「缺少必需产物」。
+    """
+    from agentcrew.gate.static_checks import run_static
+
+    root = tmp_path / "artifacts"
+    st = ArtifactStore(root, run_id="R-1")
+    task = _task_with("app/main.py")
+    st.commit("app/main.py", "x = 1\n", spec=task.deliverables[0], task=task)
+    st.commit("app/extra.py", "y = 1\n", spec=spec("app/extra.py"), task=task)
+    st.write_manifest()
+    # 模拟「清单写完之后文件才消失」（断电/外部清理/上一次 REWORK 的残留）
+    (root / "app" / "main.py").unlink()
+    (root / "app" / "extra.py").unlink()
+
+    fresh = ArtifactStore(root, run_id="R-1")
+    assert fresh.load_manifest() == 0
+    record = run_static(task, fresh, round_no=1)      # 不得抛 FileNotFoundError
+    assert record.verdict == "reject"
+    assert any("app/main.py" in issue for issue in record.issues)

@@ -1,0 +1,29 @@
+[project]
+name = "agentcrew"
+version = "1.0.0"
+description = "多智能体协作平台：项目经理调度 8 个专职 Agent 完成从需求到交付的全流程"
+requires-python = ">=3.10"   # 与设计规格 §1 的目标运行时一致
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+# ── 静态检查起步配置（spec §17.5）────────────────────────────────────────
+# 宽松起步：用来在本地先挡住明显问题，不作为提交闸门。需要更严的规则时按需加，
+# 不要一次性打开全部规则集。
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"  # spec 声明的运行下界就是 3.10；定高了会放过 3.11+ 语法
+extend-exclude = ["examples/fixtures", "output", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = ["E501"]  # 行长由 formatter / 评审把关，起步阶段不设硬线
+
+[tool.mypy]
+python_version = "3.10"  # 与 ruff target-version 同一口径：检查声明的最低版本
+ignore_missing_imports = true
+follow_imports = "silent"
+warn_unused_configs = true
+warn_redundant_casts = true

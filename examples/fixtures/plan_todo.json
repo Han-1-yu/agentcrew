@@ -1,0 +1,286 @@
+{
+  "tasks": [
+    {
+      "id": "T-001",
+      "title": "产品需求与验收标准",
+      "description": "把项目目标澄清为可验证的产品定义：目标用户、核心场景、功能清单与优先级，并给出逐条可判定的验收标准。",
+      "role": "product_manager",
+      "acceptance_criteria": [
+        "PRD 覆盖目标用户、核心场景、功能范围与优先级四部分",
+        "验收标准逐条可判定，写明输入、行为与预期结果",
+        "不做技术选型、不写实现细节与测试用例"
+      ],
+      "deliverables": [
+        {
+          "path": "docs/PRD.md",
+          "kind": "markdown",
+          "description": "产品需求文档：背景、目标用户、核心场景、功能清单与优先级",
+          "min_bytes": 600,
+          "must_contain": ["目标用户", "功能清单"]
+        },
+        {
+          "path": "docs/acceptance.md",
+          "kind": "markdown",
+          "description": "逐条可判定的验收标准，编号自 AC-01 起",
+          "min_bytes": 600,
+          "must_contain": ["AC-01", "验收标准"]
+        }
+      ],
+      "dependencies": [],
+      "priority": 1,
+      "brief": "编写 PRD 与可判定的验收标准"
+    },
+    {
+      "id": "T-002",
+      "title": "架构设计与接口契约",
+      "description": "确定技术选型与模块划分，定义 Todo REST API 的接口契约，使开发照此实现无需再询问。",
+      "role": "architect",
+      "acceptance_criteria": [
+        "给出技术选型理由与被否决的方案",
+        "模块划分说明每个模块的职责与依赖方向",
+        "API 精确到路径、方法、字段、类型与错误语义"
+      ],
+      "deliverables": [
+        {
+          "path": "docs/architecture.md",
+          "kind": "markdown",
+          "description": "架构文档：技术选型、模块划分、数据模型与关键流程",
+          "min_bytes": 600,
+          "must_contain": ["技术选型", "模块划分"]
+        },
+        {
+          "path": "docs/api-spec.yaml",
+          "kind": "yaml",
+          "description": "OpenAPI 3 风格的接口契约",
+          "min_bytes": 500,
+          "must_contain": ["openapi", "/api/todos"]
+        }
+      ],
+      "dependencies": ["T-001"],
+      "priority": 2,
+      "brief": "技术选型、模块划分与 OpenAPI 契约"
+    },
+    {
+      "id": "T-003",
+      "title": "后端 API 实现",
+      "description": "按架构与接口契约实现 FastAPI 后端：领域模型、请求/响应模型、进程内存储与 Todo CRUD 路由。",
+      "role": "backend_dev",
+      "acceptance_criteria": [
+        "全部路由与 docs/api-spec.yaml 一致",
+        "数据保存在进程内 dict，无数据库等外部依赖",
+        "cd backend && uvicorn app.main:app 可直接启动"
+      ],
+      "deliverables": [
+        {
+          "path": "backend/app/__init__.py",
+          "kind": "python",
+          "description": "后端包入口：包说明与版本号",
+          "min_bytes": 100,
+          "must_contain": ["__version__"]
+        },
+        {
+          "path": "backend/app/config.py",
+          "kind": "python",
+          "description": "运行期配置：标题、版本、端口与环境变量覆盖",
+          "min_bytes": 300,
+          "must_contain": ["class Settings"]
+        },
+        {
+          "path": "backend/app/models.py",
+          "kind": "python",
+          "description": "领域模型：Todo 实体与状态变更",
+          "min_bytes": 500,
+          "must_contain": ["class Todo"]
+        },
+        {
+          "path": "backend/app/schemas.py",
+          "kind": "python",
+          "description": "请求/响应模型：TodoCreate、TodoUpdate、TodoOut",
+          "min_bytes": 400,
+          "must_contain": ["class TodoCreate", "class TodoOut"]
+        },
+        {
+          "path": "backend/app/store.py",
+          "kind": "python",
+          "description": "进程内存储：dict + 线程锁的 TodoStore",
+          "min_bytes": 500,
+          "must_contain": ["class TodoStore"]
+        },
+        {
+          "path": "backend/app/main.py",
+          "kind": "python",
+          "description": "FastAPI 应用工厂与全部路由",
+          "min_bytes": 900,
+          "must_contain": ["def create_app", "app = create_app()"]
+        },
+        {
+          "path": "backend/requirements.txt",
+          "kind": "text",
+          "description": "后端依赖清单",
+          "min_bytes": 80,
+          "must_contain": ["fastapi", "uvicorn", "pydantic", "pytest", "httpx"]
+        }
+      ],
+      "dependencies": ["T-002"],
+      "priority": 3,
+      "brief": "按契约实现全部后端模块"
+    },
+    {
+      "id": "T-004",
+      "title": "前端单页实现",
+      "description": "用原生 HTML/CSS/JS 实现单页：列表、新增、编辑、删除与完成状态切换，并对接后端 API。",
+      "role": "frontend_dev",
+      "acceptance_criteria": [
+        "页面可完成新增、查看、编辑、删除与完成切换",
+        "覆盖加载中、出错与空数据三种状态",
+        "不引入构建链，浏览器直接打开或用后端托管即可使用"
+      ],
+      "deliverables": [
+        {
+          "path": "frontend/index.html",
+          "kind": "html",
+          "description": "单页结构：表单、状态提示、列表与条目模板",
+          "min_bytes": 600,
+          "must_contain": ["todo-list", "app.js"]
+        },
+        {
+          "path": "frontend/app.js",
+          "kind": "js",
+          "description": "交互逻辑：fetch 调用 API 并渲染列表",
+          "min_bytes": 900,
+          "must_contain": ["/api/todos", "renderTodos"]
+        },
+        {
+          "path": "frontend/styles.css",
+          "kind": "css",
+          "description": "页面样式：布局、条目状态与响应式",
+          "min_bytes": 500,
+          "must_contain": [".todo-item", ".status"]
+        }
+      ],
+      "dependencies": ["T-002"],
+      "priority": 4,
+      "brief": "原生 HTML/CSS/JS 单页"
+    },
+    {
+      "id": "T-005",
+      "title": "API 测试用例与测试报告",
+      "description": "用 pytest + fastapi.testclient 覆盖 Todo CRUD 的正常路径、校验失败与 404，并如实记录运行结果。",
+      "role": "qa_engineer",
+      "acceptance_criteria": [
+        "用例覆盖新增、查询、更新、删除与错误分支",
+        "cd artifacts && python -m pytest tests/test_api.py 可运行通过",
+        "测试报告写明运行命令、实际结果与未覆盖风险"
+      ],
+      "deliverables": [
+        {
+          "path": "tests/test_api.py",
+          "kind": "python",
+          "description": "pytest + TestClient 的 API 用例",
+          "min_bytes": 800,
+          "must_contain": ["fastapi.testclient", "def test_"]
+        },
+        {
+          "path": "docs/test-report.md",
+          "kind": "markdown",
+          "description": "测试报告：运行命令、结果与遗留风险",
+          "min_bytes": 500,
+          "must_contain": ["测试报告", "pytest"]
+        }
+      ],
+      "dependencies": ["T-003"],
+      "priority": 5,
+      "brief": "pytest + TestClient 的 API 测试与报告"
+    },
+    {
+      "id": "T-006",
+      "title": "容器化与部署配置",
+      "description": "编写 Dockerfile、docker-compose.yml 与部署文档：构建、启动、环境变量、健康检查与回滚步骤。",
+      "role": "devops_engineer",
+      "acceptance_criteria": [
+        "docker compose up 可构建并启动服务",
+        "包含端口映射与健康检查",
+        "部署文档给出可照做的回滚步骤"
+      ],
+      "deliverables": [
+        {
+          "path": "Dockerfile",
+          "kind": "dockerfile",
+          "description": "多阶段思路的 Python 3.12 运行时镜像",
+          "min_bytes": 400,
+          "must_contain": ["FROM python:3.12-slim", "uvicorn"]
+        },
+        {
+          "path": "docker-compose.yml",
+          "kind": "yaml",
+          "description": "compose 配置：构建、端口、环境变量与健康检查",
+          "min_bytes": 300,
+          "must_contain": ["services:", "8000"]
+        },
+        {
+          "path": "docs/deploy.md",
+          "kind": "markdown",
+          "description": "部署文档：构建、启动、环境变量、健康检查与回滚",
+          "min_bytes": 600,
+          "must_contain": ["docker compose up", "回滚"]
+        }
+      ],
+      "dependencies": ["T-003"],
+      "priority": 6,
+      "brief": "Dockerfile、compose 与部署文档"
+    },
+    {
+      "id": "T-007",
+      "title": "README 与使用文档",
+      "description": "编写 README 与 docs/usage.md：项目定位、目录结构、安装与快速开始、API 使用示例与常见问题；命令可直接复制执行。",
+      "role": "technical_writer",
+      "acceptance_criteria": [
+        "README 覆盖项目定位、目录结构、安装与快速开始",
+        "使用文档中的命令可直接复制执行",
+        "示例与实现一致（端口、路径、字段均来自当前实现）"
+      ],
+      "deliverables": [
+        {
+          "path": "README.md",
+          "kind": "markdown",
+          "description": "项目说明：定位、结构、快速开始、测试与 API 一览",
+          "min_bytes": 1200,
+          "must_contain": ["## 快速开始", "uvicorn app.main:app"]
+        },
+        {
+          "path": "docs/usage.md",
+          "kind": "markdown",
+          "description": "使用文档：启动、页面操作与 curl 示例",
+          "min_bytes": 900,
+          "must_contain": ["## API", "curl"]
+        }
+      ],
+      "dependencies": ["T-003", "T-004"],
+      "priority": 7,
+      "brief": "README 与使用文档"
+    },
+    {
+      "id": "T-008",
+      "title": "前端静态检查用例",
+      "description": "为前端结构编写可执行的 pytest 用例：页面元素、资源引用、样式类与 API 调用点，不依赖浏览器。",
+      "role": "qa_engineer",
+      "acceptance_criteria": [
+        "断言 index.html 的结构与资源引用完整",
+        "断言 app.js 调用 /api/todos 并提供渲染函数",
+        "断言 styles.css 覆盖关键类"
+      ],
+      "deliverables": [
+        {
+          "path": "tests/test_ui.py",
+          "kind": "python",
+          "description": "前端结构与交互的静态检查用例",
+          "min_bytes": 600,
+          "must_contain": ["def test_", "index.html"]
+        }
+      ],
+      "dependencies": ["T-004"],
+      "priority": 7,
+      "brief": "前端结构与交互的静态检查用例"
+    }
+  ]
+}

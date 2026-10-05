@@ -308,7 +308,7 @@ def test_rejects_unsafe_paths(bad):
     "a/b/c/d.txt", "deep/nested/dir/file.js", "UPPER/Case.MD",
 ])
 def test_accepts_safe_paths(ok):
-    assert safe_relpath(ok) == Path(ok).as_posix()
+    assert safe_relpath(ok).as_posix() == Path(ok).as_posix()
 
 def test_normalizes_backslashes_and_duplicate_separators():
     assert safe_relpath("a\\b//c.txt").as_posix() == "a/b/c.txt"
@@ -370,6 +370,7 @@ git add -A && git commit -m "feat: 安全路径校验与原子写"
 - Produces:
   - `agentcrew.utils.retry.TransientError(Exception)` — 可重试
   - `agentcrew.utils.retry.PermanentError(Exception)` — 不可重试
+  - `agentcrew.utils.retry.compute_delay(attempt: int, *, base_delay: float, max_delay: float, jitter: float) -> float`
   - `agentcrew.utils.retry.retry_async(fn, *, attempts=4, base_delay=1.0, max_delay=30.0, jitter=0.3, retry_on=(TransientError,), on_retry=None) -> T`
 
 - [ ] **Step 1: 写失败测试**
@@ -620,8 +621,13 @@ def test_terminal_states_have_no_outgoing():
         assert is_terminal(s)
 
 def test_failed_has_only_manual_retry_edge():
-    assert S.FAILED not in {d for s, ds in ALLOWED_TRANSITIONS.items() for d in ds
-                            if s is not S.FAILED}
+    # FAILED 的出边为空（人工重试走 TaskBoard.reset_failed()，不经状态机），
+    # 且只作为 RUNNING / REVIEW 的终点。
+    assert ALLOWED_TRANSITIONS[S.FAILED] == frozenset()
+    assert {s for s, ds in ALLOWED_TRANSITIONS.items() if S.FAILED in ds} == {
+        S.RUNNING, S.REVIEW,
+    }
+    assert is_terminal(S.FAILED)
 ```
 
 - [ ] **Step 2: 运行测试确认失败**
@@ -655,7 +661,7 @@ git add -A && git commit -m "feat: 任务状态机跃迁表"
 **Interfaces:**
 - Consumes: Task 5 的 `Task`/`TaskStatus`
 - Produces:
-  - `agentcrew.task.graph.TaskGraph` — frozen dataclass，字段 `deps: dict[str, frozenset[str]]`、`dependents: dict[str, frozenset[str]]`
+  - `agentcrew.task.graph.TaskGraph` — frozen dataclass，字段 `deps: dict[str, frozenset[str]]`、`dependents_map: dict[str, frozenset[str]]`（**注意：字段名带 `_map` 后缀**，因为 `dependents` 这个名字归方法所有——同名的实例属性会遮蔽方法）
   - `TaskGraph.build(tasks: Sequence[Task]) -> TaskGraph`
   - `TaskGraph.dependencies(task_id) -> frozenset[str]`
   - `TaskGraph.descendants(task_id) -> set[str]`
@@ -763,7 +769,6 @@ git add -A && git commit -m "feat: DAG 拓扑、环检测与就绪集判定"
 
 **Files:**
 - Create: `agentcrew/task/task_board.py`
-- Modify: `agentcrew/runtime/__init__.py`（占位，Task 14 填充）
 - Test: `tests/test_task_board.py`
 
 **Interfaces:**
@@ -959,7 +964,9 @@ from agentcrew.artifacts.spec import ArtifactSpec
 from agentcrew.roles.spec import RoleSpec
 from agentcrew.roles.catalog import RoleCatalog
 
-def draft(tid, role="backend_dev", deps=(), paths=("backend/app/main.py",)):
+def draft(tid, role="backend_dev", deps=(), paths=None):
+    # 默认路径按 tid 派生，保证不同任务的产物路径天然唯一（校验 5 会拒绝重复路径）
+    paths = paths if paths is not None else (f"src/{tid}.py",)
     return TaskDraft(id=tid, title=tid, description="d", role=role,
                      acceptance_criteria=["ok"],
                      deliverables=[ArtifactSpec(path=p, kind="python", description="x")
@@ -1044,12 +1051,25 @@ def test_same_task_may_not_declare_same_path_twice(catalog):
         ])), catalog)
 
 def test_with_final_task_appends_sink(catalog):
-    tasks = to_tasks(PlanOutput(tasks=[draft("T-1"), draft("T-2", deps=["T-1"])]))
+    # 两个**并列**任务 → 两个叶子，T-FINAL 依赖二者
+    tasks = to_tasks(PlanOutput(tasks=[draft("T-1"), draft("T-2")]))
     out = with_final_task(tasks)
     final = [t for t in out if t.id == FINAL_TASK_ID][0]
     assert final.role == "project_manager"
     assert set(final.dependencies) == {"T-1", "T-2"}     # 所有叶子
     assert any(d.path == "DELIVERY.md" for d in final.deliverables)
+
+def test_with_final_task_on_a_chain_uses_only_the_tail(catalog):
+    # 链式：只有 T-2 无下游，所以 T-FINAL 只依赖 T-2
+    tasks = to_tasks(PlanOutput(tasks=[draft("T-1"), draft("T-2", deps=["T-1"])]))
+    final = [t for t in with_final_task(tasks) if t.id == FINAL_TASK_ID][0]
+    assert set(final.dependencies) == {"T-2"}
+
+def test_with_final_task_is_idempotent(catalog):
+    once = with_final_task(to_tasks(PlanOutput(tasks=[draft("T-1")])))
+    twice = with_final_task(once)
+    assert len([t for t in twice if t.id == FINAL_TASK_ID]) == 1
+    assert FINAL_TASK_ID not in twice[-1].dependencies     # 不自依赖
 ```
 
 - [ ] **Step 2: 运行测试确认失败**
@@ -1183,7 +1203,9 @@ Expected: FAIL — `ImportError`
 
 - [ ] **Step 3: 实现**
 
-起始围栏正则：`^(?P<fence>```)(?P<lang>[A-Za-z0-9_+.\-]*)(?:\s+file=(?P<path>.+?))?\s*$`（`path` 用非贪婪到行尾，从而允许空格与中文；**不**用 `\S+`）。逐行扫描：遇到起始围栏（且此前不在块内）→ 记录；遇到 ` ``` ` 单独成行 → 闭合。扫描到结尾仍在块内 → 抛 `ArtifactParseError("未闭合的代码块，起始行 N")`。**行首恰好三个反引号才算围栏**——4 个或更多反引号会被起始正则的 `lang` 捕获为 `` ` ``，导致 `normalize_lang` 返回 `None`；此时该行不视为合法起始围栏，于是整段被当作 note，块内内容不含合法起始围栏 → 不抛错。**修正**：为避免歧义，`parse_fenced_blocks` 在扫描前先检测「行首 ≥4 个反引号」，直接抛 `ArtifactParseError("不支持的围栏长度：4 个或更多反引号")`。
+起始围栏正则：`^(?P<fence>```+)(?P<lang>[A-Za-z0-9_+.\-]*)(?:\s+file=(?P<path>.*?))?\s*$`（`path` 用非贪婪到行尾，从而允许空格与中文；**不**用 `\S+`）。逐行扫描：遇到起始围栏（且此前不在块内）→ 记住其反引号个数并进入块内；遇到**反引号个数 ≥ 起始个数**的单独围栏行 → 闭合。扫描到结尾仍在块内 → 抛 `ArtifactParseError("未闭合的代码块，起始行 N")`。
+
+**围栏语义采用 CommonMark**：N 个反引号开的块只能被 ≥N 个反引号的围栏闭合。这样 3 反引号块的行为与朴素实现完全一致，而 4 反引号块可以自由包含 3 反引号行 —— 这是 README / 使用文档里写命令示例所必需的（否则模型无法产出任何带代码示例的 markdown 产物）。
 
 块内容保留每行末尾的 `\n`（`"\n".join(lines)` + 结尾 `\n`），使写出的文件以换行结束。
 
@@ -1290,10 +1312,11 @@ def test_oversize_rejected(store):
     with pytest.raises(ArtifactTooLargeError):
         store.commit("big.txt", "x" * 100, spec=s, task=mk_task())
 
-def test_undersize_rejected(store):
+def test_undersize_content_commits_so_g1_can_see_it(store):
+    # 过小是质量问题，不是执行失败：必须落盘，由 G1 报「空文件」并驱动 REWORK
     s = ArtifactSpec(path="a.py", kind="python", description="d", min_bytes=5)
-    with pytest.raises(ValueError):
-        store.commit("a.py", "x", spec=s, task=mk_task())
+    store.commit("a.py", "x", spec=s, task=mk_task())
+    assert store.read("a.py") == "x"
 
 def test_conflict_when_other_task_already_wrote_path(tmp_path):
     st = ArtifactStore(tmp_path / "artifacts", run_id="R-1")
@@ -1361,7 +1384,7 @@ Expected: FAIL — `ImportError`
 1. `rel` 规范化后必须**等于** `spec.path`（不等 → `UndeclaredArtifactError`）
 2. `resolve(rel)`
 3. 已存在同路径记录且 `produced_by_task != task.id` → `ArtifactConflictError`
-4. 编码后长度对 `spec.max_bytes` / `spec.min_bytes` 校验
+4. **超出 `spec.max_bytes` → 抛 `ArtifactTooLargeError`**（写入期硬上限，spec §5.2「单文件上限，防模型跑飞」）。**不检查 `min_bytes`** —— 文件过小是**质量**问题，不是执行失败，必须落盘让 G1 看见并驱动返工（见下方说明）。
 5. `mkdir(parents=True, exist_ok=True)`；`atomic_write_text`
 6. 更新内存 `records`（同 `(path, task_id)` 覆盖，不追加）
 7. `ledger.emit("artifact_written", task_id=..., path=..., size_bytes=..., sha256=...)`（`ledger` 为 `None` 时跳过）
@@ -1471,7 +1494,12 @@ Expected: FAIL — `ImportError`
 - `toml` → `tomllib.loads`（Python 3.11+；3.10 用 `tomli` 不可用，故 **3.10 下降级为「跳过检查」并在返回的 dict 中标记不校验** —— 实现为：`sys.version_info < (3,11)` 时 `toml` 解析器直接返回 `None`）
 - `markdown`/`text`/`html`/`css`/`js`/`sql`/`shell`/`dockerfile` → 恒返回 `None`（结构检查由 G1 的占位符检查覆盖）
 
-`has_placeholder(content)` 返回 True 当：出现任一 `PLACEHOLDER_MARKERS`（大小写不敏感）；或存在**整行仅为 `...`** 或 `…`（去除缩进后）；或内容去空白后长度 < 30 字符且不含 `=`/`:`/`(`/`{` 等结构字符。
+`has_placeholder(content)` 返回 True 当**任一**成立：
+1. 出现任一 `PLACEHOLDER_MARKERS`（大小写不敏感）；
+2. 存在**整行仅为 `...`** 或 `…`（去除缩进后）；
+3. 内容折叠空白后**长度 < 40 字符**，且**不含**任何结构字符 `= : ( ) { } [ ] ; " '`。
+
+> 阈值 40 与结构字符表是共同标定的：HTML 桩 `<html><body>placeholder</body></html>`（37 字符、无结构字符）必须被判为占位，而真实内容（如 `# Todo App FastAPI service with CRUD endpoints.`，47 字符）不能。**不得**把裸词 `placeholder` 加进 `PLACEHOLDER_MARKERS` —— 那会误伤合法的 HTML 属性 `<input placeholder="Add a todo">`。
 
 `PLACEHOLDER_MARKERS = ("TODO", "<placeholder>", "FIXME", "your code here", "your implementation", "待补充", "待实现", "占位")`。
 
@@ -1627,7 +1655,7 @@ Expected: FAIL — `ImportError`
 检查顺序与消息模板：
 1. 缺必需产物 → `f"缺少必需产物：{path}"`
 2. 多余产物（该任务写入了不在 `task.deliverables` 中的路径）→ `f"产出未在契约中声明的文件：{path}"`
-3. 尺寸（`size < min_bytes` → 空文件 / `> max_bytes` → 过大）
+3. 尺寸：`size < min_bytes` → `f"{path} 为空文件"`（**G1 只查下界**；`max_bytes` 是 `ArtifactStore.commit` 的写入期硬上限，越界根本落不了盘，G1 不重复检查）
 4. `parse_check(deliverable.kind, content)` 返回的消息
 5. `has_placeholder(content)` → `f"{path} 仅含占位内容"`
 6. 逐条 `must_contain` 未命中 → `f"{path} 缺少必需符号：{needle}"`
@@ -1878,17 +1906,20 @@ def test_leftover_temp_files_are_cleaned(cs, monkeypatch):
 
 def test_repair_running_becomes_ready_and_keeps_counts(cs):
     b = TaskBoard([mk("A", status=S.READY)])
-    b.transition("A", S.RUNNING)                       # attempts -> 1
+    b.transition("A", S.RUNNING)
+    b.bump_attempt("A")                                # attempts 由 take_ready/bump_attempt 增加，transition 不增加
     n = repair_statuses(b)
     assert n == 1 and b.get("A").status is S.READY
     assert b.get("A").attempts == 1                    # 不重置
 
-def test_repair_rework_becomes_ready(cs):
+def test_repair_rework_stays_rework(cs):
+    # 状态机没有 REWORK → READY 这条边；且 take_ready 已能派发 REWORK，
+    # 所以修复时保持原状即可，不需要（也不能）走 transition
     b = TaskBoard([mk("A", status=S.READY)])
     b.transition("A", S.RUNNING); b.transition("A", S.REVIEW)
     b.transition("A", S.REWORK)
     repair_statuses(b)
-    assert b.get("A").status is S.READY
+    assert b.get("A").status is S.REWORK
 
 def test_repair_review_stays_review(cs):
     b = TaskBoard([mk("A", status=S.READY)])
@@ -2217,7 +2248,11 @@ Expected: FAIL — `ImportError`
 `complete()` 查找顺序：
 - `purpose == "plan"` → `fixtures_dir/plan_todo.json` 的**原始文本**
 - `purpose == "review"` → `fixtures_dir/reviews.json` 中 `data[task_id]` 的 JSON 文本；无 `task_id` 键时用 `data["_default"]`
-- `purpose == "execute"` → `fixtures_dir/responses/<task_id>/attempt-<attempt>.md`；不存在则**回退**到 `attempt-1.md`；再不存在则生成占位回复 `f"# 占位回复（fixture 缺失）\ntask={task_id} attempt={attempt}\n"` 并调 `_on_fallback(message)`
+- `purpose == "execute"` → 按此顺序（四支都要有测试）：
+  1. `responses/<task_id>/attempt-<attempt>.md` 存在 → 直接用，**不上报**
+  2. 不存在但 `attempt-1.md` 存在 → 用 attempt-1，**并调用 `_on_fallback` 上报**（这是一次真实替换，§16.1 的「绝不静默」适用）
+  3. 两者都不存在但存在任意 `attempt-*.md` → 用**编号最小**的那个，**不上报**（这是 spec §16.1:1048 的「任何尝试都返回同一内容」语义，不是回退，上报只会训练读者忽略回调）
+  4. 一个都没有 → 占位回复 + 上报
 - 任何路径都读不到 → 不抛异常（`MockFixtureMissing` 仅在 `fixtures_dir` 本身为 `None` 且 purpose 为 plan/review 时抛出）
 
 `prompt_tokens` 用 `estimate_tokens` 累加所有 messages 的 content；`completion_tokens` 用 `estimate_tokens(result_text)`。
@@ -2656,7 +2691,7 @@ Expected: FAIL — `ImportError`
 
 **修复循环**：解析或校验失败时，把 `f"你上次的输出校验失败：\n{error}\n请仅返回修正后的 JSON，不要任何解释文字。"` 作为新的 `user` 消息**追加**到消息列表（保留原对话），重新调用；最多 `repair_attempts` 次（默认 2，即最多 3 次 LLM 调用）。全部失败 → `StructuredOutputError(schema_name=schema.__name__, attempts=..., last_text=..., last_error=...)`。
 
-第 2 级时还需在提示词中嵌入 `json.dumps(schema.model_json_schema(), ensure_ascii=False)`（因为 `json_object` 模式不携带 schema）。
+**第 2 级与第 3 级都要在提示词中嵌入 schema**：`json.dumps(schema.model_json_schema(), ensure_ascii=False)`。第 2 级因为 `json_object` 模式不携带 schema；第 3 级更是既无 schema 也无 response_format，不嵌就等于让模型凭空猜形状 —— 而第 3 级恰恰是 anthropic / ernie 这类完全不支持结构化输出的 provider 走的路径，不嵌会把每次结构化调用从 1 次变成 2–3 次。第 1 级**不**嵌（API 的 `json_schema` 参数已经携带，重复只会白占上下文）。
 
 - [ ] **Step 4: 运行测试确认通过**
 
@@ -3000,9 +3035,9 @@ Expected: FAIL — `ImportError: cannot import name 'builtin'`
 
 `reviewer_for` 按 spec §8.2 的「默认评审人」列填写，并令 `ARCHITECT.reviewer_for = ["project_manager"]`、`PRODUCT_MANAGER.reviewer_for = ["project_manager"]`、`PROJECT_MANAGER.reviewer_for = ["architect", "product_manager"]`，其余按表。
 
-`reviewer_for(role_key)` 算法：
-1. 收集所有 `r for r in specs if role_key in r.reviewer_for or "*" in r.reviewer_for`
-2. 结果为空 → `["project_manager"]`（若目录中无 `project_manager` 则返回 `[]`）
+`reviewer_for(role_key)` 算法（**方向：读目标角色自己声明的 `reviewer_for`**，不是反查谁声明了它）：
+1. 候选 = `catalog.get(role_key).reviewer_for` 中的非 `"*"` 项 ∪ 所有 `r.key where "*" in r.reviewer_for`
+2. 候选项为空 → 返回 `["project_manager"]`（若目录中无 `project_manager` 则返回 `[]`）
 3. **过滤掉 `role_key` 自身**（防自评审）
 4. 过滤掉不在目录中的 key
 5. 结果仍为空 → `[]`（调用方据此跳过 G2，直接由 G1 决定）
@@ -3076,9 +3111,18 @@ def test_budget_consumes_until_full():
     assert b.remaining >= 0
 
 def test_budget_never_negative():
+    # 先精确装满，再试探超限；被拒绝的 consume **不改变 used**（否则一个大项会饿死后面所有小项）
     b = TokenBudget(limit=5)
-    b.try_consume("a" * 100_000)
+    assert b.try_consume("a" * 15) is True      # ≈5 tok
+    assert b.try_consume("a" * 100_000) is False
     assert b.remaining == 0 and b.used <= 5
+
+def test_budget_rejection_leaves_used_unchanged():
+    b = TokenBudget(limit=100)
+    b.try_consume("hello world")
+    before = b.used
+    assert b.try_consume("a" * 100_000) is False
+    assert b.used == before
 
 def test_budget_zero_limit_rejects_everything():
     b = TokenBudget(limit=0)
@@ -3117,10 +3161,16 @@ def test_small_pack_not_truncated(bus):
     assert bus.build(bus._board.get("B")).truncated is False
 
 def test_tiny_budget_truncates_and_appends_notice(bus, tmp_path):
-    b = ContextBus("做一个 Todo 应用", bus._board, bus._store, budget_tokens=30)
+    # 预算 2 装不下任何真实内容（fixture 里最小的上游 brief 也 ≈3 tok），故必然降级
+    b = ContextBus("做一个 Todo 应用", bus._board, bus._store, budget_tokens=2)
     pack = b.build(b._board.get("B"))
     assert pack.truncated is True
     assert b.render_notice() == TRUNCATION_NOTICE
+
+def test_comfortable_budget_does_not_truncate_same_fixture(bus):
+    # 同一 fixture 在充裕预算下不得降级 —— 与上一条共同钉死边界
+    b = ContextBus("做一个 Todo 应用", bus._board, bus._store, budget_tokens=24000)
+    assert b.build(b._board.get("B")).truncated is False
 
 def test_incompressible_fields_survive_tiny_budget(bus):
     b = ContextBus("目标", bus._board, bus._store, budget_tokens=1)
@@ -3929,7 +3979,7 @@ def env(tmp_path, monkeypatch):
     lg = Ledger(tmp_path / "l.jsonl", run_id="R", secrets=s.secret_values())
     store = ArtifactStore(tmp_path / "o" / "art", run_id="R", ledger=lg)
     fx = tmp_path / "fx"; fx.mkdir()
-    (fx / "reviews.json").write_text(json.dumps({"*": GOOD}), encoding="utf-8")
+    (fx / "reviews.json").write_text(json.dumps({"_default": GOOD}), encoding="utf-8")
     models = ModelFactory(s, ledger=lg, fixtures_dir=fx)
     catalog = RoleCatalog(BUILTIN_ROLES)
     agents = AgentFactory(models, store, lg, "目标", catalog)
@@ -4083,7 +4133,7 @@ def env(tmp_path, monkeypatch):
     (fx / "responses" / "T-1" / "attempt-1.md").write_text(
         "```python file=app.py\ndef create_app():\n    return None\n```\n",
         encoding="utf-8")
-    (fx / "reviews.json").write_text(json.dumps({"*": APPROVE}), encoding="utf-8")
+    (fx / "reviews.json").write_text(json.dumps({"_default": APPROVE}), encoding="utf-8")
 
     models = ModelFactory(settings, ledger=ledger, fixtures_dir=fx)
     catalog = RoleCatalog(BUILTIN_ROLES)
@@ -4215,7 +4265,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENTCREW_GATE", "none")
     fx = tmp_path / "fx"; fx.mkdir()
     (fx / "plan_todo.json").write_text(json.dumps(PLAN), encoding="utf-8")
-    (fx / "reviews.json").write_text(json.dumps({"*": {
+    (fx / "reviews.json").write_text(json.dumps({"_default": {
         "verdict": "approve", "score": 0.9, "issues": [], "fix_hints": []}}),
         encoding="utf-8")
     for tid, path, body in [
@@ -4625,7 +4675,7 @@ def test_rework_loop_first_attempt_fails_second_passes():
 def test_reviews_fixture_covers_all_tasks_and_final():
     reviews = json.loads((FIX / "reviews.json").read_text(encoding="utf-8"))
     for t in PLAN["tasks"]:
-        assert t["id"] in reviews or "*" in reviews
+        assert t["id"] in reviews or "_default" in reviews
 
 def test_review_entries_are_schema_valid():
     from agentcrew.gate.reviewer import ReviewVerdict
@@ -4687,7 +4737,9 @@ Todo 应用技术栈：FastAPI + Pydantic v2 + 进程内内存存储（`store.py
 
 `T-FINAL/attempt-1.md` 产出 `DELIVERY.md`。
 
-`reviews.json` 提供 `{"*": {...approve...}}` 通配，并为 `T-005` 的 `attempt-1` 阶段提供一条 `reject`？—— **不需要**：T-005 的首次失败由 G1 静态层拦截，走不到 G2。因此 `reviews.json` 只需 `"*"` 通配全部 approve。
+`reviews.json` 提供 `{"_default": {...approve...}}` 兜底键（**键名必须是 `_default`**，
+`MockProvider` 的 `_review_text` 按 `data[task_id]` → `data["_default"]` 查找；写成 `"*"` 会查不到、
+落到占位回复并触发 Task 26 的「评审器格式错误」放行路径 —— run 仍成功，但该夹具的 score/issues 永不生效），并为 `T-005` 的 `attempt-1` 阶段提供一条 `reject`？—— **不需要**：T-005 的首次失败由 G1 静态层拦截，走不到 G2。因此 `reviews.json` 只需 `"_default"` 兜底键全部 approve。
 
 - [ ] **Step 4: 运行测试确认通过**
 
@@ -4902,7 +4954,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'main'`
 - `roles`：遍历 `BUILTIN_ROLES` 打印表格（`key / title / 职责 / 边界 / 产出`）
 - `clean`：调 `CheckpointStore.clean`
 - `cancel <run_id>`：改 `run.json` 的 `status` 为 `CANCELLED`
-- 无参数：打印 help 返回 0
+- 无参数：打印帮助 **+ 已注册角色数 + 最近 3 次 run 概览**（spec §15.1:1008），返回 0。这是 CLI 的默认发现路径，README 会指向它
 
 `on_event` 接到 `BoardView`；`--no-live` 时 `BoardView(enabled=False)`。
 
