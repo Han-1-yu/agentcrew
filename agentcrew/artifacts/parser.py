@@ -161,7 +161,8 @@ def parse_fenced_blocks(raw: str) -> ParsedOutput:
             if inline is not None:
                 path = _normalize_path(inline.group("path"))
                 body_start = index + 1
-        body, close_index = _read_block(lines, start=body_start, fence_length=fence_length)
+        body, close_index = _read_block(
+            lines, start=body_start, fence_length=fence_length, required=bool(path))
         index = close_index + 1
         if not path:
             note_lines.extend(body)
@@ -206,13 +207,26 @@ def _closing_fence_length(line: str) -> int | None:
 
 
 def _read_block(
-    lines: list[str], start: int, *, fence_length: int
+    lines: list[str], start: int, *, fence_length: int, required: bool = True
 ) -> tuple[list[str], int]:
     """从起始围栏行读到闭合围栏，返回 ``(正文行, 闭合行下标)``。
 
     闭合条件（CommonMark）：该行去掉首尾空白后只有反引号，且**长度 ≥ 开栏
     长度**。因此 4 反引号的块能安全内嵌 3 反引号的代码示例。
-    读到结尾仍未闭合 → :class:`ArtifactParseError`，行号 1 起计。
+
+    ``required=True``（带 ``file=`` 的产物块）读到结尾仍未闭合 →
+    :class:`ArtifactParseError`，行号 1 起计：那说明**产物被截断了**，必须让
+    调用方知道。
+
+    ``required=False``（无 ``file=`` 的散文块）读到结尾则**不抛**，正文直接
+    进 notes。理由：没有 ``file=`` 的块本来就不会落盘，它不可能是"被截断的
+    产物"，只是模型忘了闭合围栏。对它抛错会把一次纯格式疏忽升级成一次执行
+    失败 —— 烧掉一个 attempt。
+
+    这条不是理论顾虑，是实测：deepseek-chat 写 markdown 产物时会用 3 反引号
+    写内层代码示例，于是产物在第一个内层裸围栏处被提前闭合；**剩余围栏的
+    奇偶性**决定了最后会不会留下一个悬空开块 —— 同一任务同一模型，偶数时
+    只是静默截断（有 advisory 提示），奇数时抛错丢一次 attempt。
     """
     body: list[str] = []
     for index in range(start + 1, len(lines)):
@@ -220,7 +234,9 @@ def _read_block(
         if length is not None and length >= fence_length:
             return body, index
         body.append(lines[index])
-    raise ArtifactParseError(f"未闭合的代码块，起始行 {start + 1}")
+    if required:
+        raise ArtifactParseError(f"未闭合的代码块，起始行 {start + 1}")
+    return body, len(lines)
 
 
 def _normalize_path(raw: str | None) -> str:

@@ -212,9 +212,18 @@ def test_indented_start_fence_is_prose():
     assert "x=1" in out.notes
 
 
-def test_lone_fence_without_newline_is_an_unclosed_block():
-    with pytest.raises(ArtifactParseError, match="起始行 1"):
-        parse_fenced_blocks("```")
+def test_lone_fence_without_file_yields_no_artifact_and_no_error():
+    """孤立的裸围栏（无 file=）不再抛错 —— 它不可能是被截断的产物。
+
+    与 ``test_unclosed_block_without_file_is_prose_not_error`` 同一条规则。
+    曾经这里断言抛错，但那让一次纯格式疏忽烧掉一次 **执行 attempt**，
+    而错误信息（"未闭合的代码块"）对模型毫无指向性。现在它不抛，产物因此
+    缺失，由 G1 报「缺少必需产物 X」——信息量高得多，且 fix hint **点名**
+    缺哪个文件。代价从 attempt 预算换到 rework 预算，方向是对的。
+    """
+    out = parse_fenced_blocks("```")
+    assert out.files == {}
+    assert out.notes.strip() == ""
 
 
 def test_unclosed_error_names_the_opening_line():
@@ -487,3 +496,47 @@ def test_block_without_any_path_stays_prose():
     out = parse_fenced_blocks(raw)
     assert out.files == {}
     assert "just prose" in out.notes
+
+
+# ── 真实模型实测：无 file= 的未闭合块不得致命 ──
+# deepseek-chat 写 markdown 产物时会用 3 反引号写内层代码示例，产物在第一个
+# 内层裸围栏处被提前闭合；剩余围栏的奇偶性决定最后是否留下悬空开块。
+# 奇数时旧实现抛 ArtifactParseError → AgentExecutionError → 烧掉一次 attempt。
+
+def test_unclosed_block_without_file_is_prose_not_error():
+    """没有 file= 的未闭合块只是没闭合的散文，不该抛错、不该丢产物。"""
+    raw = "prose before\n```python file=a.py\nx = 1\n```\ntail\n```bash\nnever closed\n"
+    out = parse_fenced_blocks(raw)
+    assert set(out.files) == {"a.py"}
+    assert out.files["a.py"] == "x = 1\n"
+    assert "never closed" in out.notes
+
+
+def test_unclosed_block_with_file_still_raises():
+    """带 file= 的未闭合块仍必须抛错：那意味着产物被截断了。"""
+    raw = "```python file=a.py\nx = 1\n"
+    with pytest.raises(ArtifactParseError, match="未闭合"):
+        parse_fenced_blocks(raw)
+
+
+def test_nested_three_backtick_examples_no_longer_costs_an_attempt():
+    """真实模型形态：3 反引号产物 + 内层 3 反引号示例 + 奇数个尾随围栏。
+
+    旧实现下最后一个围栏成为悬空开块 → 抛错 → 整个任务丢一次执行额度
+    （实测 S3 中 T-ARCH 失败的直接原因）。现在应解析成功，产物按提前闭合的
+    内容留下，并带截断 advisory。
+    """
+    raw = (
+        "```markdown file=docs/A.md\n"
+        "# 架构\n"
+        "```bash\n"
+        "uvicorn app:app\n"
+        "```\n"
+        "说明\n"
+        "```\n"          # ← 悬空的裸围栏（奇数个），旧实现在这里抛错
+    )
+    out = parse_fenced_blocks(raw)
+    assert set(out.files) == {"docs/A.md"}
+    assert "# 架构" in out.files["docs/A.md"]
+    assert any("截断" in n for n in out.notes.splitlines()), \
+        "提前闭合必须留下可见提示，否则只是把抛错换成了静默截断"
