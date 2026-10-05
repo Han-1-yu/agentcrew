@@ -76,6 +76,33 @@ def test_yaml_api_key_override_is_rejected_without_echoing_the_value(
     assert YAML_SECRET not in message
 
 
+def test_yaml_nested_secret_field_is_rejected(monkeypatch, tmp_path):
+    """密钥字段藏在 ``capabilities`` 里也一样被拒：校验是**按 schema 递归**的。
+
+    只查顶层等于把承诺的深度交给「猜密钥会写在哪一层」—— ``capabilities`` 今天
+    是唯一能嵌套的分支，但它照样能把 ``api_key`` 原样送进 ``run.json``。
+    """
+    _yaml_config(monkeypatch, tmp_path, {
+        "models": {"providers": {
+            "openai": {"capabilities": {"api_key": YAML_SECRET}}}}})
+    with pytest.raises(ValueError) as ei:
+        Settings.load()
+    message = str(ei.value)
+    assert "capabilities.api_key" in message and "疑似密钥字段" in message
+    assert YAML_SECRET not in message
+
+
+def test_yaml_nested_unknown_field_is_rejected(monkeypatch, tmp_path):
+    """嵌套层的未知字段同样不得静默忽略（与顶层同一条规则）。"""
+    _yaml_config(monkeypatch, tmp_path, {
+        "models": {"providers": {
+            "openai": {"capabilities": {"supports_json_schemas": True}}}}})
+    with pytest.raises(ValueError) as ei:
+        Settings.load()
+    assert "capabilities.supports_json_schemas" in str(ei.value)
+    assert "未知字段" in str(ei.value)
+
+
 def test_yaml_unknown_override_field_is_rejected(monkeypatch, tmp_path):
     """未知字段过去被静默忽略：写错了什么都不会发生，操作者却以为生效了。"""
     _yaml_config(monkeypatch, tmp_path, {
@@ -120,8 +147,34 @@ def test_config_snapshot_redacts_secret_looking_override_values():
     assert YAML_SECRET not in yaml.safe_dump(snapshot, allow_unicode=True)
 
 
+def test_config_snapshot_redacts_nested_secret_values():
+    """脱敏必须递归：藏在 ``capabilities`` 里的密钥同样一个字符都不许落盘。"""
+    nested = {"capabilities": {"api_key": YAML_SECRET, "max_output_tokens": 111}}
+    settings = Settings.load().model_copy(
+        update={"provider_overrides": {"openai": nested}})
+    snapshot = settings.config_snapshot()
+    assert snapshot["provider_overrides"]["openai"]["capabilities"]["api_key"] == "***"
+    assert (
+        snapshot["provider_overrides"]["openai"]["capabilities"]["max_output_tokens"]
+        == 111
+    )
+    assert YAML_SECRET not in str(snapshot)
+    assert YAML_SECRET not in yaml.safe_dump(snapshot, allow_unicode=True)
+
+
 def test_redact_overrides_keeps_other_fields_and_non_mapping_values():
     assert redact_overrides({"openai": {"token": "t", "base_url": "u"}}) == {
         "openai": {"token": "***", "base_url": "u"}}
+    # 嵌套一层同样处理，且不改动非密钥字段
+    assert redact_overrides(
+        {"openai": {"capabilities": {"secret": "s", "max_output_tokens": 7}}}
+    ) == {"openai": {"capabilities": {"secret": "***", "max_output_tokens": 7}}}
+    # 能力位里名字含 token 的**合法**字段不得被误伤（按名字一刀切会抹掉它们）
+    assert redact_overrides(
+        {"openai": {"capabilities": {"max_context_tokens": 8192}}}
+    ) == {"openai": {"capabilities": {"max_context_tokens": 8192}}}
+    # 未知字段的子树没有 schema 可依：继续按名字递归找密钥
+    assert redact_overrides({"openai": {"bogus": {"api_key": "x", "n": 1}}}) == {
+        "openai": {"bogus": {"api_key": "***", "n": 1}}}
     assert redact_overrides(None) is None
     assert redact_overrides(["x"]) == ["x"]

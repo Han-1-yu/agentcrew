@@ -208,19 +208,30 @@ def test_clean_dry_run_lists_runs(tmp_path, monkeypatch, capsys):
 # ── 完整流程 ──────────────────────────────────────────────────────────────
 
 
-def test_yaml_api_key_never_reaches_output_or_stderr(tmp_path, monkeypatch, capfd):
+@pytest.mark.parametrize(
+    "body",
+    [
+        "models:\n  providers:\n    openai:\n      api_key: {secret}\n",
+        # 嵌套一层：只查顶层的实现会把这一份原样写进 run.json（二轮评审实测）
+        "models:\n  providers:\n    openai:\n      capabilities:\n"
+        "        api_key: {secret}\n",
+    ],
+    ids=["top-level", "nested-in-capabilities"],
+)
+def test_yaml_api_key_never_reaches_output_or_stderr(
+    tmp_path, monkeypatch, capfd, body
+):
     """I1：``agentcrew.yaml`` 里写的密钥不能出现在任何落盘文件或终端里。
 
     ``provider_overrides`` 是自由形状的用户输入，修复前它会**明文**进
     ``run.json`` 的 ``config_snapshot``（第一处泄漏），而 ``resume`` 的配置差异行
     会把它打到 stderr（第二处）。这里从 CLI 顶层走一遍：配置读取期就该被拒，
-    退出码 3，密钥在 stdout/stderr 与 ``output/`` 下任何文件里都找不到。
+    退出码 3，密钥在 stdout/stderr 与 ``output/`` 下任何文件里都找不到 ——
+    顶层与嵌套两种写法都必须成立。
     """
     secret = "sk-YAMLSECRET_0123456789abcdef"
     cfg = tmp_path / "agentcrew.yaml"
-    cfg.write_text(
-        f"models:\n  providers:\n    openai:\n      api_key: {secret}\n",
-        encoding="utf-8")
+    cfg.write_text(body.format(secret=secret), encoding="utf-8")
     monkeypatch.setenv("AGENTCREW_CONFIG", str(cfg))
     monkeypatch.setenv("AGENTCREW_OUTPUT_DIR", str(tmp_path / "o"))
     monkeypatch.chdir(ROOT)

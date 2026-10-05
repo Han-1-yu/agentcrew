@@ -62,6 +62,8 @@ _OVERRIDE_KEYS: frozenset[str] = frozenset(ProviderPreset.model_fields)
 
 #: 名字命中这些词的覆盖键按「疑似密钥」拒绝：真正的 API Key 只从环境变量读
 #: （spec §17.2），而 ``provider_overrides`` 会进 ``run.json`` 的配置快照。
+#: 校验与脱敏**都按 schema 递归**（``capabilities`` 里藏一个 ``api_key`` 同样
+#: 会落到配置文件里），所以这条正则对每一层的键都成立。
 _SECRET_KEY_RE = re.compile(
     r"key|token|secret|password|passwd|credential|auth", re.IGNORECASE)
 
@@ -75,20 +77,96 @@ def redact_overrides(value: Any) -> Any:
     两层防御里的第二层：读取时的校验（:meth:`Settings._validate_provider_overrides`）
     已经拒掉了新配置里的密钥字段，但**旧的 ``run.json``** 可能是修复之前写下的，
     明文照旧躺在盘上 —— ``resume`` 的配置差异行会把它打到 stderr，所以打印前
-    再抹一次。非映射值原样返回（调用方拿到的类型不变）。
+    再抹一次。
+
+    递归**按 schema 走**（:func:`_nested_models`），而不是只看顶层：覆盖结构是
+    「映射套映射」（``capabilities`` 今天就嵌套一层），只查第一层等于把承诺的深度
+    交给「猜密钥会写在哪一层」。schema 认识的字段一律不动 —— 能力位里真的有
+    ``max_output_tokens`` / ``max_context_tokens`` 这种名字含 ``token`` 的合法
+    字段，按名字一刀切会把它们也抹成 ``***``；只有**未知**字段才按名字判密钥，
+    未知字段的子树继续按名字递归找密钥。非映射值原样返回。
     """
     if not isinstance(value, Mapping):
         return value
-    redacted: dict[str, Any] = {}
-    for provider, patch in value.items():
-        if isinstance(patch, Mapping):
-            redacted[provider] = {
-                field: (REDACTED if _SECRET_KEY_RE.search(str(field)) else item)
-                for field, item in patch.items()
-            }
+    return {
+        provider: _redact_fields(patch, ProviderPreset)
+        for provider, patch in value.items()
+    }
+
+
+def _redact_fields(patch: Any, model: type[BaseModel]) -> Any:
+    """按 ``model`` 的 schema 脱敏一层的值；未知字段按名字判、子树继续递归。"""
+    if not isinstance(patch, Mapping):
+        return patch
+    nested = _nested_models(model)
+    redacted: dict[Any, Any] = {}
+    for field, item in patch.items():
+        if field in model.model_fields:
+            sub_model = nested.get(field)
+            redacted[field] = (
+                _redact_fields(item, sub_model) if sub_model is not None else item)
         else:
-            redacted[provider] = patch
+            redacted[field] = (
+                REDACTED if _SECRET_KEY_RE.search(str(field))
+                else _redact_unknown(item))
     return redacted
+
+
+def _redact_unknown(value: Any) -> Any:
+    """没有 schema 可依的子树：逐层按**字段名**判密钥，其余原样保留。"""
+    if not isinstance(value, Mapping):
+        return value
+    return {
+        key: (
+            REDACTED if _SECRET_KEY_RE.search(str(key))
+            else _redact_unknown(item))
+        for key, item in value.items()
+    }
+
+
+def _nested_models(model: type[BaseModel]) -> dict[str, type[BaseModel]]:
+    """``model`` 里类型是 pydantic 模型的字段 → 它的模型（递归校验的下一层）。"""
+    return {
+        name: info.annotation
+        for name, info in model.model_fields.items()
+        if isinstance(info.annotation, type) and issubclass(info.annotation, BaseModel)
+    }
+
+
+def _check_override_fields(
+    patch: Mapping[Any, Any], model: type[BaseModel], *, path: str
+) -> None:
+    """按 schema 校验**一层**覆盖：未知字段与疑似密钥字段都报错（只点名字段）。
+
+    递归的依据是 schema 本身（:func:`_nested_models`），不是写死的
+    ``capabilities``：将来 ``ProviderPreset`` 再多一个模型型字段，这一层自动覆盖。
+    报错消息绝不回显字段值 —— 把密钥抄进异常消息等于换个地方泄漏（它会进终端与
+    CI 日志）。
+    """
+    available = "、".join(sorted(model.model_fields))
+    nested = _nested_models(model)
+    for field, item in patch.items():
+        if field not in model.model_fields:
+            if _SECRET_KEY_RE.search(str(field)):
+                raise ValueError(
+                    f"{path}.{field} 疑似密钥字段："
+                    "API Key 只从环境变量读取（spec §17.2），"
+                    "provider_overrides 会明文进 run.json 的配置快照；"
+                    "请删除该字段（若这其实是字段名笔误，它同样不会被任何代码"
+                    f"读取）。可覆盖字段：{available}")
+            raise ValueError(
+                f"{path}.{field} 是未知字段："
+                f"它不会被任何代码读取（静默忽略只会让人以为生效了）；"
+                f"可覆盖字段：{available}")
+        sub_model = nested.get(field)
+        if sub_model is None:
+            continue
+        if not isinstance(item, Mapping):
+            raise ValueError(
+                f"{path}.{field} 必须是映射（字段 → 值），"
+                f"实际是 {type(item).__name__}；可覆盖字段："
+                + "、".join(sorted(sub_model.model_fields)))
+        _check_override_fields(item, sub_model, path=f"{path}.{field}")
 
 
 def _default_gate() -> GateMode:
@@ -189,11 +267,11 @@ class Settings(BaseModel):
           ``run.json`` 的 ``config_snapshot``**明文**落盘，并被 ``resume`` 的
           配置差异行打到 stderr。
 
-        真正的 API Key 只从环境变量读（spec §17.2），因此这里直接报错。
-        报错消息只点名**字段名**、绝不回显字段值：把密钥抄进异常消息等于换个
-        地方泄漏（它会进终端与 CI 日志）。
+        真正的 API Key 只从环境变量读（spec §17.2），因此这里直接报错。校验
+        **按 schema 递归**（:func:`_check_override_fields`）：``capabilities`` 那
+        一层藏一个 ``api_key`` 同样会被拦住 —— 「密钥绝不落盘」的承诺不能只覆盖
+        到猜得到的那一层。报错只点名字段、绝不回显字段值。
         """
-        available = "、".join(sorted(_OVERRIDE_KEYS))
         for provider, patch in value.items():
             if provider not in PROVIDER_PRESETS:
                 known = "、".join(sorted(PROVIDER_PRESETS))
@@ -204,19 +282,8 @@ class Settings(BaseModel):
                 raise ValueError(
                     f"provider_overrides.{provider} 必须是映射（字段 → 值），"
                     f"实际是 {type(patch).__name__}")
-            for field in patch:
-                if field in _OVERRIDE_KEYS:
-                    continue
-                if _SECRET_KEY_RE.search(str(field)):
-                    raise ValueError(
-                        f"provider_overrides.{provider}.{field} 疑似密钥字段："
-                        "API Key 只从环境变量读取（spec §17.2），"
-                        "provider_overrides 会明文进 run.json 的配置快照；"
-                        f"请删除该字段。可覆盖字段：{available}")
-                raise ValueError(
-                    f"provider_overrides.{provider} 含未知字段 {field!r}："
-                    f"它不会被任何代码读取（静默忽略只会让人以为生效了）；"
-                    f"可覆盖字段：{available}")
+            _check_override_fields(
+                patch, ProviderPreset, path=f"provider_overrides.{provider}")
         return value
 
     @classmethod
