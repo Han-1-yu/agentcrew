@@ -446,3 +446,44 @@ def test_artifact_parse_error_is_a_value_error():
 def test_parsed_output_forbids_extra_fields():
     with pytest.raises(ValidationError):
         ParsedOutput(files={}, notes="", unexpected=1)
+
+
+# ── 路径写在围栏头「下一行」：真实模型（实测 deepseek-chat）的高频写法 ──
+# 不接纳时整篇文档会静默变成 notes、交付物一个都不落盘，而错误信息只会说
+# 「缺少必需产物」，从症状完全看不出病因。
+
+def test_path_on_the_line_after_the_fence_header_is_accepted():
+    raw = "```markdown\nfile=docs/ARCHITECTURE.md\n# 架构\n正文\n```\n"
+    out = parse_fenced_blocks(raw)
+    assert set(out.files) == {"docs/ARCHITECTURE.md"}
+    assert out.files["docs/ARCHITECTURE.md"] == "# 架构\n正文\n"
+    assert "file=" not in out.notes
+
+
+def test_path_on_next_line_with_four_backticks_and_embedded_example():
+    raw = ("````markdown\nfile=README.md\n用法：\n```bash\necho hi\n```\n````\n")
+    out = parse_fenced_blocks(raw)
+    assert set(out.files) == {"README.md"}
+    assert "```bash" in out.files["README.md"]
+
+
+def test_header_form_still_wins_and_is_unaffected():
+    raw = "```markdown file=docs/A.md\n# A\n```\n"
+    out = parse_fenced_blocks(raw)
+    assert set(out.files) == {"docs/A.md"}
+    assert out.files["docs/A.md"] == "# A\n"
+
+
+def test_only_the_immediately_following_line_is_considered():
+    # 空行隔开就不算 —— 只接纳「紧邻下一行」这一种形态，避免把正文吞成路径
+    raw = "```markdown\n\nfile=docs/A.md\n正文\n```\n"
+    out = parse_fenced_blocks(raw)
+    assert out.files == {}
+    assert "file=docs/A.md" in out.notes
+
+
+def test_block_without_any_path_stays_prose():
+    raw = "```\njust prose\nmore\n```\n"
+    out = parse_fenced_blocks(raw)
+    assert out.files == {}
+    assert "just prose" in out.notes

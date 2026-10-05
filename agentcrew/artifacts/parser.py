@@ -47,6 +47,10 @@ _START_FENCE_RE = re.compile(
     r"^(?P<fence>`{3,})(?P<lang>[A-Za-z0-9_+.\-]*)(?:\s+file=(?P<path>.*?))?\s*$"
 )
 
+#: 只含 ``file=<路径>`` 的整行 —— 用于接纳「路径写在围栏头下一行」的写法。
+#: 仅在围栏头本身**没有** ``file=`` 时才尝试，且只看紧邻的下一行。
+_PATH_ONLY_RE = re.compile(r"^\s*file=(?P<path>.+?)\s*$")
+
 
 class ArtifactParseError(ValueError):
     """回复不符合围栏块协议：围栏块一直没有闭合。
@@ -145,9 +149,20 @@ def parse_fenced_blocks(raw: str) -> ParsedOutput:
             index += 1
             continue
         fence_length = len(match.group("fence"))
-        body, close_index = _read_block(lines, start=index, fence_length=fence_length)
-        index = close_index + 1
         path = _normalize_path(match.group("path"))
+        body_start = index
+        if not path and index + 1 < len(lines):
+            # 容忍一种真实模型高频写法：路径不在围栏头上，而是写在**下一行**。
+            # 实测 deepseek-chat 会输出「```markdown 换行 file=docs/X.md」。
+            # 不接纳的话，整篇文档会静默变成说明、交付物一个都不落盘 —— 任务
+            # 只会报「缺少必需产物」，而模型在自己的回复里还写着它用了 4 个
+            # 反引号，从错误信息完全看不出真正的病因。
+            inline = _PATH_ONLY_RE.match(lines[index + 1])
+            if inline is not None:
+                path = _normalize_path(inline.group("path"))
+                body_start = index + 1
+        body, close_index = _read_block(lines, start=body_start, fence_length=fence_length)
+        index = close_index + 1
         if not path:
             note_lines.extend(body)
             continue
