@@ -18,9 +18,12 @@
   字典键都过 :func:`agentcrew.utils.logger.redact`；非字符串类型原样保留，不提前
   字符串化，否则 JSON 里的 int/bool 会变成字符串（spec 全局约束：API Key 绝不
   出现在日志、ledger、异常消息中）。坏行警告回显的行内容同样先脱敏再截断。
-- **序列化**：``json.dumps(..., ensure_ascii=False, default=str)``。``ensure_ascii``
-  保证中文在文件里可读；``default=str`` 让 ``Path``/``datetime`` 等不可直接序列化
-  的值存活（``str`` 混入枚举如 ``TaskStatus`` 会被 json 原生按其值写出）。
+- **序列化**：``json.dumps(..., ensure_ascii=False, default=...)``。``ensure_ascii``
+  保证中文在文件里可读；不可直接序列化的值（``Path``/``datetime``/``set``/``bytes``/
+  自定义对象）由 ``default`` 回调 ``str()`` 后**再脱敏一次**才落盘——递归脱敏只覆盖
+  字符串与容器，这些值会绕过它，而审计文件是密钥最不该留下的地方。``str`` 混入
+  枚举如 ``TaskStatus`` 被 json 原生按其值写出；``int``/``bool``/``None`` 保持原生
+  JSON 类型。
 """
 
 from __future__ import annotations
@@ -116,7 +119,14 @@ class Ledger:
             event=redact(event, self._secrets),
             data=_redact_value(data, self._secrets),
         )
-        line = json.dumps(record.model_dump(), ensure_ascii=False, default=str) + "\n"
+        payload = record.model_dump()
+        # default 只接住不可序列化的值（set/bytes/自定义对象…）：它们绕过
+        # _redact_value，必须在字符串化的这一刻补一次脱敏，否则密钥原样落盘。
+        line = json.dumps(
+            payload,
+            ensure_ascii=False,
+            default=lambda value: redact(str(value), self._secrets),
+        ) + "\n"
         with open(self._path, "a", encoding="utf-8") as file:
             file.write(line)
             file.flush()
@@ -131,7 +141,12 @@ class Ledger:
         ``logging.warning``（"无法解析"= 崩溃截断的尾行或半截多字节字符；
         "结构未知"= 合法 JSON 但不符合 :class:`LedgerEvent`，例如历史版本增删
         过字段——读取端绝不因它拒绝整份历史）。坏行回显内容先脱敏再截断。
+
+        ``event`` 过滤参数先过 ``redact`` 再与存储侧比较——写入时事件名已脱敏，
+        拿原始参数去比会静默过滤成空。
         """
+        if event is not None:
+            event = redact(event, self._secrets)
         try:
             file = open(self._path, "r", encoding="utf-8", errors="replace")
         except FileNotFoundError:

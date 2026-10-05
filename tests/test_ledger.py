@@ -202,6 +202,38 @@ def test_secret_in_event_name_is_redacted(tmp_path):
     assert json.loads(raw)["event"] == "leak-***"
 
 
+def test_set_value_is_redacted_before_stringification(tmp_path):
+    lg = Ledger(tmp_path / "l.jsonl", run_id="R-1", secrets=["supersecret"])
+    lg.emit("x", as_set={"supersecret"})
+    raw = (tmp_path / "l.jsonl").read_text(encoding="utf-8")
+    assert "supersecret" not in raw
+
+
+def test_bytes_value_is_redacted_before_stringification(tmp_path):
+    lg = Ledger(tmp_path / "l.jsonl", run_id="R-1", secrets=["supersecret"])
+    lg.emit("x", as_bytes=b"supersecret")
+    raw = (tmp_path / "l.jsonl").read_text(encoding="utf-8")
+    assert "supersecret" not in raw
+
+
+def test_object_str_embedding_secret_is_redacted(tmp_path):
+    class Payload:
+        def __str__(self):
+            return "Authorization: Bearer supersecret"
+
+    lg = Ledger(tmp_path / "l.jsonl", run_id="R-1", secrets=["supersecret"])
+    lg.emit("x", obj=Payload())
+    raw = (tmp_path / "l.jsonl").read_text(encoding="utf-8")
+    assert "supersecret" not in raw
+
+
+def test_events_filter_applies_redaction_like_storage(tmp_path):
+    lg = Ledger(tmp_path / "l.jsonl", run_id="R-1", secrets=["supersecret"])
+    lg.emit("leak-supersecret", payload="x")
+    assert [e.event for e in lg.events("leak-supersecret")] == ["leak-***"]
+    assert lg.count("leak-supersecret") == 1
+
+
 def test_redaction_preserves_non_string_types(ledger, tmp_path):
     ledger.emit("x", count=3, ratio=0.5, ok=True, nothing=None)
     data = json.loads((tmp_path / "ledger.jsonl").read_text(encoding="utf-8"))["data"]
