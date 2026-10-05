@@ -2691,7 +2691,7 @@ Expected: FAIL — `ImportError`
 
 **修复循环**：解析或校验失败时，把 `f"你上次的输出校验失败：\n{error}\n请仅返回修正后的 JSON，不要任何解释文字。"` 作为新的 `user` 消息**追加**到消息列表（保留原对话），重新调用；最多 `repair_attempts` 次（默认 2，即最多 3 次 LLM 调用）。全部失败 → `StructuredOutputError(schema_name=schema.__name__, attempts=..., last_text=..., last_error=...)`。
 
-第 2 级时还需在提示词中嵌入 `json.dumps(schema.model_json_schema(), ensure_ascii=False)`（因为 `json_object` 模式不携带 schema）。
+**第 2 级与第 3 级都要在提示词中嵌入 schema**：`json.dumps(schema.model_json_schema(), ensure_ascii=False)`。第 2 级因为 `json_object` 模式不携带 schema；第 3 级更是既无 schema 也无 response_format，不嵌就等于让模型凭空猜形状 —— 而第 3 级恰恰是 anthropic / ernie 这类完全不支持结构化输出的 provider 走的路径，不嵌会把每次结构化调用从 1 次变成 2–3 次。第 1 级**不**嵌（API 的 `json_schema` 参数已经携带，重复只会白占上下文）。
 
 - [ ] **Step 4: 运行测试确认通过**
 
