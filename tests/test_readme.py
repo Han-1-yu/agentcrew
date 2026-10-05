@@ -12,7 +12,10 @@
 - 不留任何占位文本。
 """
 
+import ast
 from pathlib import Path
+
+import pytest
 
 README = Path(__file__).resolve().parents[1] / "README.md"
 
@@ -159,3 +162,38 @@ def test_pyproject_has_lint_starters_and_keeps_pytest_config():
     assert "[tool.mypy]" in text, "pyproject 缺少 [tool.mypy] 起步配置"
     assert 'asyncio_mode = "auto"' in text, "pytest asyncio_mode 配置被改动"
     assert 'testpaths = ["tests"]' in text, "pytest testpaths 配置被改动"
+
+
+#: spec 声明的运行下界。
+PYTHON_FLOOR = "3.10"
+
+
+def test_tooling_polices_the_declared_python_floor():
+    """I7：ruff / mypy 必须按 spec 声明的 3.10 检查，而不是写成 py312。
+
+    写成 py312 时静态检查**不会**拦下 3.11+ 的语法（``except*``、PEP 695 的
+    类型参数列表…），而声明的下界是 3.10：代码一路过检，直到用户在 3.10 上
+    导入那一刻炸掉 —— 那时才发现，比在 checker 里早发现贵得多。
+    """
+    text = (README.parent / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'target-version = "py310"' in text, "ruff target-version 未对齐 3.10"
+    assert 'python_version = "3.10"' in text, "mypy python_version 未对齐 3.10"
+    assert "py312" not in text and '"3.12"' not in text, "仍有工具链钉在 3.12"
+
+
+def test_sources_parse_under_the_python_3_10_grammar():
+    """配置之外的可执行证据：交付源码本身用的语法 3.10 也认。
+
+    ``ast.parse(feature_version=…)`` 用目标版本的语法解析（``except*`` / PEP 695
+    类型参数这类 3.11+ 语法会直接 SyntaxError）。它覆盖的是**语法**，不是运行时
+    API —— 但配置项管的就是语法这一层。
+    """
+    root = README.parent
+    targets = sorted((root / "agentcrew").rglob("*.py"))
+    targets += [root / "main.py", *sorted((root / "examples").glob("*.py"))]
+    assert targets
+    for path in targets:
+        try:
+            ast.parse(path.read_text(encoding="utf-8"), feature_version=(3, 10))
+        except SyntaxError as exc:
+            pytest.fail(f"{path} 用了 3.10 不认的语法：{exc}")

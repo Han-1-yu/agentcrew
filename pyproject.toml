@@ -8,7 +8,7 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py310"  # spec 声明的运行下界就是 3.10；定高了会放过 3.11+ 语法
 extend-exclude = ["examples/fixtures", "output", ".venv"]
 
 [tool.ruff.lint]
@@ -16,7 +16,7 @@ select = ["E", "F", "W", "I", "UP", "B"]
 ignore = ["E501"]  # 行长由 formatter / 评审把关，起步阶段不设硬线
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.10"  # 与 ruff target-version 同一口径：检查声明的最低版本
 ignore_missing_imports = true
 follow_imports = "silent"
 warn_unused_configs = true
