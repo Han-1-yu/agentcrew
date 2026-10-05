@@ -41,9 +41,9 @@ def test_budget_consumes_until_full():
 
 
 def test_budget_never_negative():
+    # 先精确装满，再试探超限；被拒绝的 consume **不改变 used**（否则一个大项会饿死后面所有小项）
     b = TokenBudget(limit=5)
-    # 先精确装满（"a"*15 -> 5 tok），再试探一个装不下的：拒绝不改变 used
-    assert b.try_consume("a" * 15) is True
+    assert b.try_consume("a" * 15) is True      # ≈5 tok
     assert b.try_consume("a" * 100_000) is False
     assert b.remaining == 0 and b.used <= 5
 
@@ -107,6 +107,12 @@ def test_budget_above_digest_size_not_truncated(bus):
                       budget_tokens=100).build(bus._board.get("B"))
     assert [u.task_id for u in pack.upstream] == ["A"]
     assert pack.truncated is False
+
+
+def test_comfortable_budget_does_not_truncate_same_fixture(bus):
+    # 同一 fixture 在充裕预算下不得降级 —— 与上一条共同钉死边界
+    b = ContextBus("做一个 Todo 应用", bus._board, bus._store, budget_tokens=24000)
+    assert b.build(b._board.get("B")).truncated is False
 
 
 def test_incompressible_fields_survive_tiny_budget(bus):
@@ -182,9 +188,11 @@ def test_decision_records_from_rework(bus):
 
 # ── Resolution 1：拒绝不改 used ──
 def test_budget_rejection_leaves_used_unchanged():
-    b = TokenBudget(limit=10)
+    b = TokenBudget(limit=100)
+    b.try_consume("hello world")
+    before = b.used
     assert b.try_consume("a" * 100_000) is False
-    assert b.used == 0 and b.remaining == 10
+    assert b.used == before
 
 
 def test_budget_negative_limit_rejected():
