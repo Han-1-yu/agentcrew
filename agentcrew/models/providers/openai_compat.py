@@ -10,7 +10,9 @@
   :class:`~agentcrew.utils.retry.PermanentError`，``retry_async`` 只看到类型化错误；
   429/500/502/503/504 与超时/连接错误重试 4 次，400/401/403/404/422 立即失败。
 - **Retry-After**：经 ``retry_async`` 的 ``retry_after`` 钩子读取 SDK 异常的
-  ``response.headers``，把服务端退避指令带进重试引擎（spec §17.6）。
+  ``response.headers``，把服务端退避指令带进重试引擎（spec §17.6）。服务端指令
+  优先，但**有上限**（:data:`MAX_RETRY_AFTER_SECONDS`）：截断发生时在异常对象上
+  留痕（该对象正是传给 ``on_retry`` 的那一个），ledger 可见，绝不静默。
 """
 
 import math
@@ -40,8 +42,20 @@ _HTTP_STATUS_RE = re.compile(r"Error code:\s*(\d{3})")
 _TRANSIENT_STATUSES = frozenset({429, 500, 502, 503, 504})
 
 #: 异常类型名含这些子串即视为瞬时故障：各 SDK/httpx 的超时与连接错误
-#: （``APITimeoutError``、``ConnectTimeout``、``APIConnectionError`` …）。
-_TRANSIENT_TYPE_MARKERS = ("Timeout", "Connection")
+#: （``APITimeoutError``、``ConnectTimeout``、``APIConnectionError``、
+#: ``httpx.ConnectError``、``TransportError`` …）。按类型名匹配而非 import
+#: httpx —— 硬 import 会破坏本模块「未装 SDK 也能 import」的延迟加载缝。
+_TRANSIENT_TYPE_MARKERS = ("Timeout", "Connection", "Connect", "Transport", "Network")
+
+#: ``Retry-After`` 上限（秒）。服务端指令优先，但闲聊补全端点没有正当理由要求
+#: 更久的等待；不设上限等于把「停摆本进程」的能力交给远端（DoS），
+#: 一次 ``Retry-After: 86400`` 就能让 ``--auto`` 跑一天不返回。
+MAX_RETRY_AFTER_SECONDS = 300.0
+
+#: 截断发生时挂在异常上的属性名，值为服务端**原始**要求（秒）。
+#: 截断经 ``on_retry`` 上报（异常对象即通道），ledger 可读该属性向操作者说明
+#: 「服务端要了多久、我们实际等多久」，而不是只看到一个 5 分钟等待。
+RETRY_AFTER_CLAMPED_ATTR = "retry_after_clamped_from"
 
 #: 生产重试参数（spec §17.6）。
 _ATTEMPTS = 4
@@ -52,8 +66,8 @@ def classify_http_error(exc: Exception) -> type[Exception]:
     """把 provider 异常分类为 ``TransientError`` 或 ``PermanentError``。
 
     顺序：先解析异常字符串里的 ``Error code: NNN``（openai SDK 的格式），
-    再看异常类型名是否含 ``Timeout``/``Connection``；两者都不命中时返回
-    ``PermanentError`` —— 未知错误快速失败，胜过无限重试。
+    再看异常类型名是否命中 :data:`_TRANSIENT_TYPE_MARKERS`（超时/连接/传输/网络）；
+    两者都不命中时返回 ``PermanentError`` —— 未知错误快速失败，胜过无限重试。
     """
     match = _HTTP_STATUS_RE.search(str(exc))
     if match is not None:
@@ -71,15 +85,34 @@ def retry_after_seconds(exc: BaseException) -> float | None:
     重试引擎看到的是翻译后的类型化错误，原始 SDK 异常挂在 ``__cause__``（或
     ``__context__``）上，因此沿因果链逐层查找 ``Retry-After``。
 
+    服务端指令优先，但截断到 :data:`MAX_RETRY_AFTER_SECONDS`；发生截断时在
+    ``exc`` 上留痕（:data:`RETRY_AFTER_CLAMPED_ATTR` + ``add_note``）—— ``exc``
+    正是 ``retry_async`` 随后传给 ``on_retry`` 的同一个对象，故这次截断与普通
+    重试走同一条 ledger 通道，不会静默。
+
     并非所有 SDK 异常都带 ``response``（属性访问逐级 guarded）：任一环节缺失、
     值不可解析为数字、或为负数/非有限值时返回 ``None``，由 ``retry_async``
     回落到自身计算的指数退避。绝不抛异常 —— 该函数跑在重试引擎内部。
     """
     for candidate in _exception_chain(exc):
         seconds = _retry_after_header(candidate)
-        if seconds is not None:
-            return seconds
+        if seconds is None:
+            continue
+        if seconds > MAX_RETRY_AFTER_SECONDS:
+            _note_clamped(exc, seconds)
+            return MAX_RETRY_AFTER_SECONDS
+        return seconds
     return None
+
+
+def _note_clamped(exc: BaseException, requested: float) -> None:
+    """在 ``exc`` 上留痕：原始要求写入属性，并附一条人可读的 note（3.11+）。"""
+    setattr(exc, RETRY_AFTER_CLAMPED_ATTR, requested)
+    add_note = getattr(exc, "add_note", None)  # Python < 3.11 无 PEP 678
+    if callable(add_note):
+        add_note(
+            f"Retry-After={requested:g}s 超过上限 {MAX_RETRY_AFTER_SECONDS:g}s，"
+            f"已截断为 {MAX_RETRY_AFTER_SECONDS:g}s（服务端要求的等待不合理）")
 
 
 def _exception_chain(exc: BaseException) -> list[BaseException]:

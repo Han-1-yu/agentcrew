@@ -1,13 +1,18 @@
 """OpenAI 兼容 Provider 的行为测试（spec §12.1 / §17.6）。
 
-brief 用例原样保留；在其之上补三件事：
+brief 用例原样保留；在其之上补四件事：
 
 - ``slept``（autouse）把 ``asyncio.sleep`` 换成记录器，沿用 ``test_retry.py`` 的
   约定 —— brief 要求 ``attempts=4`` / ``base_delay=1.0``，若真睡，两个耗尽重试
   的用例合计要等约 14 秒；真实等待时长本身已由 ``test_retry.py`` 覆盖。
 - 服务端 ``Retry-After`` 必须经由 ``retry_async`` 的 ``retry_after`` 钩子覆盖自算
   退避（spec §17.6 的 carry-forward），brief 用例未覆盖。
-- 生产参数（4 次尝试 + 指数退避 + ``on_retry`` 记账）用记录器钉死，零真实等待。
+- ``Retry-After`` 的 300 秒上限与截断上报（控制器 FINDING 1）：不设上限等于把
+  停摆本进程的能力交给远端；截断经 ``on_retry`` 同一通道留痕。
+- 连接/传输/网络类错误（``ConnectError``/``TransportError``/``NetworkError``）
+  必须判为瞬时并重试（控制器 FINDING 2）。
+
+生产参数（4 次尝试 + 指数退避 + ``on_retry`` 记账）用记录器钉死，零真实等待。
 """
 
 import asyncio
@@ -16,7 +21,8 @@ import pytest
 
 from agentcrew.models.config import parse_alias
 from agentcrew.models.providers.openai_compat import (
-    OpenAICompatProvider, classify_http_error, retry_after_seconds,
+    MAX_RETRY_AFTER_SECONDS, RETRY_AFTER_CLAMPED_ATTR, OpenAICompatProvider,
+    classify_http_error, retry_after_seconds,
 )
 from agentcrew.utils.retry import TransientError, PermanentError
 
@@ -186,3 +192,59 @@ def test_retry_after_absent_or_unparseable_is_none():
     assert retry_after_seconds(no_headers) is None
     assert retry_after_seconds(with_headers) is None
     assert retry_after_seconds(negative) is None
+
+
+# ── 控制器 FINDING 1：Retry-After 上限（不允许远端停摆本进程） ──────────────
+
+def test_retry_after_above_ceiling_is_clamped():
+    err = Exception("Error code: 429 - rate limited")
+    err.response = type("R", (), {"headers": {"Retry-After": "86400"}})()
+    assert retry_after_seconds(err) == MAX_RETRY_AFTER_SECONDS
+
+
+@pytest.mark.parametrize("raw,expected", [("0", 0.0), ("2.5", 2.5), ("300", 300.0)])
+def test_retry_after_at_or_below_ceiling_passes_through(raw, expected):
+    """服务端指令在合理范围内保持权威：不截断、不留痕、值原样返回。"""
+    err = Exception("Error code: 429 - rate limited")
+    err.response = type("R", (), {"headers": {"Retry-After": raw}})()
+    assert retry_after_seconds(err) == expected
+    assert not hasattr(err, RETRY_AFTER_CLAMPED_ATTR)
+
+
+async def test_retry_after_clamp_is_reported_through_on_retry(slept):
+    """截断必须经 on_retry 通道可见（同一对象留痕），而不是静默等 300 秒。"""
+    err = Exception("Error code: 429 - rate limited")
+    err.response = type("R", (), {"headers": {"Retry-After": "86400"}})()
+    c = FakeClient(error=err)
+    seen: list[tuple[int, Exception, float]] = []
+    p = OpenAICompatProvider(parse_alias("openai:m"), api_key="k", client=c,
+                             on_retry=lambda n, e, d: seen.append((n, e, d)))
+    with pytest.raises(TransientError):
+        await p.complete([{"role": "user", "content": "x"}], temperature=0, max_tokens=10)
+    assert len(c.calls) == 4
+    assert [d for _, _, d in seen] == [MAX_RETRY_AFTER_SECONDS] * 3
+    assert slept == [MAX_RETRY_AFTER_SECONDS] * 3      # 记录器：零真实等待
+    for _, exc, _ in seen:
+        assert getattr(exc, RETRY_AFTER_CLAMPED_ATTR, None) == 86400.0
+        notes = getattr(exc, "__notes__", [])
+        assert any("86400" in note and "已截断" in note for note in notes)
+
+
+# ── 控制器 FINDING 2：连接/传输/网络类错误必须重试 ──────────────────────────
+
+@pytest.mark.parametrize("name", ["ConnectError", "TransportError", "NetworkError",
+                                  "TimeoutError", "ConnectionError"])
+def test_classify_network_failure_type_names_are_transient(name):
+    """真实 SDK 的连接失败叫 ``ConnectError``（Connective 而非 Connection）。"""
+    exc = type(name, (Exception,), {})("boom")
+    assert classify_http_error(exc) is TransientError
+
+
+async def test_connect_error_is_retried_as_transient(slept):
+    """掉线是最该重试的故障：绝不能因类型名不匹配而判为永久错误。"""
+    err = type("ConnectError", (Exception,), {})("connection dropped")
+    c = FakeClient(error=err)
+    p = OpenAICompatProvider(parse_alias("openai:m"), api_key="k", client=c)
+    with pytest.raises(TransientError):
+        await p.complete([{"role": "user", "content": "x"}], temperature=0, max_tokens=10)
+    assert len(c.calls) == 4
