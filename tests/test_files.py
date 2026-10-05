@@ -1,5 +1,7 @@
 import hashlib
+import os
 import re
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -37,6 +39,34 @@ def test_rejects_dotted_or_drive_relative_drive_paths(bad):
         safe_relpath(bad)
 
 
+@pytest.mark.parametrize("bad", [
+    "12:30-notes.md", "NUL:", "nul:$DATA", "com:", "x.txt:$DATA", "a/b:",
+])
+def test_rejects_colon_bearing_segments(bad):
+    """冒号在 Windows 上是数据流分隔符：放行它等于放行一个写不进去的名字。
+
+    修复前 ``atomic_write`` 的临时名（``.12:30-notes.md.<hex>.tmp``）会被解释成
+    数据流，写出的却是名为 ``.12`` 的基文件，``os.replace`` 抛裸 ``OSError``，
+    ``unlink(missing_ok=True)`` 只删流，残渣 ``.12`` 留在输出目录里。
+    """
+    with pytest.raises(UnsafePathError):
+        safe_relpath(bad)
+
+
+def test_rejected_colon_name_leaves_directory_unchanged(tmp_path):
+    (tmp_path / "keep.txt").write_text("x")
+    before = sorted(p.name for p in tmp_path.iterdir())
+    with pytest.raises(UnsafePathError):
+        safe_relpath("12:30-notes.md")
+    assert sorted(p.name for p in tmp_path.iterdir()) == before == ["keep.txt"]
+
+
+@pytest.mark.parametrize("bad", ["a/NUL", "a/b/com1.txt", "sub/aux.md"])
+def test_rejects_reserved_names_in_non_first_segments(bad):
+    with pytest.raises(UnsafePathError):
+        safe_relpath(bad)
+
+
 @pytest.mark.parametrize("ok", [
     "README.md", "backend/app/main.py", "docs/接口文档.md",
     "a/b/c/d.txt", "deep/nested/dir/file.js", "UPPER/Case.MD",
@@ -67,9 +97,50 @@ def test_atomic_write_overwrites_existing(tmp_path):
     assert read_text(p) == "new"
 
 
+def test_atomic_write_cleans_temp_when_replace_fails(tmp_path):
+    target = tmp_path / "x.txt"
+    target.mkdir()  # 目标是目录：os.replace 必然失败，临时文件必须被 finally 清掉
+    with pytest.raises(OSError):
+        atomic_write_bytes(target, b"data")
+    assert list(tmp_path.glob("*.tmp")) == []
+    assert list(tmp_path.glob(".*tmp*")) == []
+
+
+def test_read_text_is_byte_symmetric_with_atomic_write_text(tmp_path):
+    p = tmp_path / "x.txt"
+    atomic_write_text(p, "a\r\nb")
+    assert read_text(p) == "a\r\nb"
+
+
+def _make_dir_link(link: Path, target: Path) -> bool:
+    """建一个指向目录的链接：Windows 用 junction（mklink /J，无需提权），其余用 symlink。"""
+    if os.name == "nt":
+        return subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+            capture_output=True,
+        ).returncode == 0
+    try:
+        os.symlink(target, link, target_is_directory=True)
+    except OSError:
+        return False
+    return True
+
+
 def test_tree_lists_relative_posix_paths(tmp_path):
     (tmp_path / "a").mkdir(); (tmp_path / "a" / "b.txt").write_text("x")
     assert tree(tmp_path) == ["a/b.txt"]
+
+
+def test_tree_does_not_follow_directory_links(tmp_path):
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "inside.txt").write_text("i")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("s")
+    if not _make_dir_link(root / "link", outside):
+        pytest.skip("当前平台无法创建目录链接/联接")
+    assert tree(root) == ["inside.txt"]
 
 
 # --- 以下覆盖 brief 接口清单中未被上面用例触及的产出 ---
