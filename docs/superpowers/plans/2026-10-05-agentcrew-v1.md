@@ -621,8 +621,13 @@ def test_terminal_states_have_no_outgoing():
         assert is_terminal(s)
 
 def test_failed_has_only_manual_retry_edge():
-    assert S.FAILED not in {d for s, ds in ALLOWED_TRANSITIONS.items() for d in ds
-                            if s is not S.FAILED}
+    # FAILED 的出边为空（人工重试走 TaskBoard.reset_failed()，不经状态机），
+    # 且只作为 RUNNING / REVIEW 的终点。
+    assert ALLOWED_TRANSITIONS[S.FAILED] == frozenset()
+    assert {s for s, ds in ALLOWED_TRANSITIONS.items() if S.FAILED in ds} == {
+        S.RUNNING, S.REVIEW,
+    }
+    assert is_terminal(S.FAILED)
 ```
 
 - [ ] **Step 2: 运行测试确认失败**
