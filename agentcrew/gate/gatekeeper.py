@@ -23,11 +23,13 @@
   （``NullPrompter`` 是零 IO 的全自动实现，但真正抑制提示的是模式判断）；
   ``plan`` / ``delivery`` 各只开一个卡点，``both`` 两个都开。
 
-每条门禁裁决都落两处账：``board.record_review``（任务历史）与一条
-``gate_result`` 审计事件（spec §14.1 的 ``layer``/``verdict``/``score``/``issues``）。
-G2 的 ``Reviewer`` 自身也发一条同类事件（其模块契约）—— 本模块**不做去重**，
-两层各发一条，消费方按行渲染。状态跃迁的 ``reason`` 一律取 ``TaskStatus.value``：
-``str`` 混入枚举在 f-string 里会渲染成 ``TaskStatus.REWORK``。
+每条门禁裁决都落两处账：``board.record_review``（任务历史，每层都记）与**每层
+恰好一条** ``gate_result`` 审计事件（spec §14.1 的 ``layer``/``verdict``/``score``/
+``issues``）。事件按层归属：G2 的 ``gate_result`` 由 ``Reviewer`` 自己发（裁决、
+分数、评审人身份都在它手里），因此本模块**只为 G1 发** —— 两层各一条、不重不漏。
+谁都不许重复记账：Task 30 的运行报告按这些事件统计各层驳回数（G1 拦截 N /
+G2 驳回 M），重复一条就是报告里的错数。状态跃迁的 ``reason`` 一律取
+``TaskStatus.value``：``str`` 混入枚举在 f-string 里会渲染成 ``TaskStatus.REWORK``。
 """
 
 from __future__ import annotations
@@ -150,12 +152,13 @@ class Gatekeeper:
         """
         task_id = task.id
         static = run_static(self._board.get(task_id), self._store, round_no=round_no)
-        self._record(static)
+        self._board.record_review(task_id, static)
+        self._emit(static)          # G2 的 gate_result 由 Reviewer 自己发
         records = [static]
         if static.verdict == "approve":
             llm = await self._reviewer.review(
                 self._board.get(task_id), round_no=round_no)
-            self._record(llm)
+            self._board.record_review(task_id, llm)
             records.append(llm)
 
         primary = records[-1]
@@ -188,9 +191,13 @@ class Gatekeeper:
 
     # ---- 状态决策 ----
 
-    def _record(self, record: ReviewRecord) -> None:
-        """一条评审记录落两处账：任务历史（board）与审计事件（ledger）。"""
-        self._board.record_review(record.task_id, record)
+    def _emit(self, record: ReviewRecord) -> None:
+        """落一条 ``gate_result`` 审计事件（spec §14.1 的字段 + 定位字段）。
+
+        只有本模块独占的层（G1）走这里：G2 的事件由 ``Reviewer`` 自持的裁决、
+        分数与评审人身份直接发出。两层各恰好一条 —— 重复记账会让按事件统计的
+        各层驳回数翻倍（Task 30 报告），漏记则让 G1 拦截数凭空消失。
+        """
         self._ledger.emit(
             "gate_result",
             task_id=record.task_id,

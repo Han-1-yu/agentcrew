@@ -288,6 +288,22 @@ async def test_gate_result_events_carry_spec_fields(env, tmp_path):
     assert data["issues"] == env["board"].get("T-2").reviews[-1].issues
 
 
+async def test_full_pass_emits_exactly_one_gate_result_per_layer(env, tmp_path):
+    """两层各一条，双向钉死计数：G2 的事件归 ``Reviewer``，本模块只发 G1。
+
+    Task 30 的运行报告按 ``gate_result`` 统计各层驳回数（G1 拦截 N / G2 驳回 M），
+    任何一层被记两次都会让报告显示错的数字 —— 多一条或少一条都必须让本用例失败。
+    """
+    commit(env, "def f():\n    return 1\n")
+    await _gk(env, tmp_path).evaluate(env["task"], round_no=1)
+    events = list(env["ledger"].events("gate_result"))
+    assert [e.data["layer"] for e in events] == ["static", "llm"]
+    assert [e.data["task_id"] for e in events] == ["T-2", "T-2"]
+    assert [e.data["verdict"] for e in events] == ["approve", "approve"]
+    # 板上两层的评审记录不受「谁发事件」影响：每层都必须 record_review。
+    assert [r.layer for r in env["board"].get("T-2").reviews] == ["static", "llm"]
+
+
 async def test_transition_reason_uses_status_value_not_enum(env, tmp_path):
     commit(env, "def g():\n    return 1\n")
     await _gk(env, tmp_path).evaluate(env["task"], round_no=1)
