@@ -3111,9 +3111,18 @@ def test_budget_consumes_until_full():
     assert b.remaining >= 0
 
 def test_budget_never_negative():
+    # 先精确装满，再试探超限；被拒绝的 consume **不改变 used**（否则一个大项会饿死后面所有小项）
     b = TokenBudget(limit=5)
-    b.try_consume("a" * 100_000)
+    assert b.try_consume("a" * 15) is True      # ≈5 tok
+    assert b.try_consume("a" * 100_000) is False
     assert b.remaining == 0 and b.used <= 5
+
+def test_budget_rejection_leaves_used_unchanged():
+    b = TokenBudget(limit=100)
+    b.try_consume("hello world")
+    before = b.used
+    assert b.try_consume("a" * 100_000) is False
+    assert b.used == before
 
 def test_budget_zero_limit_rejects_everything():
     b = TokenBudget(limit=0)
@@ -3152,10 +3161,16 @@ def test_small_pack_not_truncated(bus):
     assert bus.build(bus._board.get("B")).truncated is False
 
 def test_tiny_budget_truncates_and_appends_notice(bus, tmp_path):
-    b = ContextBus("做一个 Todo 应用", bus._board, bus._store, budget_tokens=30)
+    # 预算 2 装不下任何真实内容（fixture 里最小的上游 brief 也 ≈3 tok），故必然降级
+    b = ContextBus("做一个 Todo 应用", bus._board, bus._store, budget_tokens=2)
     pack = b.build(b._board.get("B"))
     assert pack.truncated is True
     assert b.render_notice() == TRUNCATION_NOTICE
+
+def test_comfortable_budget_does_not_truncate_same_fixture(bus):
+    # 同一 fixture 在充裕预算下不得降级 —— 与上一条共同钉死边界
+    b = ContextBus("做一个 Todo 应用", bus._board, bus._store, budget_tokens=24000)
+    assert b.build(b._board.get("B")).truncated is False
 
 def test_incompressible_fields_survive_tiny_budget(bus):
     b = ContextBus("目标", bus._board, bus._store, budget_tokens=1)
