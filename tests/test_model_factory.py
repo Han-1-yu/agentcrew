@@ -10,7 +10,9 @@ brief 用例原样保留；在其之上补五件事：
   monkeypatch 它注入临时 fixtures；
 - 信号量只包住 ``complete()``：记账（ledger.emit）发生在释放之后；
 - Task 18 的 carry-forward：``Retry-After`` 截断事实必须经 ``on_retry`` 落到
-  ledger，否则操作者只能看到一次 300 秒的无解释等待。
+  ledger，否则操作者只能看到一次 300 秒的无解释等待；
+- 控制器 FINDING：结构化输出（PM 拆解、G2 评审的实际路径）必须走工厂的受治理
+  入口 —— 同一个信号量、同一段记账；降级/修复里失败的调用同样花了 token。
 """
 
 import asyncio
@@ -19,6 +21,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from pydantic import BaseModel
 
 from agentcrew.config import Settings
 from agentcrew.models.config import parse_alias
@@ -38,6 +41,7 @@ from agentcrew.models.providers.openai_compat import (
     MAX_RETRY_AFTER_SECONDS,
     OpenAICompatProvider,
 )
+from agentcrew.models.structured import StructuredOutputError
 from agentcrew.runtime.ledger import Ledger
 from agentcrew.utils.retry import TransientError
 
@@ -391,6 +395,136 @@ def test_default_fixtures_dir_is_module_level_and_read_at_construction(
     assert result.text == "MARKER"
 
 
+# ── 控制器 FINDING：结构化输出走工厂的受治理入口 ──
+
+class _Answer(BaseModel):
+    """测试用结构化输出 schema。"""
+
+    value: int
+
+
+class _StructuredProvider(BaseProvider):
+    """可编程的假 Provider：脚本化文本 + 可注入延迟（钉结构化路径与并发）。"""
+
+    def __init__(
+        self,
+        *,
+        alias: str = "openai:m",
+        texts: Sequence[str] = ('{"value": 1}',),
+        delay: float = 0.0,
+    ) -> None:
+        super().__init__(parse_alias(alias))
+        self._texts = list(texts)
+        self.delay = delay
+        self.calls = 0
+        self.live = 0
+        self.peak = 0
+
+    async def complete(
+        self,
+        messages: Sequence[Message],
+        *,
+        temperature: float,
+        max_tokens: int,
+        response_format: ResponseFormat | None = None,
+    ) -> CompletionResult:
+        self.calls += 1
+        self.live += 1
+        self.peak = max(self.peak, self.live)
+        if self.delay:
+            await asyncio.sleep(self.delay)
+        self.live -= 1
+        text = self._texts[min(self.calls - 1, len(self._texts) - 1)]
+        return CompletionResult(
+            text=text, provider=self.binding.provider, model=self.binding.model,
+            prompt_tokens=5, completion_tokens=2, latency_ms=3)
+
+
+async def test_structured_emits_one_llm_call_with_purpose(
+        settings, monkeypatch, tmp_path):
+    """第 1 级一次成功 → 恰好一条 ``llm_call``，字段与 ``call()`` 同形。"""
+    lg = Ledger(tmp_path / "l.jsonl", run_id="R")
+    f = ModelFactory(settings.model_copy(update={"max_concurrency": 1}), ledger=lg)
+    provider = _StructuredProvider()
+    monkeypatch.setattr(f, "_resolve", lambda alias: provider)
+    emitted: list[int] = []
+    original_emit = lg.emit
+
+    def spy_emit(event, **data):
+        if event == "llm_call":
+            emitted.append(f.llm_semaphore._value)
+        return original_emit(event, **data)
+
+    monkeypatch.setattr(lg, "emit", spy_emit)
+    answer = await f.complete_structured(
+        "openai:m", [{"role": "user", "content": "x"}], _Answer,
+        temperature=0, max_tokens=10, purpose="review", role="architect")
+
+    assert answer == _Answer(value=1)
+    assert provider.calls == 1
+    assert f.llm_calls == 1
+    assert f.total_prompt_tokens == 5 and f.total_completion_tokens == 2
+    assert emitted == [1]                       # 记账在信号量释放之后
+    ev = list(lg.events("llm_call"))[-1]
+    assert ev.data == {
+        "role": "architect",
+        "model": "m",
+        "prompt_tokens": 5,
+        "completion_tokens": 2,
+        "estimated_cost_usd": 0.0,
+        "latency_ms": 3,
+        "purpose": "review",
+    }
+
+
+async def test_structured_semaphore_caps_concurrency(settings, monkeypatch):
+    """结构化调用与 ``call()`` 共享同一个全局信号量（spec §7.3：G2 也计入）。"""
+    s = settings.model_copy(update={"max_concurrency": 2})
+    f = ModelFactory(s, ledger=None)
+    provider = _StructuredProvider(delay=0.02)
+    monkeypatch.setattr(f, "_resolve", lambda alias: provider)
+    await asyncio.gather(*[
+        f.complete_structured("openai:m", [{"role": "user", "content": "x"}], _Answer,
+                              temperature=0, max_tokens=10,
+                              purpose="review", role="architect")
+        for _ in range(8)])
+    assert provider.peak <= 2
+    assert f.llm_calls == 8
+
+
+async def test_structured_accounts_every_ladder_attempt(
+        settings, monkeypatch, tmp_path):
+    """修复循环里失败的那次调用同样花了 token —— 两条都要进报告（§14.3）。"""
+    lg = Ledger(tmp_path / "l.jsonl", run_id="R")
+    f = ModelFactory(settings, ledger=lg)
+    provider = _StructuredProvider(alias="ernie:e", texts=["不是 JSON", '{"value": 7}'])
+    monkeypatch.setattr(f, "_resolve", lambda alias: provider)
+    answer = await f.complete_structured(
+        "ernie:e", [{"role": "user", "content": "x"}], _Answer,
+        temperature=0, max_tokens=10, purpose="review", role="architect")
+
+    assert answer == _Answer(value=7)
+    assert provider.calls == 2
+    assert lg.count("llm_call") == 2
+    assert f.total_prompt_tokens == 10          # 5 + 5，失败那次没被丢
+
+
+async def test_structured_accounts_consumed_tokens_before_reraising(
+        settings, monkeypatch, tmp_path):
+    """阶梯耗尽抛错时，已消耗的 token 也必须先记账再抛（否则静默丢账）。"""
+    lg = Ledger(tmp_path / "l.jsonl", run_id="R")
+    f = ModelFactory(settings, ledger=lg)
+    provider = _StructuredProvider(alias="ernie:e", texts=["不是 JSON"])
+    monkeypatch.setattr(f, "_resolve", lambda alias: provider)
+    with pytest.raises(StructuredOutputError):
+        await f.complete_structured(
+            "ernie:e", [{"role": "user", "content": "x"}], _Answer,
+            temperature=0, max_tokens=10, purpose="review", role="architect")
+    assert provider.calls == 3                  # 1 次 + repair_attempts(2)
+    assert lg.count("llm_call") == 3
+    assert f.llm_calls == 3
+
+
 # ── Task 1 carry-forward：Key 解析的逐 provider 行为 ──
 
 @pytest.mark.parametrize("alias,env_name", [
@@ -439,6 +573,20 @@ def test_key_resolution_is_passed_to_provider(settings, monkeypatch):
         ("anthropic", "sk-test-anthropic", "claude-sonnet-5"),
         ("openai_compat", "ollama", "llama3"),
     ]
+
+
+def test_ollama_placeholder_used_even_with_base_url_set(settings, monkeypatch):
+    """``OLLAMA_BASE_URL`` 已设时也不能把 base URL 当 key 传给 SDK（占位串先判）。"""
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+    built: list[str | None] = []
+
+    def fake_openai(binding, *, api_key, on_retry):
+        built.append(api_key)
+        return binding
+
+    monkeypatch.setattr("agentcrew.models.factory.OpenAICompatProvider", fake_openai)
+    ModelFactory(settings.model_copy(update={"mock": False})).get("ollama:llama3")
+    assert built == ["ollama"]
 
 
 def test_api_key_for_mock_and_unknown_provider_is_none(settings):

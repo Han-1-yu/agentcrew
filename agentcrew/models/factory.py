@@ -11,9 +11,14 @@ spec §7.3 的两级并发限额里，任务槽位由 Scheduler 持有，本模�
   :class:`MockProvider`（用 ``mock`` 预设的能力位），无需任何 API Key。
 - API Key 只从环境读取（spec §17.2），缺 Key 时在构造 Provider 的当场抛
   :class:`ModelFactoryError` 并点名环境变量，绝不静默降级成无鉴权调用；
-  ``ollama`` 是本地服务，用占位串 ``"ollama"``。
+  ``ollama`` 是本地服务，一律用占位串 ``"ollama"``。
 - 记账：``call()`` 在信号量**释放之后**累加计数、用 ``estimate_cost`` 估算成本，
   再发一条 ``llm_call`` 事件（spec §13.2 的七个字段）。
+- **结构化输出也走同一个受治理入口**：``complete_structured()`` 在工厂内解析别名、
+  独占同一个信号量并复用同一段记账 —— PM 拆解与 G2 评审（spec §7.3 明确计入
+  全局限额、§14.3 的报告要汇总 token/成本）经它调用，不会绕过限流与审计。
+  ``models/structured.py`` 的 ``complete_structured`` 保持纯阶梯，仍可用任意
+  Provider 独立测试。
 - fixture 缺失**绝不静默**（spec §16.1）：``MockProvider`` 的 ``on_fallback``
   接到 ledger 的 ``mock_fallback`` 事件。
 - Task 18 的 carry-forward：``Retry-After`` 被截断到 300 秒时，截断事实经
@@ -22,10 +27,13 @@ spec §7.3 的两级并发限额里，任务槽位由 Scheduler 持有，本模�
 """
 
 import asyncio
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
+from pydantic import BaseModel
+
 from agentcrew.config import Settings
+from agentcrew.models import structured
 from agentcrew.models.config import PROVIDER_PRESETS, ModelBinding, parse_alias
 from agentcrew.models.pricing import estimate_cost
 from agentcrew.models.providers.anthropic import AnthropicProvider
@@ -40,6 +48,7 @@ from agentcrew.models.providers.openai_compat import (
     RETRY_AFTER_CLAMPED_ATTR,
     OpenAICompatProvider,
 )
+from agentcrew.models.structured import DegradeEvent
 from agentcrew.runtime.ledger import Ledger
 
 #: 默认 fixture 根目录（仓库根的 ``examples/fixtures``）。模块级常量是契约的
@@ -227,6 +236,61 @@ class ModelFactory:
                 temperature=temperature,
                 max_tokens=max_tokens,
                 response_format=response_format)
+        self._account(result, purpose=purpose, role=role)
+        return result
+
+    async def complete_structured(
+        self,
+        alias: str,
+        messages: Sequence[Message],
+        schema: type[BaseModel],
+        *,
+        temperature: float,
+        max_tokens: int,
+        purpose: str,
+        role: str,
+        repair_attempts: int = 2,
+        on_degrade: Callable[[DegradeEvent], None] | None = None,
+    ) -> BaseModel:
+        """结构化输出的受治理入口：同一个信号量 + 同一段记账（spec §7.3/§14.3）。
+
+        ``models/structured.py`` 的
+        :func:`~agentcrew.models.structured.complete_structured` 是纯阶梯、只认
+        裸 Provider；直接拿它调用的路径（PM 拆解、G2 评审）会同时绕过全局调用
+        限额与 ``llm_call`` 审计，报告里的 token/成本会缺掉整块。
+        本方法把阶梯包进工厂：解析别名 → 取信号量 → 跑阶梯 → 记账。
+
+        阶梯内部因能力降级/修复循环可能多次调用 ``provider.complete()``，这些
+        调用同样消耗 token，因此**每一次返回结果的调用各记一条 ``llm_call``**
+        （与 ``call()`` 同形）；阶梯最终失败时已消耗的部分也已记账再抛原异常。
+        Provider 调用本身抛错（无 usage 可记）时不产生事件，与 ``call()`` 一致。
+        """
+        provider = self.get(alias)
+        collecting = _CollectingProvider(provider)
+        try:
+            async with self._llm_semaphore:
+                return await structured.complete_structured(
+                    collecting,
+                    messages,
+                    schema,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    repair_attempts=repair_attempts,
+                    on_degrade=on_degrade)
+        finally:
+            # 信号量已释放（async with 先于本 finally 退出）；阶梯成功与失败
+            # 走同一条记账路径，已消耗的 token 一条都不丢。
+            for result in collecting.results:
+                self._account(result, purpose=purpose, role=role)
+
+    # ── 内部 ──────────────────────────────────────────────────────────────
+
+    def _account(self, result: CompletionResult, *, purpose: str, role: str) -> None:
+        """累加用量、估算成本并发一条 ``llm_call`` —— **两条调用路径共用**。
+
+        单一记账路径是刻意的：``call()`` 与 ``complete_structured()`` 若各写一份，
+        迟早漂移，而 spec §14.3 的运行报告会照抄其中一份。
+        """
         cost = estimate_cost(
             result.model, result.prompt_tokens, result.completion_tokens)
         self._llm_calls += 1
@@ -243,9 +307,6 @@ class ModelFactory:
                 estimated_cost_usd=cost,
                 latency_ms=result.latency_ms,
                 purpose=purpose)
-        return result
-
-    # ── 内部 ──────────────────────────────────────────────────────────────
 
     def _implementation_for(self, binding: ModelBinding) -> str:
         """binding 的生效实现方式（``provider_overrides`` 可整体替换它）。"""
@@ -277,12 +338,17 @@ class ModelFactory:
         })
 
     def _require_api_key(self, binding: ModelBinding) -> str:
-        """取 ``binding.provider`` 的 API Key；缺失时抛错并点名环境变量。"""
+        """取 ``binding.provider`` 的 API Key；缺失时抛错并点名环境变量。
+
+        ``ollama`` **先于** :meth:`Settings.api_key_for` 判断：后者在
+        ``OLLAMA_BASE_URL`` 已设时返回的是 base URL，把 URL 当 key 传进去虽无
+        害（本地服务不鉴权），但会让占位串分支永远不可达。
+        """
+        if binding.provider == "ollama":
+            return _OLLAMA_PLACEHOLDER
         api_key = self._settings.api_key_for(binding.provider)
         if api_key:
             return api_key
-        if binding.provider == "ollama":
-            return _OLLAMA_PLACEHOLDER
         raise ModelFactoryError(
             f"provider {binding.provider!r} 缺少 API Key（alias={binding.alias!r}）："
             f"请设置环境变量 {binding.api_key_env}（spec §17.2）")
@@ -310,3 +376,37 @@ class ModelFactory:
         if clamped is not None:
             data["retry_after_clamped_from"] = clamped
         self._ledger.emit("llm_retry", **data)
+
+
+class _CollectingProvider(BaseProvider):
+    """包住真实 Provider，收集每次 ``complete()`` 的 ``CompletionResult``。
+
+    :func:`~agentcrew.models.structured.complete_structured` 会因能力降级与修复
+    循环多次调用 provider，而它只返回最终的 schema 对象、不吐出中间用量；包一层
+    收集起来，工厂就能在阶梯结束后统一记账（成功与失败一视同仁）。
+
+    ``capabilities`` 与 ``binding`` 都委托给被包的真实 Provider（继承自
+    ``BaseProvider`` 的默认行为），阶梯据此选起始级别、报告 provider 名 ——
+    这一层对阶梯完全透明。
+    """
+
+    def __init__(self, provider: BaseProvider) -> None:
+        super().__init__(provider.binding)
+        self._provider = provider
+        self.results: list[CompletionResult] = []
+
+    async def complete(
+        self,
+        messages: Sequence[Message],
+        *,
+        temperature: float,
+        max_tokens: int,
+        response_format: ResponseFormat | None = None,
+    ) -> CompletionResult:
+        result = await self._provider.complete(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=response_format)
+        self.results.append(result)
+        return result
