@@ -211,3 +211,51 @@ def test_reset_failed_rejects_task_that_is_not_failed():
     with pytest.raises(ValueError):
         b.reset_failed("A")
     assert b.get("A").status is S.RUNNING
+
+
+# ---- 失败传播的传递性（控制器复核发现的一级传播缺口，修复轮）----
+
+def test_refresh_blocks_transitive_descendants_of_failed_task():
+    b = TaskBoard([mk("A", status=S.FAILED), mk("B", ["A"]), mk("C", ["B"])])
+    assert b.refresh() == 2          # B、C 各一条跃迁
+    assert b.get("B").status is S.BLOCKED
+    assert b.get("C").status is S.BLOCKED
+
+def test_refresh_blocks_deep_chain_transitively():
+    b = TaskBoard([mk("A", status=S.FAILED), mk("B", ["A"]), mk("C", ["B"]),
+                   mk("D", ["C"])])
+    b.refresh()
+    assert all(b.get(t).status is S.BLOCKED for t in "BCD")
+
+def test_refresh_does_not_resurrect_succeeded_descendants():
+    b = TaskBoard([mk("A", status=S.FAILED), mk("B", ["A"]), mk("C", ["B"]),
+                   mk("D", ["A"], status=S.SUCCEEDED)])
+    b.refresh()
+    assert b.get("C").status is S.BLOCKED        # 传递阻塞生效
+    assert b.get("D").status is S.SUCCEEDED      # 已是终态的下游原样保留
+
+def test_refresh_blocks_transitive_descendants_of_cancelled_task():
+    b = TaskBoard([mk("A", status=S.CANCELLED), mk("B", ["A"]), mk("C", ["B"])])
+    b.refresh()
+    assert b.get("B").status is S.BLOCKED
+    assert b.get("C").status is S.BLOCKED
+
+def test_refresh_blocks_ready_task_when_upstream_is_failed():
+    b = TaskBoard([mk("A", status=S.FAILED), mk("B", ["A"], status=S.READY)])
+    b.refresh()
+    assert b.get("B").status is S.BLOCKED     # READY → BLOCKED 是合法边
+
+def test_transitively_blocked_chain_recovers_step_by_step():
+    b = TaskBoard([mk("A", status=S.FAILED), mk("B", ["A"]), mk("C", ["B"])])
+    b.refresh()
+    assert b.get("C").status is S.BLOCKED
+    b.reset_failed("A")
+    for status in (S.RUNNING, S.REVIEW, S.SUCCEEDED):
+        b.transition("A", status)
+    b.refresh()
+    assert b.get("B").status is S.READY         # 直接下游解除阻塞
+    assert b.get("C").status is S.BLOCKED       # C 的依赖 B 只是 READY，尚不放行
+    for status in (S.RUNNING, S.REVIEW, S.SUCCEEDED):
+        b.transition("B", status)
+    b.refresh()
+    assert b.get("C").status is S.READY

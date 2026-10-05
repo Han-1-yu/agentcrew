@@ -25,7 +25,7 @@ from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import Any
 
-from agentcrew.task.graph import TaskGraph, blocked_ids, ready_ids
+from agentcrew.task.graph import TaskGraph, ready_ids
 from agentcrew.task.state_machine import assert_transition
 from agentcrew.task.state_machine import is_terminal as is_terminal_status
 from agentcrew.task.task import (
@@ -35,6 +35,11 @@ from agentcrew.task.task import (
     Task,
     TaskResult,
     TaskStatus,
+)
+
+#: 永久终止、会把传递下游一并拖死的上游状态（spec §7.3「失败传播」）。
+_FAILED_UPSTREAM_STATES: frozenset[TaskStatus] = frozenset(
+    {TaskStatus.FAILED, TaskStatus.CANCELLED}
 )
 
 
@@ -176,7 +181,11 @@ class TaskBoard:
 
         四步顺序固定：
 
-        (i) ``PENDING → BLOCKED``：任一依赖 ``FAILED`` / ``CANCELLED``；
+        (i) 任一 ``FAILED`` / ``CANCELLED`` 任务的**传递**下游中，所有未开工的
+            （``PENDING`` / ``READY``）任务 ``→ BLOCKED``。这正是 spec §7.3 的
+            「失败传播」：``TaskGraph.descendants()`` 决定范围，已是终态的下游
+            （``SUCCEEDED`` 等）不受影响。``blocked_ids`` 只覆盖**直接**依赖，
+            不足以表达传递闭包，故这里直接走图算法。
         (ii) ``PENDING → SKIPPED``：任一依赖 ``SKIPPED``（``graph.py`` 故意
              不做这一跳，是 ``TaskBoard`` 的职责）；
         (iii) ``PENDING → READY``：全部依赖 ``SUCCEEDED``；
@@ -189,7 +198,7 @@ class TaskBoard:
         """
         changed = 0
 
-        for task_id in blocked_ids(self._tasks):
+        for task_id in self._blocked_by_failed_upstream():
             self.transition(task_id, TaskStatus.BLOCKED, reason="upstream-failed")
             changed += 1
 
@@ -312,6 +321,27 @@ class TaskBoard:
 
     def _pending_ids(self) -> list[str]:
         return [task.id for task in self.all() if task.status == TaskStatus.PENDING]
+
+    def _blocked_by_failed_upstream(self) -> list[str]:
+        """永久失败上游的全部传递下游中，尚未开工者（按 id 升序）。
+
+        spec §7.3「失败传播」：任一任务 ``FAILED`` / ``CANCELLED`` 后，
+        ``graph.descendants()`` 中所有未开始的任务转 ``BLOCKED``；已经
+        ``SUCCEEDED`` 的下游不受影响。终态（``SUCCEEDED`` / ``SKIPPED`` /
+        ``CANCELLED``）与在跑（``RUNNING`` / ``REVIEW`` / ``REWORK``）的一律
+        不动——``SUCCEEDED → BLOCKED`` 本就是非法跃迁，跳过它们既是语义要求，
+        也避免无谓抛错。
+        """
+        doomed: set[str] = set()
+        for task in self.all():
+            if task.status in _FAILED_UPSTREAM_STATES:
+                doomed |= self._graph.descendants(task.id)
+        return [
+            task.id
+            for task in self.all()
+            if task.id in doomed
+            and task.status in (TaskStatus.PENDING, TaskStatus.READY)
+        ]
 
     def _recovered_ids(self) -> list[str]:
         """依赖已全部 ``SUCCEEDED`` 的 ``BLOCKED`` 任务（可解除阻塞）。"""
