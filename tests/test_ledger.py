@@ -114,6 +114,58 @@ def test_truncated_multibyte_tail_is_skipped_not_raised(ledger, tmp_path, caplog
     assert any(record.levelno == logging.WARNING for record in caplog.records)
 
 
+def test_never_written_ledger_reads_as_empty(tmp_path):
+    lg = Ledger(tmp_path / "absent.jsonl", run_id="R-1")
+    assert list(lg.events()) == []
+    assert list(lg.events("a")) == []
+    assert lg.count("a") == 0
+
+
+def test_wrong_shape_line_is_skipped_not_raised(ledger, tmp_path, caplog):
+    ledger.emit("a")
+    with open(tmp_path / "ledger.jsonl", "a", encoding="utf-8") as file:
+        file.write('{"ts": "2026-01-01T00:00:00", "run_id": "R-1", "event": "b", "data": {}, "unexpected": 1}\n')
+        file.write('{"nope": 1}\n')
+    ledger.emit("c")  # 坏行之后的好行仍要读得出来
+    with caplog.at_level(logging.WARNING):
+        assert [e.event for e in ledger.events()] == ["a", "c"]
+        assert len(caplog.records) == 2  # 单次遍历：每条坏行恰好一条警告
+    assert ledger.count("a") == 1 and ledger.count("b") == 0 and ledger.count("c") == 1
+
+
+def test_wrong_shape_line_excerpt_is_redacted(ledger, tmp_path, caplog):
+    with open(tmp_path / "ledger.jsonl", "a", encoding="utf-8") as file:
+        file.write('{"event": "x", "api_key": "sk-abc123456", "extra": 1}\n')
+    with caplog.at_level(logging.WARNING):
+        assert list(ledger.events()) == []
+    assert "sk-abc123456" not in caplog.text
+    assert "结构未知" in caplog.text
+
+
+def test_count_agrees_with_len_events_across_bad_lines(ledger, tmp_path):
+    ledger.emit("a")
+    with open(tmp_path / "ledger.jsonl", "a", encoding="utf-8") as file:
+        file.write('{"partial":\n')  # 无法解析（截断尾行）
+        file.write('{"nope": 1}\n')  # 结构未知
+        file.write("\n   \n")  # 空行
+        file.write("修复\n")  # 合法 UTF-8 但非法 JSON
+    ledger.emit("a")
+    assert ledger.count("a") == len(list(ledger.events("a"))) == 2
+    assert len(list(ledger.events())) == 2
+
+
+def test_bad_line_warnings_distinguish_truncated_from_unknown_shape(ledger, tmp_path, caplog):
+    with open(tmp_path / "ledger.jsonl", "a", encoding="utf-8") as file:
+        file.write('{"partial":\n')
+        file.write('{"nope": 1}\n')
+    with caplog.at_level(logging.WARNING):
+        assert list(ledger.events()) == []
+    messages = [record.getMessage() for record in caplog.records]
+    assert len(messages) == 2
+    assert "无法解析" in messages[0]
+    assert "结构未知" in messages[1]
+
+
 def test_malformed_line_excerpt_is_redacted(tmp_path, caplog):
     lg = Ledger(tmp_path / "l.jsonl", run_id="R-1", secrets=["supersecret"])
     with open(tmp_path / "l.jsonl", "a", encoding="utf-8") as file:
