@@ -225,6 +225,13 @@ class ArtifactStore:
 
         ``delete_files=False`` 只清记录、保留文件（记录驱动的检查即刻不再看到它们，
         文件留给人工处置）。
+
+        **清单在这里一并重写**（Task 13 的 carry-forward）：调用方（``Scheduler``）
+        是在 ``take_ready`` 触发 ``on_change`` → ``write_manifest`` **之后**才调本
+        方法的，于是盘上会留下「清单声明了已被删掉的文件」这种状态 —— 恰恰是本
+        方法要杜绝的形态，而且它不自愈：下次 resume 的 ``load_manifest`` 会把幽灵
+        记录载回来，G1 拿着记录读一个不存在的文件，``FileNotFoundError`` 直接打崩
+        门禁。只改内存不改盘等于把不一致留给下一次启动。
         """
         kept: list[ArtifactRecord] = []
         removed = 0
@@ -237,6 +244,8 @@ class ArtifactStore:
                 continue
             removed += 1
         self._records = kept
+        if removed:
+            self.write_manifest()
         return removed
 
     def _delete_file(self, rel: str) -> bool:
@@ -281,6 +290,13 @@ class ArtifactStore:
         记录**整体替换**（幂等），不合并：清单是磁盘产物的权威快照，合并会留下
         指向已删除文件的幽灵记录（``discard_task`` 正是删文件又删记录的）。
         ``run_id`` 不一致的清单直接报错 —— 载入他次 run 的记录比不载入更危险。
+
+        **文件已不在的记录一律丢弃**（第二层防御）：一条指向不存在文件的记录是
+        G1 的陷阱 —— ``run_static`` 会拿着记录去 ``read`` 一个不存在的路径，
+        抛 ``FileNotFoundError`` 把门禁打崩（不是驳回，是崩溃）。不安全路径
+        （``../x``）同样丢弃：它本来就读不到，留着只会变成一颗延时炸弹。
+        丢弃的路径落一条 ``manifest_repaired`` 事件（没有 ledger 时静默跳过），
+        免得「清单被裁剪过」这件事只存在于某次调用的返回值里。
         """
         path = self._root / "MANIFEST.json" if path is None else Path(path)
         if not path.is_file():
@@ -291,8 +307,19 @@ class ArtifactStore:
                 f"MANIFEST.run_id={manifest.run_id!r} 与本次 run_id="
                 f"{self._run_id!r} 不一致，拒绝载入：{path}"
             )
-        self._records = list(manifest.entries)
+        records = [entry for entry in manifest.entries if self._file_present(entry.path)]
+        missing = [entry.path for entry in manifest.entries if entry not in records]
+        self._records = records
+        if missing and self._ledger is not None:
+            self._ledger.emit("manifest_repaired", path=str(path), dropped=missing)
         return len(self._records)
+
+    def _file_present(self, rel: str) -> bool:
+        """``rel`` 是否对应一个真实存在的文件；不安全路径按「不在」处理。"""
+        try:
+            return self.resolve(rel).is_file()
+        except UnsafePathError:
+            return False
 
     def file_tree(self) -> list[str]:
         """``root`` 下全部文件的 POSIX 相对路径（截断惯例见 ``files.tree``）。"""

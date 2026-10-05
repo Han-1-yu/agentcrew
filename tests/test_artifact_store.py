@@ -519,3 +519,72 @@ def test_discard_task_keeps_g1_record_file_invariant(store):
     assert record.verdict == "reject"             # 缺必需产物 app/main.py
     assert any("app/main.py" in issue for issue in record.issues)
     assert not any("hack" in issue for issue in record.issues)
+
+
+# ── 清单与磁盘的一致性（I3）──
+
+def test_discard_task_rewrites_manifest(tmp_path):
+    """返工丢弃必须**同时**改盘上的清单：否则幽灵记录会活过下一次 resume。
+
+    ``Scheduler.take_ready`` 是在 ``on_change`` → ``write_manifest`` **之后**才
+    调到 ``discard_task`` 的，所以只改内存的话，盘上留着的正是本方法 docstring
+    禁止的形态：清单声明了一堆已经被删掉的文件，而它不自愈 —— 下次启动
+    ``load_manifest`` 把它们载回来，G1 拿着记录去 ``read`` 不存在的文件。
+    """
+    root = tmp_path / "artifacts"
+    st = ArtifactStore(root, run_id="R-1")
+    task = _task_with("app/main.py")
+    st.commit("app/main.py", "x = 1\n", spec=task.deliverables[0], task=task)
+    st.commit("app/extra.py", "y = 1\n", spec=spec("app/extra.py"), task=task)
+    st.write_manifest()
+
+    assert st.discard_task(task.id) == 2
+
+    manifest = json.loads((root / "MANIFEST.json").read_text(encoding="utf-8"))
+    assert manifest["entries"] == []
+    assert st.file_tree() == ["MANIFEST.json"]
+
+
+def test_load_manifest_drops_records_whose_files_are_gone(tmp_path):
+    """记录指向不存在的文件 → 载入时丢弃（第二层防御），并留一条可查的事件。"""
+    root = tmp_path / "artifacts"
+    ledger = RecordingLedger()
+    st = ArtifactStore(root, run_id="R-1", ledger=ledger)
+    st.commit("a.py", "x = 1\n", spec=spec("a.py"), task=mk_task("T-1"))
+    st.commit("b.py", "y = 1\n", spec=spec("b.py"), task=mk_task("T-2"))
+    st.write_manifest()
+    (root / "a.py").unlink()            # 清单还在，文件已被删掉
+
+    fresh = ArtifactStore(root, run_id="R-1", ledger=ledger)
+    assert fresh.load_manifest() == 1
+    assert [record.path for record in fresh.records()] == ["b.py"]
+    assert ledger.events[-1] == (
+        "manifest_repaired",
+        {"path": str(root / "MANIFEST.json"), "dropped": ["a.py"]},
+    )
+
+
+def test_stale_manifest_does_not_blow_up_run_static(tmp_path):
+    """最终评审的现场：幽灵记录会让 ``run_static`` 抛 ``FileNotFoundError``。
+
+    没有这层清理时，G1 拿记录去读一个不存在的路径 —— 不是「驳回」，是把门禁
+    打崩（异常穿出 ``Gatekeeper.evaluate``）。丢弃幽灵记录之后，G1 只是如实报
+    「缺少必需产物」。
+    """
+    from agentcrew.gate.static_checks import run_static
+
+    root = tmp_path / "artifacts"
+    st = ArtifactStore(root, run_id="R-1")
+    task = _task_with("app/main.py")
+    st.commit("app/main.py", "x = 1\n", spec=task.deliverables[0], task=task)
+    st.commit("app/extra.py", "y = 1\n", spec=spec("app/extra.py"), task=task)
+    st.write_manifest()
+    # 模拟「清单写完之后文件才消失」（断电/外部清理/上一次 REWORK 的残留）
+    (root / "app" / "main.py").unlink()
+    (root / "app" / "extra.py").unlink()
+
+    fresh = ArtifactStore(root, run_id="R-1")
+    assert fresh.load_manifest() == 0
+    record = run_static(task, fresh, round_no=1)      # 不得抛 FileNotFoundError
+    assert record.verdict == "reject"
+    assert any("app/main.py" in issue for issue in record.issues)
