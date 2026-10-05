@@ -311,6 +311,32 @@ async def test_review_task_without_a_worker_is_regated(env):
     assert board.get("B").attempts == 1           # 走的是正常执行通道
 
 
+async def test_regate_dispatch_respects_the_worker_cap(env):
+    """补派发门禁不得突破并发上限：``peak_concurrency`` 是报告里读的实测值。
+
+    ``free`` 只算一次就给两个派发循环复用，于是 ``take_ready`` 与 ``_regate_ids``
+    各能派满一轮 —— 注册表峰值到 2× ``max_concurrency``，而 ``_regate_ids`` 的
+    docstring 声称它「保证 worker 注册表不超并发上限」。真实 Agent 并发仍由任务
+    槽位兜住，但报告里那个数会撒谎。
+    """
+    for t in "ABCDEFGH":
+        write_fixture(env["fx"], t)
+    review = []
+    for tid in "ABCD":
+        task = mk(tid)
+        env["store"].commit(f"{tid}.py", f"# {tid}\nX = 1\n",
+                            spec=task.deliverables[0], task=task)
+        review.append(task.model_copy(update={"status": S.REVIEW}))
+
+    board, sch = build(env, [*review, *[mk(t) for t in "EFGH"]],
+                       max_concurrency=2)
+    await asyncio.wait_for(sch.run(), timeout=10)
+
+    assert sch.deadlock_report is None
+    assert all(board.get(t).status is S.SUCCEEDED for t in "ABCDEFGH")
+    assert sch.peak_concurrency <= 2
+
+
 # ── 并发峰值是实测值 ──
 
 async def test_peak_concurrency_reaches_limit_across_eight_dispatches(env):

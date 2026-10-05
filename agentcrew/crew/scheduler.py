@@ -184,7 +184,12 @@ class Scheduler:
                 free = self._max_concurrency - len(self._workers)
                 for task in self._board.take_ready(limit=free):
                     self._spawn(task, discarded=self._discard_before_rework(task))
-                for task_id in self._regate_ids(limit=free):
+                # 限额**重算**：上一行可能刚把槽位派满，复用同一个 free 会让两个
+                # 循环各派一轮，注册表峰值到 2 × max_concurrency（peak_concurrency
+                # 是运行报告里读的实测值，不能撒谎）。
+                for task_id in self._regate_ids(
+                    limit=self._max_concurrency - len(self._workers)
+                ):
                     self._spawn_regate(task_id)
                 if self._workers:
                     outcome = await self._completion_queue.get()
@@ -306,8 +311,10 @@ class Scheduler:
           完成任务之前板上状态仍是 ``REVIEW``，没有这个检查就会在下一轮重复
           派发同一个任务（同一次门禁被并行判两遍）。
 
-        ``limit`` 与 ``take_ready`` 同源（空闲槽位数），保证 worker 注册表不超
-        并发上限；它同时充当「本轮最多补派发几个」的节流。
+        ``limit`` 由调用方给**当前**的空闲槽位数 —— 注意是 ``take_ready`` 派发
+        **之后**重算的那个值（``max_concurrency − len(self._workers)``），而不是
+        同一个 ``free`` 的复用：复用会让两个循环各派一轮，注册表峰值到 2 ×
+        ``max_concurrency``。它同时充当「本轮最多补派发几个」的节流。
         """
         return [
             task.id
