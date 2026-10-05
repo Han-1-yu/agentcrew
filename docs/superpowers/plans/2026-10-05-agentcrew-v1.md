@@ -3979,7 +3979,7 @@ def env(tmp_path, monkeypatch):
     lg = Ledger(tmp_path / "l.jsonl", run_id="R", secrets=s.secret_values())
     store = ArtifactStore(tmp_path / "o" / "art", run_id="R", ledger=lg)
     fx = tmp_path / "fx"; fx.mkdir()
-    (fx / "reviews.json").write_text(json.dumps({"*": GOOD}), encoding="utf-8")
+    (fx / "reviews.json").write_text(json.dumps({"_default": GOOD}), encoding="utf-8")
     models = ModelFactory(s, ledger=lg, fixtures_dir=fx)
     catalog = RoleCatalog(BUILTIN_ROLES)
     agents = AgentFactory(models, store, lg, "目标", catalog)
@@ -4133,7 +4133,7 @@ def env(tmp_path, monkeypatch):
     (fx / "responses" / "T-1" / "attempt-1.md").write_text(
         "```python file=app.py\ndef create_app():\n    return None\n```\n",
         encoding="utf-8")
-    (fx / "reviews.json").write_text(json.dumps({"*": APPROVE}), encoding="utf-8")
+    (fx / "reviews.json").write_text(json.dumps({"_default": APPROVE}), encoding="utf-8")
 
     models = ModelFactory(settings, ledger=ledger, fixtures_dir=fx)
     catalog = RoleCatalog(BUILTIN_ROLES)
@@ -4265,7 +4265,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENTCREW_GATE", "none")
     fx = tmp_path / "fx"; fx.mkdir()
     (fx / "plan_todo.json").write_text(json.dumps(PLAN), encoding="utf-8")
-    (fx / "reviews.json").write_text(json.dumps({"*": {
+    (fx / "reviews.json").write_text(json.dumps({"_default": {
         "verdict": "approve", "score": 0.9, "issues": [], "fix_hints": []}}),
         encoding="utf-8")
     for tid, path, body in [
@@ -4675,7 +4675,7 @@ def test_rework_loop_first_attempt_fails_second_passes():
 def test_reviews_fixture_covers_all_tasks_and_final():
     reviews = json.loads((FIX / "reviews.json").read_text(encoding="utf-8"))
     for t in PLAN["tasks"]:
-        assert t["id"] in reviews or "*" in reviews
+        assert t["id"] in reviews or "_default" in reviews
 
 def test_review_entries_are_schema_valid():
     from agentcrew.gate.reviewer import ReviewVerdict
@@ -4737,7 +4737,9 @@ Todo 应用技术栈：FastAPI + Pydantic v2 + 进程内内存存储（`store.py
 
 `T-FINAL/attempt-1.md` 产出 `DELIVERY.md`。
 
-`reviews.json` 提供 `{"*": {...approve...}}` 通配，并为 `T-005` 的 `attempt-1` 阶段提供一条 `reject`？—— **不需要**：T-005 的首次失败由 G1 静态层拦截，走不到 G2。因此 `reviews.json` 只需 `"*"` 通配全部 approve。
+`reviews.json` 提供 `{"_default": {...approve...}}` 兜底键（**键名必须是 `_default`**，
+`MockProvider` 的 `_review_text` 按 `data[task_id]` → `data["_default"]` 查找；写成 `"*"` 会查不到、
+落到占位回复并触发 Task 26 的「评审器格式错误」放行路径 —— run 仍成功，但该夹具的 score/issues 永不生效），并为 `T-005` 的 `attempt-1` 阶段提供一条 `reject`？—— **不需要**：T-005 的首次失败由 G1 静态层拦截，走不到 G2。因此 `reviews.json` 只需 `"_default"` 兜底键全部 approve。
 
 - [ ] **Step 4: 运行测试确认通过**
 
