@@ -259,3 +259,64 @@ def test_transitively_blocked_chain_recovers_step_by_step():
         b.transition("B", status)
     b.refresh()
     assert b.get("C").status is S.READY
+
+
+# ---- REWORK 任务的重新派发（控制器复核 FINDING 2）----
+
+def test_rework_task_is_redispatched_by_take_ready():
+    b = TaskBoard([mk("A")])
+    b.transition("A", S.READY); b.transition("A", S.RUNNING)
+    b.transition("A", S.REVIEW); b.transition("A", S.REWORK)
+    b.bump_rework("A")
+    assert b.get("A").rework_count == 1
+    taken = b.take_ready(limit=1)
+    assert [t.id for t in taken] == ["A"]
+    assert b.get("A").status is S.RUNNING
+    assert b.get("A").status_history[-1].reason == "rework-dispatched"
+
+def test_take_ready_mixes_ready_and_rework_by_priority_then_id():
+    b = TaskBoard([mk("A", priority=5), mk("Z", status=S.REWORK, priority=1)])
+    taken = b.take_ready(limit=1)
+    assert [t.id for t in taken] == ["Z"]        # priority 1 先于 5
+    assert b.get("Z").status is S.RUNNING
+    assert b.get("A").status is S.READY          # 被 limit 截断者保持 READY
+
+    b2 = TaskBoard([mk("A", priority=1), mk("Z", status=S.REWORK, priority=9)])
+    (first,) = b2.take_ready(limit=1)
+    assert first.id == "A"                       # priority 1 先于 9
+    assert b2.get("A").status is S.RUNNING
+    assert b2.get("Z").status is S.REWORK        # 被截断的 REWORK 保持 REWORK
+
+def test_rework_dispatch_does_not_consume_attempts():
+    b = TaskBoard([mk("A", status=S.REWORK), mk("B")])
+    taken = b.take_ready(limit=5)
+    assert [t.id for t in taken] == ["A", "B"]   # 同优先级按 id
+    assert b.get("A").status is S.RUNNING and b.get("A").attempts == 0
+    assert b.get("B").status is S.RUNNING and b.get("B").attempts == 1
+
+def test_rework_loop_redispatches_then_reaches_succeeded():
+    b = TaskBoard([mk("A")])
+    b.transition("A", S.READY); b.transition("A", S.RUNNING)
+    b.transition("A", S.REVIEW); b.transition("A", S.REWORK)
+    b.bump_rework("A")
+    (redispatched,) = b.take_ready(limit=1)
+    assert redispatched.status is S.RUNNING
+    b.transition("A", S.REVIEW)
+    b.transition("A", S.SUCCEEDED)
+    assert b.get("A").rework_count == 1 and b.get("A").attempts == 0
+    assert b.is_terminal()
+    assert b.take_ready(limit=5) == []
+
+def test_refresh_leaves_rework_task_alone_until_dispatched():
+    b = TaskBoard([mk("A", status=S.REWORK)])
+    b.refresh()
+    assert b.get("A").status is S.REWORK         # refresh 不移动 REWORK
+    (taken,) = b.take_ready(limit=1)             # 只有派发才离开 REWORK
+    assert taken.status is S.RUNNING
+
+    # 上游事后 FAILED 的 REWORK 任务（能进入 REWORK 说明其上游曾 SUCCEEDED，
+    # 合法历史不可达）：状态表没有 REWORK → BLOCKED 边，故 refresh 保持
+    # REWORK，等 take_ready 重新派发。
+    weird = TaskBoard([mk("A", status=S.FAILED), mk("B", ["A"], status=S.REWORK)])
+    weird.refresh()
+    assert weird.get("B").status is S.REWORK

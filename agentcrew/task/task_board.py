@@ -13,7 +13,8 @@
 - 本类不做任何 I/O：持久化由调用方通过 ``on_change`` 回调完成（每次状态跃迁
   后触发，供 Task 15 的 checkpoint 落盘 ``tasks.json``）。
 
-额度语义（spec §6.2）：``attempts`` 由 :meth:`take_ready` 在**派发时**扣除，
+额度语义（spec §6.2）：``attempts`` 由 :meth:`take_ready` 在派发 ``READY`` 任务时
+扣除（``REWORK`` 重新派发**不**扣，返工额度记在 ``rework_count`` 上），
 ``rework_count`` 由调用方在 ``REVIEW → REWORK`` 之后调 :meth:`bump_rework`
 扣除；:meth:`transition` 本身不会隐式自增任何一个计数器。
 """
@@ -221,22 +222,46 @@ class TaskBoard:
     def take_ready(self, limit: int) -> list[Task]:
         """先 :meth:`refresh`，再按 ``(priority, id)`` 升序派发至多 ``limit`` 个。
 
-        每个被取中的任务在此刻扣一次 ``attempts``（spec §6.2「派发时扣除」：
-        进程中断也消耗额度，从机制上杜绝「中断 → resume → 再中断」的无限
-        循环），然后 ``READY → RUNNING``。被 ``limit`` 截断而留下的 READY
-        任务保持 READY、不扣额度。返回按派发顺序排列的 RUNNING 任务。
+        候选是 ``READY`` **与** ``REWORK`` 两种状态：``REWORK`` 等的是「带上
+        fix_hints 重新执行」，spec §6.1 把 ``REWORK → RUNNING`` 明确划给调度器
+        （「调度器取得槽位并派发」）；只取 ``READY`` 会让返工任务永远无人认领
+        （死锁）。``refresh()`` 不动 ``REWORK``，它只在派发时离开该状态。
+
+        两条派发路径**故意不对称**（spec §6.2），勿擅自「统一」：
+
+        - ``READY → RUNNING``：先扣一次 ``attempts``。额度在**派发时**扣除，
+          进程中断也消耗一次，从机制上杜绝「中断 → resume → 再中断」的无限
+          循环；reason ``dispatched``。
+        - ``REWORK → RUNNING``：**不扣** ``attempts``——返工是质量驱动的重执行，
+          额度记在 ``rework_count`` 上（``REVIEW → REWORK`` 时已由调用方 bump）；
+          reason ``rework-dispatched``。
+
+        两个额度各自有界：每轮返工至多 ``max_attempts`` 次执行、全局至多
+        ``max_reworks`` 轮，不存在无限循环。被 ``limit`` 截断的任务保持原状态、
+        不扣额度。返回按派发顺序排列的 RUNNING 任务。
         """
         self.refresh()
-        ready = sorted(
-            (task for task in self._tasks.values() if task.status == TaskStatus.READY),
+        candidates = sorted(
+            (
+                task
+                for task in self._tasks.values()
+                if task.status in (TaskStatus.READY, TaskStatus.REWORK)
+            ),
             key=lambda task: (task.priority, task.id),
         )
         taken: list[Task] = []
-        for task in ready[: max(0, limit)]:
-            self.bump_attempt(task.id)
-            taken.append(
-                self.transition(task.id, TaskStatus.RUNNING, reason="dispatched")
-            )
+        for task in candidates[: max(0, limit)]:
+            if task.status == TaskStatus.READY:
+                self.bump_attempt(task.id)
+                taken.append(
+                    self.transition(task.id, TaskStatus.RUNNING, reason="dispatched")
+                )
+            else:
+                taken.append(
+                    self.transition(
+                        task.id, TaskStatus.RUNNING, reason="rework-dispatched"
+                    )
+                )
         return taken
 
     # ---- 汇总 ----
