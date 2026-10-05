@@ -13,6 +13,8 @@ from agentcrew.context.budget import TokenBudget
 from agentcrew.context.context_bus import (
     ContextBus, ContextPack, DecisionRecord, TRUNCATION_NOTICE,
 )
+# 白盒：第 2 级按 _digest_text 的实际大小计费，测试需要复算这个口径
+from agentcrew.context.context_bus import _digest_text
 from agentcrew.task.task import Task, TaskStatus as S
 from agentcrew.task.task_board import TaskBoard
 from agentcrew.utils.tokens import estimate_tokens
@@ -90,10 +92,21 @@ def test_small_pack_not_truncated(bus):
 
 
 def test_tiny_budget_truncates_and_appends_notice(bus, tmp_path):
-    b = ContextBus("做一个 Todo 应用", bus._board, bus._store, budget_tokens=30)
+    # 预算是 2：连最小的第 2 级（上游摘要实际约 7 tok）也装不下 -> 降级。
+    # （原 brief 写 30，但本 fixture 里唯一内容是约 3 tok 的 brief「产出 PRD」，
+    #   30 其实装得下全部内容，truncated 正确为 False —— 见下方对照用例。）
+    b = ContextBus("做一个 Todo 应用", bus._board, bus._store, budget_tokens=2)
     pack = b.build(b._board.get("B"))
     assert pack.truncated is True
     assert b.render_notice() == TRUNCATION_NOTICE
+
+
+def test_budget_above_digest_size_not_truncated(bus):
+    """同一 fixture：预算只要装得下上游摘要的实际大小，就不得截断。"""
+    pack = ContextBus("做一个 Todo 应用", bus._board, bus._store,
+                      budget_tokens=100).build(bus._board.get("B"))
+    assert [u.task_id for u in pack.upstream] == ["A"]
+    assert pack.truncated is False
 
 
 def test_incompressible_fields_survive_tiny_budget(bus):
@@ -179,14 +192,28 @@ def test_budget_negative_limit_rejected():
         TokenBudget(limit=-1)
 
 
-# ── Resolution 2/3：降级顺序与 truncated ──
+# ── Resolution 2/3：按实际大小计费，降级顺序与 truncated ──
+def test_digest_charge_is_actual_size_not_cap(bus):
+    """第 2 级按摘要截断后的实际大小计费，不是 400 token 上限。"""
+    digest = bus.build(bus._board.get("B")).upstream[0]
+    charge = estimate_tokens(_digest_text(digest))
+    assert charge < 50                                  # 小摘要：远小于 400 上限
+    exact = ContextBus("g", bus._board, bus._store, budget_tokens=charge)
+    assert [u.task_id for u in exact.build(bus._board.get("B")).upstream] == ["A"]
+    tight = ContextBus("g", bus._board, bus._store, budget_tokens=charge - 1)
+    assert tight.build(bus._board.get("B")).upstream == []   # 差 1 token 就不进
+
+
 def test_drop_order_stops_after_decisions(bus):
     """预算刚好装下 1-3 级：决策在包内，文件树与节选被跳过，truncated=True。"""
     commit(bus._store, "a.py", "x = 1\ny = 2\nz = 3\n", bus._board.get("A"))
     record = DecisionRecord(at=datetime.now(), task_id="A",
                             role="backend_dev", decision="用内存存储")
-    # 第 2 级按每个上游 400 tok 上限计费；预算 = 400 + 决策实际费用 -> 第 4/5 级无余量
-    exact = 400 + estimate_tokens(record.model_dump_json())
+    probe = ContextBus("g", bus._board, bus._store)
+    probe.add_decision(record)
+    digest = probe.build(bus._board.get("B")).upstream[0]
+    # 预算 = 摘要实际费用 + 决策实际费用：第 4/5 级无余量
+    exact = estimate_tokens(_digest_text(digest)) + estimate_tokens(record.model_dump_json())
     b = ContextBus("g", bus._board, bus._store, budget_tokens=exact)
     b.add_decision(record)
     pack = b.build(bus._board.get("B"))
@@ -201,11 +228,14 @@ def test_drop_order_keeps_later_smaller_excerpts(bus):
     commit(bus._store, "big.py", "x = 1\n" * 20000, bus._board.get("A"))
     for i in range(60):
         commit(bus._store, f"d/{i:02d}.py", "x=1\n", bus._board.get("A"))
-    long_decision = "决策" * 500
     bus.add_decision(DecisionRecord(at=datetime.now(), task_id="A",
-                                    role="backend_dev", decision=long_decision))
-    b = ContextBus("g", bus._board, bus._store, budget_tokens=500)
+                                    role="backend_dev", decision="决策" * 500))
+    probe = bus.build(bus._board.get("B"))
+    digest_charge = estimate_tokens(_digest_text(probe.upstream[0]))
+    assert estimate_tokens("\n".join(probe.file_tree)) > 30   # 前提：第 4 级装不下
+    b = ContextBus("g", bus._board, bus._store, budget_tokens=digest_charge + 30)
     pack = b.build(bus._board.get("B"))
+    assert [u.task_id for u in pack.upstream] == ["A"]   # 第 2 级装得下
     assert pack.decisions == []                 # 第 3 级（决策）装不下 -> 跳过
     assert pack.file_tree == []                 # 第 4 级（文件树）装不下 -> 跳过
     assert [ex.path for ex in pack.key_excerpts]  # 第 5 级仍装入

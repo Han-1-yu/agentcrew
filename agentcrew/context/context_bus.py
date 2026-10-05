@@ -8,8 +8,9 @@
 
 1. **不可压缩**：项目目标 + 本任务描述/验收标准 + ``fix_hints`` —— 无条件装入，
    且不占预算（``budget_tokens=1`` 时目标与任务本身也必须存活）。
-2. 直接上游（``task.dependencies``）的 ``brief`` + ``summary``，每个摘要按
-   ``_DIGEST_MAX_TOKENS`` 截断上限计费（spec §11.2「每个 ≤400 tok」）。
+2. 直接上游（``task.dependencies``）的 ``brief`` + ``summary``，每个截到
+   ``_DIGEST_MAX_TOKENS`` 以内（spec §11.2「每个 ≤400 tok」），按截断后的
+   **实际大小**计费 —— 不按上限预留，小摘要不占大预算。
 3. 全局决策记录（最近 20 条，最新的在前）。
 4. ``file_tree``：超 ``tree_max_entries`` 时折叠出 ``"... (N more)"`` 一行。
 5. ``key_excerpts``：按「被下游依赖次数降序、path 升序」逐个装入，单个文件的
@@ -41,7 +42,7 @@ from agentcrew.utils.tokens import estimate_tokens
 #: spec §11.2 的固定提示句；``BaseAgent`` 在 ``pack.truncated`` 时逐字追加。
 TRUNCATION_NOTICE = "注意：为控制上下文长度，部分上游产物未全文展示；如需查看，请依据文件路径读取。"
 
-#: 单个上游摘要（第 2/6 级）的截断上限，也是它的计费上限（spec §11.2「每个 ≤400 tok」）。
+#: 单个上游摘要（第 2/6 级）的截断上限（spec §11.2「每个 ≤400 tok」）；计费按截断后实际大小。
 _DIGEST_MAX_TOKENS = 400
 
 #: 上下文包携带的决策记录条数上限（spec §11.2「最近 20 条」）。
@@ -136,12 +137,13 @@ class ContextBus:
         # 级 1：不可压缩，无条件装入、不占预算。
         incompressible = _incompressible_text(self._goal, task, fix_hints)
 
-        # 级 2：直接上游摘要（每个按 400 tok 上限计费）。
+        # 级 2：直接上游摘要（每个截到 400 tok 内，按截断后的实际大小计费）。
         upstream: list[UpstreamDigest] = []
         direct = [tasks[dep] for dep in dict.fromkeys(task.dependencies) if dep in tasks]
         for dep in direct:
-            if budget.try_consume_tokens(_DIGEST_MAX_TOKENS):
-                upstream.append(self._digest(dep))
+            digest = self._digest(dep)
+            if budget.try_consume(_digest_text(digest)):
+                upstream.append(digest)
             else:
                 truncated = True
 
@@ -185,10 +187,11 @@ class ContextBus:
             if was_truncated:
                 truncated = True
 
-        # 级 6：更远祖先的摘要（追加在直接上游之后）。
+        # 级 6：更远祖先的摘要（追加在直接上游之后，同样按实际大小计费）。
         for ancestor_id in self._distant_ancestor_ids(task, tasks):
-            if budget.try_consume_tokens(_DIGEST_MAX_TOKENS):
-                upstream.append(self._digest(tasks[ancestor_id]))
+            digest = self._digest(tasks[ancestor_id])
+            if budget.try_consume(_digest_text(digest)):
+                upstream.append(digest)
             else:
                 truncated = True
 
@@ -332,6 +335,19 @@ class ContextBus:
             if ancestor is not None:
                 queue.extend(ancestor.dependencies)
         return list(seen)
+
+
+def _digest_text(digest: UpstreamDigest) -> str:
+    """摘要进提示词时要占的正文（字段换行拼接，不含 JSON 包装）；第 2/6 级按它计费。"""
+    parts = [
+        digest.task_id,
+        digest.role,
+        digest.title,
+        digest.brief,
+        digest.summary,
+        *digest.files,
+    ]
+    return "\n".join(part for part in parts if part)
 
 
 def _incompressible_text(goal: str, task: Task, fix_hints: Sequence[str]) -> str:
