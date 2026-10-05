@@ -370,6 +370,7 @@ git add -A && git commit -m "feat: 安全路径校验与原子写"
 - Produces:
   - `agentcrew.utils.retry.TransientError(Exception)` — 可重试
   - `agentcrew.utils.retry.PermanentError(Exception)` — 不可重试
+  - `agentcrew.utils.retry.compute_delay(attempt: int, *, base_delay: float, max_delay: float, jitter: float) -> float`
   - `agentcrew.utils.retry.retry_async(fn, *, attempts=4, base_delay=1.0, max_delay=30.0, jitter=0.3, retry_on=(TransientError,), on_retry=None) -> T`
 
 - [ ] **Step 1: 写失败测试**
@@ -763,7 +764,6 @@ git add -A && git commit -m "feat: DAG 拓扑、环检测与就绪集判定"
 
 **Files:**
 - Create: `agentcrew/task/task_board.py`
-- Modify: `agentcrew/runtime/__init__.py`（占位，Task 14 填充）
 - Test: `tests/test_task_board.py`
 
 **Interfaces:**
