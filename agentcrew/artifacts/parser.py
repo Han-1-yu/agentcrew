@@ -16,6 +16,11 @@
   （N 开 M 闭当且仅当 M ≥ N）。
 - 带语言名或 ``file=`` 的行永远是**起始候选**、绝不闭合（畸形输入因此构造不出
   嵌套围栏）；少于 3 个反引号的行既开不了块也闭不了块。
+- **一条提示，不报错**：3 反引号开栏的 ``file=`` 块，若正文里还留着「带语言名或
+  ``file=`` 的围栏行」，说明内嵌的示例没被容纳进产物、多半已在示例处被提前
+  截断 —— 按路径去重追加一条 ``注意`` 行（走与重复告警同一个末尾通道）。4
+  反引号开栏的块天然不会触发（那正是合法嵌套），所以这条提示没有误报成本；
+  是否真的不完整由 Task 13 的 ``min_bytes``/``must_contain`` 定性。
 - 未闭合的块 → :class:`ArtifactParseError`，消息带起始行号（1 起）。
 - 同一个路径重复出现 → 取**最后一次**的内容，并在 ``notes`` 末尾追加一条
   **按路径去重**的告警；被覆盖块的正文既不落盘也不进 notes。
@@ -124,10 +129,11 @@ def parse_fenced_blocks(raw: str) -> ParsedOutput:
     """解析模型回复里的 ``file=`` 围栏块。
 
     只有带非空 ``file=`` 的块进入 ``files``；无 ``file=`` 的块与所有块外文字
-    按原文顺序进 ``notes``，重复路径的告警追加在末尾。
+    按原文顺序进 ``notes``，重复路径的告警与提前截断的提示追加在末尾。
     """
     lines = _split_lines(raw)
     files: dict[str, str] = {}
+    fence_lengths: dict[str, int] = {}  # 路径 → 存活内容那一块的开栏反引号数
     note_lines: list[str] = []
     duplicated: list[str] = []
     warned: set[str] = set()
@@ -138,9 +144,8 @@ def parse_fenced_blocks(raw: str) -> ParsedOutput:
             note_lines.append(lines[index])
             index += 1
             continue
-        body, close_index = _read_block(
-            lines, start=index, fence_length=len(match.group("fence"))
-        )
+        fence_length = len(match.group("fence"))
+        body, close_index = _read_block(lines, start=index, fence_length=fence_length)
         index = close_index + 1
         path = _normalize_path(match.group("path"))
         if not path:
@@ -150,7 +155,12 @@ def parse_fenced_blocks(raw: str) -> ParsedOutput:
             warned.add(path)
             duplicated.append(path)
         files[path] = _join_body(body)
+        fence_lengths[path] = fence_length
     note_lines.extend(_duplicate_note(path) for path in duplicated)
+    for path, content in files.items():
+        # 恰好 3 反引号（最小长度）开栏的块容不下内嵌示例
+        if fence_lengths[path] == 3 and _contains_embedded_fence(content):
+            note_lines.append(_truncation_note(path))
     return ParsedOutput(files=files, notes="\n".join(note_lines))
 
 
@@ -214,3 +224,26 @@ def _join_body(body: list[str]) -> str:
 def _duplicate_note(path: str) -> str:
     """同一路径重复出现时的说明行（每个路径最多一条）。"""
     return f"警告：路径 {path} 重复出现，已采用最后一次的围栏块内容"
+
+
+def _contains_embedded_fence(content: str) -> bool:
+    """内容里是否还留着「带语言名或 ``file=`` 的围栏行」。
+
+    这是「产物被提前截断」唯一可证的信号：3 反引号的块里，内嵌示例**裸的**闭合
+    围栏必然已经把它闭合（裸的 3 反引号闭合，更长的裸围栏同样闭合），因此还能
+    留在正文里的围栏行一定带着语言名或 ``file=`` —— 有这种行，就说明还有一个
+    示例没被容纳进产物。带围栏的合法嵌套（4 反引号开栏）不会走到这里。
+    """
+    for line in content.split("\n"):
+        match = _START_FENCE_RE.match(line)
+        if match and (match.group("lang") or match.group("path")):
+            return True
+    return False
+
+
+def _truncation_note(path: str) -> str:
+    """3 反引号开栏却内含围栏行时的提示行（每个路径最多一条，纯提示不报错）。"""
+    return (
+        f"注意：{path} 用 3 个反引号开启却包含代码围栏行，"
+        "产物可能在示例处被提前截断；建议改用 4 个反引号作为外层围栏。"
+    )

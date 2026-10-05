@@ -379,6 +379,63 @@ def test_duplicate_warnings_follow_first_duplication_order():
     assert out.notes.index("a.py") < out.notes.index("b.py")
 
 
+# ── 提前截断提示：3 反引号块里残留围栏行 ─────────────────────────
+
+
+def test_three_backtick_artifact_with_embedded_fence_gets_truncation_advisory():
+    """3 反引号开栏却内含围栏行 → 产物多半已被提前截断：给一条提示，但不报错。"""
+    raw = (
+        "```markdown file=README.md\n"
+        "# Todo\n"
+        "```bash\n"
+        "uvicorn app.main:app --reload\n"
+        "```\n"
+        "更多说明\n"
+    )
+    out = parse_fenced_blocks(raw)
+    # 内层的裸围栏把外层块闭合：README 在示例处截断，余下内容成为说明
+    assert out.files == {
+        "README.md": "# Todo\n```bash\nuvicorn app.main:app --reload\n"
+    }
+    assert "更多说明" in out.notes
+    assert "README.md" in out.notes
+    assert "截断" in out.notes and "4 个反引号" in out.notes
+
+
+def test_four_backtick_artifact_with_embedded_fence_gets_no_advisory():
+    """同内容改用 4 反引号开栏 → 合法嵌套，绝不误报（这是该提示的全部依据）。"""
+    raw = (
+        "````markdown file=README.md\n"
+        "# Todo\n"
+        "```bash\n"
+        "uvicorn app.main:app --reload\n"
+        "```\n"
+        "````\n"
+    )
+    out = parse_fenced_blocks(raw)
+    assert out.files == {
+        "README.md": "# Todo\n```bash\nuvicorn app.main:app --reload\n```\n"
+    }
+    assert out.notes == ""
+
+
+def test_truncation_advisory_is_emitted_once_per_path():
+    raw = ("```markdown file=README.md\n# A\n```bash\nx\n```\n"
+           "```markdown file=README.md\n# B\n```bash\ny\n```\n")
+    out = parse_fenced_blocks(raw)
+    assert out.files == {"README.md": "# B\n```bash\ny\n"}
+    assert out.notes.count("4 个反引号") == 1
+
+
+def test_truncation_advisory_reflects_the_surviving_block():
+    """同一路径被后一个块覆盖：提示只看最终存活的产物，不残留误报。"""
+    raw = ("```markdown file=README.md\n# A\n```bash\nx\n```\n"
+           "````markdown file=README.md\n# B\n```bash\ny\n```\n````\n")
+    out = parse_fenced_blocks(raw)
+    assert out.files == {"README.md": "# B\n```bash\ny\n```\n"}
+    assert "4 个反引号" not in out.notes
+
+
 # ── 结果对象本身 ─────────────────────────────────────────────────
 
 
