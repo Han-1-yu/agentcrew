@@ -258,11 +258,21 @@ class BaseAgent(ABC):
         missing = sorted(
             {spec.path for spec in task.deliverables if spec.required} - produced
         )
-        if missing:
-            self._fail(task, f"缺少必需产物：{'、'.join(missing)}")
         undeclared = sorted(produced - declared)
+        problems: list[str] = []
+        if missing:
+            problems.append(f"缺少必需产物：{'、'.join(missing)}")
         if undeclared:
-            self._fail(task, f"产出未在契约中声明的文件：{'、'.join(undeclared)}")
+            # 必须**同时**说出允许写哪些：实测真实模型会既按契约产出 app.js、
+            # 又按上游设计文档多加一个 server.js，而错误只说「多出 server.js」
+            # 时它无从判断是「名字错了」还是「不该多写」——三次尝试原地打转。
+            allowed = "、".join(sorted(declared)) or "（本任务无文件交付物）"
+            problems.append(
+                f"产出未在契约中声明的文件：{'、'.join(undeclared)}"
+                f"；本任务只允许写：{allowed}"
+            )
+        if problems:
+            self._fail(task, "；".join(problems))
 
     def summarize(self, result: TaskResult) -> str:
         """默认摘要：``notes`` 前 400 字符；没有说明文字时回落到产物清单。
@@ -403,7 +413,6 @@ def _render_pack(pack: ContextPack, fix_hints: Sequence[str]) -> str:
     sections = [
         _section("项目目标", pack.project_goal),
         _section("本任务", _render_task(pack.task)),
-        _section("交付物契约", _render_deliverables(pack.task)),
     ]
     if pack.upstream:
         sections.append(_section("上游任务摘要", _render_upstream(pack.upstream)))
@@ -415,6 +424,14 @@ def _render_pack(pack: ContextPack, fix_hints: Sequence[str]) -> str:
         )
     if pack.key_excerpts:
         sections.append(_section("关键文件节选", _render_excerpts(pack.key_excerpts)))
+    # 交付物契约放到**最后**（仅早于返工意见）。
+    # 它是文件清单的唯一权威；而上面那些节选可能来自架构文档、带着另一套文件
+    # 名与目录结构 —— 两者平级呈现时，实测真实模型会跟设计文档走：PM 契约写
+    # `backend/src/app.js`，模型却产 `backend/src/server.js`，连续 3 次尝试全废、
+    # 下游 5 个任务阻塞。放在末尾既给了优先级，也吃到近因效应。
+    sections.append(
+        _section("交付物契约（文件清单以此为准）", _render_deliverables(pack.task))
+    )
     hints = [hint.strip() for hint in fix_hints if hint.strip()]
     if hints:
         sections.append(
@@ -449,7 +466,11 @@ def _render_deliverables(task: Task) -> str:
     """交付物契约：路径是模型唯一被允许写出的东西，必须逐条列清。"""
     if not task.deliverables:
         return "- （本任务无文件交付物）"
-    lines: list[str] = []
+    lines: list[str] = [
+        "**本清单是本次输出文件路径的唯一权威。** 上游设计文档若给出不同的文件名"
+        "或目录，**以本清单为准**：先按下面的路径落盘，设计文档里的结构体现在文件"
+        "内容里。输出任何未列出的路径都会让本次执行直接失败。"
+    ]
     for spec in task.deliverables:
         flags = "必需" if spec.required else "可选"
         line = f"- `{spec.path}`（{spec.kind}，{flags}）：{spec.description}"

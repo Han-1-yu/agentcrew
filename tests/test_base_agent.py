@@ -498,3 +498,29 @@ def test_reviewer_agent_for_returns_first_reviewer(env):
     reviewer = f.reviewer_agent_for("backend_dev")
     assert reviewer is not None and reviewer.spec.key == "architect"
     assert f.reviewer_agent_for("backend_dev") is reviewer
+
+
+async def test_undeclared_failure_names_both_sides(env, tmp_path):
+    """实测真实模型会既按契约产出 app.js、又按上游设计文档多加一个 server.js。
+
+    错误只说「多出 server.js」时，模型分不清是「名字写错了」还是「不该多写」——
+    连续三次尝试原地打转。消息必须同时给出**允许写的清单**。
+    """
+    fx = tmp_path / "fx"
+    write_fixture(fx, GOOD_A + "\n```python file=server.py\nx = 1\n```\n")
+    agent = make_agent(env, fx)
+    with pytest.raises(AgentExecutionError) as exc:
+        await agent.execute(env["task"], env["bus"].build(env["task"]))
+    msg = str(exc.value)
+    assert "server.py" in msg      # 多出来的
+    assert "只允许写" in msg        # 以及允许写的清单
+    assert "a.py" in msg           # 契约里的那个
+
+
+def test_deliverables_section_declares_itself_authoritative(env):
+    """契约节必须写明它是文件清单的唯一权威 —— 上下文里同时有架构文档的文件结构。"""
+    from agentcrew.agents.base_agent import _render_deliverables
+
+    text = _render_deliverables(env["task"])
+    assert "唯一权威" in text
+    assert "以本清单为准" in text
