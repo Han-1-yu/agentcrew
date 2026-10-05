@@ -1,0 +1,287 @@
+"""按 kind 的解析原语与占位符检测测试（Task 12）。
+
+``parse_check`` 的输入是**不可信的模型产物**：畸形是常态而非例外。因此除了
+brief 给定的用例外，这里还钉死两类行为 —— 能解析的 kind 必须报出可读错误而
+**绝不抛异常**（深度嵌套、超长整数、孤立代理项都会穿透常规解析器的异常类型），
+以及 ``has_placeholder`` 的三条规则标定（HTML 桩 37 字符 vs 真实内容 47 字符）。
+"""
+
+import warnings
+from typing import get_args
+
+import pytest
+
+from agentcrew.artifacts import contract
+from agentcrew.artifacts.contract import KIND_PARSERS, has_placeholder, parse_check
+from agentcrew.artifacts.spec import ArtifactKind
+
+
+# ── brief 指定的用例 ──────────────────────────────────────────────
+
+
+def test_python_valid_passes():
+    assert parse_check("python", "def f():\n    return 1\n") is None
+
+
+def test_python_syntax_error_reports_line():
+    msg = parse_check("python", "def f(\n  pass\n")
+    assert msg is not None and "语法错误" in msg
+
+
+def test_json_valid_passes():
+    assert parse_check("json", '{"a": 1}') is None
+
+
+def test_json_invalid_reports():
+    msg = parse_check("json", '{"a": }')
+    assert msg is not None and "JSON" in msg
+
+
+def test_yaml_valid_passes():
+    assert parse_check("yaml", "a: 1\nb:\n  - x\n") is None
+
+
+def test_yaml_invalid_reports():
+    assert parse_check("yaml", "a: [1, 2\n") is not None
+
+
+def test_toml_valid_and_invalid():
+    assert parse_check("toml", 'a = 1\n') is None
+    assert parse_check("toml", 'a = = 1') is not None
+
+
+def test_markdown_and_text_always_pass():
+    assert parse_check("markdown", "") is None
+    assert parse_check("text", "anything") is None
+
+
+def test_unknown_kind_is_error():
+    assert parse_check("nonsense", "x") is not None
+
+
+def test_kind_parsers_covers_all_twelve_kinds():
+    assert set(KIND_PARSERS) == set(get_args(ArtifactKind))
+
+
+@pytest.mark.parametrize("marker", ["TODO", "<placeholder>", "FIXME",
+                                    "your code here", "YOUR CODE HERE",
+                                    "<!-- 待补充 -->", "待补充"])
+def test_placeholder_markers_detected(marker):
+    assert has_placeholder(f"# file\n{marker}\n")
+
+
+def test_real_content_is_not_placeholder():
+    assert not has_placeholder("# Todo App\n\nFastAPI service with CRUD endpoints.\n")
+
+
+def test_ellipsis_only_detected_when_line_is_just_ellipsis():
+    assert has_placeholder("def f():\n    ...\n")
+    assert not has_placeholder("x = compute(...)  # 正常展开语法\n" + "y = 1\n" * 20)
+
+
+def test_html_js_placeholder_detected():
+    assert has_placeholder("<html><body>placeholder</body></html>")
+
+
+# ── KIND_PARSERS 与 parse_check 的覆盖面 ──────────────────────────
+
+
+def test_non_parsing_kinds_always_pass():
+    """8 个无结构可校验的 kind 恒返回 None（占位符检查归 Task 13 的 G1）。"""
+    for kind in ("markdown", "text", "html", "css", "js", "sql", "shell",
+                 "dockerfile"):
+        assert parse_check(kind, "# TODO 待补充\n[[[ {{{ \x00") is None
+
+
+def test_kind_parsers_values_are_callable():
+    for kind, parser in KIND_PARSERS.items():
+        assert callable(parser), kind
+
+
+def test_every_kind_is_explicitly_classified():
+    """每个 kind 必须显式归类：有结构解析器，或列入「无结构」名单。
+
+    ``KIND_PARSERS`` 的键由字面量生成，所以 brief 的「集合相等」测试永远成立；
+    这条才是拦住「新 kind 被 ``.get`` 默认值静默降级为不校验」的那道门。
+    """
+    literal = set(get_args(ArtifactKind))
+    structural = set(contract._STRUCTURAL_PARSERS)
+    no_structure = set(contract._NO_STRUCTURE_KINDS)
+    assert structural | no_structure == literal
+    assert not structural & no_structure
+
+
+def test_unknown_kind_message_names_the_kind():
+    msg = parse_check("nonsense", "x")
+    assert msg is not None and "nonsense" in msg
+
+
+def test_error_messages_carry_kind_and_position():
+    json_msg = parse_check("json", '{"a": }')
+    assert json_msg is not None and "JSON" in json_msg and "line 1" in json_msg
+    yaml_msg = parse_check("yaml", "a: [1, 2\n")
+    assert yaml_msg is not None and "YAML" in yaml_msg and "line" in yaml_msg
+    toml_msg = parse_check("toml", "a = = 1")
+    assert toml_msg is not None and "TOML" in toml_msg and "line" in toml_msg
+
+
+# ── parse_check 绝不抛异常 ────────────────────────────────────────
+
+
+#: 常规解析器异常类型之外的穿透样本（均实测能穿透）：
+#: 孤立代理项让 ``ast.parse`` 抛 ``UnicodeEncodeError``；上千层嵌套让四种
+#: 解析器都抛 ``RecursionError``；超过 4300 位的整数让 json/toml/yaml 抛出
+#: 裸 ``ValueError``（int 转换上限）。畸形产物是数据，不是异常。
+HOSTILE_CONTENTS = [
+    "",
+    "\ufeff",                          # 孤立 BOM
+    "\x00\x01\ufffd",                  # NUL、控制字符、替换字符
+    "x = '\ud800'",                    # 孤立代理项
+    "[" * 3000,                        # 上千层嵌套
+    "a = " + "1" * 5000,               # 超过 int 转换上限的整数
+    "x" * 1_000_000,                   # 1MB 单体文本
+]
+
+
+@pytest.mark.parametrize("kind", get_args(ArtifactKind))
+@pytest.mark.parametrize("content", HOSTILE_CONTENTS, ids=[
+    "empty", "bom", "control", "surrogate", "deep_nesting", "huge_int", "one_mb",
+])
+def test_parse_check_never_raises(kind, content):
+    result = parse_check(kind, content)
+    assert result is None or isinstance(result, str)
+
+
+def test_deeply_nested_content_reports_instead_of_raising():
+    assert parse_check("python", "-" * 3000 + "1") is not None
+    assert parse_check("json", "[" * 3000) is not None
+    assert parse_check("toml", "a = " + "[" * 3000) is not None
+    assert parse_check("yaml", "[" * 3000) is not None
+
+
+def test_huge_integer_literal_reports_instead_of_raising():
+    assert parse_check("json", "1" * 5000) is not None
+    assert parse_check("toml", "a = " + "1" * 5000) is not None
+    assert parse_check("yaml", "a: " + "1" * 5000) is not None
+
+
+def test_python_lone_surrogate_reports_instead_of_raising():
+    assert parse_check("python", "x = '\ud800'\n") is not None
+
+
+def test_python_invalid_escape_verdict_is_filter_independent():
+    """无效转义序列是 SyntaxWarning，不是语法错误：判决不能随警告过滤器翻转。
+
+    默认配置下 ``ast.parse`` 只把 SyntaxWarning 打到 stderr 并解析成功；``-W
+    error``（或 ``PYTHONWARNINGS=error``）下同一份源码会变成 SyntaxError。校验
+    原语若随环境改判，G1 的结论就依赖跑它的人 —— 这里统一按「警告不是错误」。
+    """
+    source = 'import re\n\nPATTERN = re.compile("\\d+")\n'
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert parse_check("python", source) is None
+    assert parse_check("python", source) is None
+
+
+def test_toml_check_is_skipped_without_tomllib(monkeypatch):
+    """Python 3.10 无 ``tomllib``：toml 退化为跳过检查而不是让模块不可导入。"""
+    monkeypatch.setattr(contract, "_HAS_TOMLLIB", False)
+    assert contract.parse_check("toml", "a = = 1") is None
+
+
+def test_cross_kind_content_is_handled_by_the_label_kind():
+    """同一段内容换个 kind 标签必须按标签裁决，而不是按内容「猜」。"""
+    assert parse_check("json", "a: 1\n") is not None   # YAML 合法但不是 JSON
+    assert parse_check("yaml", "a: 1\n") is None       # 同一段内容在 YAML 下合法
+    assert parse_check("python", "def f(:\n") is not None
+    assert parse_check("yaml", "def f(:\n") is None    # YAML 里是普通标量
+
+
+# ── has_placeholder：三条规则与标定 ───────────────────────────────
+
+
+def test_markers_are_detected_inside_long_content():
+    """标记必须在长内容里也命中 —— 短内容靠长度规则兜底，不能掩盖规则 1。"""
+    tail = "def handler(request):\n    return {\"ok\": True}  # 填充实现\n" * 20
+    assert has_placeholder(tail + "    # TODO: 实现真正的逻辑\n")
+    assert has_placeholder(tail + "    # YOUR CODE HERE\n")
+
+
+def test_todo_marker_is_uppercase_only():
+    """``TODO`` 是全大写标记：小写/混合大小写的 ``todo`` 是演示项目的领域词。
+
+    brief 的 ``test_real_content_is_not_placeholder`` 与控制器标定里的
+    ``<input placeholder="Add a todo">`` 都要求它不触发占位判定；而真正的
+    ``TODO`` 标记（T-005 的 attempt-1）必须照常命中，哪怕文件很长。
+    """
+    long_body = "def add_todo(item):\n    return item\n" * 20
+    assert not has_placeholder(long_body + "class Todo:\n    pass\n")
+    assert not has_placeholder(long_body + "<!-- Add a todo -->\n")
+    assert has_placeholder(long_body + "# TODO: implement\n")
+
+
+def test_input_placeholder_attribute_is_legitimate():
+    assert not has_placeholder('<input placeholder="Add a todo">\n')
+
+
+def test_long_legit_frontend_is_not_placeholder():
+    html = (
+        "<!doctype html>\n<html lang=\"zh\">\n<head>\n"
+        "  <meta charset=\"utf-8\">\n  <title>Todo App</title>\n</head>\n"
+        "<body>\n  <ul id=\"list\"></ul>\n  <script src=\"app.js\"></script>\n"
+        "</body>\n</html>\n"
+    )
+    assert not has_placeholder(html)
+
+
+def test_html_stub_is_placeholder_by_length_rule():
+    """37 字符、无结构字符 —— 与 47 字符的真实内容一起标定了阈值 40。"""
+    stub = "<html><body>placeholder</body></html>"
+    assert len(" ".join(stub.split())) == 37
+    assert has_placeholder(stub)
+
+
+def test_real_content_length_matches_calibration():
+    content = "# Todo App\n\nFastAPI service with CRUD endpoints.\n"
+    assert len(" ".join(content.split())) == 47
+    assert not has_placeholder(content)
+
+
+def test_short_but_structured_content_is_not_placeholder():
+    """长度规则只针对「无结构短文本」；短而有结构的代码片段不算占位。"""
+    assert not has_placeholder("x = 1")
+    assert not has_placeholder('print("hi")')
+
+
+def test_trailing_ellipsis_line_with_crlf_is_detected():
+    assert has_placeholder("def f():\r\n    ...\r\n")
+
+
+def test_ellipsis_with_other_tokens_on_line_is_not_detected():
+    assert not has_placeholder("values = [1, 2, ...]\n" * 10)
+
+
+def test_placeholder_markers_exact_value():
+    """标记表逐字钉死：增删一条都会改变误报画像，必须显式改测试。"""
+    assert contract.PLACEHOLDER_MARKERS == (
+        "TODO", "<placeholder>", "FIXME", "your code here", "your implementation",
+        "待补充", "待实现", "占位",
+    )
+
+
+def test_bare_word_placeholder_is_not_a_marker():
+    """裸词 ``placeholder`` 不是标记 —— 它出现在合法 HTML 属性与普通英文里。"""
+    prose = "the word placeholder appears here in this sentence of plain prose"
+    assert len(" ".join(prose.split())) >= 40
+    assert not has_placeholder(prose)
+
+
+def test_length_rule_boundary_is_40_chars():
+    assert has_placeholder("a" * 39)
+    assert not has_placeholder("a" * 40)
+
+
+def test_empty_and_whitespace_only_content_are_placeholder():
+    """空内容没有结构也没有实质内容，判为占位（与契约的 ``min_bytes`` 同向）。"""
+    assert has_placeholder("")
+    assert has_placeholder("   \n\n  \t\n")
