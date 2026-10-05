@@ -1906,17 +1906,20 @@ def test_leftover_temp_files_are_cleaned(cs, monkeypatch):
 
 def test_repair_running_becomes_ready_and_keeps_counts(cs):
     b = TaskBoard([mk("A", status=S.READY)])
-    b.transition("A", S.RUNNING)                       # attempts -> 1
+    b.transition("A", S.RUNNING)
+    b.bump_attempt("A")                                # attempts 由 take_ready/bump_attempt 增加，transition 不增加
     n = repair_statuses(b)
     assert n == 1 and b.get("A").status is S.READY
     assert b.get("A").attempts == 1                    # 不重置
 
-def test_repair_rework_becomes_ready(cs):
+def test_repair_rework_stays_rework(cs):
+    # 状态机没有 REWORK → READY 这条边；且 take_ready 已能派发 REWORK，
+    # 所以修复时保持原状即可，不需要（也不能）走 transition
     b = TaskBoard([mk("A", status=S.READY)])
     b.transition("A", S.RUNNING); b.transition("A", S.REVIEW)
     b.transition("A", S.REWORK)
     repair_statuses(b)
-    assert b.get("A").status is S.READY
+    assert b.get("A").status is S.REWORK
 
 def test_repair_review_stays_review(cs):
     b = TaskBoard([mk("A", status=S.READY)])
