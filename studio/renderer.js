@@ -536,6 +536,7 @@ function renderRunStatusBar() {
   }
   if (isReal) {
     actions.push(h('button',{class:'btn',onclick:()=>{ openNewRunModal(); $('#nr-goal').value = run.project_goal || ''; }},'重新运行'));
+    actions.push(h('button',{class:'btn',onclick:()=>window.studio.openPath(run.dir)},'打开目录'));
   } else {
     actions.push(h('button',{class:'btn',onclick:()=>toast('info','重新运行','已用相同目标启动新运行')},'重新运行'));
     actions.push(h('button',{class:'btn',onclick:()=>{ pushEvent('checkpoint_saved',{manual:true}); toast('success','检查点','已从最近检查点继续'); }},'从检查点继续'));
