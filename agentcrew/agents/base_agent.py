@@ -36,11 +36,12 @@
   截断」提示恰恰在那时最有解释力（Task 10 的裁定）。
 """
 
+import json
 import re
 from abc import ABC
 from collections.abc import Sequence
 from datetime import datetime
-from typing import NoReturn
+from typing import Any, NoReturn
 
 from agentcrew.artifacts.parser import (
     ParsedOutput,
@@ -69,6 +70,7 @@ from agentcrew.roles.spec import RoleSpec
 from agentcrew.runtime.ledger import Ledger
 from agentcrew.task.task import Task, TaskResult
 from agentcrew.utils.files import UnsafePathError, safe_relpath
+from agentcrew.tools import Tool, ToolRegistry
 
 #: 默认摘要的长度上限（spec §8.1「取 notes 前 400 字符」）。
 _SUMMARY_LIMIT = 400
@@ -110,6 +112,58 @@ _ARTIFACT_FORMAT = """\
   会提前结束你的产物，后半段内容会被当作说明丢弃。
 """
 
+#: ReAct 工具调用（P1-1）：模型在回复里用一对 ``<tool_call>`` 围栏发出一次调用，
+#: 内含 ``{"name": "...", "args": {...}}`` JSON。与产物围栏刻意区分（标签而非
+#: 反引号），免得和 ``file=`` 产物围栏相互干扰。
+_TOOL_CALL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
+
+#: ReAct 循环的默认最大轮数（每轮 = 一次 LLM 调用 + 一批工具执行）。
+_DEFAULT_MAX_TOOL_CALLS = 10
+
+
+class ParsedToolCall:
+    """从模型回复里解析出的一次工具调用（轻量值对象，不进 pydantic 体系）。"""
+
+    __slots__ = ("name", "args")
+
+    def __init__(self, name: str, args: dict[str, Any]) -> None:
+        self.name = name
+        self.args = args
+
+
+def _extract_tool_calls(raw: str) -> list[ParsedToolCall]:
+    """从模型回复里提取全部 ``<tool_call>`` 块并解析其 JSON。
+
+    JSON 非法或不是对象的块以 ``name="<malformed>"`` 占位——执行层会把它转成
+    一条错误文本回灌给模型，而不是悄悄丢掉（丢了模型就不知道自己写错了）。
+    """
+    calls: list[ParsedToolCall] = []
+    for match in _TOOL_CALL_RE.finditer(raw):
+        body = match.group(1).strip()
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            calls.append(ParsedToolCall("<malformed>", {"_raw": body[:200]}))
+            continue
+        if not isinstance(data, dict):
+            calls.append(ParsedToolCall("<malformed>", {"_raw": body[:200]}))
+            continue
+        name = str(data.get("name", "")).strip()
+        args = data.get("args")
+        if not isinstance(args, dict):
+            args = {}
+        calls.append(ParsedToolCall(name, args))
+    return calls
+
+
+def _args_summary(args: dict[str, Any]) -> dict[str, str]:
+    """ledger 用的入参摘要：超长值截断，避免大段代码把审计行撑爆。"""
+    summary: dict[str, str] = {}
+    for key, value in args.items():
+        text = repr(value)
+        summary[key] = text if len(text) <= 200 else text[:200] + "…"
+    return summary
+
 
 class AgentExecutionError(RuntimeError):
     """一次 Agent 执行失败：解析、契约校验或落盘不通过。
@@ -144,12 +198,19 @@ class BaseAgent(ABC):
         ledger: Ledger,
         project_goal: str,
         catalog: RoleCatalog | None = None,
+        tool_registry: ToolRegistry | None = None,
+        max_tool_calls: int = _DEFAULT_MAX_TOOL_CALLS,
     ) -> None:
         """``catalog`` 是本 run 的角色目录（含自定义角色），可为 ``None``。
 
         只有需要「看见整个团队」的 Agent 用它（PM 的拆解提示词要从目录渲染
         可用角色清单，否则自定义角色永远不会出现在计划里）；其余 Agent 不读。
         ``None`` 是合法的降级态：直接构造 Agent 的单测没有目录可给。
+
+        ``tool_registry`` 非空时 :meth:`execute` 走 ReAct 循环（P1-1）：模型可在
+        产出最终产物前调用工具获取信息。``None``（默认）保持原有单次调用行为，
+        向后兼容。``max_tool_calls`` 是 ReAct 最大轮数，触顶仍想调工具时降级为
+        把最后一次回复当最终产物，并记一条 ``tool_loop_exhausted`` 警告。
         """
         self.spec = spec
         self._models = models
@@ -157,6 +218,8 @@ class BaseAgent(ABC):
         self._ledger = ledger
         self._project_goal = project_goal
         self._catalog = catalog
+        self._tool_registry = tool_registry
+        self._max_tool_calls = max_tool_calls
 
     # ── 模板方法（子类不重写）────────────────────────────────────────────
 
@@ -182,30 +245,10 @@ class BaseAgent(ABC):
 
         messages = self.build_messages(task, pack, fix_hints)
         alias = self._resolve_alias(task)
-        self._configure_replay(alias, task)
-        completion = await self._models.call(
-            alias,
-            messages,
-            temperature=self.spec.temperature,
-            max_tokens=self.spec.max_output_tokens,
-            purpose="execute",
-            role=self.spec.key,
-        )
+        final_text = await self._obtain_final_text(task, messages, alias)
 
-        if _is_truncated(completion):
-            # 回复是**被输出上限截断**的，不是模型写完了。此时围栏必然未闭合，
-            # 而按「格式错误」重试毫无意义 —— 同一个上限、同一段内容，只会再
-            # 截断一次。实测真实运行里架构师连续 3 次都停在 8192，每次都被判成
-            # 「解析失败」，重试三次全废。这里必须把病因说清楚，让重试有得改。
-            self._fail(
-                task,
-                f"模型回复被输出上限截断（finish_reason={completion.finish_reason}，"
-                f"已输出 {completion.completion_tokens} token）：请精简内容，"
-                f"或把交付物拆成更小的几次输出后重试。",
-            )
-
-        parsed = self._parse(completion.text, task)
-        notes = _join_notes(parsed.notes, *_language_notes(completion.text, task))
+        parsed = self._parse(final_text, task)
+        notes = _join_notes(parsed.notes, *_language_notes(final_text, task))
         self._emit_notes(task, notes)
         self._validate(parsed, task)
         records = self._commit(parsed, task)
@@ -242,18 +285,20 @@ class BaseAgent(ABC):
         fix_hints: Sequence[str],
     ) -> list[Message]:
         """默认提示词：system 走角色规格，user 走渲染后的上下文包。"""
-        system = "\n\n".join(
-            (
-                self.spec.system_prompt,
-                f"## 输出规范\n{self.spec.output_contract}",
-                _ARTIFACT_FORMAT,
-                # 明说 token 预算：撞上上限时回复会被**截断**，围栏随之未闭合，
-                # 整次输出全废。实测架构师连写三版 8000 token 的文档全部撞线。
-                f"## 输出长度\n本次回复的全部内容（含围栏与说明文字）上限约 "
-                f"{self.spec.max_output_tokens} token。宁可写紧凑、写到要点为止，"
-                f"也不要写满被截断——一旦截断，本次输出整体作废。",
-            )
-        )
+        system_parts: list[str] = [
+            self.spec.system_prompt,
+            f"## 输出规范\n{self.spec.output_contract}",
+            _ARTIFACT_FORMAT,
+            # 明说 token 预算：撞上上限时回复会被**截断**，围栏随之未闭合，
+            # 整次输出全废。实测架构师连写三版 8000 token 的文档全部撞线。
+            f"## 输出长度\n本次回复的全部内容（含围栏与说明文字）上限约 "
+            f"{self.spec.max_output_tokens} token。宁可写紧凑、写到要点为止，"
+            f"也不要写满被截断——一旦截断，本次输出整体作废。",
+        ]
+        tools_section = self._tools_section()
+        if tools_section:
+            system_parts.append(tools_section)
+        system = "\n\n".join(system_parts)
         return [
             {"role": "system", "content": system},
             {"role": "user", "content": _render_pack(pack, fix_hints)},
@@ -348,6 +393,165 @@ class BaseAgent(ABC):
                 role=self.spec.key,
                 task_id=task.id,
                 attempt=max(1, task.attempts + task.rework_count),
+            )
+
+    # ── ReAct 工具循环（P1-1）────────────────────────────────────────────
+
+    def _available_tools(self) -> list[Tool]:
+        """本角色在本次执行中可用的工具（注册表 × ``spec.allowed_tools``）。
+
+        注册表为 ``None``（默认，向后兼容）或角色白名单过滤后为空 → 返回空列表，
+        :meth:`execute` 退回单次调用，系统提示词也不带工具说明。
+        """
+        if self._tool_registry is None:
+            return []
+        return self._tool_registry.filter_by_allowed(self.spec.allowed_tools)
+
+    def _tools_section(self) -> str:
+        """渲染进系统提示词的工具说明段；无可用工具时返回空串。"""
+        tools = self._available_tools()
+        if not tools:
+            return ""
+        lines = [
+            "## 可用工具（ReAct）",
+            "你可以在产出最终产物之前调用工具来获取信息或执行代码。工具清单：",
+        ]
+        for tool in tools:
+            schema = tool.input_schema or {}
+            props = schema.get("properties", {}) if isinstance(schema, dict) else {}
+            required = schema.get("required", []) if isinstance(schema, dict) else []
+            args_desc = "、".join(
+                f"{name}{"（必填）" if name in required else ""}" for name in props
+            ) or "无参数"
+            lines.append(f"- `{tool.name}`：{tool.description} 入参：{args_desc}")
+        lines += [
+            "调用方式：在回复中插入一个 `<tool_call>` 块，内含一个 JSON 对象 "
+            "`{\"name\": \"<工具名>\", \"args\": {…}}`，例如：",
+            "",
+            '<tool_call>\n{"name": "read_file", "args": {"path": "src/app.py"}}\n</tool_call>',
+            "",
+            "工具结果会以 `<tool_result name=\"工具名\">…</tool_result>` 块返回给你。"
+            "可以在一条回复里放多个 `<tool_call>` 连续调用。收集到足够信息后，"
+            "再产出带 `file=` 的最终产物围栏；**最终产物的那条回复里不要再放 `<tool_call>`**。",
+        ]
+        return "\n".join(lines)
+
+    async def _obtain_final_text(
+        self, task: Task, messages: list[Message], alias: str
+    ) -> str:
+        """取得「最终产物回复」的文本：无工具走单次调用，有工具走 ReAct 循环。
+
+        两次路径在截断检查、mock 回放上下文、temperature/max_tokens 上完全一致；
+        唯一区别是有工具时会循环把工具结果回灌、直到模型不再发 ``<tool_call>``。
+        """
+        if not self._available_tools():
+            self._configure_replay(alias, task)
+            completion = await self._models.call(
+                alias,
+                messages,
+                temperature=self.spec.temperature,
+                max_tokens=self.spec.max_output_tokens,
+                purpose="execute",
+                role=self.spec.key,
+            )
+            self._guard_truncation(completion, task)
+            return completion.text
+        return await self._run_agent_loop(task, messages, alias)
+
+    async def _run_agent_loop(
+        self, task: Task, messages: list[Message], alias: str
+    ) -> str:
+        """ReAct 循环：LLM → 解析 tool_call → 执行工具 → 回灌 → 再问 LLM。
+
+        最多 ``self._max_tool_calls`` 轮。模型某次回复不再含 ``<tool_call>`` 即
+        为最终产物。触顶仍在发 tool_call 时**降级**：记一条 ``tool_loop_exhausted``
+        警告，把最后一次回复当最终产物（不判失败——重试同上限只会再循环一次）。
+        """
+        completion = None
+        exhausted = False
+        for round_index in range(self._max_tool_calls):
+            self._configure_replay(alias, task)
+            completion = await self._models.call(
+                alias,
+                messages,
+                temperature=self.spec.temperature,
+                max_tokens=self.spec.max_output_tokens,
+                purpose="execute",
+                role=self.spec.key,
+            )
+            self._guard_truncation(completion, task)
+            calls = _extract_tool_calls(completion.text)
+            if not calls:
+                break
+            if round_index >= self._max_tool_calls - 1:
+                exhausted = True
+                break
+            results_block = await self._execute_tool_calls(calls, task)
+            messages.append({"role": "assistant", "content": completion.text})
+            messages.append({"role": "user", "content": results_block})
+        if exhausted:
+            self._ledger.emit(
+                "tool_loop_exhausted",
+                task_id=task.id,
+                role=self.spec.key,
+                max_tool_calls=self._max_tool_calls,
+            )
+        assert completion is not None  # 循环至少跑一轮
+        return completion.text
+
+    async def _execute_tool_calls(
+        self, calls: list[ParsedToolCall], task: Task
+    ) -> str:
+        """执行一批 tool_call，把每条结果包成 ``<tool_result>`` 块拼接返回。
+
+        工具不存在 / 未授权 / 执行抛异常，都收敛成错误文本回灌（不中断循环），
+        每条都记 ``tool_call`` ledger 事件（含入参摘要、success、耗时）——工具
+        调用必须诚实留痕。
+        """
+        available = {tool.name: tool for tool in self._available_tools()}
+        blocks: list[str] = []
+        for call in calls:
+            started = datetime.now()
+            tool = available.get(call.name)
+            if tool is None:
+                result_text = (
+                    f"错误：工具 {call.name!r} 不存在或未授权。"
+                    f"本角色可用工具：{'、'.join(sorted(available)) or '（无）'}"
+                )
+                success = False
+            else:
+                try:
+                    result_text = await tool.run(**call.args)
+                    success = True
+                except Exception as exc:  # 工具内部异常统一兜底回灌
+                    result_text = f"错误：工具 {call.name!r} 执行失败：{exc}"
+                    success = False
+            duration_ms = int((datetime.now() - started).total_seconds() * 1000)
+            self._ledger.emit(
+                "tool_call",
+                task_id=task.id,
+                role=self.spec.key,
+                tool_name=call.name,
+                args=_args_summary(call.args),
+                success=success,
+                duration_ms=duration_ms,
+            )
+            blocks.append(
+                f'<tool_result name="{call.name}">\n{result_text}\n</tool_result>'
+            )
+        return "\n\n".join(blocks)
+
+    def _guard_truncation(self, completion: object, task: Task) -> None:
+        """回复撞上输出上限时直接失败（与单次调用路径同一条病因说明）。"""
+        if _is_truncated(completion):
+            # 回复是**被输出上限截断**的，不是模型写完了。此时围栏必然未闭合，
+            # 而按「格式错误」重试毫无意义 —— 同一个上限、同一段内容，只会再
+            # 截断一次。这里必须把病因说清楚，让重试有得改。
+            self._fail(
+                task,
+                f"模型回复被输出上限截断（finish_reason={completion.finish_reason}，"
+                f"已输出 {completion.completion_tokens} token）：请精简内容，"
+                f"或把交付物拆成更小的几次输出后重试。",
             )
 
     def _parse(self, raw: str, task: Task) -> ParsedOutput:

@@ -56,7 +56,10 @@ _ROLE_MODEL_ENV_PREFIX = "AGENTCREW_MODEL_"
 _YAML_SCALAR_KEYS = ("max_concurrency", "context_budget_tokens", "gate", "roles_dir")
 
 #: 分层合并时按 key 覆盖而非整体替换的字段。
-_MAPPING_FIELDS = ("role_bindings", "provider_overrides", "model_tiers", "model_failover")
+_MAPPING_FIELDS = (
+    "role_bindings", "provider_overrides", "model_tiers", "model_failover",
+    "mcp_servers",
+)
 
 #: ``AGENTCREW_TIER_<LEVEL>`` → ``model_tiers[<level>]``（V2：按复杂度选模型）。
 _TIER_ENV_PREFIX = "AGENTCREW_TIER_"
@@ -208,6 +211,11 @@ def _yaml_values() -> dict[str, object]:
         values["role_bindings"] = dict(models["role_bindings"])
     if models.get("providers"):
         values["provider_overrides"] = dict(models["providers"])
+    mcp_servers = data.get("mcp_servers")
+    if mcp_servers:
+        if not isinstance(mcp_servers, dict):
+            raise ValueError(f"配置文件 mcp_servers 段必须是映射：{path}")
+        values["mcp_servers"] = dict(mcp_servers)
     return values
 
 
@@ -277,6 +285,16 @@ class Settings(BaseModel):
     provider_overrides: dict[str, dict] = Field(default_factory=dict)
     model_tiers: dict[str, str] = Field(default_factory=dict)
     model_failover: dict[str, list[str]] = Field(default_factory=dict)
+    mcp_servers: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    """外部 MCP 服务器配置（P1-1）：服务器名 → 启动参数映射。
+
+    形状为 ``{"filesystem": {"command": ["npx", "-y",
+    "@modelcontextprotocol/server-filesystem", "/tmp"]}}``；Crew 层据此经
+    :class:`~agentcrew.mcp.client.MCPClient` 起服务器、发现工具并登记进
+    :class:`~agentcrew.tools.registry.ToolRegistry`。配置快照落盘前按字段名
+    脱敏（含 key/token/secret 的值替换为 ``***``，见 :meth:`config_snapshot`）。
+    环境变量解析从简：当前以 YAML 配置为准。
+    """
     """Provider 故障转移（P0-2）：别名 → 备用别名列表。
 
     当主别名的 Provider 抛出不可用错误（503/429/连接超时/读取超时，重试耗尽后），
@@ -366,6 +384,9 @@ class Settings(BaseModel):
         """
         data = self.model_dump(mode="json")
         data["provider_overrides"] = redact_overrides(self.provider_overrides)
+        # mcp_servers 是自由形状映射（command/args/env…），没有 schema 可依，
+        # 逐层按字段名判密钥（含 key/token/secret 即抹成 ***）。
+        data["mcp_servers"] = _redact_unknown(self.mcp_servers)
         return data
 
     def secret_values(self) -> list[str]:

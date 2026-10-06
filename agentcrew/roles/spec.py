@@ -31,3 +31,10 @@ class RoleSpec(BaseModel):
     max_output_tokens: int = 8192
     model: str = "default"  # 模型别名，见 spec §12.2
     reviewer_for: list[str] = Field(default_factory=list)  # 默认评审本角色的 key
+    allowed_tools: list[str] = Field(default_factory=lambda: ["*"])
+    """本角色在 ReAct 循环里可调用的工具名白名单（P1-1）。
+
+    ``["*"]``（默认）放行工具注册表中的全部工具；列具体名字则只放行列出的——
+    未授权的工具既不会出现在系统提示词里，模型若强行写出也会被 Agent 以
+    「未授权」错误回灌。空列表视同 ``["*"]``（兼容既有用例）。
+    """

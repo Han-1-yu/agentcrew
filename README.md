@@ -376,6 +376,40 @@ DELETE /runs/{run_id}?confirm=1
 - 返回释放的字节数；Web UI 顶部有删除按钮（running 状态置灰，带确认对话框）
 - 与 `clean` 共享同一套边界校验（链接样式 / output_dir 之外一律拒绝）
 
+### P1-1. MCP 工具集成到 Agent 执行链路（ReAct 循环）
+
+`BaseAgent.execute()` 从「单次 LLM 调用 → 落盘」升级为可选的 **ReAct 循环**：
+模型在产出最终产物前，可以先调用工具（读文件、列目录、grep、跑 Python 片段、
+外部 MCP 工具）获取信息，再写交付物。**默认关闭**——不传 `tool_registry` 时行为
+与之前完全一致。
+
+- **统一工具接口**：`agentcrew/tools/` 提供 `Tool` 基类、`ToolRegistry`、四个
+  内置沙箱工具（`read_file` / `list_files` / `grep` / `run_python`），以及
+  `MCPToolAdapter`——把 `tools/list` 发现的外部 MCP 工具包成同一接口登记进注册表。
+- **ReAct 协议**：模型在回复里用 `<tool_call>` 围栏发出
+  `{"name": ..., "args": {...}}`；工具结果以 `<tool_result name="...">` 回灌，
+  可连续多轮，最多 `max_tool_calls`（默认 10）轮；触顶仍想调工具时降级为把最后
+  回复当产物，记一条 `tool_loop_exhausted` 警告，不判失败。
+- **能力边界**：`RoleSpec.allowed_tools`（默认 `["*"]`）按角色白名单过滤可见工具，
+  未授权工具既不进提示词、被强行调用也会以错误回灌。
+- **安全**：所有文件操作限制在项目根内（`safe_relpath` 拒绝 `../`、绝对路径、
+  盘符）；`run_python` 用独立子进程（`-I` 隔离、cwd 受限、默认 10s 超时、裁剪
+  环境变量），生成代码不在宿主进程执行。
+- **诚实留痕**：每次工具调用都记 ledger `tool_call` 事件（工具名、入参摘要、
+  success、耗时）。
+- **配置**：`agentcrew.yaml` 可声明 `mcp_servers`（服务器名 → `command`/`args`），
+  配置快照落盘前对含 key/token/secret 的字段脱敏为 `***`。
+
+```python
+# 给某个 Agent 接上工具（Crew 层接线，单测直接构造即可）
+from agentcrew.tools import ToolRegistry, ReadFileTool, RunPythonTool
+registry = ToolRegistry()
+registry.register(ReadFileTool(workdir=project_root))
+registry.register(RunPythonTool(workdir=project_root))
+agent = GenericAgent(spec, models=..., store=..., ledger=...,
+                     project_goal=..., tool_registry=registry)
+```
+
 ### P1-2. 并行 G2 评审
 
 多评审人（如 PM 任务的 architect + product_manager 双评审）从串行改为
