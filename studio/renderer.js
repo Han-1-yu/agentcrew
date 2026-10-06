@@ -1085,6 +1085,105 @@ function summarizeEvent(e) {
   return d.summary || Object.keys(d).join(', ');
 }
 
+/* ============================================================
+   任务图全屏页（分层列表视图）
+   ============================================================ */
+function renderDagPage(container) {
+  container.appendChild(h('div', { class: 'page-head' },
+    h('h2', {}, '任务依赖图'),
+    h('button', { class: 'btn', onclick: () => switchNav('dashboard') }, '返回总览 DAG')));
+  const wrap = h('div', { class: 'dag-full-wrap' });
+  container.appendChild(wrap);
+  const tasks = S.dash.tasks || [];
+  if (!tasks.length) { wrap.appendChild(h('div', { class: 'ph-empty' }, '暂无任务')); return; }
+  // 按拓扑层分组
+  const { layers } = computeLayers(tasks);
+  layers.forEach((ids, li) => {
+    const layerTasks = ids.map(id => tasks.find(t => t.id === id)).filter(Boolean);
+    const layerEl = h('div', { class: 'dag-layer' },
+      h('div', { class: 'dag-layer-head' }, `第 ${li + 1} 层 · ${layerTasks.length} 个任务`));
+    const listEl = h('div', { class: 'dag-layer-tasks' });
+    for (const t of layerTasks) {
+      const meta = ROLE_META[t.role] || { label: t.role, color: '#8E8E93' };
+      listEl.appendChild(h('div', { class: 'dag-task-row', onclick: () => openTaskDetail(t.id) },
+        h('span', { class: `ts-dot ts-${t.status}` }),
+        h('span', { class: 'dag-task-id' }, t.id),
+        h('span', { class: 'dag-task-title' }, trunc(t.title, 40)),
+        h('span', { class: 'dag-task-role', style: `color:${meta.color}` }, meta.label || t.role),
+        h('span', { class: 'dag-task-deps' }, (t.dependencies || []).length ? `← ${t.dependencies.join(', ')}` : '—'),
+        h('span', { class: `dag-task-status status-${t.status}` }, t.status)));
+    }
+    layerEl.appendChild(listEl);
+    wrap.appendChild(layerEl);
+  });
+}
+
+/* ============================================================
+   Agents 全屏页
+   ============================================================ */
+function renderAgentsPage(container) {
+  container.appendChild(h('div', { class: 'page-head' },
+    h('h2', {}, 'Agents'),
+    h('button', { class: 'btn', onclick: () => switchNav('dashboard') }, '返回')));
+  const grid = h('div', { class: 'agents-full-grid' });
+  container.appendChild(grid);
+  const agents = S.dash.agents || {};
+  for (const [role, a] of Object.entries(agents)) {
+    const meta = ROLE_META[role] || { label: role, color: '#8E8E93' };
+    const myTasks = S.dash.tasks.filter(t => t.role === role);
+    grid.appendChild(h('div', { class: 'agent-full-card' },
+      h('div', { class: 'agent-full-head' },
+        h('span', { class: 'agent-full-dot', style: `background:${meta.color}` }),
+        h('span', { class: 'agent-full-name' }, meta.label || role),
+        h('span', { class: `agent-full-status status-${a.status}` }, a.status)),
+      h('div', { class: 'agent-full-body' },
+        h('div', { class: 'agent-full-row' }, h('span', { class: 'k' }, '当前任务'), h('span', { class: 'v' }, a.task || '—')),
+        h('div', { class: 'agent-full-row' }, h('span', { class: 'k' }, '最近动作'), h('span', { class: 'v' }, a.action || '—')),
+        h('div', { class: 'agent-full-row' }, h('span', { class: 'k' }, '已完成'), h('span', { class: 'v' }, `${a.done} 项`)),
+        h('div', { class: 'agent-full-row' }, h('span', { class: 'k' }, '失败'), h('span', { class: 'v' }, `${a.fail} 次`)),
+        h('div', { class: 'agent-full-row' }, h('span', { class: 'k' }, 'Token'), h('span', { class: 'v' }, fmtTokens(a.tokens || 0))),
+        h('div', { class: 'agent-full-row' }, h('span', { class: 'k' }, '模型'), h('span', { class: 'v' }, a.model || '—')),
+        h('div', { class: 'agent-full-tasks' },
+          h('div', { class: 'agent-full-tasks-title' }, `任务列表（${myTasks.length}）`),
+          ...myTasks.map(t => h('div', { class: 'agent-full-task-item',
+            onclick: () => { switchNav('dashboard'); setTimeout(() => openTaskDetail(t.id), 100); } },
+            h('span', { class: `ts-dot ts-${t.status}` }),
+            h('span', { class: 'agent-full-task-id' }, t.id),
+            h('span', { class: 'agent-full-task-title' }, trunc(t.title, 30))))))));
+  }
+}
+
+/* ============================================================
+   门禁全屏页
+   ============================================================ */
+function renderGatesPage(container) {
+  container.appendChild(h('div', { class: 'page-head' },
+    h('h2', {}, '质量门禁'),
+    h('button', { class: 'btn', onclick: () => switchNav('dashboard') }, '返回')));
+  const list = h('div', { class: 'gates-full-list' });
+  container.appendChild(list);
+  const gates = S.dash.gates || [];
+  for (const g of gates) {
+    const reviews = S.dash.tasks.flatMap(t => (t.reviews || []).filter(r => r.layer === g.layer));
+    list.appendChild(h('div', { class: 'gate-full-card' },
+      h('div', { class: 'gate-full-head' },
+        h('span', { class: 'gate-full-id' }, g.id),
+        h('span', { class: 'gate-full-name' }, g.name),
+        h('span', { class: `gate-full-status status-${g.status}` }, g.status)),
+      h('div', { class: 'gate-full-stats' },
+        h('div', { class: 'gate-full-stat' }, h('div', { class: 'n' }, g.checks.total), h('div', { class: 'l' }, '检查项')),
+        h('div', { class: 'gate-full-stat ok' }, h('div', { class: 'n' }, g.checks.passed), h('div', { class: 'l' }, '通过')),
+        h('div', { class: 'gate-full-stat err' }, h('div', { class: 'n' }, g.checks.failed), h('div', { class: 'l' }, '失败'))),
+      h('div', { class: 'gate-full-verdict' }, g.verdict || ''),
+      reviews.length ? h('div', { class: 'gate-full-reviews' },
+        h('div', { class: 'gate-full-reviews-title' }, `评审记录（${reviews.length}）`),
+        ...reviews.slice(0, 10).map(r => h('div', { class: 'gate-review-item' },
+          h('span', { class: `gate-review-verdict ${r.verdict}` }, r.verdict),
+          h('span', { class: 'gate-review-task' }, r.task_id || ''),
+          h('span', { class: 'gate-review-text' }, trunc(r.summary || r.issues?.join('; ') || '', 80))))) : null));
+  }
+}
+
 function switchNav(key){
   S.nav=key;
   $$('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.nav===key));
@@ -1095,6 +1194,9 @@ function switchNav(key){
   if(key==='artifacts'){ renderArtifactsPage(ph); return; }
   if(key==='settings'){ renderSettingsPage(ph); return; }
   if(key==='events'){ renderEventsPage(ph); return; }
+  if(key==='dag'){ renderDagPage(ph); return; }
+  if(key==='agents'){ renderAgentsPage(ph); return; }
+  if(key==='gates'){ renderGatesPage(ph); return; }
   const p=PLACEHOLDERS[key]||{title:key,desc:'该页面开发中。'};
   ph.appendChild(h('div',{class:'ph-icon'},h('svg',{width:30,height:30,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor','stroke-width':1.6,'stroke-linecap':'round','stroke-linejoin':'round'},h('rect',{x:'3',y:'3',width:'18',height:'18',rx:'3'}),h('path',{d:'M8 12h8'}))));
   ph.appendChild(h('h2',{},p.title)); ph.appendChild(h('p',{},p.desc));
