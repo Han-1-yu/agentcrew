@@ -16,6 +16,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import shutil
+import sys
 from typing import Any
 
 from agentcrew.mcp.tool import MCPTool, MCPToolResult
@@ -54,8 +56,15 @@ class MCPClient:
 
     async def start(self) -> None:
         """启动服务器进程并完成 initialize 握手。"""
+        # Windows：create_subprocess_exec 不解析 PATHEXT（.cmd/.bat），
+        # 用 shutil.which 解析完整路径，否则 npx/npm 等命令找不到。
+        cmd = list(self._command)
+        if sys.platform == "win32":
+            resolved = shutil.which(cmd[0])
+            if resolved:
+                cmd[0] = resolved
         self._proc = await asyncio.create_subprocess_exec(
-            *self._command,
+            *cmd,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
