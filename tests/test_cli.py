@@ -269,7 +269,7 @@ def test_demo_mock_run_end_to_end(tmp_path, monkeypatch):
     monkeypatch.chdir(ROOT)
     code = cli.main(["run", "--demo", "--mock", "--auto", "--no-live"])
     assert code == 0
-    run_dirs = list((tmp_path / "o").iterdir())
+    run_dirs = [d for d in (tmp_path / "o").iterdir() if d.is_dir() and (d / "run.json").exists()]
     assert len(run_dirs) == 1
     art = run_dirs[0] / "artifacts"
     assert (art / "README.md").exists() and (art / "DELIVERY.md").exists()
@@ -280,7 +280,7 @@ def test_status_reads_completed_run(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("AGENTCREW_OUTPUT_DIR", str(tmp_path / "o"))
     monkeypatch.chdir(ROOT)
     assert cli.main(["run", "--demo", "--mock", "--auto", "--no-live"]) == 0
-    rid = next((tmp_path / "o").iterdir()).name
+    rid = next(d for d in (tmp_path / "o").iterdir() if d.is_dir() and (d / "run.json").exists()).name
     assert cli.main(["status", rid]) == 0
     out = capsys.readouterr().out
     assert rid in out
@@ -294,7 +294,7 @@ def test_run_prints_artifacts_dir(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert str(tmp_path / "o") in out and "artifacts" in out
     record = json.loads(
-        (next((tmp_path / "o").iterdir()) / "run.json").read_text(encoding="utf-8"))
+        (next(d for d in (tmp_path / "o").iterdir() if d.is_dir() and (d / "run.json").exists()) / "run.json").read_text(encoding="utf-8"))
     assert record["project_goal"] == PROJECT_GOAL
 
 
