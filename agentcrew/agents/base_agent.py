@@ -244,6 +244,7 @@ class BaseAgent(ABC):
         tool_registry: ToolRegistry | None = None,
         max_tool_calls: int = _DEFAULT_MAX_TOOL_CALLS,
         subtask_creator: Callable[[dict], str] | None = None,
+        max_self_corrections: int = 2,
     ) -> None:
         """``catalog`` 是本 run 的角色目录（含自定义角色），可为 ``None``。
 
@@ -260,6 +261,11 @@ class BaseAgent(ABC):
         ``<subtask>`` 围栏并通过它创建动态子任务；``None``（默认）不检测、
         系统提示词也不告知子任务能力，行为与原来完全一致。它接收子任务 spec
         字典（含 Agent 注入的 ``parent_id``），返回新任务 id。
+
+        ``max_self_corrections``（P2-8）：parse/validate 失败时，在**同一次
+        execute() 内**把错误回灌给模型重调 LLM 的最大次数（默认 2）。仍失败才抛
+        :class:`AgentExecutionError` 让调度器重试。``0`` = 首次失败即抛错（与
+        原行为完全一致）。Provider 异常（网络/鉴权）不在自我修正范围内，原样上抛。
         """
         self.spec = spec
         self._models = models
@@ -270,6 +276,7 @@ class BaseAgent(ABC):
         self._tool_registry = tool_registry
         self._max_tool_calls = max_tool_calls
         self._subtask_creator = subtask_creator
+        self._max_self_corrections = max_self_corrections
 
     def set_subtask_creator(
         self, creator: Callable[[dict], str] | None
@@ -308,10 +315,10 @@ class BaseAgent(ABC):
         # 记 ledger，子任务在下一轮调度即可被派发。
         await self._maybe_create_subtasks(task, final_text)
 
-        parsed = self._parse(final_text, task)
-        notes = _join_notes(parsed.notes, *_language_notes(final_text, task))
-        self._emit_notes(task, notes)
-        self._validate(parsed, task)
+        # P2-8：parse/validate 失败时在同一次 execute() 内自我重调 LLM 修正。
+        parsed, notes = await self._produce_with_corrections(
+            task, messages, alias, final_text
+        )
         records = self._commit(parsed, task)
 
         finished_at = datetime.now()
@@ -647,6 +654,72 @@ class BaseAgent(ABC):
                 f"已输出 {completion.completion_tokens} token）：请精简内容，"
                 f"或把交付物拆成更小的几次输出后重试。",
             )
+
+    async def _produce_with_corrections(
+        self,
+        task: Task,
+        messages: list[Message],
+        alias: str,
+        final_text: str,
+    ) -> tuple[ParsedOutput, str]:
+        """P2-8：parse + validate，失败时把错误回灌给模型重调 LLM 自我修正。
+
+        最多 ``max_self_corrections`` 次重调：每次失败都把错误信息作为新的 user
+        消息（连同上一条 assistant 回复）追加进 messages，再 ``models.call`` 一次。
+        每次修正记 ``agent_self_correction``（含 task_id/role/attempt/error）；
+        重调同样走 ``models.call``，token/成本照记。达到上限仍失败 → 抛
+        :class:`AgentExecutionError`（与原行为一致，交给调度器重试）。
+
+        ``max_self_corrections=0`` 时循环只跑一轮，首次失败即抛错——与改造前完全
+        一致。Provider 异常（网络/鉴权）不在这里 catch，原样上抛。
+        """
+        parsed: ParsedOutput | None = None
+        notes = ""
+        for attempt in range(self._max_self_corrections + 1):
+            try:
+                parsed = self._parse(final_text, task)
+                notes = _join_notes(
+                    parsed.notes, *_language_notes(final_text, task)
+                )
+                self._emit_notes(task, notes)
+                self._validate(parsed, task)
+                return parsed, notes
+            except AgentExecutionError as exc:
+                if attempt >= self._max_self_corrections:
+                    raise
+                # 自我修正：留痕 → 把坏回复与错误回灌 → 重调 LLM。
+                self._ledger.emit(
+                    "agent_self_correction",
+                    task_id=task.id,
+                    role=self.spec.key,
+                    attempt=attempt + 1,
+                    error=str(exc),
+                )
+                messages.append({"role": "assistant", "content": final_text})
+                messages.append(
+                    {"role": "user", "content": self._correction_hint(str(exc))}
+                )
+                completion = await self._models.call(
+                    alias,
+                    messages,
+                    temperature=self.spec.temperature,
+                    max_tokens=self.spec.max_output_tokens,
+                    purpose="execute",
+                    role=self.spec.key,
+                )
+                self._guard_truncation(completion, task)
+                final_text = completion.text
+                await self._maybe_create_subtasks(task, final_text)
+        raise AssertionError("unreachable")
+
+    def _correction_hint(self, error: str) -> str:
+        """把一次 parse/validate 失败变成给模型的修正提示。"""
+        return (
+            "你上一次输出没有通过校验，问题如下：\n"
+            f"{error}\n\n"
+            "请严格按系统提示里的「产物输出协议」重新输出**完整的交付物**"
+            "（每个交付物一个带正确 `file=` 路径的围栏块），不要只写解释文字。"
+        )
 
     def _parse(self, raw: str, task: Task) -> ParsedOutput:
         """调 ``parse_output``，把任何解析失败收敛成 ``AgentExecutionError``。"""

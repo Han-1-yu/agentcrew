@@ -567,6 +567,21 @@ run 会永远挂住。本项补上**运行时停滞检测**——有任务在跑
 - **向后兼容**：`stall_timeout_seconds` 默认 300；正常长任务只要在阈值内有过
   任意一次完成/跃迁就不会误触。
 
+### P2-8. Agent 自我修正循环
+
+Agent 执行失败（输出格式 / 契约校验不通过）时，不再直接抛错让调度器重试——
+而是在**同一次 `execute()` 内**把错误回灌给模型，让它自己改对。
+
+- **流程**：parse 或 validate 失败 → 把错误信息 + 上一条 assistant 回复追加进
+  messages → 重调一次 LLM → 再 parse/validate，循环直到成功或用尽次数。
+- **额度**：`max_self_corrections`（默认 2）次自我修正；仍失败才抛
+  `AgentExecutionError`，由调度器按 attempts 重试。
+- **留痕与记账**：每次修正记 ledger `agent_self_correction`（含 task_id / role /
+  attempt / error）；重调走 `models.call()`，token / 成本照记。
+- **边界**：仅作用于 parse/validate 失败；Provider 异常（网络 / 鉴权）原样上抛，
+  不自我修正。
+- **向后兼容**：`max_self_corrections=0` 时首次失败即抛错，与原行为完全一致。
+
 ### P2-9. Ledger 查询与分析 API
 
 Ledger 此前只被终端看板 / 状态命令消费，现在 REST 也能直接读：
