@@ -1330,7 +1330,7 @@ function renderGatesPage(container) {
 }
 
 function switchNav(key){
-  S.nav=key;
+  S.nav=key; persistState();
   $$('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.nav===key));
   const dash=$('#dashboard-view'), ph=$('#placeholder-view');
   if(key==='dashboard'){ ph.classList.add('hidden'); dash.classList.remove('hidden'); return; }
@@ -1637,6 +1637,7 @@ async function switchRun(dir) {
     const ok = await loadRealRun(dir);
     if (ok) {
       renderDashboard();
+      persistState();
       toast('info', '已切换', simplifyGoal(S.dash.run.project_goal));
     } else {
       toast('error', '切换失败', '无法加载该运行数据');
@@ -1698,16 +1699,29 @@ async function boot(){
   try {
     const runs=await window.studio.listRuns();
     if(runs&&runs.length){
-      const ok = await loadRealRun(runs[0].dir);
+      // 优先恢复上次查看的 run，否则用最新的
+      const lastDir = localStorage.getItem('agentcrew:lastRunDir');
+      const target = lastDir && runs.find(r=>r.dir===lastDir) ? lastDir : runs[0].dir;
+      const ok = await loadRealRun(target);
       if (ok) S.realMode = true;
     }
   } catch {}
   if(!S.realMode) initMockData();
 
   renderDashboard();
-  switchNav('dashboard');
+  // 恢复上次查看的页面
+  const lastPage = localStorage.getItem('agentcrew:lastPage');
+  switchNav(lastPage || 'dashboard');
   if (!S.realMode) startSim();
   setInterval(renderChrome,1000);
+}
+
+/* 状态持久化 */
+function persistState() {
+  try {
+    if (S.watchDir) localStorage.setItem('agentcrew:lastRunDir', S.watchDir);
+    if (S.nav) localStorage.setItem('agentcrew:lastPage', S.nav);
+  } catch {}
 }
 
 function openUserMenu(){
