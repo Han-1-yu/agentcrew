@@ -55,6 +55,7 @@ from agentcrew.artifacts.store import (
     ArtifactTooLargeError,
     UndeclaredArtifactError,
 )
+from agentcrew.artifacts.summarizer import summarize_records
 from agentcrew.context.context_bus import (
     TRUNCATION_NOTICE,
     ContextPack,
@@ -63,7 +64,7 @@ from agentcrew.context.context_bus import (
     UpstreamDigest,
 )
 from agentcrew.models.factory import ModelFactory
-from agentcrew.models.providers.base import Message
+from agentcrew.models.providers.base import CompletionResult, Message
 from agentcrew.models.providers.mock import MockProvider, set_purpose
 from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.roles.spec import RoleSpec
@@ -73,7 +74,14 @@ from agentcrew.utils.files import UnsafePathError, safe_relpath
 from agentcrew.tools import Tool, ToolRegistry
 
 #: 默认摘要的长度上限（spec §8.1「取 notes 前 400 字符」）。
+#: P3-6 起：有产物时产物正文智能摘要优先于此额度，notes 作为补充；无产物时
+#: notes 仍按此截断。
 _SUMMARY_LIMIT = 400
+
+#: P3-6：有产物时，批量产物摘要（``summarize_records``）并入 notes 后的总
+#: 长度上限。产物正文摘要比 notes 截断更有价值，因此额度放大到 1500；notes
+#: 排在产物摘要之后，超出部分截断。
+_ARTIFACT_SUMMARY_TOTAL = 1500
 
 #: ``RoleSpec.model`` 的哨兵值：字面量 ``"default"`` 表示「按三级优先级解析」。
 _DEFAULT_ALIAS = "default"
@@ -245,6 +253,7 @@ class BaseAgent(ABC):
         max_tool_calls: int = _DEFAULT_MAX_TOOL_CALLS,
         subtask_creator: Callable[[dict], str] | None = None,
         max_self_corrections: int = 2,
+        stream: bool = False,
     ) -> None:
         """``catalog`` 是本 run 的角色目录（含自定义角色），可为 ``None``。
 
@@ -266,6 +275,11 @@ class BaseAgent(ABC):
         execute() 内**把错误回灌给模型重调 LLM 的最大次数（默认 2）。仍失败才抛
         :class:`AgentExecutionError` 让调度器重试。``0`` = 首次失败即抛错（与
         原行为完全一致）。Provider 异常（网络/鉴权）不在自我修正范围内，原样上抛。
+
+        ``stream``（P3-3）：``True`` 时 LLM 调用走 ``models.stream_call`` 流式
+        路径，逐块收集并对每个增量块记一条 ``agent_stream_chunk`` ledger 事件；
+        收集齐全文后仍走原有的 parse/validate/commit 流程。``False``（默认）
+        完全走 ``models.call``，行为与改造前逐字节一致（向后兼容）。
         """
         self.spec = spec
         self._models = models
@@ -277,6 +291,7 @@ class BaseAgent(ABC):
         self._max_tool_calls = max_tool_calls
         self._subtask_creator = subtask_creator
         self._max_self_corrections = max_self_corrections
+        self._stream = stream
 
     def set_subtask_creator(
         self, creator: Callable[[dict], str] | None
@@ -408,19 +423,30 @@ class BaseAgent(ABC):
             self._fail(task, "；".join(problems))
 
     def summarize(self, result: TaskResult) -> str:
-        """默认摘要：``notes`` 前 400 字符；没有说明文字时回落到产物清单。
+        """默认摘要：有产物时优先产物正文智能摘要（P3-6），否则回落到 notes。
 
         「没有说明文字」是常态而非异常：只输出围栏块的规范回复里一个字的说明
         都没有，而 ``summary`` 是下游上下文包的信息来源，空串会让下游只看到
         一个文件名列表。
+
+        P3-6：当本次执行产出了文件时，用 :func:`summarize_records` 对**正文**做
+        结构性摘要（标题 / 接口 / schema），比原来只列文件名有价值得多。产物
+        摘要在前、notes 在后（若有），整体截断到 :data:`_ARTIFACT_SUMMARY_TOTAL`。
+        无产物时**完全**回落到旧的 notes 截断 / 「执行完成」逻辑，向后兼容。
         """
         notes = result.notes.strip()
-        if notes:
-            return notes[:_SUMMARY_LIMIT]
         if not result.artifacts:
+            # 向后兼容：无产物时沿用原 notes 截断 / 空回落逻辑。
+            if notes:
+                return notes[:_SUMMARY_LIMIT]
             return "执行完成，未产出文件"
-        produced = "、".join(record.path for record in result.artifacts)
-        return f"产出 {len(result.artifacts)} 个产物：{produced}"
+        artifact_summary = summarize_records(
+            result.artifacts, self._store, max_total=_ARTIFACT_SUMMARY_TOTAL
+        )
+        if notes:
+            combined = f"{artifact_summary}\n说明：{notes}"
+            return _truncate_summary(combined, _ARTIFACT_SUMMARY_TOTAL)
+        return artifact_summary
 
     # ── 内部 ─────────────────────────────────────────────────────────────
 
@@ -507,6 +533,57 @@ class BaseAgent(ABC):
         ]
         return "\n".join(lines)
 
+    async def _invoke_model(
+        self, task: Task, messages: list[Message], alias: str
+    ) -> CompletionResult:
+        """调一次 LLM：非流式走 ``models.call``，流式走 ``models.stream_call``（P3-3）。
+
+        ``stream=False``（默认）时就是 ``models.call`` 的薄封装，行为与改造前逐
+        字节一致。``stream=True`` 时逐块消费 ``stream_call``：每拼一个增量块就记
+        一条 ``agent_stream_chunk`` ledger 事件（含 ``task_id`` 与 ``delta_length``），
+        全部收齐后拼成完整文本、重建一个 :class:`CompletionResult`（只带
+        ``text``/``finish_reason``，token 记账已在工厂 ``stream_call`` 内完成），
+        后续截断守卫/解析/校验/落盘与非流式共用同一条路径。
+        """
+        if not self._stream:
+            return await self._models.call(
+                alias,
+                messages,
+                temperature=self.spec.temperature,
+                max_tokens=self.spec.max_output_tokens,
+                purpose="execute",
+                role=self.spec.key,
+            )
+        parts: list[str] = []
+        finish_reason: str | None = None
+        async for chunk in self._models.stream_call(
+            alias,
+            messages,
+            temperature=self.spec.temperature,
+            max_tokens=self.spec.max_output_tokens,
+            purpose="execute",
+            role=self.spec.key,
+        ):
+            parts.append(chunk.delta)
+            if chunk.finish_reason is not None:
+                finish_reason = chunk.finish_reason
+            self._ledger.emit(
+                "agent_stream_chunk",
+                task_id=task.id,
+                role=self.spec.key,
+                delta_length=len(chunk.delta),
+            )
+        provider = self._models.get(alias)
+        return CompletionResult(
+            text="".join(parts),
+            provider=provider.binding.provider,
+            model=provider.binding.model,
+            prompt_tokens=0,
+            completion_tokens=0,
+            latency_ms=0,
+            finish_reason=finish_reason,
+        )
+
     async def _obtain_final_text(
         self, task: Task, messages: list[Message], alias: str
     ) -> str:
@@ -517,14 +594,7 @@ class BaseAgent(ABC):
         """
         if not self._available_tools():
             self._configure_replay(alias, task)
-            completion = await self._models.call(
-                alias,
-                messages,
-                temperature=self.spec.temperature,
-                max_tokens=self.spec.max_output_tokens,
-                purpose="execute",
-                role=self.spec.key,
-            )
+            completion = await self._invoke_model(task, messages, alias)
             self._guard_truncation(completion, task)
             return completion.text
         return await self._run_agent_loop(task, messages, alias)
@@ -542,14 +612,7 @@ class BaseAgent(ABC):
         exhausted = False
         for round_index in range(self._max_tool_calls):
             self._configure_replay(alias, task)
-            completion = await self._models.call(
-                alias,
-                messages,
-                temperature=self.spec.temperature,
-                max_tokens=self.spec.max_output_tokens,
-                purpose="execute",
-                role=self.spec.key,
-            )
+            completion = await self._invoke_model(task, messages, alias)
             self._guard_truncation(completion, task)
             calls = _extract_tool_calls(completion.text)
             if not calls:
@@ -699,14 +762,7 @@ class BaseAgent(ABC):
                 messages.append(
                     {"role": "user", "content": self._correction_hint(str(exc))}
                 )
-                completion = await self._models.call(
-                    alias,
-                    messages,
-                    temperature=self.spec.temperature,
-                    max_tokens=self.spec.max_output_tokens,
-                    purpose="execute",
-                    role=self.spec.key,
-                )
+                completion = await self._invoke_model(task, messages, alias)
                 self._guard_truncation(completion, task)
                 final_text = completion.text
                 await self._maybe_create_subtasks(task, final_text)
@@ -926,6 +982,15 @@ def _render_excerpts(excerpts: Sequence[FileExcerpt]) -> str:
 def _join_notes(*parts: str) -> str:
     """拼接说明段落，丢掉空段（``ParsedOutput.notes`` 原样保留）。"""
     return "\n".join(part for part in parts if part)
+
+
+def _truncate_summary(text: str, max_length: int) -> str:
+    """截断摘要到 ``max_length`` 字符，超长时以省略号收尾（占位算进额度）。"""
+    if max_length <= 0 or len(text) <= max_length:
+        return text
+    if max_length == 1:
+        return "…"
+    return text[: max_length - 1].rstrip() + "…"
 
 
 def _canonical_path(raw: str) -> str:
