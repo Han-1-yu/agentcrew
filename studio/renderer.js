@@ -1056,9 +1056,72 @@ function onWatchLedger(payload) {
   const newEvents = payload.events || [];
   if (newEvents.length) {
     S.dash.events.push(...newEvents);
-    // 限制事件数量
     if (S.dash.events.length > 500) S.dash.events = S.dash.events.slice(-500);
     renderEvents();
+  }
+}
+
+/* ============================================================
+   运行列表与切换
+   ============================================================ */
+const RUN_STATUS_COLOR = {
+  running: '#007AFF', completed: '#34C759', failed: '#FF3B30',
+  paused: '#FF9F0A', cancelled: '#8E8E93', planning: '#5AC8FA',
+  preparing: '#8E8E93', awaiting_approval: '#AF52DE',
+};
+
+async function loadRunList() {
+  const listEl = $('#run-dropdown-list');
+  if (!listEl) return;
+  try {
+    const runs = await window.studio.listRuns();
+    if (!runs || !runs.length) {
+      listEl.innerHTML = '<div class="rd-empty">暂无运行记录</div>';
+      return;
+    }
+    listEl.innerHTML = '';
+    for (const r of runs.slice(0, 20)) {
+      const color = RUN_STATUS_COLOR[r.status] || '#8E8E93';
+      const isActive = S.dash.run && S.dash.run.dir === r.dir;
+      const item = h('div', { class: 'rd-item' + (isActive ? ' active' : ''),
+        onclick: () => { closeRunDropdown(); switchRun(r.dir); } },
+        h('span', { class: 'rd-dot', style: `background:${color}` }),
+        h('div', { class: 'rd-item-info' },
+          h('div', { class: 'rd-item-title', title: r.goal || r.runId }, simplifyGoal(r.goal || r.runId || '未命名')),
+          h('div', { class: 'rd-item-meta' }, `${r.runId || ''} · ${r.status || 'unknown'} · ${fmtDateTime(r.createdAt || r.updatedAt)}`)));
+      listEl.appendChild(item);
+    }
+  } catch (e) {
+    listEl.innerHTML = '<div class="rd-empty">加载失败</div>';
+  }
+}
+
+function toggleRunDropdown() {
+  const dd = $('#run-dropdown');
+  if (!dd) return;
+  if (dd.classList.contains('hidden')) {
+    loadRunList();
+    dd.classList.remove('hidden');
+  } else {
+    dd.classList.add('hidden');
+  }
+}
+function closeRunDropdown() {
+  const dd = $('#run-dropdown');
+  if (dd) dd.classList.add('hidden');
+}
+
+async function switchRun(dir) {
+  // 停止旧 watch
+  if (S.watchDir) {
+    try { await window.studio.unwatchRun(S.watchDir); } catch {}
+  }
+  const ok = await loadRealRun(dir);
+  if (ok) {
+    renderDashboard();
+    toast('info', '已切换', simplifyGoal(S.dash.run.project_goal));
+  } else {
+    toast('error', '切换失败', '无法加载该运行数据');
   }
 }
 
@@ -1066,6 +1129,8 @@ async function boot(){
   $('#btn-new-run').addEventListener('click',openNewRunModal);
   $('#btn-notify').addEventListener('click',()=>{ $('#notify-dot').classList.add('hidden'); toast('info','通知','暂无新通知'); });
   $('#btn-user').addEventListener('click',openUserMenu);
+  $('#tb-workspace').addEventListener('click',(e)=>{ e.stopPropagation(); toggleRunDropdown(); });
+  document.addEventListener('click',(e)=>{ if(!e.target.closest('#run-dropdown')&&!e.target.closest('#tb-workspace')) closeRunDropdown(); });
   $$('.nav-item').forEach(b=>b.addEventListener('click',()=>switchNav(b.dataset.nav)));
   window.addEventListener('error',(e)=>toast('error','界面错误',e.message));
   window.addEventListener('unhandledrejection',(e)=>toast('error','未处理异常',String(e.reason&&e.reason.message||e.reason)));
@@ -1111,10 +1176,40 @@ function openNewRunModal(){
   showModal(h('div',{},
     h('h3',{class:'modal-title'},'启动新运行'),
     h('div',{class:'confirm-text'},'用一句话描述要交付的目标：'),
-    h('textarea',{id:'nr-goal',rows:3,style:'width:100%;border:1px solid rgba(60,60,67,.2);border-radius:6px;padding:8px;font-family:inherit',placeholder:'例如：开发一个短链接生成服务…'}),
+    h('textarea',{id:'nr-goal',rows:3,style:'width:100%;border:1px solid rgba(60,60,67,.2);border-radius:6px;padding:8px;font-family:inherit;font-size:13px;resize:vertical',placeholder:'例如：开发一个短链接生成服务，含 REST API、缓存与部署文档'}),
+    h('div',{style:'display:flex;gap:16px;margin-top:10px;font-size:12px;color:#6E6E73'},
+      h('label',{style:'display:flex;align-items:center;gap:5px;cursor:pointer'},
+        h('input',{type:'checkbox',id:'nr-mock',checked:true}),'Mock 模式'),
+      h('label',{style:'display:flex;align-items:center;gap:5px;cursor:pointer'},
+        h('input',{type:'checkbox',id:'nr-auto',checked:true}),'自动执行'),
+      h('label',{style:'display:flex;align-items:center;gap:5px;cursor:pointer'},
+        h('input',{type:'checkbox',id:'nr-demo'}),'Demo 目标')),
     h('div',{class:'modal-actions'},
       h('button',{class:'btn',onclick:closeModal},'取消'),
-      h('button',{class:'btn btn-primary',onclick:()=>{closeModal();toast('success','已启动','新运行已提交（演示）');initMockData();renderDashboard();startSim();}},'启动'))));
+      h('button',{class:'btn btn-primary',onclick:async ()=>{
+        const goal=$('#nr-goal').value.trim();
+        const useDemo=$('#nr-demo').checked;
+        if(!useDemo && !goal){ toast('warning','需要目标','请输入项目目标或勾选 Demo'); return; }
+        closeModal();
+        try {
+          const r = await window.studio.startRun({
+            goal: useDemo ? '' : goal,
+            demo: useDemo,
+            mock: $('#nr-mock').checked,
+            auto: $('#nr-auto').checked,
+          });
+          toast('success','已启动','运行已提交，正在初始化…');
+          // 等待 CLI 创建 run 目录后切换
+          setTimeout(async ()=>{
+            try {
+              const runs = await window.studio.listRuns();
+              if(runs && runs.length) await switchRun(runs[0].dir);
+            } catch {}
+          }, 2500);
+        } catch(e) {
+          toast('error','启动失败', String(e.message||e));
+        }
+      }},'启动'))));
 }
 
 boot();
