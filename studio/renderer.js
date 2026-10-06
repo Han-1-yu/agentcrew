@@ -501,19 +501,45 @@ function renderRunStatusBar() {
   const elapsed=run.status==='running'&&stats.started_at ? (Date.now()-parseTs(stats.started_at).getTime()) : null;
   const cost=stats.estimated_cost_usd||0;
   const actions=[];
+  const isReal = !!S.realMode;
   if (run.status==='running'){
-    actions.push(h('button',{class:'btn',onclick:()=>confirmAction('暂停运行','暂停后所有 Agent 将在当前任务完成后停止，可随时恢复。',
-      ()=>{ run.status='paused'; toast('warning','已暂停','运行已挂起'); renderDashboard(); })},
-      iconPause(),'暂停'));
+    if (!isReal) {
+      actions.push(h('button',{class:'btn',onclick:()=>confirmAction('暂停运行','暂停后所有 Agent 将在当前任务完成后停止，可随时恢复。',
+        ()=>{ run.status='paused'; toast('warning','已暂停','运行已挂起'); renderDashboard(); })},
+        iconPause(),'暂停'));
+    }
     actions.push(h('button',{class:'btn btn-danger',onclick:()=>confirmAction('取消运行','取消后本次运行将被终止，未完成任务标记为失败。',
-      ()=>{ run.status='cancelled'; pushEvent('run_cancelled',{}); toast('error','已取消','运行已终止'); stopSim(); renderDashboard(); })},
+      async ()=>{
+        if (isReal && run.dir) {
+          try { await window.studio.cancelOffline(run.dir); toast('info','已发送取消','等待进程退出…'); }
+          catch(e) { toast('error','取消失败',String(e.message||e)); }
+        } else {
+          run.status='cancelled'; pushEvent('run_cancelled',{}); stopSim(); renderDashboard();
+          toast('error','已取消','运行已终止');
+        }
+      })},
       iconX(),'取消'));
-  } else if (run.status==='paused'){
-    actions.push(h('button',{class:'btn btn-primary',onclick:()=>{ run.status='running'; pushEvent('human_approved',{note:'resume from checkpoint'}); toast('success','已恢复','从检查点继续运行'); startSim(); renderDashboard(); }},
+  } else if (run.status==='paused' || run.status==='cancelled' || run.status==='failed'){
+    actions.push(h('button',{class:'btn btn-primary',onclick:async ()=>{
+      if (isReal && run.dir) {
+        try {
+          await window.studio.resumeRun({runDir: run.dir, mock: true, auto: true});
+          toast('success','已恢复','从检查点继续运行');
+          setTimeout(async ()=>{ try { await switchRun(run.dir); } catch {} }, 2000);
+        } catch(e) { toast('error','恢复失败',String(e.message||e)); }
+      } else {
+        run.status='running'; pushEvent('human_approved',{note:'resume from checkpoint'}); startSim(); renderDashboard();
+        toast('success','已恢复','从检查点继续运行');
+      }
+    }},
       iconPlay(),'恢复'));
   }
-  actions.push(h('button',{class:'btn',onclick:()=>toast('info','重新运行','已用相同目标启动新运行')},'重新运行'));
-  actions.push(h('button',{class:'btn',onclick:()=>{ pushEvent('checkpoint_saved',{manual:true}); toast('success','检查点','已从最近检查点继续'); }},'从检查点继续'));
+  if (isReal) {
+    actions.push(h('button',{class:'btn',onclick:()=>{ openNewRunModal(); $('#nr-goal').value = run.project_goal || ''; }},'重新运行'));
+  } else {
+    actions.push(h('button',{class:'btn',onclick:()=>toast('info','重新运行','已用相同目标启动新运行')},'重新运行'));
+    actions.push(h('button',{class:'btn',onclick:()=>{ pushEvent('checkpoint_saved',{manual:true}); toast('success','检查点','已从最近检查点继续'); }},'从检查点继续'));
+  }
 
   host.innerHTML='';
   host.appendChild(h('div',{},
