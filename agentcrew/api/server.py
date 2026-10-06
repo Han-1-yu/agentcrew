@@ -18,7 +18,9 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, unquote, urlsplit
 
 
 @dataclass
@@ -70,12 +72,14 @@ class ApiServer:
         host: str = "127.0.0.1",
         port: int = 8765,
         event_bus: EventBus | None = None,
+        output_dir: Path | None = None,
     ) -> None:
         self.host = host
         self.port = port
         self.bus = event_bus or EventBus()
         self.runs: dict[str, RunState] = {}
         self._server: asyncio.AbstractServer | None = None
+        self._output_dir = output_dir
 
     async def start(self) -> None:
         self._server = await asyncio.start_server(
@@ -134,6 +138,8 @@ class ApiServer:
                 # POST 只用于测试注入，body 可选（最多读 64KB）
                 body = await reader.read(65536)
                 await self._handle_post(path, body, writer)
+            elif method == "DELETE":
+                await self._handle_delete(path, writer)
             else:
                 await self._send_json(writer, 405, {"error": "Method Not Allowed"})
         except (ConnectionError, asyncio.CancelledError):
@@ -193,6 +199,47 @@ class ApiServer:
             await self._send_json(writer, 202, {"accepted": True})
             return
         await self._send_json(writer, 404, {"error": "Not Found"})
+
+    async def _handle_delete(self, path: str, writer: asyncio.StreamWriter) -> None:
+        """``DELETE /runs/{run_id}?confirm=1``：删除单个 run（P0-4）。
+
+        必须带 ``?confirm=1`` 否则返回 400（防误删）。``running`` 状态由
+        ``delete_run`` 内部拒绝（返回 409）。删除成功返回释放字节数。
+        """
+        parsed = urlsplit(path)
+        segments = [unquote(s) for s in parsed.path.split("/") if s]
+        if len(segments) != 2 or segments[0] != "runs":
+            await self._send_json(writer, 404, {"error": "Not Found"})
+            return
+        run_id = segments[1]
+        query = parse_qs(parsed.query)
+        if query.get("confirm", ["0"])[0] != "1":
+            await self._send_json(writer, 400, {
+                "error": "删除需显式确认：追加 ?confirm=1",
+            })
+            return
+        if self._output_dir is None:
+            await self._send_json(writer, 500, {"error": "server 未配置 output_dir"})
+            return
+        from agentcrew.runtime.checkpoint import delete_run
+        try:
+            freed = delete_run(self._output_dir, run_id)
+        except FileNotFoundError:
+            await self._send_json(writer, 404, {"error": f"run {run_id!r} 不存在"})
+            return
+        except RuntimeError as exc:
+            # running 状态拒绝删除 → 409 Conflict
+            await self._send_json(writer, 409, {"error": str(exc)})
+            return
+        except (OSError, ValueError) as exc:
+            await self._send_json(writer, 500, {"error": str(exc)})
+            return
+        # 从内存注册表中移除（如果存在）
+        self.runs.pop(run_id, None)
+        await self._send_json(writer, 200, {
+            "deleted": run_id,
+            "freed_bytes": freed,
+        })
 
     async def _handle_sse(self, run_id: str, writer: asyncio.StreamWriter) -> None:
         writer.write(

@@ -26,6 +26,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   input { background: #161b22; border: 1px solid #30363d; color: #e1e4e8; padding: 6px 12px; border-radius: 6px; font-size: 14px; width: 200px; }
   button { background: #238636; color: #fff; border: none; padding: 6px 16px; border-radius: 6px; cursor: pointer; font-size: 14px; }
   button:hover { background: #2ea043; }
+  button:disabled { background: #30363d; color: #6e7681; cursor: not-allowed; }
+  .btn-danger { background: #da3633; }
+  .btn-danger:hover { background: #f85149; }
+  .btn-danger:disabled { background: #30363d; color: #6e7681; }
   .board { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin-bottom: 16px; }
   .column { background: #161b22; border-radius: 8px; padding: 8px; min-height: 100px; }
   .column h3 { font-size: 12px; text-transform: uppercase; color: #8b949e; margin-bottom: 8px; text-align: center; }
@@ -47,6 +51,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <div class="controls">
   <input id="run-id" placeholder="Run ID（如 R-1）" value="">
   <button onclick="connect()">连接</button>
+  <button id="btn-delete" class="btn-danger" onclick="deleteRun()" disabled>删除 Run</button>
   <span id="run-status" class="status-badge status-pending">pending</span>
 </div>
 <div class="board" id="board"></div>
@@ -108,6 +113,31 @@ function setStatus(status) {
   const el = document.getElementById("run-status");
   el.textContent = status;
   el.className = "status-badge status-" + status;
+  // running 状态禁止删除（需先 cancel）
+  const btn = document.getElementById("btn-delete");
+  if (btn) btn.disabled = (status === "running" || !currentRun);
+}
+
+async function deleteRun() {
+  if (!currentRun) { alert("请先连接一个 Run"); return; }
+  if (!confirm(`确认删除 run ${currentRun}？此操作不可恢复。`)) return;
+  try {
+    const resp = await fetch(`/runs/${currentRun}?confirm=1`, { method: "DELETE" });
+    const data = await resp.json();
+    if (resp.ok) {
+      alert(`已删除 run ${currentRun}，释放 ${data.freed_bytes?.toLocaleString() || 0} 字节。`);
+      if (eventSource) { eventSource.close(); eventSource = null; }
+      currentRun = null;
+      setStatus("pending");
+      initBoard();
+    } else if (resp.status === 409) {
+      alert(`删除被拒绝：${data.error}`);
+    } else {
+      alert(`删除失败（${resp.status}）：${data.error || resp.statusText}`);
+    }
+  } catch(e) {
+    alert(`删除请求失败：${e}`);
+  }
 }
 
 function setConn(connected) {

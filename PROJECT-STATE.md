@@ -4,7 +4,7 @@ V2 七项增强全部完成，master 干净，1286 passed / 1 skipped / ruff 全
 V1 原提示词七条验收 7/7，真实模型端到端 8/8（$0.10，产物实测可跑）。
 V2 真实协同验证通过（摘要压缩 + 复杂度选模型，Todo 演示 14 次 LLM 调用零平台故障）。
 
-V3 三十二项增强进行中：P0-1、P0-2、P0-3 已完成（全量测试中）。
+V3 三十二项增强进行中：P0-1、P0-2、P0-3 已完成（全量测试中）。P0-4 已完成（全量测试中）。
 
 ```bash
 python main.py run --demo --mock --auto --no-live   # 离线
@@ -28,7 +28,7 @@ python -m pytest -q
 - [x] **P0-1** G2 评审 score 阈值放行 — `config.py` + `gate/gatekeeper.py`，env `AGENTCREW_REVIEW_SCORE_THRESHOLD`
 - [x] **P0-2** Provider 故障转移 — `config.py` + `models/factory.py`，env `AGENTCREW_FAILOVER_<ALIAS>`（别名中 `:` 用 `__`）
 - [x] **P0-3** 成本预算硬上限 — `config.py` + `models/factory.py` + `crew/crew.py` + `crew/scheduler.py`，CLI `--max-cost` / `--max-llm-calls`
-- [ ] P0-4 可删除会话
+- [x] **P0-4** 可删除会话 — `runtime/checkpoint.py` + `main.py` + `api/server.py` + `api/dashboard.py`，CLI `delete` / API `DELETE /runs/{id}?confirm=1`
 
 ### 阶段二 P1（近期做）
 - [ ] P1-1 MCP 工具集成到 Agent 执行链路

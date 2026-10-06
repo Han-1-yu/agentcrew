@@ -359,6 +359,23 @@ AGENTCREW_MAX_LLM_CALLS=50
 
 默认 `None` = 不限制，保持现有行为。
 
+### P0-4. 可删除会话（删除单个 run）
+
+`clean` 只能批量删旧 run，`cancel` 只打标记。新增按 run_id 删除单个会话的能力：
+
+```bash
+# CLI：打印概要后询问确认（TTY），--force 跳过
+python main.py delete <run_id> [--output-dir DIR] [--force]
+
+# API：必须带 ?confirm=1
+DELETE /runs/{run_id}?confirm=1
+```
+
+- ``running`` 状态拒绝删除（退出码 3 / HTTP 409），提示先 `cancel`
+- 删除前打印 run 概要（目标/状态/时间/产物大小），TTY 下询问 `[y/N]`
+- 返回释放的字节数；Web UI 顶部有删除按钮（running 状态置灰，带确认对话框）
+- 与 `clean` 共享同一套边界校验（链接样式 / output_dir 之外一律拒绝）
+
 ---
 
 ## 自定义角色 / 团队开发指南

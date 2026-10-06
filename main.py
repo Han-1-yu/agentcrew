@@ -57,6 +57,7 @@ from agentcrew.runtime.checkpoint import (
     RunRecord,
     RunStatus,
     clean,
+    delete_run,
 )
 from agentcrew.runtime.ledger import Ledger, LedgerEvent
 from examples.todo_web_project import PROJECT_GOAL
@@ -180,6 +181,13 @@ def build_parser() -> argparse.ArgumentParser:
         "cancel", help="给离线 run 打 cancelled 标记（下次 resume 直接收尾）")
     cancel.add_argument("run_id")
     cancel.add_argument("--output-dir", metavar="DIR")
+
+    delete_cmd = sub.add_parser(
+        "delete", help="删除单个 run（不可恢复；running 状态拒绝）")
+    delete_cmd.add_argument("run_id", help="要删除的 run 目录名")
+    delete_cmd.add_argument("--output-dir", metavar="DIR", help="run 输出根目录")
+    delete_cmd.add_argument("--force", action="store_true",
+                            help="跳过确认提示（非交互环境/脚本用）")
 
     serve = sub.add_parser(
         "serve", help="启动 HTTP API + Web UI 面板（V2）")
@@ -544,6 +552,59 @@ def _cmd_cancel(args: argparse.Namespace) -> int:
     return EXIT_CODES["ok"]
 
 
+def _cmd_delete(args: argparse.Namespace) -> int:
+    """删除单个 run 目录（P0-4，不可恢复）。
+
+    打印 run 概要（目标/状态/时间/产物大小），TTY 下询问确认；``running`` 状态
+    拒绝删除（退出码 3，提示先 cancel）；``--force`` 跳过确认。删除后打印释放字节数。
+    """
+    try:
+        settings = _settings_from(args)
+        run_dir = _run_dir(settings, args.run_id)
+        checkpoint = CheckpointStore(run_dir)
+        record = checkpoint.load_record()
+    except (OSError, ValueError) as exc:
+        return _fail(f"无法读取 run {args.run_id}：{exc}")
+
+    # running 状态拒绝删除（退出码 3 = config 类错误，与 spec 退出码表一致）
+    if record.status is RunStatus.RUNNING:
+        return _fail(
+            f"run {record.run_id!r} 正在运行中，拒绝删除。"
+            f"请先 cancel：python main.py cancel {record.run_id}",
+        )
+
+    console = Console()
+    artifacts_dir = run_dir / "artifacts"
+    artifact_size = sum(
+        f.stat().st_size for f in artifacts_dir.rglob("*") if f.is_file()
+    ) if artifacts_dir.is_dir() else 0
+    _out(console, f"━━━ 将删除 run · {record.run_id} ━━━")
+    _out(console, f"目标    {record.project_goal}")
+    _out(console, f"状态    {record.status.value}")
+    _out(
+        console,
+        f"创建    {record.created_at:%Y-%m-%d %H:%M:%S}"
+        f"    更新    {record.updated_at:%Y-%m-%d %H:%M:%S}",
+    )
+    _out(console, f"产物    {artifact_size:,} 字节    目录    {run_dir}")
+
+    if not args.force and sys.stdin.isatty():
+        try:
+            answer = input("确认删除？[y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = ""
+        if answer not in ("y", "yes"):
+            _out(console, "已取消删除。")
+            return EXIT_CODES["ok"]
+
+    try:
+        freed = delete_run(settings.output_dir, record.run_id)
+    except (OSError, RuntimeError, ValueError) as exc:
+        return _fail(f"删除失败：{exc}")
+    _out(console, f"已删除 run {record.run_id}，释放 {freed:,} 字节。")
+    return EXIT_CODES["ok"]
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     """启动 HTTP API + SSE 事件流服务器（V2 第 5 项）。"""
     import asyncio
@@ -551,7 +612,8 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     from agentcrew.api.server import ApiServer
 
     async def _serve() -> None:
-        server = ApiServer(host=args.host, port=args.port)
+        settings = _settings_from(args)
+        server = ApiServer(host=args.host, port=args.port, output_dir=settings.output_dir)
         await server.start()
         print(f"AgentCrew API server listening on http://{args.host}:{args.port}")
         print(f"  Web UI: http://{args.host}:{args.port}/")
@@ -579,6 +641,7 @@ _HANDLERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "roles": _cmd_roles,
     "clean": _cmd_clean,
     "cancel": _cmd_cancel,
+    "delete": _cmd_delete,
     "serve": _cmd_serve,
 }
 

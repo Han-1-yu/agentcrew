@@ -368,3 +368,38 @@ def clean(output_dir: Path, *, keep: int, dry_run: bool = False) -> list[Path]:
             shutil.rmtree(target)
         removed.append(target)
     return removed
+
+
+def delete_run(output_dir: Path, run_id: str) -> int:
+    """删除单个 run 目录，返回释放的字节数（P0-4）。
+
+    与 :func:`clean` 共享 ``_assert_deletable`` 边界校验（链接样式 / output_dir
+    之外一律拒绝）。``running`` 状态的 run 拒绝删除（提示先 cancel），因为删一个
+    活着的 run 等于在进程写盘中途拔电源 —— 产物可能只写了一半，且进程下次
+    checkpoint 会因目录消失而崩。非 running 状态（completed / failed / cancelled /
+    interrupted）均可删除。
+
+    删除前先统计目录总大小（``shutil.rmtree`` 不返回释放量），用于 CLI 打印
+    「释放 N 字节」。run_id 必须通过 :func:`_validated_run_id` 校验（拒绝
+    ``../x`` 等路径注入）。run 不存在时抛 ``FileNotFoundError``。
+    """
+    output_dir = Path(output_dir)
+    run_id = _validated_run_id(run_id)
+    run_dir = output_dir / run_id
+    if not run_dir.is_dir():
+        raise FileNotFoundError(f"run 不存在: {run_dir}")
+    record_path = run_dir / "run.json"
+    if record_path.is_file():
+        try:
+            data = json.loads(read_text(record_path))
+            status = data.get("status") if isinstance(data, dict) else None
+        except (json.JSONDecodeError, OSError):
+            status = None
+        if status == RunStatus.RUNNING.value:
+            raise RuntimeError(
+                f"run {run_id!r} 正在运行中，拒绝删除：请先 cancel 该 run"
+                f"（python main.py cancel {run_id}）")
+    _assert_deletable(run_dir, output_dir.resolve())
+    freed = sum(f.stat().st_size for f in run_dir.rglob("*") if f.is_file())
+    shutil.rmtree(run_dir)
+    return freed
