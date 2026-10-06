@@ -339,6 +339,14 @@ h1,h2,h3,h4 { margin: 0; font-weight: 600; letter-spacing: -0.1px; }
 .cmp-diff.neg { color: #34C759; }
 .cmp-diff.zero { color: #8E8E93; }
 
+/* 运行下拉 - 项目分组 */
+.rd-filter { display: flex; align-items: center; gap: 4px; padding: 8px 12px; border-bottom: 1px solid rgba(60,60,67,0.1); flex-wrap: wrap; }
+.rd-filter-label { font-size: 11px; color: #8E8E93; margin-right: 4px; }
+.rd-filter-chip { background: rgba(60,60,67,0.06); border: none; border-radius: 4px; padding: 3px 8px; font-size: 11px; color: #6E6E73; cursor: pointer; transition: all 0.15s; }
+.rd-filter-chip:hover { background: rgba(0,122,255,0.1); color: #007AFF; }
+.rd-filter-chip.on { background: #007AFF; color: #fff; }
+.rd-group-header { padding: 6px 12px 4px; font-size: 10px; font-weight: 600; color: #8E8E93; text-transform: uppercase; letter-spacing: 0.5px; background: rgba(60,60,67,0.03); }
+
 /* Agent 统计网格 */
 .agent-full-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 10px 0; padding: 10px; background: rgba(60,60,67,0.03); border-radius: 6px; }
 .af-stat { text-align: center; }

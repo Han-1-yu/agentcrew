@@ -94,6 +94,7 @@ const S = {
   simTimer: null,
   startedAt: Date.now(),
   view: { zoom: 1, x: 0, y: 0 },   // DAG 视图变换
+  runFilter: null,                  // 项目筛选
 };
 
 // 自测遥测（selftest 依赖，必须保留）
@@ -2013,41 +2014,65 @@ async function loadRunList() {
       return;
     }
     listEl.innerHTML = '';
-    for (const r of runs.slice(0, 20)) {
-      const color = RUN_STATUS_COLOR[r.status] || '#8E8E93';
-      const isActive = S.dash.run && S.dash.run.dir === r.dir;
-      const canDelete = r.status !== 'running';
-      const item = h('div', { class: 'rd-item' + (isActive ? ' active' : '') },
-        h('span', { class: 'rd-dot', style: `background:${color}`, onclick: () => { closeRunDropdown(); switchRun(r.dir); } }),
-        h('div', { class: 'rd-item-info', onclick: () => { closeRunDropdown(); switchRun(r.dir); } },
-          h('div', { class: 'rd-item-title', title: r.goal || r.runId }, simplifyGoal(r.goal || r.runId || '未命名')),
-          h('div', { class: 'rd-item-meta' }, `${r.runId || ''} · ${r.status || 'unknown'} · ${fmtDateTime(r.createdAt || r.updatedAt)}`)),
-        h('button', { class: 'rd-del', title: canDelete ? '删除运行' : '运行中无法删除',
-          disabled: !canDelete,
-          onclick: async (e) => {
-            e.stopPropagation();
-            if (!confirm(`确认删除运行「${simplifyGoal(r.goal || r.runId)}」？\n此操作不可恢复。`)) return;
-            try {
-              await window.studio.deleteRun(r.dir);
-              toast('success', '已删除', r.runId || '');
-              if (isActive) {
-                const remaining = await window.studio.listRuns();
-                if (remaining && remaining.length) await switchRun(remaining[0].dir);
-                else { S.realMode = false; initMockData(); renderDashboard(); }
-              }
-              loadRunList();
-            } catch (err) { toast('error', '删除失败', String(err.message || err)); }
-          } },
-          h('svg', { width: 13, height: 13, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' },
-            h('polyline', { points: '3 6 5 6 21 6' }),
-            h('path', { d: 'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2' }))),
-        !isActive ? h('button', { class: 'rd-cmp', title: '与当前运行对比',
-          onclick: (e) => { e.stopPropagation(); closeRunDropdown(); openCompareModal(r); } },
-          h('svg', { width: 13, height: 13, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' },
-            h('path', { d: 'M14 3v4a1 1 0 0 0 1 1h4' }),
-            h('path', { d: 'M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z' }),
-            h('path', { d: 'M9 13h6M9 17h6' }))) : null);
-      listEl.appendChild(item);
+    // 按项目分组
+    const groups = {};
+    for (const r of runs.slice(0, 50)) {
+      const g = r.group || '未分组';
+      if (!groups[g]) groups[g] = [];
+      groups[g].push(r);
+    }
+    // 项目筛选器
+    const groupNames = Object.keys(groups);
+    if (groupNames.length > 1) {
+      const filterBar = h('div', { class: 'rd-filter' },
+        h('span', { class: 'rd-filter-label' }, '项目：'),
+        ...groupNames.map(g => h('button', {
+          class: 'rd-filter-chip' + (S.runFilter === g ? ' on' : ''),
+          onclick: () => { S.runFilter = (S.runFilter === g ? null : g); loadRunList(); }
+        }, g)));
+      listEl.appendChild(filterBar);
+    }
+    for (const [gName, gRuns] of Object.entries(groups)) {
+      if (S.runFilter && S.runFilter !== gName) continue;
+      if (groupNames.length > 1) {
+        listEl.appendChild(h('div', { class: 'rd-group-header' }, gName));
+      }
+      for (const r of gRuns) {
+        const color = RUN_STATUS_COLOR[r.status] || '#8E8E93';
+        const isActive = S.dash.run && S.dash.run.dir === r.dir;
+        const canDelete = r.status !== 'running';
+        const item = h('div', { class: 'rd-item' + (isActive ? ' active' : '') },
+          h('span', { class: 'rd-dot', style: `background:${color}`, onclick: () => { closeRunDropdown(); switchRun(r.dir); } }),
+          h('div', { class: 'rd-item-info', onclick: () => { closeRunDropdown(); switchRun(r.dir); } },
+            h('div', { class: 'rd-item-title', title: r.goal || r.runId }, simplifyGoal(r.goal || r.runId || '未命名')),
+            h('div', { class: 'rd-item-meta' }, `${r.runId || ''} · ${r.status || 'unknown'} · ${fmtDateTime(r.createdAt || r.updatedAt)}`)),
+          h('button', { class: 'rd-del', title: canDelete ? '删除运行' : '运行中无法删除',
+            disabled: !canDelete,
+            onclick: async (e) => {
+              e.stopPropagation();
+              if (!confirm(`确认删除运行「${simplifyGoal(r.goal || r.runId)}」？\n此操作不可恢复。`)) return;
+              try {
+                await window.studio.deleteRun(r.dir);
+                toast('success', '已删除', r.runId || '');
+                if (isActive) {
+                  const remaining = await window.studio.listRuns();
+                  if (remaining && remaining.length) await switchRun(remaining[0].dir);
+                  else { S.realMode = false; initMockData(); renderDashboard(); }
+                }
+                loadRunList();
+              } catch (err) { toast('error', '删除失败', String(err.message || err)); }
+            } },
+            h('svg', { width: 13, height: 13, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' },
+              h('polyline', { points: '3 6 5 6 21 6' }),
+              h('path', { d: 'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2' }))),
+          !isActive ? h('button', { class: 'rd-cmp', title: '与当前运行对比',
+            onclick: (e) => { e.stopPropagation(); closeRunDropdown(); openCompareModal(r); } },
+            h('svg', { width: 13, height: 13, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' },
+              h('path', { d: 'M14 3v4a1 1 0 0 0 1 1h4' }),
+              h('path', { d: 'M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z' }),
+              h('path', { d: 'M9 13h6M9 17h6' }))) : null);
+        listEl.appendChild(item);
+      }
     }
   } catch (e) {
     listEl.innerHTML = '<div class="rd-empty">加载失败</div>';
@@ -2250,6 +2275,9 @@ function openNewRunModal(){
     h('h3',{class:'modal-title'},'启动新运行'),
     h('div',{class:'confirm-text'},'用一句话描述要交付的目标：'),
     h('textarea',{id:'nr-goal',rows:3,style:'width:100%;border:1px solid rgba(60,60,67,.2);border-radius:6px;padding:8px;font-family:inherit;font-size:13px;resize:vertical',placeholder:'例如：开发一个短链接生成服务，含 REST API、缓存与部署文档'}),
+    h('div',{style:'margin-top:10px'},
+      h('label',{style:'font-size:12px;color:#6E6E73;display:block;margin-bottom:4px'},'项目（可选，用于分组管理）'),
+      h('input',{id:'nr-project',type:'text',style:'width:100%;border:1px solid rgba(60,60,67,.2);border-radius:6px;padding:6px 8px;font-family:inherit;font-size:13px',placeholder:'例如：shortlink-service'})),
     h('div',{style:'display:flex;gap:16px;margin-top:10px;font-size:12px;color:#6E6E73'},
       h('label',{style:'display:flex;align-items:center;gap:5px;cursor:pointer'},
         h('input',{type:'checkbox',id:'nr-mock',checked:true}),'Mock 模式'),
@@ -2263,6 +2291,7 @@ function openNewRunModal(){
         const goal=$('#nr-goal').value.trim();
         const useDemo=$('#nr-demo').checked;
         if(!useDemo && !goal){ toast('warning','需要目标','请输入项目目标或勾选 Demo'); return; }
+        const project=$('#nr-project').value.trim();
         closeModal();
         try {
           const r = await window.studio.startRun({
@@ -2270,6 +2299,7 @@ function openNewRunModal(){
             demo: useDemo,
             mock: $('#nr-mock').checked,
             auto: $('#nr-auto').checked,
+            project: project || null,
           });
           toast('success','已启动','运行已提交，正在初始化…');
           // 等待 CLI 创建 run 目录后切换

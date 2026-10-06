@@ -528,7 +528,15 @@ function registerIpc() {
     ledgerHistory(path.join(String(dir), 'ledger.jsonl'), Number(maxLines) || 400));
 
   ipcMain.handle('run:start', (_e, p) => {
-    const outputDir = p.outputDir || settings.outputDir;
+    let outputDir = p.outputDir || settings.outputDir;
+    // P3：多项目/工作区 — 指定 project 时在 outputDir/project/ 下创建 run
+    if (p.project) {
+      const safeName = String(p.project).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim();
+      if (safeName) {
+        outputDir = path.join(outputDir, safeName);
+        try { fs.mkdirSync(outputDir, { recursive: true }); } catch { /* 忽略 */ }
+      }
+    }
     const args = ['run'];
     if (p.demo) args.push('--demo');
     else args.push('--goal', String(p.goal || ''));
