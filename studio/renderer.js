@@ -175,8 +175,8 @@ function toast(type, title, msg, ms) {
   box.appendChild(t);
   setTimeout(()=>{ t.style.opacity='0'; t.style.transition='opacity .25s'; setTimeout(()=>t.remove(),300); }, ms||(type==='error'?8000:4000));
 }
-function showModal(node){ const m=$('#modal'); m.innerHTML=''; m.appendChild(node); $('#modal-mask').classList.remove('hidden'); m.classList.remove('hidden'); }
-function closeModal(){ $('#modal').classList.add('hidden'); $('#modal-mask').classList.add('hidden'); }
+function showModal(node){ const m=$('#modal'); m.innerHTML=''; m.appendChild(node); $('#modal-mask').classList.remove('hidden'); m.classList.remove('hidden'); requestAnimationFrame(()=>{ m.classList.add('show'); $('#modal-mask').classList.add('show'); }); }
+function closeModal(){ const m=$('#modal'); m.classList.remove('show'); $('#modal-mask').classList.remove('show'); setTimeout(()=>{ m.classList.add('hidden'); $('#modal-mask').classList.add('hidden'); },200); }
 $('#modal-mask').addEventListener('click', closeModal);
 function confirmAction(title, message, onOk, okLabel) {
   showModal(h('div',{},
