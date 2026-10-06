@@ -46,6 +46,10 @@ from agentcrew.cli.doctor import (
     print_report as print_doctor_report,
     run_diagnostics,
 )
+from agentcrew.cli.diff import (
+    diff_runs,
+    print_diff as print_run_diff,
+)
 from agentcrew.config import GateMode, Settings, redact_overrides
 from agentcrew.crew.crew import (
     EXIT_CODES,
@@ -213,6 +217,14 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--output-dir", metavar="DIR", help="run 输出根目录")
     doctor.add_argument("--json", action="store_true",
                         help="以 JSON 输出报告（便于脚本解析）")
+
+    diff = sub.add_parser(
+        "diff", help="对比两个 run 的配置 / 任务 / 产物 / 事件统计差异")
+    diff.add_argument("run_id_a", help="第一个 run ID（基线）")
+    diff.add_argument("run_id_b", help="第二个 run ID")
+    diff.add_argument("--output-dir", metavar="DIR", help="run 输出根目录")
+    diff.add_argument("--json", action="store_true",
+                      help="以 JSON 输出差异（便于脚本解析）")
 
     return parser
 
@@ -711,6 +723,40 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     return EXIT_CODES["ok"] if report.ok else EXIT_CODES["config"]
 
 
+def _cmd_diff(args: argparse.Namespace) -> int:
+    """``diff <run_a> <run_b>``：对比两个 run 的配置/任务/产物/事件差异。
+
+    退出码：两个 run 都存在 → 0（diff 是信息性命令，有差异也不报错）；任一 run
+    不存在 → 1（``failed``）。``--json`` 输出结构化差异供脚本解析。
+    """
+    try:
+        settings = _settings_from(args)
+    except (OSError, ValueError) as exc:
+        print(f"配置错误：{exc}", file=sys.stderr)
+        return EXIT_CODES["config"]
+
+    def _load(run_id: str) -> tuple[CheckpointStore, RunRecord]:
+        run_dir = _run_dir(settings, run_id)
+        if not run_dir.is_dir():
+            raise FileNotFoundError(f"run 不存在: {run_id}")
+        store = CheckpointStore(run_dir)
+        return store, store.load_record()
+
+    try:
+        store_a, record_a = _load(args.run_id_a)
+        store_b, record_b = _load(args.run_id_b)
+    except (OSError, ValueError) as exc:
+        print(f"无法读取 run：{exc}", file=sys.stderr)
+        return EXIT_CODES["failed"]
+
+    diff = diff_runs(record_a, record_b, store_a, store_b)
+    if args.json:
+        print(json.dumps(diff.model_dump(), ensure_ascii=False, indent=2))
+    else:
+        print_run_diff(diff)
+    return EXIT_CODES["ok"]
+
+
 #: 子命令 → 处理器（``build_parser`` 里注册的 dest 值）。
 _HANDLERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "run": _cmd_run,
@@ -722,6 +768,7 @@ _HANDLERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "delete": _cmd_delete,
     "serve": _cmd_serve,
     "doctor": _cmd_doctor,
+    "diff": _cmd_diff,
 }
 
 

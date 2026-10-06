@@ -32,6 +32,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from agentcrew.api.auth import APIKeyAuth, RateLimiter
+
 
 @dataclass
 class RunState:
@@ -94,6 +96,8 @@ class ApiServer:
         output_dir: Path | None = None,
         settings: Any | None = None,
         crew_factory: Callable[[str, Mapping[str, Any]], Any] | None = None,
+        auth: APIKeyAuth | None = None,
+        rate_limiter: RateLimiter | None = None,
     ) -> None:
         """``settings`` / ``crew_factory`` 只服务于 P1-5 的创建/恢复端点。
 
@@ -101,6 +105,12 @@ class ApiServer:
         run 驱动对象（真实是 :class:`~agentcrew.crew.crew.Crew`，测试注入 mock）；
         缺省时用 ``settings`` 现场构造一个 ``gate="none"`` 的 Crew。``settings``
         为 ``None`` 且未给工厂时，创建/恢复端点返回 503。
+
+        ``auth`` / ``rate_limiter``（E-3）是两个可选保护层，默认 ``None`` =
+        不挂中间件，行为与改造前逐字节一致。启用后在路由分发前依次做：先按
+        客户端 IP 限流（超限 429），再校验 API Key（缺失 / 无效 401）。被拒请求
+        写进 :attr:`security_events`（只记事件名与 client_ip/path/remaining，
+        **绝不记 key 值**）。
         """
         self.host = host
         self.port = port
@@ -110,6 +120,13 @@ class ApiServer:
         self._output_dir = output_dir
         self._settings = settings
         self._crew_factory = crew_factory
+        #: E-3：可选的 API Key 认证 / IP 速率限制（None = 关闭，向后兼容）。
+        self._auth = auth
+        self._rate_limiter = rate_limiter
+        #: E-3：服务端安全审计事件（``api_auth_failed`` / ``api_rate_limited``）。
+        #: 中间件在路由分发被拒时追加；与 run 级 Ledger 同源同形（事件名 + data），
+        #: 但落在内存——这些事件发生在任何 run 被识别之前，没有 run 目录可写。
+        self.security_events: list[dict[str, Any]] = []
         #: 运行中的 Crew 注册表（run_id → crew 实例）；任务结束由 runner 摘除。
         self.active_crews: dict[str, Any] = {}
         #: 后台任务句柄（run_id → asyncio.Task），便于优雅收尾。
@@ -176,19 +193,31 @@ class ApiServer:
             if not request_line:
                 return
             method, path, _ = request_line.decode("utf-8", errors="replace").split(" ", 2)
-            # 读请求头，顺带记住 Content-Length（无 body 的 POST 不能再 read() 阻塞
-            # 等客户端 —— 连接还开着等响应，会和服务端互相死等）。
+            # 读请求头，存成「小写键 → 值」的字典（E-3 认证要查 Authorization /
+            # X-API-Key，限流要查 X-Forwarded-For）；顺带记住 Content-Length（无
+            # body 的 POST 不能再 read() 阻塞等客户端 —— 连接还开着等响应，会和
+            # 服务端互相死等）。
+            headers: dict[str, str] = {}
             content_length = 0
             while True:
                 line = await reader.readline()
                 if line in (b"\r\n", b"\n", b""):
                     break
-                if line.lower().startswith(b"content-length:"):
+                name, sep, raw_value = line.partition(b":")
+                if not sep:
+                    continue
+                key = name.strip().decode("ascii", errors="replace").lower()
+                value = raw_value.strip().decode("latin-1", errors="replace")
+                headers[key] = value
+                if key == "content-length":
                     try:
-                        content_length = max(
-                            0, int(line.split(b":", 1)[1].strip()))
+                        content_length = max(0, int(value))
                     except ValueError:
                         content_length = 0
+            # E-3 中间件链（路由分发前）：先限流后认证。任一拦截直接回响应并
+            # return，不再读 body / 不再分发——被拒请求不该再触发任何业务逻辑。
+            if await self._apply_middleware(path, headers, writer):
+                return
             if method == "GET":
                 await self._handle_get(path, writer)
             elif method in ("POST", "PUT"):
@@ -210,6 +239,71 @@ class ApiServer:
         finally:
             writer.close()
             await writer.wait_closed()
+
+    # ── E-3：认证 / 速率限制中间件 ──────────────────────────────────────────
+
+    async def _apply_middleware(
+        self,
+        path: str,
+        headers: dict[str, str],
+        writer: asyncio.StreamWriter,
+    ) -> bool:
+        """路由分发前的保护层；返回 ``True`` 表示已拦截（调用方停止分发）。
+
+        顺序固定为「先限流、后认证」：被刷爆的客户端不该再消耗认证比对，也不该
+        通过 401 探知端点是否存在。两者都写 :attr:`security_events`——事件名与
+        data 只含 client_ip / path / remaining，**绝不回显客户端发来的 key**
+        （key 只参与布尔比对，不进任何持久化结构）。
+        """
+        client_ip = self._client_ip(headers, writer)
+        # 1) 速率限制（基于 IP 的滑动窗口）
+        limiter = self._rate_limiter
+        if limiter is not None and limiter.enabled:
+            allowed, remaining = limiter.check(client_ip)
+            if not allowed:
+                self._record_security("api_rate_limited", {
+                    "client_ip": client_ip, "path": path, "remaining": remaining,
+                })
+                await self._send_json(
+                    writer, 429,
+                    {"error": "Too Many Requests"},
+                    extra_headers={"Retry-After": str(limiter.window_seconds)},
+                )
+                return True
+        # 2) API Key 认证（Bearer / X-API-Key）
+        auth = self._auth
+        if auth is not None and auth.enabled:
+            if not auth.authenticate(headers):
+                self._record_security("api_auth_failed", {
+                    "client_ip": client_ip, "path": path,
+                })
+                await self._send_json(
+                    writer, 401,
+                    {"error": "Unauthorized"},
+                    extra_headers={"WWW-Authenticate": 'Bearer realm="agentcrew"'},
+                )
+                return True
+        return False
+
+    @staticmethod
+    def _client_ip(
+        headers: dict[str, str], writer: asyncio.StreamWriter
+    ) -> str:
+        """客户端 IP：优先 ``X-Forwarded-For`` 首地址（反代后真实客户端），否则
+        取 socket peer 地址；都取不到时记 ``unknown``。"""
+        forwarded = headers.get("x-forwarded-for", "")
+        if forwarded:
+            first = forwarded.split(",")[0].strip()
+            if first:
+                return first
+        peername = writer.get_extra_info("peername")
+        if peername:
+            return str(peername[0])
+        return "unknown"
+
+    def _record_security(self, event: str, data: dict[str, Any]) -> None:
+        """追加一条服务端安全审计事件（内存；与 Ledger 事件同形：event + data）。"""
+        self.security_events.append({"event": event, "data": dict(data)})
 
     async def _handle_get(self, path: str, writer: asyncio.StreamWriter) -> None:
         # 先按 urlsplit 拆开路径与查询串：带 ``?event=...`` 的请求不能再用
@@ -697,15 +791,23 @@ class ApiServer:
 
     @staticmethod
     async def _send_json(
-        writer: asyncio.StreamWriter, status: int, body: dict[str, Any],
+        writer: asyncio.StreamWriter,
+        status: int,
+        body: dict[str, Any],
+        *,
+        extra_headers: Mapping[str, str] | None = None,
     ) -> None:
         payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
-        reason = {200: "OK", 202: "Accepted", 400: "Bad Request", 404: "Not Found", 405: "Method Not Allowed"}.get(status, "OK")
-        writer.write(
+        reason = {
+            200: "OK", 202: "Accepted", 400: "Bad Request", 401: "Unauthorized",
+            404: "Not Found", 405: "Method Not Allowed", 429: "Too Many Requests",
+        }.get(status, "OK")
+        header_lines = (
             f"HTTP/1.1 {status} {reason}\r\n".encode()
             + b"Content-Type: application/json\r\n"
             + f"Content-Length: {len(payload)}\r\n".encode()
-            + b"\r\n"
-            + payload
         )
+        for name, value in (extra_headers or {}).items():
+            header_lines += f"{name}: {value}\r\n".encode()
+        writer.write(header_lines + b"\r\n" + payload)
         await writer.drain()

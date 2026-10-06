@@ -50,6 +50,10 @@ _ENV_TO_FIELD: dict[str, str] = {
     "AGENTCREW_HEALTH_CHECK_ENABLED": "health_check_enabled",
     "AGENTCREW_HEALTH_CHECK_INTERVAL": "health_check_interval_secs",
     "AGENTCREW_LLM_CACHE_ENABLED": "llm_cache_enabled",
+    "AGENTCREW_API_AUTH_ENABLED": "api_auth_enabled",
+    "AGENTCREW_API_KEYS": "api_keys",
+    "AGENTCREW_API_RATE_LIMIT_ENABLED": "api_rate_limit_enabled",
+    "AGENTCREW_API_RATE_LIMIT_MAX": "api_rate_limit_max",
 }
 
 #: ``AGENTCREW_MODEL_<ROLE>`` → ``role_bindings[<role 小写>]``（spec §17.2）。
@@ -58,10 +62,10 @@ _ROLE_MODEL_ENV_PREFIX = "AGENTCREW_MODEL_"
 #: ``agentcrew.yaml`` 顶层标量字段（spec §17.3）。
 _YAML_SCALAR_KEYS = ("max_concurrency", "context_budget_tokens", "gate", "roles_dir")
 
-#: 分层合并时按 key 覆盖而非整体替换的字段。
+#: 分层合并时按 key 覆盖（映射型）/ 按序合并去重（列表型）而非整体替换的字段。
 _MAPPING_FIELDS = (
     "role_bindings", "provider_overrides", "model_tiers", "model_failover",
-    "mcp_servers", "gate_config", "tool_permissions",
+    "mcp_servers", "gate_config", "tool_permissions", "api_keys",
 )
 
 #: ``AGENTCREW_TIER_<LEVEL>`` → ``model_tiers[<level>]``（V2：按复杂度选模型）。
@@ -266,15 +270,27 @@ def _env_values() -> dict[str, object]:
                 model_failover[alias] = backups
     if model_failover:
         values["model_failover"] = model_failover
+    # E-3：AGENTCREW_API_KEYS 逗号分隔 → list[str]。通用循环把它当成普通标量
+    # 塞进了 raw 字符串，而 pydantic 不能把 "a,b" 直接强转成 list[str]，在这里拆。
+    if isinstance(values.get("api_keys"), str):
+        values["api_keys"] = [
+            key.strip() for key in values["api_keys"].split(",") if key.strip()
+        ]
     return values
 
 
 def _merge(into: dict[str, object], incoming: Mapping[str, object]) -> None:
-    """就地合并一层来源：映射型字段按 key 覆盖，其余整体覆盖。"""
+    """就地合并一层来源：映射型字段按 key 覆盖、列表型字段按序合并去重，其余整体覆盖。"""
     for key, value in incoming.items():
         current = into.get(key)
         if key in _MAPPING_FIELDS and isinstance(current, Mapping) and isinstance(value, Mapping):
             into[key] = {**current, **value}
+        elif key in _MAPPING_FIELDS and isinstance(current, list) and isinstance(value, list):
+            merged = list(current)
+            for item in value:
+                if item not in merged:
+                    merged.append(item)
+            into[key] = merged
         else:
             into[key] = value
 
@@ -351,6 +367,35 @@ class Settings(BaseModel):
     完全一致 —— 默认关闭是为了避免意外改变既有输出/计费口径。
     环境变量 ``AGENTCREW_LLM_CACHE_ENABLED``。
     """
+    api_auth_enabled: bool = False
+    """REST API 的 API Key 认证总开关（E-3）。
+
+    ``False``（默认）时 :class:`~agentcrew.api.server.ApiServer` 不挂认证中间件，
+    所有端点匿名可访问，行为与改造前逐字节一致。``True`` 时 serve 子命令用
+    :attr:`api_keys` 构造 :class:`~agentcrew.api.auth.APIKeyAuth`，请求须带
+    ``Authorization: Bearer <key>`` 或 ``X-API-Key: <key>``，否则回 401。
+    环境变量 ``AGENTCREW_API_AUTH_ENABLED``。
+    """
+    api_keys: list[str] = Field(default_factory=list)
+    """REST API 的有效 API Key 白名单（E-3）。
+
+    仅当 :attr:`api_auth_enabled` 为真时生效。环境变量
+    ``AGENTCREW_API_KEYS`` 为逗号分隔列表；经分层合并与 YAML / CLI 的同名列表
+    按序合并去重。Key 只参与布尔比对，绝不写入日志 / ledger（见
+    :class:`~agentcrew.api.auth.APIKeyAuth`）。
+    """
+    api_rate_limit_enabled: bool = False
+    """REST API 的 IP 速率限制总开关（E-3）。
+
+    ``False``（默认）时不挂限流中间件。``True`` 时 serve 子命令按
+    :attr:`api_rate_limit_max` / :attr:`api_rate_limit_window` 构造
+    :class:`~agentcrew.api.auth.RateLimiter`，超限回 429 + ``Retry-After``。
+    环境变量 ``AGENTCREW_API_RATE_LIMIT_ENABLED``。
+    """
+    api_rate_limit_max: int = 100
+    """滑动窗口内每 IP 允许的最大请求数（E-3）；``<= 0`` 视为不限流。"""
+    api_rate_limit_window: int = 60
+    """速率限制窗口时长（秒，E-3）；与 :attr:`api_rate_limit_max` 共同决定策略。"""
     gate_config: dict[str, Any] = Field(default_factory=dict)
     """门禁规则配置化（P2-5）：G1/G2/G3 开关与评审参数。
 

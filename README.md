@@ -289,6 +289,31 @@ P1-5 起 `POST /runs` 经 `crew_factory` 装配 Crew、挂上 `on_event` 后用
 响应并登记进内存注册表，任务结束自动摘除。取消为软取消：不再派发新任务，
 等在跑任务收尾后以 `cancelled` 封版。
 
+#### 可选：API Key 认证与速率限制（E-3）
+
+默认**关闭**：不传 `auth` / `rate_limiter` 时，所有端点匿名可访问，行为与改造前
+完全一致。开启方式（`serve` 子命令按配置自动装配）：
+
+```bash
+# 方式一：环境变量（推荐，key 不落盘）
+export AGENTCREW_API_AUTH_ENABLED=true
+export AGENTCREW_API_KEYS="key-alpha,key-beta"
+export AGENTCREW_API_RATE_LIMIT_ENABLED=true
+export AGENTCREW_API_RATE_LIMIT_MAX=100     # 每 IP 每分钟 100 次
+python main.py serve
+
+# 方式二：--api-key 快速开单个 key
+python main.py serve --api-key dev-key-123
+```
+
+- **认证**：请求须带 `Authorization: Bearer <key>` 或 `X-API-Key: <key>`；缺失或
+  无效返回 `401 Unauthorized`（带 `WWW-Authenticate` 头）。
+- **限流**：按客户端 IP 的滑动窗口计数（取 `X-Forwarded-For` 首地址，否则取
+  socket peer）；超限返回 `429 Too Many Requests`（带 `Retry-After` 头）。
+- **诚实留痕**：认证失败记 `api_auth_failed`、限流记 `api_rate_limited` 事件
+  （含 `client_ip` / `path`，限流事件含 `remaining`）。Key 值只参与布尔比对，
+  **绝不**写进日志或审计记录。
+
 ### 6. MCP 协议互操作
 
 零依赖 stdio MCP 客户端，支持连接外部 MCP 服务器发现和调用工具：
@@ -1114,6 +1139,10 @@ asyncio.run(main())
 | `AGENTCREW_MOCK` | `false` | 全局 mock 开关 |
 | `AGENTCREW_MOCK_LATENCY_MS` | `0` | mock 调用固定延迟（毫秒） |
 | `AGENTCREW_CONFIG` | `agentcrew.yaml` | YAML 配置文件路径 |
+| `AGENTCREW_API_AUTH_ENABLED` | `false` | REST API 的 API Key 认证总开关（E-3） |
+| `AGENTCREW_API_KEYS` | 空 | 有效 API Key 白名单（逗号分隔；只参与认证比对，不落盘） |
+| `AGENTCREW_API_RATE_LIMIT_ENABLED` | `false` | REST API 的 IP 速率限制总开关（E-3） |
+| `AGENTCREW_API_RATE_LIMIT_MAX` | `100` | 滑动窗口内每 IP 最大请求数 |
 
 > 注意：`OLLAMA_BASE_URL` **不参与端点解析** —— provider 的 `base_url` 只来自
 > 内置预设或 `agentcrew.yaml` 的 `models.providers.<provider>.base_url`。把远程
@@ -1243,8 +1272,9 @@ V1 的功能边界如下，请在使用前明确知悉。这些限制不是「�
 
 V2 新增能力的已知边界：
 
-6. **HTTP API 为内部控制面设计**。手写 HTTP/1.1 解析，仅支持 GET/POST，无认证、
-   无速率限制、无请求体大小上限（64KB 硬编码），不建议直接暴露公网。
+6. **HTTP API 为内部控制面设计**。手写 HTTP/1.1 解析，仅支持 GET/POST/PUT/DELETE；
+   E-3 起提供**可选**的 API Key 认证与 IP 速率限制（默认关闭，见上「API Key 认证与
+   速率限制」），但仍无请求体大小上限（64KB 硬编码），开启认证前不建议直接暴露公网。
 7. **MCP 客户端仅支持 stdio 传输**。未实现 SSE/HTTP 传输、resources/prompts 能力、
    progress 通知；连接真实 MCP 服务器前建议先用 `list_tools()` 验证兼容性。
 8. **Web UI 无人工闸门交互**。P2-10 起 Dashboard 已支持取消 / 删除 / 切换模型 /
