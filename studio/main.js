@@ -45,6 +45,7 @@ function defaultSettings() {
     theme: 'dark',
     defaultMock: true,
     defaultAuto: true,
+    apiBaseUrl: '',  // P3：后端 API 地址，设置后用 SSE 替代文件 watch
   };
 }
 

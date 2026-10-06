@@ -347,6 +347,12 @@ h1,h2,h3,h4 { margin: 0; font-weight: 600; letter-spacing: -0.1px; }
 .rd-filter-chip.on { background: #007AFF; color: #fff; }
 .rd-group-header { padding: 6px 12px 4px; font-size: 10px; font-weight: 600; color: #8E8E93; text-transform: uppercase; letter-spacing: 0.5px; background: rgba(60,60,67,0.03); }
 
+/* 连接状态指示器 */
+.conn-indicator { font-size: 10px; padding: 3px 8px; border-radius: 4px; font-weight: 500; letter-spacing: 0.3px; }
+.conn-indicator.live { background: rgba(52,199,89,0.12); color: #34C759; }
+.conn-indicator.watch { background: rgba(0,122,255,0.1); color: #007AFF; }
+.conn-indicator.demo { background: rgba(60,60,67,0.08); color: #8E8E93; }
+
 /* Agent 统计网格 */
 .agent-full-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 10px 0; padding: 10px; background: rgba(60,60,67,0.03); border-radius: 6px; }
 .af-stat { text-align: center; }

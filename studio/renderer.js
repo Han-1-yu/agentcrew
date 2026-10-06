@@ -95,6 +95,7 @@ const S = {
   startedAt: Date.now(),
   view: { zoom: 1, x: 0, y: 0 },   // DAG 视图变换
   runFilter: null,                  // 项目筛选
+  sseConnected: false,              // SSE 连接状态
 };
 
 // 自测遥测（selftest 依赖，必须保留）
@@ -1220,6 +1221,7 @@ async function renderSettingsPage(container) {
         outputDir: $('#set-output').value.trim(),
         defaultModel: $('#set-model-custom').value.trim() || $('#set-model').value.trim(),
         maxCostUsd: parseFloat($('#set-maxcost').value) || 0,
+        apiBaseUrl: $('#set-api').value.trim(),
       };
       try {
         await window.studio.setSettings(next);
@@ -1248,6 +1250,7 @@ async function renderSettingsPage(container) {
       h('input', { id: 'set-model-custom', type: 'text', placeholder: '自定义',
         style: 'width:120px;padding:6px 8px;border:1px solid rgba(60,60,67,.18);border-radius:6px;font-size:12px;font-family:inherit' }))));
   form.appendChild(field('预算上限 (USD)', 'set-maxcost', cfg.maxCostUsd || '', '0 = 不限制', 'number'));
+  form.appendChild(field('后端 API 地址（可选）', 'set-api', cfg.apiBaseUrl || '', 'http://localhost:8765 — 设置后启用 SSE 实时推送'));
 
   form.appendChild(h('div', { class: 'settings-field' },
     h('label', {}, '关于'),
@@ -1814,6 +1817,7 @@ function renderChrome(){
   $('#sb-conn-dot').className='dot ' + (S.realMode ? 'running' : 'idle');
   $('#sb-conn-label').textContent = S.realMode ? '已连接' : '演示模式';
   const ds = $('#sb-datasource'); if (ds) { ds.textContent = S.realMode ? '真实' : '演示'; ds.style.color = S.realMode ? '#34C759' : '#FF9F0A'; }
+  updateConnIndicator();
 }
 
 /* ============================================================
@@ -1942,6 +1946,40 @@ function enrichRun(run) {
   });
 }
 
+/* P3：SSE 实时推送客户端 */
+let sseSource = null;
+function connectSSE(runId) {
+  const base = (S.settings && S.settings.apiBaseUrl) || '';
+  if (!base) return false;
+  if (sseSource) { try { sseSource.close(); } catch {} sseSource = null; }
+  try {
+    const url = `${base.replace(/\/$/, '')}/runs/${encodeURIComponent(runId)}/events`;
+    sseSource = new EventSource(url);
+    sseSource.onopen = () => { S.sseConnected = true; updateConnIndicator(); toast('info', 'SSE 已连接', runId); };
+    sseSource.onerror = () => { S.sseConnected = false; updateConnIndicator(); };
+    sseSource.onmessage = (ev) => {
+      try {
+        const data = JSON.parse(ev.data);
+        // 后端 SSE 事件格式：{event, ts, data} 或 {type, ...}
+        const evt = {
+          event: data.event || data.type || 'unknown',
+          ts: data.ts || data.occurred_at || new Date().toISOString(),
+          data: data.data || data.payload || data,
+        };
+        handleRealtimeEvent(evt);
+      } catch {}
+    };
+    return true;
+  } catch (e) {
+    console.warn('SSE connect failed', e);
+    return false;
+  }
+}
+function disconnectSSE() {
+  if (sseSource) { try { sseSource.close(); } catch {} sseSource = null; }
+  S.sseConnected = false;
+}
+
 /* 加载真实 run 数据并启动 watch */
 async function loadRealRun(dir) {
   try {
@@ -1963,8 +2001,11 @@ async function loadRealRun(dir) {
     };
     S.realMode = true;
     S.watchDir = dir;
-    // 启动实时 watch
-    try { await window.studio.watchRun(dir, true); } catch {}
+    // P3：优先 SSE，回退文件 watch
+    const runId = snap.run.run_id || path.basename(dir);
+    if (!connectSSE(runId)) {
+      try { await window.studio.watchRun(dir, true); } catch {}
+    }
     return true;
   } catch (e) {
     console.error('loadRealRun failed', e);
@@ -1992,6 +2033,52 @@ function onWatchLedger(payload) {
     S.dash.events.push(...newEvents);
     if (S.dash.events.length > 500) S.dash.events = S.dash.events.slice(-500);
     renderEvents();
+  }
+}
+
+/* P3：SSE 实时事件处理 */
+let sseReloadTimer = null;
+function handleRealtimeEvent(evt) {
+  if (!S.dash) return;
+  S.dash.events.push(evt);
+  if (S.dash.events.length > 500) S.dash.events = S.dash.events.slice(-500);
+  renderEvents();
+  // 状态变更类事件触发快照刷新（防抖 500ms）
+  const stateEvents = ['task_started', 'task_finished', 'gate_result', 'run_status_changed', 'budget_warning', 'budget_exhausted'];
+  if (stateEvents.includes(evt.event)) {
+    if (sseReloadTimer) clearTimeout(sseReloadTimer);
+    sseReloadTimer = setTimeout(async () => {
+      if (S.watchDir) {
+        try {
+          const snap = await window.studio.loadRun(S.watchDir);
+          if (snap && snap.run) {
+            S.dash.run = Object.assign(enrichRun(snap.run), { dir: S.watchDir });
+            if (snap.tasks) {
+              S.dash.tasks = snap.tasks.map(mapRealTask);
+              S.dash.agents = deriveAgents(S.dash.tasks);
+              S.dash.gates = deriveGates(S.dash.tasks);
+            }
+            renderDashboard();
+          }
+        } catch {}
+      }
+    }, 500);
+  }
+}
+
+/* P3：连接状态指示器 */
+function updateConnIndicator() {
+  const el = $('#conn-indicator');
+  if (!el) return;
+  if (S.sseConnected) {
+    el.textContent = 'SSE 实时';
+    el.className = 'conn-indicator live';
+  } else if (S.realMode && S.watchDir) {
+    el.textContent = '文件监听';
+    el.className = 'conn-indicator watch';
+  } else {
+    el.textContent = '演示模式';
+    el.className = 'conn-indicator demo';
   }
 }
 
