@@ -29,6 +29,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
+import os
 import sys
 from collections.abc import Callable, Coroutine, Sequence
 from datetime import datetime
@@ -38,6 +40,12 @@ from typing import Any, TextIO
 from rich.console import Console
 from rich.text import Text
 
+from agentcrew.cli.doctor import (
+    DoctorCheck,
+    DoctorReport,
+    print_report as print_doctor_report,
+    run_diagnostics,
+)
 from agentcrew.config import GateMode, Settings, redact_overrides
 from agentcrew.crew.crew import (
     EXIT_CODES,
@@ -148,7 +156,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="AgentCrew：8 角色多 Agent 协作平台（规划 → 执行 → 三层门禁 → 交付）",
     )
     sub = parser.add_subparsers(
-        dest="command", metavar="{run,resume,status,roles,clean,cancel,serve}")
+        dest="command",
+        metavar="{run,resume,status,roles,clean,cancel,delete,serve,doctor,diff}")
 
     run = sub.add_parser("run", help="执行一次完整 run（规划 → 执行 → 交付）")
     run.add_argument("--goal", metavar="TEXT", help="项目目标（与 --demo 二选一）")
@@ -193,6 +202,17 @@ def build_parser() -> argparse.ArgumentParser:
         "serve", help="启动 HTTP API + Web UI 面板（V2）")
     serve.add_argument("--host", default="127.0.0.1", metavar="HOST")
     serve.add_argument("--port", type=int, default=8765, metavar="PORT")
+    serve.add_argument(
+        "--api-key", metavar="KEY",
+        help="E-3：快速设置单个 API Key（给出即临时开启认证；与 AGENTCREW_API_KEYS 合并）")
+
+    doctor = sub.add_parser(
+        "doctor", help="诊断配置 / 环境 / 依赖 / Provider 连通性，输出健康报告")
+    doctor.add_argument("--config", metavar="PATH",
+                        help="指定 agentcrew.yaml 路径（缺省读工作目录下的同名文件）")
+    doctor.add_argument("--output-dir", metavar="DIR", help="run 输出根目录")
+    doctor.add_argument("--json", action="store_true",
+                        help="以 JSON 输出报告（便于脚本解析）")
 
     return parser
 
@@ -606,14 +626,36 @@ def _cmd_delete(args: argparse.Namespace) -> int:
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:
-    """启动 HTTP API + SSE 事件流服务器（V2 第 5 项）。"""
+    """启动 HTTP API + SSE 事件流服务器（V2 第 5 项；E-3 可选认证/限流）。"""
     import asyncio
 
+    from agentcrew.api.auth import APIKeyAuth, RateLimiter
     from agentcrew.api.server import ApiServer
 
     async def _serve() -> None:
         settings = _settings_from(args)
-        server = ApiServer(host=args.host, port=args.port, output_dir=settings.output_dir)
+        # E-3：按配置装配认证 / 限流；两者默认关闭，缺省时与改造前行为一致。
+        api_keys = list(settings.api_keys)
+        cli_key = getattr(args, "api_key", None)
+        if cli_key:
+            api_keys.append(cli_key)
+        auth = (
+            APIKeyAuth(api_keys)
+            if (settings.api_auth_enabled or bool(cli_key)) and api_keys
+            else None
+        )
+        rate_limiter = (
+            RateLimiter(
+                max_requests=settings.api_rate_limit_max,
+                window_seconds=settings.api_rate_limit_window,
+            )
+            if settings.api_rate_limit_enabled
+            else None
+        )
+        server = ApiServer(
+            host=args.host, port=args.port, output_dir=settings.output_dir,
+            auth=auth, rate_limiter=rate_limiter,
+        )
         await server.start()
         print(f"AgentCrew API server listening on http://{args.host}:{args.port}")
         print(f"  Web UI: http://{args.host}:{args.port}/")
@@ -621,6 +663,12 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         print("  GET  /runs/{id}/status    运行状态")
         print("  GET  /runs/{id}/events    SSE 事件流")
         print("  POST /runs/{id}/events    注入事件（调试）")
+        if auth is not None:
+            print("  认证：已启用 API Key（Bearer / X-API-Key）")
+        if rate_limiter is not None:
+            print(
+                f"  限流：每 IP {settings.api_rate_limit_max} 次 / "
+                f"{settings.api_rate_limit_window}s")
         print("Ctrl-C 停止。")
         try:
             await asyncio.Event().wait()  # 永远等待
@@ -633,6 +681,36 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     return EXIT_CODES["ok"]
 
 
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    """``doctor``：跑环境/配置/依赖/连通性检查，打印健康报告。
+
+    退出码：全部 pass 或仅有 warn → 0；有任何 fail → 3（``config``）。配置本身
+    加载失败时也退 3，并在报告里给一条 ``config: fail``，而不是抛 traceback。
+    """
+    if getattr(args, "config", None):
+        # 配置文件路径走 AGENTCREW_CONFIG 环境变量（config.py 的唯一读取点）。
+        os.environ["AGENTCREW_CONFIG"] = args.config
+    try:
+        settings = _settings_from(args)
+    except (OSError, ValueError) as exc:
+        report = DoctorReport(
+            ok=False,
+            checks=[DoctorCheck(
+                name="config", status="fail", message=f"配置加载失败：{exc}")],
+        )
+        if args.json:
+            print(json.dumps(report.model_dump(), ensure_ascii=False, indent=2))
+        else:
+            print_doctor_report(report)
+        return EXIT_CODES["config"]
+    report = asyncio.run(run_diagnostics(settings))
+    if args.json:
+        print(json.dumps(report.model_dump(), ensure_ascii=False, indent=2))
+    else:
+        print_doctor_report(report)
+    return EXIT_CODES["ok"] if report.ok else EXIT_CODES["config"]
+
+
 #: 子命令 → 处理器（``build_parser`` 里注册的 dest 值）。
 _HANDLERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "run": _cmd_run,
@@ -643,6 +721,7 @@ _HANDLERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "cancel": _cmd_cancel,
     "delete": _cmd_delete,
     "serve": _cmd_serve,
+    "doctor": _cmd_doctor,
 }
 
 

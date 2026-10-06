@@ -183,6 +183,7 @@ uvicorn app.main:app --reload
 | `python main.py clean` | 保留最近 N 个 run，删除更旧的（默认 N=5） | `--keep N`；`--dry-run`（只列不删）；`--output-dir DIR` |
 | `python main.py cancel <run_id>` | 给离线 run 打 cancelled 标记（下次 resume 直接收尾） | `--output-dir DIR` |
 | `python main.py serve` | 启动 HTTP API + Web UI 面板（V2） | `--host HOST`（默认 127.0.0.1）；`--port PORT`（默认 8765） |
+| `python main.py doctor` | 诊断配置 / 环境 / 依赖 / Provider 连通性，输出健康报告 | `--config PATH`（指定 agentcrew.yaml）；`--output-dir DIR`；`--json`（机器可读） |
 
 行为说明：
 
@@ -195,6 +196,11 @@ uvicorn app.main:app --reload
   `attempts` / `rework_count` 一律不重置。
 - `clean` 的删除范围被限制在 `--output-dir` 之下，`--dry-run` 与真删共用同一套
   边界校验。
+- `doctor` 打印一份健康报告：Python 版本、核心依赖可导入性、已配置 provider 的
+  API Key、`default_model` 别名可解析、`output_dir` 可写，以及对每个已配置别名的
+  Provider 连通性探测（复用 P2-11 的 healthy / degraded / unavailable 三级结论）。
+  `--json` 输出机器可读的 JSON。退出码：全部通过或仅有警告 → 0；任何一项失败 → 3
+  （警告不阻断，因为「能用但不理想」不该挡住跑 run）。
 
 退出码（`agentcrew/crew/crew.py::EXIT_CODES`，对应 spec §7.4）：
 
