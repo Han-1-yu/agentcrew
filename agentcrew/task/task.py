@@ -89,6 +89,7 @@ class Task(BaseModel):
     deliverables: list[ArtifactSpec]  # 交付物契约
     dependencies: list[str] = Field(default_factory=list)  # 前置任务 id
     parent_id: str | None = None  # V2：树状拆解的父任务 id（None = 根任务）
+    dynamic: bool = False  # P2-1：是否运行时由 Agent 请求动态创建（vs 规划阶段静态）
     priority: int = Field(5, ge=1, le=9)  # 数字小者优先
     brief: str = ""  # PM 写给下游的一句话摘要（供上下文压缩）
     timeout_seconds: int = 300  # P1-4：单次执行超时（秒），超时走 attempts 重试通道

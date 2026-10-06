@@ -9,6 +9,8 @@
 复用安全），调度器每个任务都要取一次 Agent，缓存省掉重复构造。
 """
 
+from collections.abc import Callable
+
 from agentcrew.agents.architect import ArchitectAgent
 from agentcrew.agents.backend_dev import BackendDevAgent
 from agentcrew.agents.base_agent import BaseAgent
@@ -72,6 +74,7 @@ class AgentFactory:
         ledger: Ledger,
         project_goal: str,
         catalog: RoleCatalog,
+        subtask_creator: Callable[[dict], str] | None = None,
     ) -> None:
         self._models = models
         self._store = store
@@ -82,6 +85,25 @@ class AgentFactory:
         #: ``get()`` 里按「本地优先」合并。
         self._classes: dict[str, type[BaseAgent]] = {}
         self._agents: dict[str, BaseAgent] = {}
+        #: P2-1：动态子任务回调；``setter`` 会同步刷新已缓存的 Agent 实例
+        #: （调度器在交付打回后换板重入时，缓存实例仍指向旧面板的闭包）。
+        self._subtask_creator: Callable[[dict], str] | None = subtask_creator
+
+    @property
+    def subtask_creator(self) -> Callable[[dict], str] | None:
+        """当前子任务回调（``None`` = 不启用动态子任务）。"""
+        return self._subtask_creator
+
+    @subtask_creator.setter
+    def subtask_creator(self, creator: Callable[[dict], str] | None) -> None:
+        """更换子任务回调，并把它推给所有已缓存的 Agent 实例。
+
+        Agent 按 role key 缓存、跨调度器循环复用；调度器换板（交付打回重建
+        面板）后，旧闭包会把新任务加到已废弃的面板上——必须连缓存实例一起刷新。
+        """
+        self._subtask_creator = creator
+        for agent in self._agents.values():
+            agent.set_subtask_creator(creator)
 
     def register(self, role_key: str, cls: type[BaseAgent]) -> None:
         """为 ``role_key`` 指定专用 Agent 类；覆盖旧注册并丢弃已缓存实例。
@@ -117,6 +139,7 @@ class AgentFactory:
             # 目录随 Agent 下发：PM 的拆解提示词据此渲染**含自定义角色**的
             # 可用角色清单（§8.3 的「角色是数据」只有在模型看得见新角色时才成立）。
             catalog=self._catalog,
+            subtask_creator=self._subtask_creator,
         )
         self._agents[role_key] = agent
         return agent

@@ -78,6 +78,51 @@ class TaskBoard:
         """
         return self._tasks[task_id]
 
+    def add_task(self, task: Task) -> None:
+        """P2-1：运行时动态把一个新任务加入面板，初始状态直接为 ``READY``。
+
+        与 :meth:`transition` 同属「状态写入点」，但**绕过状态机**：新任务不存在
+        于板上，没有 ``from_status``，故合成一条 ``PENDING → READY``、理由
+        ``dynamic-created`` 的 ``StatusChange`` 让这次注入在历史里可见（与
+        :meth:`reset_failed` 同类的显式绕过）。
+
+        动态任务按约定不依赖任何上游（子任务独立调度），因此无需经
+        ``refresh()`` 的依赖判定即可被 :meth:`take_ready` 在下一轮拾取。重复 id
+        抛 ``ValueError``——id 是面板的主键，静默覆盖会丢历史。
+        """
+        if task.id in self._tasks:
+            raise ValueError(f"任务 id 已存在，无法动态添加：{task.id}")
+        now = datetime.now()
+        change = StatusChange(
+            from_status=TaskStatus.PENDING,
+            to_status=TaskStatus.READY,
+            reason="dynamic-created",
+            at=now,
+        )
+        new_task = task.model_copy(
+            update={
+                "status": TaskStatus.READY,
+                "updated_at": now,
+                "status_history": [*task.status_history, change],
+            }
+        )
+        self._tasks[task.id] = new_task
+        if self._on_change is not None:
+            self._on_change(new_task, change)
+
+    def children_of(self, parent_id: str) -> list[Task]:
+        """P2-1：某任务的全部直接子任务（按 id 升序）。
+
+        直接扫 ``_tasks`` 的 ``parent_id`` 字段，不读依赖图——运行时动态新增的
+        任务不进 ``__init__`` 建的那张图（子任务独立调度，无需父先于子），读图
+        会把它们漏掉。
+        """
+        return [
+            self._tasks[task_id]
+            for task_id in sorted(self._tasks)
+            if self._tasks[task_id].parent_id == parent_id
+        ]
+
     def all(self) -> list[Task]:
         """全部任务，按 id 升序（确定性输出）。"""
         return [self._tasks[task_id] for task_id in sorted(self._tasks)]

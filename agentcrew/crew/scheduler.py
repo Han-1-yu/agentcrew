@@ -58,6 +58,7 @@ from pydantic import BaseModel, ConfigDict
 
 from agentcrew.agents.base_agent import AgentExecutionError
 from agentcrew.agents.registry import AgentFactory
+from agentcrew.artifacts.spec import ArtifactSpec
 from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.context.context_bus import ContextBus
 from agentcrew.gate.gatekeeper import GateDecision, Gatekeeper
@@ -142,6 +143,12 @@ class Scheduler:
         #: P0-3：预算耗尽标志。worker 中捕获 BudgetExhaustedError 时置位，
         #: 主循环检测后停止派发、等在跑 worker 收尾，再重抛该异常给 Crew。
         self._budget_exhausted: BudgetExhaustedError | None = None
+        #: P2-1：动态子任务 id 序号（``T-DYN-001`` …），保证 run 内唯一。
+        self._subtask_seq = 0
+        # P2-1：把「在本面板上创建动态子任务」的闭包注入 Agent 工厂——
+        # worker 里 Agent 检测到 <subtask> 围栏时回调它。工厂 setter 会同步刷新
+        # 已缓存的 Agent 实例；在任何 get() 之前设置，首轮构造即带上回调。
+        self._agents.subtask_creator = self._create_subtask
 
     # ---- 只读视图 ----
 
@@ -509,6 +516,42 @@ class Scheduler:
             message=error,
         )
 
+    # ---- P2-1：运行时动态子任务 ----
+
+    def _create_subtask(self, spec: dict[str, Any]) -> str:
+        """把 Agent 请求的子任务 spec 构造成 ``Task`` 并经 ``board.add_task`` 入板。
+
+        ``spec`` 由模型产出（title/description/role/deliverables）+ Agent 注入的
+        ``parent_id``。子任务无依赖、直接 ``READY``（独立调度），并打上
+        ``dynamic=True``。返回新任务 id——Agent 随后记 ``subtask_created`` 事件。
+        """
+        parent_id = str(spec.get("parent_id") or "")
+        task_id = self._next_subtask_id()
+        deliverables = [
+            _deliverable_from_spec(item) for item in (spec.get("deliverables") or [])
+        ]
+        task = Task(
+            id=task_id,
+            title=str(spec.get("title") or "动态子任务"),
+            description=str(spec.get("description") or ""),
+            role=str(spec.get("role") or "generic"),
+            acceptance_criteria=[],
+            deliverables=deliverables,
+            dependencies=[],
+            parent_id=parent_id or None,
+            dynamic=True,
+        )
+        self._board.add_task(task)
+        return task_id
+
+    def _next_subtask_id(self) -> str:
+        """生成 run 内唯一的动态任务 id（``T-DYN-001`` 递增，避开已用 id）。"""
+        existing = set(self._board.ids())
+        self._subtask_seq += 1
+        while f"T-DYN-{self._subtask_seq:03d}" in existing:
+            self._subtask_seq += 1
+        return f"T-DYN-{self._subtask_seq:03d}"
+
     def _save_checkpoint(self) -> None:
         """每处理完一个完成事件就落一次 checkpoint（``tasks.json`` + 回调）。
 
@@ -537,6 +580,25 @@ def _error_outcome(task_id: str, exc: BaseException) -> WorkerOutcome:
         decision=None,
         error=f"{type(exc).__name__}: {exc}",
     )
+
+
+def _deliverable_from_spec(item: Any) -> ArtifactSpec:
+    """把子任务请求里的一个 deliverables 项归一化成 :class:`ArtifactSpec`。
+
+    模型给的可能是路径字符串，也可能是部分字段的 dict；缺省 kind 取 ``text``、
+    description 回落到路径。无法识别的形态一律给一份诚实的兜底契约，而不是抛错
+    ——动态子任务的契约本就粗糙，让它进调度再由门禁/执行反馈修正。
+    """
+    if isinstance(item, dict):
+        path = str(item.get("path") or item.get("description") or "subtask_output.md")
+        kind = str(item.get("kind") or "text")
+        description = str(item.get("description") or path)
+        try:
+            return ArtifactSpec(path=path, kind=kind, description=description)
+        except Exception:
+            return ArtifactSpec(path=path, kind="text", description=description)
+    path = str(item)
+    return ArtifactSpec(path=path, kind="text", description=path)
 
 
 def _is_rework_dispatch(task: Task) -> bool:

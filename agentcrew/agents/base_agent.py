@@ -39,7 +39,7 @@
 import json
 import re
 from abc import ABC
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import Any, NoReturn
 
@@ -120,6 +120,26 @@ _TOOL_CALL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
 #: ReAct 循环的默认最大轮数（每轮 = 一次 LLM 调用 + 一批工具执行）。
 _DEFAULT_MAX_TOOL_CALLS = 10
 
+#: P2-1 动态子任务：模型在回复里用一对 ``<subtask>`` 围栏请求创建子任务，
+#: 内含一个 JSON 对象（title/description/role/deliverables）。与 ``<tool_call>``
+#: 同族（标签而非反引号），不与 ``file=`` 产物围栏相互干扰。
+_SUBTASK_RE = re.compile(r"<subtask>\s*(.*?)\s*</subtask>", re.DOTALL)
+
+#: P2-1：仅当本 Agent 注入了 ``subtask_creator`` 时才在系统提示词里告知模型
+#: 可以请求动态子任务——未注入时模型看不到这段，行为与原来完全一致。
+_SUBTASK_SECTION = """\
+## 动态子任务（可选）
+如果本任务需要拆出独立的子任务来完成，可以在回复中用一对 `<subtask>` 围栏请求创建一个子任务。围栏内是一个 JSON 对象：
+
+<subtask>
+{"title": "子任务标题", "description": "子任务要做什么", "role": "backend_dev", "deliverables": ["path/to/output.py"]}
+</subtask>
+
+- `deliverables` 是子任务要产出的文件路径列表（字符串数组）。
+- 子任务创建后由调度器独立派发；你创建完子任务后**继续完成本任务**，本任务自己的交付物仍须按上面的产物协议输出。
+- 不要在最终产物回复里遗漏本任务自己的 `file=` 围栏——`<subtask>` 只是请求拆任务，不替代交付物。
+"""
+
 
 class ParsedToolCall:
     """从模型回复里解析出的一次工具调用（轻量值对象，不进 pydantic 体系）。"""
@@ -165,6 +185,29 @@ def _args_summary(args: dict[str, Any]) -> dict[str, str]:
     return summary
 
 
+def _extract_subtask_specs(raw: str) -> list[dict[str, Any]]:
+    """P2-1：从模型回复里提取全部 ``<subtask>`` 块并解析其 JSON。
+
+    JSON 非法 / 不是对象的块**不抛错**：模型写砸一个子任务请求不该让本任务
+    （可能已正确产出交付物）跟着失败。坏块以 ``{"_malformed": <原文>}`` 占位
+    返回，由调用方记一条 ``subtask_malformed`` 留痕后跳过——与 tool_call 的
+    ``<malformed>`` 同族（让模型知道自己写错了，而不是悄悄丢掉）。
+    """
+    specs: list[dict[str, Any]] = []
+    for match in _SUBTASK_RE.finditer(raw):
+        body = match.group(1).strip()
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            specs.append({"_malformed": body[:200]})
+            continue
+        if not isinstance(data, dict):
+            specs.append({"_malformed": body[:200]})
+            continue
+        specs.append(data)
+    return specs
+
+
 class AgentExecutionError(RuntimeError):
     """一次 Agent 执行失败：解析、契约校验或落盘不通过。
 
@@ -200,6 +243,7 @@ class BaseAgent(ABC):
         catalog: RoleCatalog | None = None,
         tool_registry: ToolRegistry | None = None,
         max_tool_calls: int = _DEFAULT_MAX_TOOL_CALLS,
+        subtask_creator: Callable[[dict], str] | None = None,
     ) -> None:
         """``catalog`` 是本 run 的角色目录（含自定义角色），可为 ``None``。
 
@@ -211,6 +255,11 @@ class BaseAgent(ABC):
         产出最终产物前调用工具获取信息。``None``（默认）保持原有单次调用行为，
         向后兼容。``max_tool_calls`` 是 ReAct 最大轮数，触顶仍想调工具时降级为
         把最后一次回复当最终产物，并记一条 ``tool_loop_exhausted`` 警告。
+
+        ``subtask_creator``（P2-1）非空时 :meth:`execute` 会检测回复里的
+        ``<subtask>`` 围栏并通过它创建动态子任务；``None``（默认）不检测、
+        系统提示词也不告知子任务能力，行为与原来完全一致。它接收子任务 spec
+        字典（含 Agent 注入的 ``parent_id``），返回新任务 id。
         """
         self.spec = spec
         self._models = models
@@ -220,6 +269,13 @@ class BaseAgent(ABC):
         self._catalog = catalog
         self._tool_registry = tool_registry
         self._max_tool_calls = max_tool_calls
+        self._subtask_creator = subtask_creator
+
+    def set_subtask_creator(
+        self, creator: Callable[[dict], str] | None
+    ) -> None:
+        """运行时更换子任务回调（AgentFactory 在调度器换板后刷新缓存实例用）。"""
+        self._subtask_creator = creator
 
     # ── 模板方法（子类不重写）────────────────────────────────────────────
 
@@ -246,6 +302,11 @@ class BaseAgent(ABC):
         messages = self.build_messages(task, pack, fix_hints)
         alias = self._resolve_alias(task)
         final_text = await self._obtain_final_text(task, messages, alias)
+
+        # P2-1：检测 <subtask> 围栏并创建动态子任务（仅当注入了 creator）。
+        # 在 parse 之前做：子任务请求不影响本任务自己的产物解析，且创建后立即
+        # 记 ledger，子任务在下一轮调度即可被派发。
+        await self._maybe_create_subtasks(task, final_text)
 
         parsed = self._parse(final_text, task)
         notes = _join_notes(parsed.notes, *_language_notes(final_text, task))
@@ -298,6 +359,9 @@ class BaseAgent(ABC):
         tools_section = self._tools_section()
         if tools_section:
             system_parts.append(tools_section)
+        # P2-1：仅在注入了子任务回调时告知模型可以请求动态子任务。
+        if self._subtask_creator is not None:
+            system_parts.append(_SUBTASK_SECTION)
         system = "\n\n".join(system_parts)
         return [
             {"role": "system", "content": system},
@@ -540,6 +604,36 @@ class BaseAgent(ABC):
                 f'<tool_result name="{call.name}">\n{result_text}\n</tool_result>'
             )
         return "\n\n".join(blocks)
+
+    async def _maybe_create_subtasks(self, task: Task, raw: str) -> None:
+        """P2-1：检测 ``<subtask>`` 围栏，经回调创建动态子任务并记 ledger。
+
+        未注入 ``subtask_creator`` 时是零成本 no-op（向后兼容：原行为完全不变）。
+        每个合法 spec 都把本任务 id 作 ``parent_id`` 注入后交给回调；回调返回新
+        任务 id，随后记一条 ``subtask_created``（含 parent_id/child_id/title）。
+        坏 JSON 块记一条 ``subtask_malformed`` 留痕后跳过——不让一个写错的
+        子任务请求拖垮本任务。
+        """
+        if self._subtask_creator is None:
+            return
+        for spec in _extract_subtask_specs(raw):
+            if "_malformed" in spec:
+                self._ledger.emit(
+                    "subtask_malformed",
+                    task_id=task.id,
+                    role=self.spec.key,
+                    raw=spec["_malformed"],
+                )
+                continue
+            enriched = {**spec, "parent_id": task.id}
+            child_id = self._subtask_creator(enriched)
+            self._ledger.emit(
+                "subtask_created",
+                parent_id=task.id,
+                child_id=child_id,
+                title=str(spec.get("title", "")),
+                role=str(spec.get("role", "")),
+            )
 
     def _guard_truncation(self, completion: object, task: Task) -> None:
         """回复撞上输出上限时直接失败（与单次调用路径同一条病因说明）。"""
