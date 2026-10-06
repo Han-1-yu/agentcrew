@@ -220,7 +220,7 @@ async function boot() {
     S.settings = { theme: 'dark' };
     toast('error', '读取设置失败', String(e));
   }
-  applyTheme(S.settings.theme || 'dark');
+  applyTheme(S.settings.theme || 'dark', S.settings.accent || 'orange');
   refreshPythonFoot();
   await refreshRuns(false);
   // 启动时显示运行列表视图
@@ -231,8 +231,22 @@ async function boot() {
   setInterval(tickElapsed, 1000);
 }
 
-function applyTheme(theme) {
+const ACCENT_THEMES = [
+  { id: 'orange', label: '暖橙', color: '#e07a5f' },
+  { id: 'blue', label: '天蓝', color: '#3b82f6' },
+  { id: 'purple', label: '紫罗兰', color: '#8b5cf6' },
+  { id: 'green', label: '翠绿', color: '#22c55e' },
+  { id: 'cyan', label: '青色', color: '#06b6d4' },
+  { id: 'pink', label: '粉红', color: '#ec4899' },
+  { id: 'red', label: '红色', color: '#ef4444' },
+  { id: 'amber', label: '琥珀', color: '#f59e0b' },
+  { id: 'teal', label: '蓝绿', color: '#14b8a6' },
+  { id: 'indigo', label: '靛蓝', color: '#6366f1' },
+];
+
+function applyTheme(theme, accent) {
   document.documentElement.dataset.theme = theme;
+  document.documentElement.dataset.accent = accent || 'orange';
 }
 
 function wireTopbar() {
@@ -251,7 +265,7 @@ function wireTopbar() {
   });
   $('#btn-theme').addEventListener('click', async () => {
     const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
-    applyTheme(next);
+    applyTheme(next, S.settings.accent || 'orange');
     S.settings.theme = next;
     try { await window.studio.setSettings({ theme: next }); } catch { /* 保存失败不阻塞切主题 */ }
   });
@@ -282,19 +296,82 @@ async function refreshRuns(autoSelect) {
 }
 
 function renderRunsView() {
-  const list = $('#run-cards');
-  list.innerHTML = '';
+  const container = $('#runs-view');
+  // 保留 header，重建内容区
+  const oldLayout = container.querySelector('.runs-layout');
+  if (oldLayout) oldLayout.remove();
+
   const q = S.search;
   const filtered = S.runs.filter((r) => !q
     || (r.goal || '').toLowerCase().includes(q)
     || r.runId.toLowerCase().includes(q)
     || (r.group || '').toLowerCase().includes(q));
+
+  // 统计数据
+  const total = S.runs.length;
+  const running = S.runs.filter((r) => r.status === 'running').length;
+  const completed = S.runs.filter((r) => r.status === 'completed').length;
+  const failed = S.runs.filter((r) => r.status === 'failed').length;
+  const totalTasks = S.runs.reduce((a, r) => a + ((r.stats && r.stats.total_tasks) || 0), 0);
+  const totalCost = S.runs.reduce((a, r) => a + ((r.stats && r.stats.estimated_cost_usd) || 0), 0);
+
+  const layout = h('div', { class: 'runs-layout' },
+    // 左侧：运行卡片
+    h('div', { class: 'runs-main' },
+      h('div', { class: 'run-cards' }, ...buildRunCards(filtered))),
+    // 右侧：面板
+    h('div', { class: 'runs-side' },
+      // 统计概览
+      h('div', { class: 'side-panel' },
+        h('h3', { class: 'side-panel-title' }, '统计概览'),
+        h('div', { class: 'stat-grid' },
+          h('div', { class: 'stat-cell' }, h('div', { class: 'sc-label' }, '总运行'), h('div', { class: 'sc-value' }, String(total))),
+          h('div', { class: 'stat-cell' }, h('div', { class: 'sc-label' }, '运行中'), h('div', { class: 'sc-value', style: `color:${running ? 'var(--st-running)' : 'inherit'}` }, String(running))),
+          h('div', { class: 'stat-cell' }, h('div', { class: 'sc-label' }, '已完成'), h('div', { class: 'sc-value', style: `color:${completed ? 'var(--st-succeeded)' : 'inherit'}` }, String(completed))),
+          h('div', { class: 'stat-cell' }, h('div', { class: 'sc-label' }, '失败'), h('div', { class: 'sc-value', style: `color:${failed ? 'var(--st-failed)' : 'inherit'}` }, String(failed))),
+          h('div', { class: 'stat-cell' }, h('div', { class: 'sc-label' }, '总任务'), h('div', { class: 'sc-value' }, String(totalTasks))),
+          h('div', { class: 'stat-cell' }, h('div', { class: 'sc-label' }, '总成本'), h('div', { class: 'sc-value', style: 'font-size:14px' }, `$${totalCost.toFixed(3)}`)))),
+      // 快捷操作
+      h('div', { class: 'side-panel' },
+        h('h3', { class: 'side-panel-title' }, '快捷操作'),
+        h('div', { class: 'quick-actions' },
+          h('button', { class: 'quick-action-btn', onclick: openNewRunModal },
+            h('span', { class: 'qa-icon' }, '+'), '新运行'),
+          h('button', { class: 'quick-action-btn', onclick: () => refreshRuns() },
+            h('span', { class: 'qa-icon' }, '⟳'), '刷新列表'),
+          h('button', { class: 'quick-action-btn', onclick: () => { const d = S.settings && S.settings.outputDir; if (d) window.studio.revealFile(d); else toast('warn', '未配置输出目录', '请在设置中配置'); } },
+            h('span', { class: 'qa-icon' }, '📁'), '打开输出目录'),
+          h('button', { class: 'quick-action-btn', onclick: openSettingsModal },
+            h('span', { class: 'qa-icon' }, '⚙'), '设置'))),
+      // 系统信息
+      h('div', { class: 'side-panel' },
+        h('h3', { class: 'side-panel-title' }, '系统信息'),
+        h('div', {},
+          h('div', { class: 'sys-info-row' },
+            h('span', { class: 'si-label' }, 'Python'),
+            S.pythonInfo
+              ? h('span', { class: 'si-value si-ok', title: S.pythonInfo.cmd }, `${S.pythonInfo.cmd} · ${S.pythonInfo.version.replace(S.pythonInfo.cmd, '').trim() || S.pythonInfo.version}`)
+              : h('span', { class: 'si-value si-err' }, '未检测到')),
+          h('div', { class: 'sys-info-row' },
+            h('span', { class: 'si-label' }, '输出目录'),
+            h('span', { class: 'si-value', title: S.settings && S.settings.outputDir }, S.settings && S.settings.outputDir || '未配置')),
+          h('div', { class: 'sys-info-row' },
+            h('span', { class: 'si-label' }, '仓库'),
+            h('span', { class: 'si-value', title: S.settings && S.settings.repoRoot }, S.settings && S.settings.repoRoot || '未配置')),
+          h('div', { class: 'sys-info-row' },
+            h('span', { class: 'si-label' }, '默认'),
+            h('span', { class: 'si-value' }, `${S.settings && S.settings.defaultMock ? 'mock ' : ''}${S.settings && S.settings.defaultAuto ? 'auto' : ''}` || '—'))),
+    ),
+  ));
+  container.appendChild(layout);
+}
+
+function buildRunCards(filtered) {
   if (!filtered.length) {
-    list.appendChild(h('div', { class: 'runs-empty' },
-      S.runs.length ? '没有匹配的运行' : '输出目录下暂无运行，点击右上角「新运行」开始'));
-    return;
+    return [h('div', { class: 'runs-empty' },
+      S.runs.length ? '没有匹配的运行' : '输出目录下暂无运行，点击右上角「新运行」开始')];
   }
-  for (const r of filtered) {
+  return filtered.map((r) => {
     const live = r.status === 'running';
     const st = RUN_META[r.status] || RUN_META.unknown;
     const s = r.stats || {};
@@ -302,15 +379,13 @@ function renderRunsView() {
     const ok = s.succeeded || 0;
     const fail = s.failed || 0;
     const blk = s.blocked || 0;
-    list.appendChild(h('div', {
+    return h('div', {
       class: `run-card${r.dir === S.selectedDir ? ' active' : ''}${live ? ' is-live' : ''}`,
       'data-dir': r.dir, role: 'option',
       onclick: () => selectRun(r.dir),
     },
-      // 左侧状态图标
       h('div', { class: 'run-card-icon', style: `--ic:${st.color}` },
         h('span', { class: 'run-card-dot' })),
-      // 中间内容
       h('div', { class: 'run-card-body' },
         h('div', { class: 'run-card-head' },
           h('span', { class: 'run-card-name', title: r.goal }, r.goal || (r.error ? '（run.json 不可读）' : '（无目标）')),
@@ -332,7 +407,6 @@ function renderRunsView() {
             blk ? h('span', { class: 'rc-block' }, `${blk}⛔`) : null,
             h('span', { class: 'rc-total' }, `/${total}`)),
         ) : null),
-      // 右侧操作
       h('div', { class: 'run-card-actions' },
         h('button', {
           class: 'btn btn-icon btn-sm run-card-del',
@@ -340,8 +414,8 @@ function renderRunsView() {
           disabled: live,
           onclick: (e) => { e.stopPropagation(); confirmDeleteRun(r); },
         }, '✕')),
-    ));
-  }
+    );
+  });
 }
 
 /* ---------- 选中运行 & 监视 ---------- */
@@ -1246,6 +1320,20 @@ function openSettingsModal() {
       h('div', { class: 'form-checks' },
         h('label', { class: 'form-check' }, h('input', { type: 'radio', name: 'set-theme', value: 'dark', checked: (s.theme || 'dark') === 'dark' }), '深色'),
         h('label', { class: 'form-check' }, h('input', { type: 'radio', name: 'set-theme', value: 'light', checked: s.theme === 'light' }), '浅色'))),
+    h('div', { class: 'form-row' },
+      h('label', {}, '强调色'),
+      h('div', { class: 'accent-picker', id: 'accent-picker' },
+        ACCENT_THEMES.map((a) => h('button', {
+          type: 'button',
+          class: `accent-swatch${(s.accent || 'orange') === a.id ? ' active' : ''}`,
+          'data-accent': a.id,
+          style: `background:${a.color}`,
+          title: a.label,
+          onclick: () => {
+            document.querySelectorAll('.accent-swatch').forEach((b) => b.classList.toggle('active', b.dataset.accent === a.id));
+            applyTheme(($('input[name="set-theme"]:checked') || {}).value || 'dark', a.id);
+          },
+        })))),
     h('div', { class: 'modal-actions' },
       h('button', { class: 'btn', onclick: closeModal }, '取消'),
       h('button', { class: 'btn btn-primary', id: 'set-save' }, '保存')),
@@ -1271,6 +1359,7 @@ function openSettingsModal() {
       defaultMock: $('#set-mock').checked,
       defaultAuto: $('#set-auto').checked,
       theme: ($('input[name="set-theme"]:checked') || {}).value || 'dark',
+      accent: (document.querySelector('.accent-swatch.active') || {}).dataset.accent || 'orange',
     };
     try {
       const saved = await callIpc(window.studio.setSettings, next);

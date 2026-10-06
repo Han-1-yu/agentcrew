@@ -75,6 +75,18 @@
   color-scheme: light;
 }
 
+/* ---------- 多配色主题（强调色） ---------- */
+[data-accent="orange"]  { --accent:#e07a5f; --accent-hover:#e88a70; --accent-soft:rgba(224,122,95,.12); --accent-border:rgba(224,122,95,.35); }
+[data-accent="blue"]    { --accent:#3b82f6; --accent-hover:#60a5fa; --accent-soft:rgba(59,130,246,.12);  --accent-border:rgba(59,130,246,.35); }
+[data-accent="purple"]  { --accent:#8b5cf6; --accent-hover:#a78bfa; --accent-soft:rgba(139,92,246,.12);  --accent-border:rgba(139,92,246,.35); }
+[data-accent="green"]   { --accent:#22c55e; --accent-hover:#4ade80; --accent-soft:rgba(34,197,94,.12);   --accent-border:rgba(34,197,94,.35); }
+[data-accent="cyan"]    { --accent:#06b6d4; --accent-hover:#22d3ee; --accent-soft:rgba(6,182,212,.12);   --accent-border:rgba(6,182,212,.35); }
+[data-accent="pink"]    { --accent:#ec4899; --accent-hover:#f472b6; --accent-soft:rgba(236,72,153,.12);  --accent-border:rgba(236,72,153,.35); }
+[data-accent="red"]     { --accent:#ef4444; --accent-hover:#f87171; --accent-soft:rgba(239,68,68,.12);   --accent-border:rgba(239,68,68,.35); }
+[data-accent="amber"]   { --accent:#f59e0b; --accent-hover:#fbbf24; --accent-soft:rgba(245,158,11,.12);  --accent-border:rgba(245,158,11,.35); }
+[data-accent="teal"]    { --accent:#14b8a6; --accent-hover:#2dd4bf; --accent-soft:rgba(20,184,166,.12);  --accent-border:rgba(20,184,166,.35); }
+[data-accent="indigo"]  { --accent:#6366f1; --accent-hover:#818cf8; --accent-soft:rgba(99,102,241,.12);  --accent-border:rgba(99,102,241,.35); }
+
 html, body {
   height: 100%;
   margin: 0;
@@ -204,7 +216,6 @@ html, body {
 /* 运行卡片网格 */
 .run-cards {
   display: flex; flex-direction: column; gap: 10px;
-  max-width: 860px;
 }
 .runs-empty {
   text-align: center; padding: 60px 20px; color: var(--ink-faint); font-size: 14px;
@@ -633,6 +644,67 @@ html, body {
 
 /* 顶栏主按钮 + 号 */
 .btn-plus { font-size: 16px; font-weight: 700; margin-right: 2px; line-height: 1; }
+
+/* 配色选择器 */
+.accent-picker { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.accent-swatch {
+  appearance: none; border: 2px solid transparent; border-radius: 50%;
+  width: 28px; height: 28px; cursor: pointer; padding: 0;
+  transition: all 0.15s var(--ease); position: relative;
+}
+.accent-swatch:hover { transform: scale(1.12); }
+.accent-swatch.active { border-color: var(--ink); box-shadow: 0 0 0 2px var(--bg1), 0 0 0 4px var(--ink); }
+.accent-swatch.active::after {
+  content: "✓"; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 12px; font-weight: 700; text-shadow: 0 1px 2px rgba(0,0,0,.3);
+}
+
+/* ---------- 主页右侧面板 ---------- */
+
+.runs-layout {
+  display: flex; gap: 24px; align-items: flex-start;
+}
+.runs-main { flex: 1; min-width: 0; }
+.runs-side {
+  width: 280px; flex: none; position: sticky; top: 0;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.side-panel {
+  background: var(--bg1); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 16px;
+}
+.side-panel-title {
+  font-size: 11px; font-weight: 600; color: var(--ink-faint);
+  letter-spacing: 0.5px; text-transform: uppercase; margin: 0 0 12px;
+}
+.stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.stat-cell {
+  background: var(--bg2); border-radius: var(--radius-sm); padding: 10px 12px;
+}
+.stat-cell .sc-label { font-size: 10.5px; color: var(--ink-faint); margin-bottom: 3px; }
+.stat-cell .sc-value {
+  font: 600 17px/1.2 "SF Mono", "Cascadia Code", Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.quick-actions { display: flex; flex-direction: column; gap: 6px; }
+.quick-action-btn {
+  appearance: none; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--bg2); color: var(--ink-dim); font: inherit; font-size: 12.5px;
+  padding: 8px 12px; cursor: pointer; text-align: left;
+  display: flex; align-items: center; gap: 8px;
+  transition: all 0.12s var(--ease);
+}
+.quick-action-btn:hover { background: var(--bg-hover); color: var(--ink); border-color: var(--line-bright); }
+.quick-action-btn .qa-icon { width: 16px; text-align: center; flex: none; }
+.sys-info-row {
+  display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-dim);
+  padding: 5px 0; border-bottom: 1px solid var(--line-soft);
+}
+.sys-info-row:last-child { border-bottom: none; }
+.sys-info-row .si-label { color: var(--ink-faint); flex: none; width: 60px; }
+.sys-info-row .si-value { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: "SF Mono", "Cascadia Code", Consolas, monospace; font-size: 11px; }
+.sys-info-row .si-ok { color: var(--st-succeeded); }
+.sys-info-row .si-err { color: var(--st-failed); }
 
 /* ---------- V3 增强：优先级 / 预算 / 配置 ---------- */
 
