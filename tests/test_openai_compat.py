@@ -16,6 +16,7 @@ brief 用例原样保留；在其之上补四件事：
 """
 
 import asyncio
+import sys
 
 import pytest
 
@@ -230,8 +231,10 @@ async def test_retry_after_clamp_is_reported_through_on_retry(slept):
     assert slept == [MAX_RETRY_AFTER_SECONDS] * 3      # 记录器：零真实等待
     for _, exc, _ in seen:
         assert getattr(exc, RETRY_AFTER_CLAMPED_ATTR, None) == 86400.0
-        notes = getattr(exc, "__notes__", [])
-        assert any("86400" in note and "已截断" in note for note in notes)
+        # add_note / __notes__ 是 PEP 678（Python 3.11+），3.10 上不设置
+        if sys.version_info >= (3, 11):
+            notes = getattr(exc, "__notes__", [])
+            assert any("86400" in note and "已截断" in note for note in notes)
 
 
 # ── 控制器 FINDING 2：连接/传输/网络类错误必须重试 ──────────────────────────

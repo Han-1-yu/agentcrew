@@ -44,6 +44,7 @@ def test_yaml_invalid_reports():
     assert parse_check("yaml", "a: [1, 2\n") is not None
 
 
+@pytest.mark.skipif(not contract._HAS_TOMLLIB, reason="Python 3.10 无 tomllib，toml 检查跳过")
 def test_toml_valid_and_invalid():
     assert parse_check("toml", 'a = 1\n') is None
     assert parse_check("toml", 'a = = 1') is not None
@@ -115,6 +116,7 @@ def test_unknown_kind_message_names_the_kind():
     assert msg is not None and "nonsense" in msg
 
 
+@pytest.mark.skipif(not contract._HAS_TOMLLIB, reason="Python 3.10 无 tomllib，toml 检查跳过")
 def test_error_messages_carry_kind_and_position():
     json_msg = parse_check("json", '{"a": }')
     assert json_msg is not None and "JSON" in json_msg and "line 1" in json_msg
@@ -151,6 +153,7 @@ def test_parse_check_never_raises(kind, content):
     assert result is None or isinstance(result, str)
 
 
+@pytest.mark.skipif(not contract._HAS_TOMLLIB, reason="Python 3.10 无 tomllib，toml 检查跳过")
 def test_deeply_nested_content_reports_instead_of_raising():
     assert parse_check("python", "-" * 3000 + "1") is not None
     assert parse_check("json", "[" * 3000) is not None
@@ -158,6 +161,7 @@ def test_deeply_nested_content_reports_instead_of_raising():
     assert parse_check("yaml", "[" * 3000) is not None
 
 
+@pytest.mark.skipif(not contract._HAS_TOMLLIB, reason="Python 3.10 无 tomllib，toml 检查跳过")
 def test_huge_integer_literal_reports_instead_of_raising():
     assert parse_check("json", "1" * 5000) is not None
     assert parse_check("toml", "a = " + "1" * 5000) is not None
