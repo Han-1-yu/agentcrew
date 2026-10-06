@@ -614,6 +614,18 @@ class Crew:
             if self._cancel_event.is_set():
                 # 软取消收尾：在跑任务已自然结束，不再开交付卡点，直接 CANCELLED。
                 return self._finalize(run, RunStatus.CANCELLED)
+            if scheduler.stalled:
+                # P2-2：调度器判定「有任务在跑却超时无进展」并已硬取消在跑 worker。
+                # 置停滞标志（_exit_code 据此映射 4），记 run 级事件并落诊断报告。
+                # 详细的 stalled_for_seconds / active_tasks 已由调度器在 run_stalled
+                # 事件里落过，这里只补一条 run 级收口事件。
+                self._stalled = True
+                run.ledger.emit("run_stalled", kind="timeout")
+                self._write_stall_report(
+                    run,
+                    scheduler.deadlock_report
+                    or "运行停滞：超过阈值仍无任务状态变化，在跑任务已被取消",
+                )
             if scheduler.deadlock_report is not None and _is_stalled(board):
                 self._stalled = True
                 self._write_stall_report(run, scheduler.deadlock_report)

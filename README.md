@@ -549,6 +549,24 @@ G1 原本只做契约校验（缺产物 / 未声明 / 占位 / must_contain）�
 - **向后兼容**：Agent 未注入 `subtask_creator` 时完全不检测、系统提示词也不提
   子任务能力，行为与之前一致。
 
+### P2-2. 超时停滞检测
+
+调度主循环原本裸 `await queue.get()`：worker 僵在某个永不返回的 await 上时，
+run 会永远挂住。本项补上**运行时停滞检测**——有任务在跑却长时间没有任何状态
+跃迁，就判停滞、硬取消在跑任务、以退出码 4 优雅收尾。
+
+- **判据**：`Scheduler` 记 `_last_progress_at`（monotonic 时钟），每次派发 /
+  完成 / 状态跃迁都刷新；主循环把阻塞等待改成 `asyncio.wait_for` 分段等，每
+  秒醒一次检查。**仍有在跑 worker** 且距上次进展超过 `stall_timeout_seconds`
+  （默认 300 秒）→ 判停滞。
+- **与结构性死锁互补**：既有的「无就绪、无在跑」死锁检测（退出码 4）仍在；
+  本项补的是「有 worker 在跑但卡死」这一类——两者都映射到 `stalled` 退出码 4。
+- **留痕**：停滞时记 ledger `run_stalled`（含 `stalled_for_seconds` 与当时
+  `active_tasks`），Crew 再补一条 run 级 `run_stalled` 并落
+  `diagnostics/stall-report.md`。
+- **向后兼容**：`stall_timeout_seconds` 默认 300；正常长任务只要在阈值内有过
+  任意一次完成/跃迁就不会误触。
+
 ### P2-9. Ledger 查询与分析 API
 
 Ledger 此前只被终端看板 / 状态命令消费，现在 REST 也能直接读：

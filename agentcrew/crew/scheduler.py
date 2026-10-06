@@ -51,6 +51,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -77,6 +78,11 @@ CANCELLED_ERROR = "cancelled"
 #: ``tasks.json``，下一次派发由 :meth:`Scheduler._fix_hints` 取出来交给模型 ——
 #: 这是让重试「有的可改」而不是原样重放的唯一通道。
 _RETRY_REASON_PREFIX = "retry: "
+
+#: P2-2：停滞检测的唤醒周期（秒）。主循环每这么久醒一次检查「距上次进展是否
+#: 已超过 ``stall_timeout_seconds``」。取较小值让停滞能及时被发现，同时又不会
+#: 忙等；真正的判停阈值是构造参数 ``stall_timeout_seconds``，不是这个常量。
+_STALL_CHECK_INTERVAL = 1.0
 
 
 class WorkerOutcome(BaseModel):
@@ -112,6 +118,7 @@ class Scheduler:
         ledger: Ledger,
         checkpoint: CheckpointStore | None = None,
         max_concurrency: int = 4,
+        stall_timeout_seconds: int = 300,
         on_event: Callable[[str, dict], None] | None = None,
         on_checkpoint: Callable[[], None] | None = None,
     ) -> None:
@@ -149,6 +156,12 @@ class Scheduler:
         # worker 里 Agent 检测到 <subtask> 围栏时回调它。工厂 setter 会同步刷新
         # 已缓存的 Agent 实例；在任何 get() 之前设置，首轮构造即带上回调。
         self._agents.subtask_creator = self._create_subtask
+        # P2-2：运行时停滞检测。``stall_timeout_seconds`` 是「有任务在跑却长时间
+        # 无任何状态进展」的阈值（默认 5 分钟）；``_last_progress_at`` 记录最近一次
+        # 派发/完成/跃迁的时刻（monotonic 时钟，不受系统时间回拨影响）。
+        self._stall_timeout_seconds = stall_timeout_seconds
+        self._last_progress_at = time.monotonic()
+        self._stalled = False
 
     # ---- 只读视图 ----
 
@@ -156,6 +169,16 @@ class Scheduler:
     def deadlock_report(self) -> str | None:
         """停滞诊断（``None`` 表示本次 run 未判定为停滞）。"""
         return self._deadlock_report
+
+    @property
+    def stalled(self) -> bool:
+        """P2-2：本次 run 是否因「有任务在跑却超时无进展」被判停滞。
+
+        与 :attr:`deadlock_report` 的「无就绪、无在跑」结构性死锁互补：这个是
+        「有 worker 在跑但长时间没有任何状态跃迁」的运行时停滞（worker 僵在某个
+        永不返回的 await 上）。Crew 据此映射退出码 4。
+        """
+        return self._stalled
 
     @property
     def peak_concurrency(self) -> int:
@@ -208,8 +231,12 @@ class Scheduler:
                 ):
                     self._spawn_regate(task_id)
                 if self._workers:
-                    outcome = await self._completion_queue.get()
+                    outcome = await self._wait_for_outcome()
+                    if outcome is None:
+                        # P2-2：超时无进展已判停滞并硬取消在跑 worker —— 退出循环。
+                        break
                     self._handle_completion(outcome)
+                    self._touch_progress()
                     self._save_checkpoint()
                     # P0-3：预算耗尽 —— 停止派发新任务，等在跑 worker 自然收尾。
                     if self._budget_exhausted is not None:
@@ -329,6 +356,7 @@ class Scheduler:
         """登记并启动一个 worker；``peak_concurrency`` 在此实测更新。"""
         self._workers[task.id] = asyncio.create_task(self._worker(task))
         self._peak_concurrency = max(self._peak_concurrency, len(self._workers))
+        self._touch_progress()
         self._notify(
             "task_dispatched",
             task_id=task.id,
@@ -347,6 +375,7 @@ class Scheduler:
         """
         self._workers[task_id] = asyncio.create_task(self._regate_worker(task_id))
         self._peak_concurrency = max(self._peak_concurrency, len(self._workers))
+        self._touch_progress()
         self._notify("task_regated", task_id=task_id)
 
     def _regate_ids(self, *, limit: int) -> list[str]:
@@ -570,6 +599,63 @@ class Scheduler:
         """把一条调度事件交给可选的 ``on_event`` 观察者（未接线时零开销）。"""
         if self._on_event is not None:
             self._on_event(event, data)
+
+    # ---- P2-2：运行时停滞检测 ----
+
+    def _touch_progress(self) -> None:
+        """把「最近一次进展」重置为现在（monotonic 时钟）。
+
+        任何让任务板往前动一下的动作都调它：派发、完成事件、状态跃迁。停滞判定
+        读的是 ``now - _last_progress_at``，只要还有任何任务在动就一直被重置。
+        """
+        self._last_progress_at = time.monotonic()
+
+    async def _wait_for_outcome(self) -> WorkerOutcome | None:
+        """等一个完成事件；期间周期性检查是否超时无进展。
+
+        原本这里是裸 ``await queue.get()``——worker 僵在某个永不返回的 await 上时
+        它会永远阻塞。改成 ``asyncio.wait_for`` 分段等：每 ``_STALL_CHECK_INTERVAL``
+        秒醒一次，若**仍有在跑 worker** 且距上次进展已超过 ``stall_timeout_seconds``，
+        就判停滞、硬取消在跑 worker，返回 ``None`` 让主循环退出。
+
+        正常的长任务（一次合法的 LLM 调用跑很久）不会误触：只要它在阈值内产出
+        过任意一次完成/跃迁，``_last_progress_at`` 就被刷新。
+        """
+        while True:
+            try:
+                outcome = await asyncio.wait_for(
+                    self._completion_queue.get(),
+                    timeout=_STALL_CHECK_INTERVAL,
+                )
+                return outcome
+            except asyncio.TimeoutError:
+                if not self._workers:
+                    continue
+                idle = time.monotonic() - self._last_progress_at
+                if idle >= self._stall_timeout_seconds:
+                    self._trigger_stall(idle)
+                    return None
+
+    def _trigger_stall(self, idle_seconds: float) -> None:
+        """置停滞标志、留痕、硬取消在跑 worker。
+
+        ledger 记 ``run_stalled``（含 ``stalled_for_seconds`` 与 ``active_tasks``
+        ——当时哪些任务还挂着，是停滞诊断的第一手线索）。硬取消让僵住的 worker
+        立刻抛 ``CancelledError`` 回流，主循环随后 ``_drain_workers`` 收干净。
+        """
+        self._stalled = True
+        active = sorted(self._workers)
+        self._ledger.emit(
+            "run_stalled",
+            stalled_for_seconds=int(idle_seconds),
+            active_tasks=active,
+        )
+        self._notify(
+            "run_stalled",
+            stalled_for_seconds=int(idle_seconds),
+            active_tasks=active,
+        )
+        self.cancel(hard=True)
 
 
 def _error_outcome(task_id: str, exc: BaseException) -> WorkerOutcome:
