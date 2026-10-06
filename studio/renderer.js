@@ -1,123 +1,131 @@
 'use strict';
 // AgentCrew Studio — 渲染进程（原生 JS，无框架）。
-// 全部数据经 preload 暴露的 window.studio IPC 获取；不在渲染进程接触 Node。
+// 第一阶段：iOS 风格运行总览 Dashboard。
+// 数据层严格对齐 artifacts/contracts：TaskStatus 10 态、ledger 事件 {ts,run_id,event,data}。
+// 数据层（S.dash）与视图层分离；无真实运行时用内置 mock。
 
-/* ---------- 常量 ---------- */
+/* ============================================================
+   常量：状态 / 角色 / 事件元数据（对齐 contracts/state-enums.md）
+   ============================================================ */
 
+// TaskStatus 10 态（权威：task/state_machine.py）
 const STATUS_META = {
-  pending:   { label: '待启动', color: 'var(--st-pending)' },
-  ready:     { label: '就绪',   color: 'var(--st-ready)' },
-  running:   { label: '运行中', color: 'var(--st-running)' },
-  review:    { label: '评审中', color: 'var(--st-review)' },
-  rework:    { label: '返工中', color: 'var(--st-rework)' },
-  succeeded: { label: '成功',   color: 'var(--st-succeeded)' },
-  failed:    { label: '失败',   color: 'var(--st-failed)' },
-  blocked:   { label: '阻塞',   color: 'var(--st-blocked)' },
-  cancelled: { label: '已取消', color: 'var(--st-cancelled)' },
-  skipped:   { label: '已跳过', color: 'var(--st-skipped)' },
-  unknown:   { label: '未知',   color: 'var(--st-pending)' },
+  pending:   { label: '待启动', color: '#8E8E93', fill: '#FFFFFF' },
+  ready:     { label: '就绪',   color: '#007AFF', fill: 'rgba(0,122,255,0.06)' },
+  running:   { label: '运行中', color: '#007AFF', fill: 'rgba(0,122,255,0.10)' },
+  review:    { label: '门禁评审', color: '#FF9F0A', fill: 'rgba(255,159,10,0.10)' },
+  rework:    { label: '返工中', color: '#FF9F0A', fill: 'rgba(255,159,10,0.14)' },
+  blocked:   { label: '阻塞',   color: '#FF9F0A', fill: 'rgba(255,159,10,0.08)' },
+  succeeded: { label: '已通过', color: '#34C759', fill: 'rgba(52,199,89,0.10)' },
+  failed:    { label: '失败',   color: '#FF3B30', fill: 'rgba(255,59,48,0.10)' },
+  skipped:   { label: '已跳过', color: '#8E8E93', fill: '#F2F2F7' },
+  cancelled: { label: '已取消', color: '#8E8E93', fill: '#F2F2F7' },
+  unknown:   { label: '未知',   color: '#8E8E93', fill: '#FFFFFF' },
 };
-const STATUS_ORDER = ['pending', 'ready', 'running', 'review', 'rework', 'succeeded', 'failed', 'blocked', 'cancelled', 'skipped'];
+const STATUS_ORDER = ['pending','ready','running','review','rework','blocked','succeeded','failed','skipped','cancelled'];
 
-/* 运行级状态（run.json status）与任务级状态是两套枚举，配色分开 */
+// RunStatus（实际观测值）：preparing/planning/awaiting_approval/running/paused/failed/completed/cancelled
 const RUN_META = {
-  running:     { label: '运行中',   color: 'var(--st-running)' },
-  completed:   { label: '成功完成', color: 'var(--st-succeeded)' },
-  failed:      { label: '失败',     color: 'var(--st-failed)' },
-  cancelled:   { label: '已取消',   color: 'var(--st-cancelled)' },
-  interrupted: { label: '已中断',   color: 'var(--st-rework)' },
-  unknown:     { label: '未知',     color: 'var(--st-pending)' },
+  preparing:        { label: '准备中',       dot: 'idle',    chip: 'idle' },
+  planning:         { label: '规划中',       dot: 'running', chip: 'review' },
+  awaiting_approval:{ label: '等待人工确认', dot: 'warning', chip: 'review' },
+  running:          { label: '运行中',       dot: 'running', chip: 'running' },
+  paused:           { label: '已暂停',       dot: 'paused',  chip: 'paused' },
+  failed:           { label: '失败',         dot: 'error',   chip: 'failed' },
+  completed:        { label: '已完成',       dot: 'done',    chip: 'done' },
+  cancelled:        { label: '已取消',       dot: 'idle',    chip: 'idle' },
 };
 
+// RunPhase：planning / execution / delivery（代码路径，UI 派生）
+const PHASES = ['规划', '执行', '交付'];
+
+// 8 个角色（role 字段权威值）
 const ROLE_META = {
-  project_manager:  { label: '项目经理', color: '#e879f9' },
-  product_manager:  { label: '产品经理', color: '#fb7185' },
-  architect:        { label: '架构师',   color: '#38bdf8' },
-  backend_dev:      { label: '后端开发', color: '#34d399' },
-  frontend_dev:     { label: '前端开发', color: '#a3e635' },
-  qa_engineer:      { label: '测试工程师', color: '#fbbf24' },
-  devops_engineer:  { label: '运维工程师', color: '#22d3ee' },
-  technical_writer: { label: '文档工程师', color: '#c4b5fd' },
+  project_manager:  { label: 'PM',       full: '项目经理',   color: '#AF52DE' },
+  product_manager:  { label: '产品',     full: '产品经理',   color: '#FF2D55' },
+  architect:        { label: '架构',     full: '架构师',     color: '#007AFF' },
+  backend_dev:      { label: '后端',     full: '后端开发',   color: '#34C759' },
+  frontend_dev:     { label: '前端',     full: '前端开发',   color: '#5AC8FA' },
+  qa_engineer:      { label: '测试',     full: '测试工程师', color: '#FF9500' },
+  devops_engineer:  { label: '运维',     full: '运维工程师', color: '#5E5CE6' },
+  technical_writer: { label: '文档',     full: '文档工程师', color: '#8E8E93' },
 };
-const roleMeta = (id) => ROLE_META[id] || { label: id || '未知角色', color: '#9aa7bd' };
+const roleMeta = (id) => ROLE_META[id] || { label: id || '?', full: id || '未知角色', color: '#8E8E93' };
 
+// ledger 事件类型（event 字段权威值，见 DATA-CONTRACT-REFERENCE §3）
 const EVENT_META = {
-  run_started:      { label: 'run_started',      color: '#38bdf8' },
-  plan_created:     { label: 'plan_created',     color: '#34d399' },
-  plan_rejected:    { label: 'plan_rejected',    color: '#f97316' },
-  task_started:     { label: 'task_started',     color: '#f59e0b' },
-  task_finished:    { label: 'task_finished',    color: '#22c55e' },
-  task_transition:  { label: 'task_transition',  color: '#94a3b8' },
-  task_notes:       { label: 'task_notes',       color: '#94a3b8' },
-  gate_result:      { label: 'gate_result',      color: '#8b5cf6' },
-  artifact_written: { label: 'artifact_written', color: '#2dd4bf' },
-  llm_call:         { label: 'llm_call',         color: '#67e8f9' },
-  llm_degraded:     { label: 'llm_degraded',     color: '#fb923c' },
-  llm_failover:     { label: 'llm_failover',     color: '#fbbf24' },
-  budget_exhausted: { label: 'budget_exhausted', color: '#f43f5e' },
-  tool_loop_exhausted: { label: 'tool_loop_exhausted', color: '#f472b6' },
-  error:            { label: 'error',            color: '#ef4444' },
-  run_finished:     { label: 'run_finished',     color: '#a78bfa' },
+  run_started:      { label: '运行创建',   color: '#007AFF' },
+  llm_call:         { label: 'LLM 调用',   color: '#5AC8FA' },
+  plan_created:     { label: '任务生成',   color: '#34C759' },
+  plan_scored:      { label: '计划评分',   color: '#5AC8FA' },
+  task_started:     { label: '任务开始',   color: '#FF9500' },
+  task_notes:       { label: '任务笔记',   color: '#8E8E93' },
+  artifact_written: { label: '产物生成',   color: '#34C759' },
+  task_finished:    { label: '任务完成',   color: '#34C759' },
+  task_transition:  { label: '状态跃迁',   color: '#8E8E93' },
+  gate_result:      { label: '门禁结果',   color: '#AF52DE' },
+  run_finished:     { label: '运行结束',   color: '#8E8E93' },
+  llm_failover:     { label: '故障转移',   color: '#FF9F0A' },
+  llm_model_switched:{ label: '模型切换',  color: '#5AC8FA' },
+  budget_warning:   { label: '预算预警',   color: '#FF9F0A' },
+  budget_exhausted: { label: '预算耗尽',   color: '#FF3B30' },
+  task_timeout:     { label: '任务超时',   color: '#FF9F0A' },
+  checkpoint_saved: { label: '检查点保存', color: '#8E8E93' },
+  human_approved:   { label: '人工批准',   color: '#34C759' },
+  run_cancelled:    { label: '运行取消',   color: '#FF3B30' },
+  error:            { label: '错误',       color: '#FF3B30' },
 };
 const EVENT_TYPES = Object.keys(EVENT_META);
 
-const FINISHED_STATUSES = new Set(['completed', 'failed', 'cancelled', 'interrupted']);
-const STALE_MS = 90 * 1000;
+// iOS 硬编码颜色
+const C = { blue:'#007AFF', success:'#34C759', warn:'#FF9F0A', error:'#FF3B30',
+  text:'#1C1C1E', sub:'#6E6E73', ter:'#8E8E93' };
 
-/* ---------- 状态 ---------- */
-
+/* ============================================================
+   全局状态
+   ============================================================ */
 const S = {
-  settings: null,
-  env: null,
-  pythonInfo: null,
-  runs: [],
-  selectedDir: null,
-  run: null,
-  tasks: [],
-  loadErrors: null,
-  events: [],
-  eventsSkipped: 0,
+  settings: null, env: null,
+  dash: null,            // { run, tasks, agents, gates, events }
+  nav: 'dashboard',
+  detail: null,          // { kind:'task'|'agent', id }
   eventFilter: new Set(EVENT_TYPES),
-  eventSearch: '',
-  autoScroll: true,
-  tab: 'board',
-  artifacts: null,        // { entries, manifestError }
-  artifactSel: null,      // 当前预览的相对路径
-  procsByRunDir: new Map(),
-  activeProcKey: null,    // 最近一次由 UI 启动的进程
-  search: '',
-  elapsedTimer: null,
+  eventExpanded: new Set(),
+  simTimer: null,
+  startedAt: Date.now(),
+  view: { zoom: 1, x: 0, y: 0 },   // DAG 视图变换
 };
 
-// 自测遥测：主进程 selftest 通过 executeJavaScript 读取
+// 自测遥测（selftest 依赖，必须保留）
 window.__st = {
-  snapshots: 0,
-  ledgerBatches: 0,
-  state: () => ({
-    dir: S.selectedDir,
-    status: S.run && S.run.status,
-    stats: S.run && S.run.stats ? S.run.stats : null,
-    tasks: (S.tasks || []).length,
-    events: S.events.length,
-  }),
+  snapshots: 0, ledgerBatches: 0,
+  state: () => {
+    const d = S.dash || {};
+    return {
+      dir: (d.run && d.run.dir) || null,
+      status: (d.run && d.run.status) || 'idle',
+      stats: (d.run && d.run.stats) || null,
+      tasks: (d.tasks || []).length,
+      events: (d.events || []).length,
+    };
+  },
 };
 
-/* ---------- 工具 ---------- */
-
+/* ============================================================
+   工具函数
+   ============================================================ */
 const $ = (sel, root) => (root || document).querySelector(sel);
 const $$ = (sel, root) => [...(root || document).querySelectorAll(sel)];
 
 function h(tag, props, ...children) {
   const el = document.createElement(tag);
-  if (props) {
-    for (const [k, v] of Object.entries(props)) {
-      if (v == null) continue;
-      if (k === 'class') el.className = v;
-      else if (k === 'style') el.setAttribute('style', v);
-      else if (k.startsWith('data-')) el.setAttribute(k, v);
-      else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
-      else el[k] = v;
-    }
+  if (props) for (const [k, v] of Object.entries(props)) {
+    if (v == null) continue;
+    if (k === 'class') el.className = v;
+    else if (k === 'style') el.setAttribute('style', v);
+    else if (k.startsWith('data-')) el.setAttribute(k, v);
+    else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else el[k] = v;
   }
   for (const c of children.flat()) {
     if (c == null || c === false) continue;
@@ -125,1352 +133,774 @@ function h(tag, props, ...children) {
   }
   return el;
 }
-
-function fmtTokens(n) {
-  if (n == null) return '—';
-  return Number(n).toLocaleString('en-US');
-}
-function fmtCost(n) {
-  if (n == null) return '—';
-  const s = Number(n).toFixed(10).replace(/0+$/, '').replace(/\.$/, '');
-  return `$${s}`;
-}
-function fmtDur(ms) {
-  if (ms == null) return '—';
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  const s = ms / 1000;
-  if (s < 60) return `${s.toFixed(1)}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m${Math.round(s % 60)}s`;
-  return `${Math.floor(m / 60)}h${m % 60}m`;
-}
-function fmtBytes(n) {
-  if (n == null) return '—';
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1024 / 1024).toFixed(2)} MB`;
-}
-function parseTs(ts) {
-  if (!ts) return null;
-  const d = new Date(String(ts).replace(' ', 'T'));
-  return isNaN(d) ? null : d;
-}
-function fmtClock(ts) {
-  const d = parseTs(ts);
-  return d ? d.toTimeString().slice(0, 8) : String(ts || '');
-}
-function fmtDateTime(ts) {
-  const d = parseTs(ts);
-  if (!d) return String(ts || '—');
-  const p = (x) => String(x).padStart(2, '0');
-  return `${d.getMonth() + 1}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
-}
-function trunc(s, n) {
-  s = String(s == null ? '' : s);
-  return s.length > n ? `${s.slice(0, n)}…` : s;
-}
-function runDurationMs(run, tasks) {
-  if (run && run.stats && run.stats.started_at) {
-    const a = parseTs(run.stats.started_at);
-    const b = parseTs(run.stats.finished_at || run.updated_at) || new Date();
-    if (a) return b - a;
+const SVG_NS = 'http://www.w3.org/2000/svg';
+function s(tag, attrs, ...children) {
+  const el = document.createElementNS(SVG_NS, tag);
+  if (attrs) for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  for (const c of children.flat()) {
+    if (c == null) continue;
+    el.appendChild(typeof c === 'object' ? c : document.createTextNode(String(c)));
   }
-  return null;
+  return el;
 }
-function statusCounts(tasks) {
-  const c = {};
-  for (const st of STATUS_ORDER) c[st] = 0;
-  for (const t of tasks || []) c[t.status] = (c[t.status] || 0) + 1;
-  return c;
+
+function fmtTokens(n) { return n == null ? '—' : Number(n).toLocaleString('en-US'); }
+function fmtCost(n) { if (n==null) return '—'; const v=Number(n); return `$${v.toFixed(4).replace(/0+$/,'').replace(/\.$/,'')}`; }
+function fmtDur(ms) {
+  if (ms==null) return '—';
+  if (ms<1000) return `${Math.round(ms)}ms`;
+  const sec=ms/1000; if (sec<60) return `${sec.toFixed(1)}s`;
+  const m=Math.floor(sec/60); if (m<60) return `${m}m${Math.round(sec%60)}s`;
+  return `${Math.floor(m/60)}h${m%60}m`;
 }
+function fmtBytes(n) { if(n==null)return'—'; if(n<1024)return`${n} B`; if(n<1048576)return`${(n/1024).toFixed(1)} KB`; return `${(n/1048576).toFixed(2)} MB`; }
+// ledger ts: "YYYY-MM-DD HH:MM:SS.ffffff"（空格分隔，无时区）
+function parseTs(ts) { if(!ts) return null; const d=new Date(String(ts).replace(' ','T')); return isNaN(d)?null:d; }
+function fmtClock(ts){ const d=parseTs(ts); return d?d.toTimeString().slice(0,8):String(ts||''); }
+function fmtDateTime(ts){ const d=parseTs(ts); if(!d)return'—'; const p=x=>String(x).padStart(2,'0'); return `${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; }
+function relTime(ts){ const d=parseTs(ts); if(!d)return''; const diff=(Date.now()-d.getTime())/1000; if(diff<5)return'刚刚'; if(diff<60)return`${Math.floor(diff)} 秒前`; if(diff<3600)return`${Math.floor(diff/60)} 分钟前`; if(diff<86400)return`${Math.floor(diff/3600)} 小时前`; return `${Math.floor(diff/86400)} 天前`; }
+function trunc(s,n){ s=String(s==null?'':s); return s.length>n?s.slice(0,n)+'…':s; }
 
 async function callIpc(fn, ...args) {
   try { return await fn(...args); }
-  catch (e) {
-    toast('error', '后端调用失败', String(e && e.message || e));
-    throw e;
-  }
+  catch (e) { toast('error','后端调用失败', String(e&&e.message||e)); throw e; }
 }
 
-/* ---------- Toast ---------- */
-
+/* ============================================================
+   Toast / Modal / 确认弹窗
+   ============================================================ */
 function toast(type, title, msg, ms) {
   const box = $('#toasts');
-  const t = h('div', { class: `toast ${type || ''}` },
-    h('div', { class: 'toast-title' }, title),
-    msg ? h('div', { class: 'toast-msg' }, msg) : null);
+  const t = h('div',{class:`toast ${type||''}`}, h('div',{class:'toast-title'},title), msg?h('div',{class:'toast-msg'},msg):null);
   box.appendChild(t);
-  setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity .25s'; setTimeout(() => t.remove(), 300); }, ms || (type === 'error' ? 8000 : 4000));
+  setTimeout(()=>{ t.style.opacity='0'; t.style.transition='opacity .25s'; setTimeout(()=>t.remove(),300); }, ms||(type==='error'?8000:4000));
 }
-
-/* ---------- 启动 ---------- */
-
-async function boot() {
-  wireTopbar();
-  wireProcPush();
-  wireWatchPush();
-  window.addEventListener('error', (e) => toast('error', '界面错误', e.message));
-  window.addEventListener('unhandledrejection', (e) => toast('error', '未处理的异常', String(e.reason && e.reason.message || e.reason)));
-
-  try {
-    const r = await window.studio.getSettings();
-    S.settings = r.settings;
-    S.env = r.env;
-  } catch (e) {
-    S.settings = { theme: 'dark' };
-    toast('error', '读取设置失败', String(e));
-  }
-  setupAutoTheme();
-  const initTheme = S.settings.theme === 'auto'
-    ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
-    : (S.settings.theme || 'dark');
-  applyTheme(initTheme, S.settings.accent || 'orange');
-  refreshPythonFoot();
-  await refreshRuns(false);
-  // 启动时显示运行列表视图
-  $('#runs-view').classList.remove('hidden');
-  $('#run-view').classList.add('hidden');
-  $('#empty-view').classList.add('hidden');
-  setInterval(() => { refreshRuns(); refreshProcMap(); }, 2000);
-  setInterval(tickElapsed, 1000);
-}
-
-const ACCENT_THEMES = [
-  { id: 'orange', label: '暖橙', color: '#e07a5f' },
-  { id: 'blue', label: '天蓝', color: '#3b82f6' },
-  { id: 'purple', label: '紫罗兰', color: '#8b5cf6' },
-  { id: 'green', label: '翠绿', color: '#22c55e' },
-  { id: 'cyan', label: '青色', color: '#06b6d4' },
-  { id: 'pink', label: '粉红', color: '#ec4899' },
-  { id: 'red', label: '红色', color: '#ef4444' },
-  { id: 'amber', label: '琥珀', color: '#f59e0b' },
-  { id: 'teal', label: '蓝绿', color: '#14b8a6' },
-  { id: 'indigo', label: '靛蓝', color: '#6366f1' },
-];
-
-function applyTheme(theme, accent) {
-  document.documentElement.dataset.theme = theme;
-  if (accent && accent.startsWith('#')) {
-    // 自定义颜色：直接设置 CSS 变量
-    document.documentElement.style.setProperty('--accent', accent);
-    document.documentElement.style.setProperty('--accent-hover', lightenColor(accent, 12));
-    document.documentElement.style.setProperty('--accent-soft', hexToRgba(accent, 0.12));
-    document.documentElement.style.setProperty('--accent-border', hexToRgba(accent, 0.35));
-    delete document.documentElement.dataset.accent;
-  } else {
-    // 预设配色：清除内联样式，用 data-accent 属性
-    document.documentElement.style.removeProperty('--accent');
-    document.documentElement.style.removeProperty('--accent-hover');
-    document.documentElement.style.removeProperty('--accent-soft');
-    document.documentElement.style.removeProperty('--accent-border');
-    document.documentElement.dataset.accent = accent || 'orange';
-  }
-}
-
-/* 颜色工具函数 */
-function hexToRgba(hex, alpha) {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `rgba(${r},${g},${b},${alpha})`;
-}
-function lightenColor(hex, percent) {
-  const r = Math.min(255, parseInt(hex.slice(1, 3), 16) + Math.round(255 * percent / 100));
-  const g = Math.min(255, parseInt(hex.slice(3, 5), 16) + Math.round(255 * percent / 100));
-  const b = Math.min(255, parseInt(hex.slice(5, 7), 16) + Math.round(255 * percent / 100));
-  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
-}
-
-/* 状态 → 强调色映射（运行详情视图自动切换） */
-const STATUS_ACCENT = {
-  running: '#f59e0b',
-  completed: '#22c55e',
-  failed: '#ef4444',
-  interrupted: '#f97316',
-  cancelled: null, // 保持用户配色
-};
-function applyStateAccent(status) {
-  const color = STATUS_ACCENT[status];
-  if (color) applyTheme(document.documentElement.dataset.theme, color);
-  else applyTheme(document.documentElement.dataset.theme, S.settings.accent || 'orange');
-}
-
-/* 获取设置中选择的主题（auto → 解析为实际 dark/light） */
-function getSettingsTheme() {
-  const v = ($('input[name="set-theme"]:checked') || {}).value || 'dark';
-  if (v === 'auto') return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-  return v;
-}
-
-/* 自动主题：监听系统配色变化 */
-let _autoThemeMQ = null;
-function setupAutoTheme() {
-  if (_autoThemeMQ) _autoThemeMQ.removeEventListener('change', _onAutoThemeChange);
-  _autoThemeMQ = window.matchMedia('(prefers-color-scheme: dark)');
-  _autoThemeMQ.addEventListener('change', _onAutoThemeChange);
-}
-function _onAutoThemeChange() {
-  if (S.settings && S.settings.theme === 'auto') {
-    const resolved = _autoThemeMQ.matches ? 'dark' : 'light';
-    applyTheme(resolved, S.settings.accent || 'orange');
-  }
-}
-
-function wireTopbar() {
-  $('#btn-new-run').addEventListener('click', openNewRunModal);
-  $('#btn-empty-new').addEventListener('click', openNewRunModal);
-  $('#btn-refresh-runs').addEventListener('click', () => refreshRuns());
-  $('#run-search').addEventListener('input', (e) => { S.search = e.target.value.trim().toLowerCase(); renderRunsView(); });
-  // 图标栏导航
-  document.querySelectorAll('.rail-item[data-view]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const view = btn.dataset.view;
-      document.querySelectorAll('.rail-item[data-view]').forEach((b) => b.classList.toggle('active', b === btn));
-      if (view === 'runs') goBackToList();
-      else if (view === 'settings') openSettingsModal();
-    });
-  });
-  $('#btn-theme').addEventListener('click', async () => {
-    const cur = S.settings.theme || 'dark';
-    const order = ['auto', 'dark', 'light'];
-    const next = order[(order.indexOf(cur) + 1) % order.length];
-    const resolved = next === 'auto'
-      ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
-      : next;
-    applyTheme(resolved, S.settings.accent || 'orange');
-    S.settings.theme = next;
-    try { await window.studio.setSettings({ theme: next }); } catch { /* 保存失败不阻塞切主题 */ }
-    toast('info', '主题', next === 'auto' ? '自动（跟随系统）' : next === 'dark' ? '深色' : '浅色');
-  });
-}
-
-async function refreshPythonFoot() {
-  // Python 探测结果存入状态，供设置模态和运行列表底部显示
-  try {
-    const r = await window.studio.detectPython();
-    S.pythonInfo = r || null;
-    if (r && !S.settings.pythonCmd) {
-      S.settings.pythonCmd = r.cmd;
-      await window.studio.setSettings({ pythonCmd: r.cmd });
-    }
-  } catch { S.pythonInfo = null; }
-}
-
-/* ---------- 运行列表 ---------- */
-
-async function refreshRuns(autoSelect) {
-  let runs;
-  try { runs = await callIpc(window.studio.listRuns); }
-  catch { return; }
-  S.runs = runs;
-  $('#runs-count').textContent = runs.length ? `${runs.length}` : '';
-  renderRunsView();
-  if (autoSelect && !S.selectedDir && runs.length) selectRun(runs[0].dir);
-}
-
-function renderRunsView() {
-  const container = $('#runs-view');
-  // 保留 header，重建内容区
-  const oldLayout = container.querySelector('.runs-layout');
-  if (oldLayout) oldLayout.remove();
-
-  const q = S.search;
-  const filtered = S.runs.filter((r) => !q
-    || (r.goal || '').toLowerCase().includes(q)
-    || r.runId.toLowerCase().includes(q)
-    || (r.group || '').toLowerCase().includes(q));
-
-  // 统计数据
-  const total = S.runs.length;
-  const running = S.runs.filter((r) => r.status === 'running').length;
-  const completed = S.runs.filter((r) => r.status === 'completed').length;
-  const failed = S.runs.filter((r) => r.status === 'failed').length;
-  const totalTasks = S.runs.reduce((a, r) => a + ((r.stats && r.stats.total_tasks) || 0), 0);
-  const totalCost = S.runs.reduce((a, r) => a + ((r.stats && r.stats.estimated_cost_usd) || 0), 0);
-
-  const layout = h('div', { class: 'runs-layout' },
-    // 左侧：运行卡片
-    h('div', { class: 'runs-main' },
-      h('div', { class: 'run-cards' }, ...buildRunCards(filtered))),
-    // 右侧：面板
-    h('div', { class: 'runs-side' },
-      // 统计概览
-      h('div', { class: 'side-panel' },
-        h('h3', { class: 'side-panel-title' }, '统计概览'),
-        h('div', { class: 'stat-grid' },
-          h('div', { class: 'stat-cell' }, h('div', { class: 'sc-label' }, '总运行'), h('div', { class: 'sc-value' }, String(total))),
-          h('div', { class: 'stat-cell' }, h('div', { class: 'sc-label' }, '运行中'), h('div', { class: 'sc-value', style: `color:${running ? 'var(--st-running)' : 'inherit'}` }, String(running))),
-          h('div', { class: 'stat-cell' }, h('div', { class: 'sc-label' }, '已完成'), h('div', { class: 'sc-value', style: `color:${completed ? 'var(--st-succeeded)' : 'inherit'}` }, String(completed))),
-          h('div', { class: 'stat-cell' }, h('div', { class: 'sc-label' }, '失败'), h('div', { class: 'sc-value', style: `color:${failed ? 'var(--st-failed)' : 'inherit'}` }, String(failed))),
-          h('div', { class: 'stat-cell' }, h('div', { class: 'sc-label' }, '总任务'), h('div', { class: 'sc-value' }, String(totalTasks))),
-          h('div', { class: 'stat-cell' }, h('div', { class: 'sc-label' }, '总成本'), h('div', { class: 'sc-value', style: 'font-size:14px' }, `$${totalCost.toFixed(3)}`)))),
-      // 快捷操作
-      h('div', { class: 'side-panel' },
-        h('h3', { class: 'side-panel-title' }, '快捷操作'),
-        h('div', { class: 'quick-actions' },
-          h('button', { class: 'quick-action-btn', onclick: openNewRunModal },
-            h('span', { class: 'qa-icon' }, '+'), '新运行'),
-          h('button', { class: 'quick-action-btn', onclick: () => refreshRuns() },
-            h('span', { class: 'qa-icon' }, '⟳'), '刷新列表'),
-          h('button', { class: 'quick-action-btn', onclick: () => { const d = S.settings && S.settings.outputDir; if (d) window.studio.revealFile(d); else toast('warn', '未配置输出目录', '请在设置中配置'); } },
-            h('span', { class: 'qa-icon' }, '📁'), '打开输出目录'),
-          h('button', { class: 'quick-action-btn', onclick: openSettingsModal },
-            h('span', { class: 'qa-icon' }, '⚙'), '设置'))),
-      // 系统信息
-      h('div', { class: 'side-panel' },
-        h('h3', { class: 'side-panel-title' }, '系统信息'),
-        h('div', {},
-          h('div', { class: 'sys-info-row' },
-            h('span', { class: 'si-label' }, 'Python'),
-            S.pythonInfo
-              ? h('span', { class: 'si-value si-ok', title: S.pythonInfo.cmd }, `${S.pythonInfo.cmd} · ${S.pythonInfo.version.replace(S.pythonInfo.cmd, '').trim() || S.pythonInfo.version}`)
-              : h('span', { class: 'si-value si-err' }, '未检测到')),
-          h('div', { class: 'sys-info-row' },
-            h('span', { class: 'si-label' }, '输出目录'),
-            h('span', { class: 'si-value', title: S.settings && S.settings.outputDir }, S.settings && S.settings.outputDir || '未配置')),
-          h('div', { class: 'sys-info-row' },
-            h('span', { class: 'si-label' }, '仓库'),
-            h('span', { class: 'si-value', title: S.settings && S.settings.repoRoot }, S.settings && S.settings.repoRoot || '未配置')),
-          h('div', { class: 'sys-info-row' },
-            h('span', { class: 'si-label' }, '默认'),
-            h('span', { class: 'si-value' }, `${S.settings && S.settings.defaultMock ? 'mock ' : ''}${S.settings && S.settings.defaultAuto ? 'auto' : ''}` || '—'))),
-    ),
-  ));
-  container.appendChild(layout);
-}
-
-function buildRunCards(filtered) {
-  if (!filtered.length) {
-    return [h('div', { class: 'runs-empty' },
-      S.runs.length ? '没有匹配的运行' : '输出目录下暂无运行，点击右上角「新运行」开始')];
-  }
-  return filtered.map((r) => {
-    const live = r.status === 'running';
-    const st = RUN_META[r.status] || RUN_META.unknown;
-    const s = r.stats || {};
-    const total = s.total_tasks || 0;
-    const ok = s.succeeded || 0;
-    const fail = s.failed || 0;
-    const blk = s.blocked || 0;
-    return h('div', {
-      class: `run-card${r.dir === S.selectedDir ? ' active' : ''}${live ? ' is-live' : ''}`,
-      'data-dir': r.dir, role: 'option',
-      onclick: () => selectRun(r.dir),
-    },
-      h('div', { class: 'run-card-icon', style: `--ic:${st.color}` },
-        h('span', { class: 'run-card-dot' })),
-      h('div', { class: 'run-card-body' },
-        h('div', { class: 'run-card-head' },
-          h('span', { class: 'run-card-name', title: r.goal }, r.goal || (r.error ? '（run.json 不可读）' : '（无目标）')),
-          h('span', { class: 'flex-spacer' }),
-          live ? h('span', { class: 'run-card-live' }, '运行中') : h('span', { class: 'run-card-status', style: `color:${st.color}` }, st.label)),
-        h('div', { class: 'run-card-sub' },
-          h('span', { class: 'run-card-id' }, r.runId),
-          h('span', { class: 'run-card-sep' }, '·'),
-          h('span', {}, fmtDateTime(r.createdAt || '')),
-          r.group ? h('span', { class: 'run-card-sep' }, '·') : null,
-          r.group ? h('span', { class: 'run-card-group', title: r.group }, r.group) : null),
-        total ? h('div', { class: 'run-card-progress' },
-          h('div', { class: 'run-card-bar' },
-            h('i', { style: `width:${total ? (ok / total * 100) : 0}%;background:var(--st-succeeded)` }),
-            fail ? h('i', { style: `width:${total ? (fail / total * 100) : 0}%;background:var(--st-failed)` }) : null),
-          h('span', { class: 'run-card-stats' },
-            h('span', { class: 'rc-ok' }, `${ok}✓`),
-            fail ? h('span', { class: 'rc-fail' }, `${fail}✗`) : null,
-            blk ? h('span', { class: 'rc-block' }, `${blk}⛔`) : null,
-            h('span', { class: 'rc-total' }, `/${total}`)),
-        ) : null),
-      h('div', { class: 'run-card-actions' },
-        h('button', {
-          class: 'btn btn-icon btn-sm run-card-del',
-          title: live ? '运行中无法删除，请先取消' : '删除此运行（不可恢复）',
-          disabled: live,
-          onclick: (e) => { e.stopPropagation(); confirmDeleteRun(r); },
-        }, '✕')),
-    );
-  });
-}
-
-/* ---------- 选中运行 & 监视 ---------- */
-
-async function selectRun(dir) {
-  if (!dir) return;
-  if (S.selectedDir && S.selectedDir !== dir) {
-    try { await window.studio.unwatchRun(S.selectedDir); } catch { /* 忽略 */ }
-  }
-  S.selectedDir = dir;
-  S.run = null; S.tasks = []; S.loadErrors = null;
-  S.events = []; S.eventsSkipped = 0; S.eventFilter = new Set(EVENT_TYPES); S.eventSearch = ''; S.autoScroll = true;
-  S.artifacts = null; S.artifactSel = null;
-  S.tab = 'board';
-  renderRunsView();
-
-  // 先同步读一次快照，立刻有内容；再启动轮询（tail 模式带出历史事件）
-  try {
-    const snap = await callIpc(window.studio.loadRun, dir);
-    S.run = snap.run; S.tasks = snap.tasks || []; S.loadErrors = snap.errors;
-    // 智能配色：运行详情视图强调色跟随运行状态
-    if (S.run && S.run.status) applyStateAccent(S.run.status);
-  } catch { S.loadErrors = { run: '读取运行数据失败' }; }
-  $('#runs-view').classList.add('hidden');
-  $('#empty-view').classList.add('hidden');
-  $('#run-view').classList.remove('hidden');
-  renderRunView();
-  try { await window.studio.watchRun(dir, true); } catch (e) { toast('error', '启动实时监视失败', String(e && e.message || e)); }
-}
-
-function goBackToList() {
-  if (S.selectedDir) {
-    try { window.studio.unwatchRun(S.selectedDir); } catch { /* 忽略 */ }
-  }
-  S.selectedDir = null;
-  S.run = null; S.tasks = []; S.events = [];
-  // 恢复用户选择的配色
-  applyTheme(document.documentElement.dataset.theme, S.settings.accent || 'orange');
-  $('#run-view').classList.add('hidden');
-  $('#empty-view').classList.add('hidden');
-  $('#runs-view').classList.remove('hidden');
-  renderRunsView();
-  // 重置图标栏选中态
-  document.querySelectorAll('.rail-item[data-view]').forEach((b) => b.classList.toggle('active', b.dataset.view === 'runs'));
-}
-
-function wireWatchPush() {
-  window.studio.on('watch:ledger', (p) => {
-    if (p.dir !== S.selectedDir) return;
-    window.__st.ledgerBatches += 1;
-    if (p.initial && p.skipped) S.eventsSkipped = p.skipped;
-    S.events.push(...p.events);
-    if (S.events.length > 3000) S.events = S.events.slice(S.events.length - 2600);
-    if (S.tab === 'events') renderEventList();
-    if (S.tab === 'charts') renderCharts();
-  });
-  window.studio.on('watch:snapshot', (p) => {
-    if (p.dir !== S.selectedDir) return;
-    window.__st.snapshots += 1;
-    const prevStatus = S.run && S.run.status;
-    if (p.run) S.run = p.run;
-    if (p.tasks) S.tasks = p.tasks;
-    if (p.errors) S.loadErrors = p.errors;
-    // 状态变化时更新智能配色
-    if (p.run && p.run.status && prevStatus !== p.run.status) applyStateAccent(p.run.status);
-    renderRunView();
-    const now = p.run && p.run.status;
-    if (prevStatus && prevStatus !== now && FINISHED_STATUSES.has(now) && !FINISHED_STATUSES.has(prevStatus)) {
-      refreshRuns();
-      openReportModal();
-      toast(now === 'completed' ? 'success' : 'error', `运行结束：${RUN_META[now] ? RUN_META[now].label : now}`, (S.run && S.run.project_goal ? trunc(S.run.project_goal, 60) : ''));
-    }
-  });
-}
-
-/* ---------- 运行主视图 ---------- */
-
-function renderRunView() {
-  const root = $('#run-view');
-  const scroll = root.scrollTop;
-  root.innerHTML = '';
-  if (S.loadErrors && !S.run) {
-    root.appendChild(h('div', { class: 'error-banner' },
-      h('h4', {}, '无法读取这次运行'),
-      h('p', {}, S.loadErrors.run || S.loadErrors.tasks || '未知错误'),
-      h('button', { class: 'btn', onclick: () => selectRun(S.selectedDir) }, '重试'),
-      h('button', { class: 'btn', onclick: () => window.studio.openPath(S.selectedDir) }, '打开目录'),
-    ));
-    return;
-  }
-  const run = S.run || {};
-  const tasks = S.tasks || [];
-  const st = RUN_META[run.status] || RUN_META.unknown;
-  const stats = run.stats || {};
-  const derived = tasks.length ? {
-    total: tasks.length,
-    succeeded: tasks.filter((t) => t.status === 'succeeded').length,
-    failed: tasks.filter((t) => t.status === 'failed').length,
-    blocked: tasks.filter((t) => t.status === 'blocked').length,
-    skipped: tasks.filter((t) => t.status === 'skipped').length,
-  } : null;
-  const live = run.status === 'running';
-  const stale = live && isStale(run) && !S.procsByRunDir.has(S.selectedDir);
-  const counts = statusCounts(tasks);
-
-  // P0-3：预算状态（从 config_snapshot 读取上限，从 stats/事件读取当前用量）
-  const cfg = run.config_snapshot || {};
-  const maxCost = cfg.max_cost_usd;
-  const maxLlm = cfg.max_llm_calls;
-  const curCost = (stats && stats.total_cost_usd != null) ? stats.total_cost_usd
-    : (S.events || []).reduce((a, e) => a + ((e.event === 'llm_call' && e.data && e.data.estimated_cost_usd) || 0), 0);
-  const curLlm = (stats && stats.llm_calls != null) ? stats.llm_calls
-    : (S.events || []).filter((e) => e.event === 'llm_call').length;
-  const budgetExhausted = (S.events || []).some((e) => e.event === 'budget_exhausted');
-  const budgetBits = [];
-  if (maxCost != null) {
-    const pct = Math.min(100, (curCost / maxCost) * 100);
-    budgetBits.push(h('span', { class: `budget-chip${pct >= 90 ? ' warn' : ''}`, title: `成本上限 $${maxCost}` }, `$${curCost.toFixed(4)}/$${maxCost}`));
-  }
-  if (maxLlm != null) {
-    const pct = Math.min(100, (curLlm / maxLlm) * 100);
-    budgetBits.push(h('span', { class: `budget-chip${pct >= 90 ? ' warn' : ''}`, title: `LLM 调用上限 ${maxLlm}` }, `${curLlm}/${maxLlm} 次`));
-  }
-  if (budgetExhausted) budgetBits.push(h('span', { class: 'budget-chip err', title: '预算已耗尽，run 优雅收尾' }, '预算耗尽'));
-
-  // 顶部状态比例缝
-  const seam = h('div', { id: 'live-seam' });
-  for (const k of STATUS_ORDER) {
-    if (counts[k]) seam.appendChild(h('i', { style: `width:${(counts[k] / Math.max(1, tasks.length)) * 100}%;background:${STATUS_META[k].color}` }));
-  }
-  root.appendChild(seam);
-
-  // 头部
-  const actions = [];
-  if (live && S.procsByRunDir.has(S.selectedDir)) {
-    actions.push(h('button', { class: 'btn btn-danger', id: 'btn-cancel-run', onclick: cancelSelected }, '取消运行'));
-  } else if (live && stale) {
-    actions.push(h('button', { class: 'btn', onclick: resumeSelected }, '恢复运行'));
-    actions.push(h('button', { class: 'btn', id: 'btn-cancel-run', onclick: cancelSelected }, '标记取消'));
-  } else if (['interrupted', 'failed', 'cancelled'].includes(run.status)) {
-    actions.push(h('button', { class: 'btn', onclick: resumeSelected }, '恢复运行'));
-  }
-  if (FINISHED_STATUSES.has(run.status)) actions.push(h('button', { class: 'btn', onclick: () => openReportModal() }, '结束报告'));
-  actions.push(h('button', { class: 'btn', onclick: () => window.studio.openPath(S.selectedDir) }, '打开目录'));
-  actions.push(h('button', { class: 'btn', onclick: exportArtifactsNow }, '导出产物'));
-
-  root.appendChild(h('div', { class: 'run-header' },
-    h('div', { class: 'run-header-main' },
-      h('div', { class: 'run-header-top' },
-        h('button', { class: 'btn btn-icon btn-back', onclick: goBackToList, title: '返回运行列表', 'aria-label': '返回' },
-          h('svg', { width: '16', height: '16', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' },
-            h('path', { d: 'M19 12H5' }),
-            h('path', { d: 'M12 19l-7-7 7-7' }))),
-        h('span', { class: `status-chip big${live ? ' live' : ''}`, style: `--chip-color:${st.color}` }, st.label),
-        h('span', { class: 'run-sub', style: 'display:inline-flex;margin-left:10px;vertical-align:middle' },
-          h('span', { class: 'run-id' }, run.run_id || '')),
-        stale ? h('span', { class: 'warn-banner', style: 'display:inline-block;margin-left:10px;padding:2px 10px' }, '长时间无更新，疑似已中断') : null,
-      ),
-      h('div', { class: 'run-goal-full' }, run.project_goal || '（无目标）'),
-      h('div', { class: 'run-sub' },
-        run.group ? h('span', {}, `${run.group}`) : null,
-        h('span', {}, `创建 ${fmtDateTime(run.created_at)}`),
-        h('span', { class: 'sep' }, '·'),
-        h('span', { id: 'elapsed-cell' }, live ? '计时中…' : `更新 ${fmtDateTime(run.updated_at)}`),
-        budgetBits.length ? h('span', { class: 'sep' }, '·') : null,
-        ...budgetBits)),
-    h('div', { class: 'run-actions' }, actions),
-  ));
-
-  // 统计行（运行结束后与 run.json stats 逐项一致；早期无 stats 时用任务派生值）
-  const total = stats.total_tasks != null ? stats.total_tasks : (derived ? derived.total : 0);
-  const ok = stats.succeeded != null ? stats.succeeded : (derived ? derived.succeeded : 0);
-  const bad = stats.failed != null ? stats.failed : (derived ? derived.failed : 0);
-  const blk = stats.blocked != null ? stats.blocked : (derived ? derived.blocked : 0);
-  const skip = stats.skipped != null ? stats.skipped : (derived ? derived.skipped : 0);
-  const durMs = live ? null : runDurationMs(run, tasks);
-  const cards = [
-    statCard('任务', `${ok}/${total}`, `${skip} 跳过 · ${blk} 阻塞`, { pct: total ? ok / total : 0, color: STATUS_META.succeeded.color }),
-    statCard('失败', String(bad), bad ? '需要关注' : '', { pct: total ? bad / total : 0, color: STATUS_META.failed.color, valueColor: bad ? STATUS_META.failed.color : null }),
-    statCard('LLM 调用', fmtTokens(stats.llm_calls), stats.estimated_cost_usd != null ? `成本 ${fmtCost(stats.estimated_cost_usd)}` : '', null),
-    statCard('Tokens', fmtTokens((stats.prompt_tokens || 0) + (stats.completion_tokens || 0)), `提示 ${fmtTokens(stats.prompt_tokens || 0)} · 补全 ${fmtTokens(stats.completion_tokens || 0)}`, null),
-    statCard('成本（估算）', fmtCost(stats.estimated_cost_usd != null ? stats.estimated_cost_usd : null), '', null),
-    statCard('耗时', live ? '计时中…' : fmtDur(durMs), live ? '' : (stats.finished_at ? `结束 ${fmtDateTime(stats.finished_at)}` : ''), null),
-  ];
-  const statsRow = h('div', { class: 'stats-row' }, cards);
-  root.appendChild(statsRow);
-
-  // 页签
-  const tabs = h('div', { class: 'tabs' },
-    tabBtn('board', '看板', tasks.length ? String(tasks.length) : ''),
-    tabBtn('events', '事件流', S.events.length ? String(S.events.length) : ''),
-    tabBtn('artifacts', '产物'),
-    tabBtn('charts', '图表'),
-  );
-  root.appendChild(tabs);
-
-  const pane = h('div', { id: 'tab-pane' });
-  root.appendChild(pane);
-  renderTabPane();
-  root.scrollTop = scroll;
-}
-
-function statCard(label, value, sub, bar) {
-  return h('div', { class: 'stat-card' },
-    h('div', { class: 'stat-label' }, label),
-    h('div', { class: 'stat-value', style: bar && bar.valueColor ? `color:${bar.valueColor}` : '' }, value),
-    sub ? h('div', { class: 'stat-sub' }, sub) : null,
-    bar && bar.pct ? h('div', { class: 'stat-bar' }, h('i', { style: `width:${Math.min(100, bar.pct * 100)}%;background:${bar.color}` })) : null,
-  );
-}
-
-function tabBtn(key, label, badge) {
-  return h('button', {
-    class: `tab${S.tab === key ? ' active' : ''}`, 'data-tab': key,
-    onclick: () => { S.tab = key; $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === key)); renderTabPane(); },
-  }, label, badge ? h('span', { class: 'tab-badge' }, badge) : null);
-}
-
-function renderTabPane() {
-  const pane = $('#tab-pane');
-  if (!pane) return;
-  pane.innerHTML = '';
-  if (S.tab === 'board') renderBoard(pane);
-  else if (S.tab === 'events') { renderEventsToolbar(pane); renderEventList(pane); }
-  else if (S.tab === 'artifacts') { renderArtifacts(pane); }
-  else if (S.tab === 'charts') renderCharts(pane);
-}
-
-function isStale(run) {
-  const u = parseTs(run.updated_at);
-  return !u || (Date.now() - u.getTime() > STALE_MS);
-}
-
-function tickElapsed() {
-  const cell = $('#elapsed-cell');
-  if (!cell || !S.run || S.run.status !== 'running') return;
-  const a = parseTs(S.run.stats && S.run.stats.started_at || S.run.created_at);
-  if (a) cell.textContent = `已运行 ${fmtDur(Date.now() - a.getTime())}`;
-}
-
-/* ---------- 看板 ---------- */
-
-function renderBoard(pane) {
-  const wrap = h('div', { class: 'board-wrap' });
-  const prevLeft = wrap.scrollLeft;
-  const board = h('div', { class: 'board' });
-  const tasks = S.tasks || [];
-  for (const k of STATUS_ORDER) {
-    const meta = STATUS_META[k];
-    const items = tasks.filter((t) => (t.status || 'pending') === k);
-    const col = h('div', { class: 'board-col', 'data-status': k },
-      h('div', { class: 'board-col-head', style: `border-bottom-color:${meta.color}` },
-        h('span', { class: 'board-col-title', style: `color:${meta.color}` }, meta.label),
-        h('span', { class: 'board-col-count' }, items.length || '')),
-      h('div', { class: 'board-col-body' },
-        items.length ? items.map((t) => taskCard(t)) : h('div', { class: 'board-col-empty' }, '—')));
-    board.appendChild(col);
-  }
-  wrap.appendChild(board);
-  pane.appendChild(wrap);
-  wrap.scrollLeft = prevLeft;
-}
-
-function taskCard(t) {
-  const meta = STATUS_META[t.status] || STATUS_META.unknown;
-  const rm = roleMeta(t.role);
-  const isLive = ['running', 'review', 'rework'].includes(t.status);
-  const lastReviews = (t.reviews || []).slice(-3);
-  const okN = lastReviews.filter((r) => r.verdict === 'approve').length;
-  const badN = lastReviews.filter((r) => r.verdict === 'reject').length;
-  const dur = t.result && t.result.duration_ms;
-  const pri = t.priority || 5;
-  const priClass = pri <= 3 ? 'pri-high' : pri >= 7 ? 'pri-low' : 'pri-normal';
-  return h('div', {
-    class: `task-card${isLive ? ' is-live' : ''}`,
-    'data-task': t.id, style: `--card-color:${meta.color};border-left-color:${meta.color}`,
-    onclick: () => openTaskDrawer(t.id),
-  },
-    h('div', { class: 'task-id-row' },
-      h('span', { class: 'task-id', style: `color:${meta.color}` }, t.id),
-      h('span', { class: `pri-badge ${priClass}`, title: `优先级 ${pri}/9（数字小者优先）` }, `P${pri}`),
-      h('span', { class: 'role-chip', style: `--chip-color:${rm.color}` }, rm.label)),
-    h('div', { class: 'task-title' }, t.title || '（无标题）'),
-    h('div', { class: 'task-meta' },
-      h('span', { title: '尝试次数/上限' }, `⭯${t.attempts || 0}/${t.max_attempts || '—'}`),
-      (t.rework_count || 0) ? h('span', { title: '返工次数' }, `↺${t.rework_count}`) : null,
-      dur != null ? h('span', {}, fmtDur(dur)) : null,
-      lastReviews.length ? h('span', { title: '最近评审' }, `${okN ? `✓${okN}` : ''}${okN && badN ? ' ' : ''}${badN ? `✗${badN}` : ''}`) : null,
-    ));
-}
-
-/* ---------- 任务详情抽屉 ---------- */
-
-function closeDrawer() {
-  $('#drawer').classList.add('hidden');
-  $('#drawer-mask').classList.add('hidden');
-}
-
-function openTaskDrawer(taskId) {
-  const t = (S.tasks || []).find((x) => x.id === taskId);
-  if (!t) return;
-  const meta = STATUS_META[t.status] || STATUS_META.unknown;
-  const rm = roleMeta(t.role);
-  const d = $('#drawer');
-  d.innerHTML = '';
-  d.appendChild(h('div', { class: 'drawer-head' },
-    h('div', { class: 'drawer-title' },
-      h('span', { class: 'task-id', style: `color:${meta.color};font-size:13px` }, t.id + ' '),
-      h('span', {}, t.title || ''),
-      h('div', { class: 'drawer-sub' },
-        h('span', { class: 'status-chip', style: `--chip-color:${meta.color}` }, meta.label),
-        h('span', { class: 'role-chip', style: `--chip-color:${rm.color}` }, rm.label),
-        h('span', { class: 'run-id' }, `尝试 ${t.attempts || 0}/${t.max_attempts || '—'} · 返工 ${t.rework_count || 0}/${t.max_reworks || '—'}`))),
-    h('button', { class: 'btn btn-icon drawer-close', id: 'drawer-close', onclick: closeDrawer, title: '关闭' }, '✕')));
-
-  const body = h('div', { class: 'drawer-body' });
-  const sec = (title, ...kids) => body.appendChild(h('div', { class: 'dsection' }, h('h4', {}, title), ...kids));
-  const none = () => h('div', { class: 'dtext dim' }, '（空）');
-
-  if (t.brief) sec('一句话摘要', h('div', { class: 'dtext dim' }, t.brief));
-  sec('描述', t.description ? h('div', { class: 'dtext' }, t.description) : none());
-  sec('验收标准', (t.acceptance_criteria || []).length
-    ? h('ul', { class: 'crit-list' }, t.acceptance_criteria.map((c) => h('li', {}, c))) : none());
-  if ((t.dependencies || []).length) sec('依赖', h('div', { class: 'dtext dim' }, t.dependencies.join('、')));
-
-  sec('执行配置',
-    h('div', { class: 'cfg-grid' },
-      h('div', { class: 'cfg-item' }, h('span', { class: 'cfg-label' }, '优先级'), h('span', {}, `P${t.priority || 5}/9`)),
-      h('div', { class: 'cfg-item' }, h('span', { class: 'cfg-label' }, '单次超时'), h('span', {}, `${t.timeout_seconds || 300}s`)),
-      h('div', { class: 'cfg-item' }, h('span', { class: 'cfg-label' }, '执行重试'), h('span', {}, `${t.max_attempts || 3} 次`)),
-      h('div', { class: 'cfg-item' }, h('span', { class: 'cfg-label' }, '返工上限'), h('span', {}, `${t.max_reworks || 2} 轮`))));
-
-  if ((t.deliverables || []).length) {
-    sec('交付物',
-      h('table', { class: 'dtable' },
-        h('tr', {}, h('th', {}, '路径'), h('th', {}, '类型'), h('th', {}, '必选')),
-        t.deliverables.map((dv) => h('tr', {},
-          h('td', { class: 'mono' }, dv.path), h('td', {}, dv.kind || '—'),
-          h('td', {}, dv.required ? '是' : '否')))));
-  }
-
-  if ((t.reviews || []).length) {
-    sec('评审记录', t.reviews.map((r) => {
-      const vCls = r.verdict === 'approve' ? 'verdict-approve' : (r.verdict === 'reject' ? 'verdict-reject' : 'verdict-warn');
-      return h('div', { class: 'gate-item' },
-        h('div', { class: 'gate-item-head' },
-          h('span', { class: 'verdict-chip ' + vCls }, r.verdict || '—'),
-          h('span', { class: 'gate-layer' }, `${r.layer || ''} · 第 ${r.round || '?'} 轮`),
-          r.score != null ? h('span', { class: 'gate-layer' }, `分数 ${r.score}`) : null,
-          h('span', { class: 'gate-layer', style: 'margin-left:auto' }, r.reviewer || '')),
-        (r.issues || []).length ? h('ul', { class: 'gate-issues' }, r.issues.map((i) => h('li', {}, typeof i === 'string' ? i : JSON.stringify(i)))) : null,
-        (r.fix_hints || []).length ? h('ul', { class: 'gate-issues' }, r.fix_hints.map((i) => h('li', {}, `建议：${typeof i === 'string' ? i : JSON.stringify(i)}`))) : null);
-    }));
-  }
-
-  if (t.result && (t.result.summary || (t.result.artifacts || []).length)) {
-    sec('执行结果',
-      t.result.summary ? h('div', { class: 'dtext' }, t.result.summary) : null,
-      t.result.duration_ms != null ? h('div', { class: 'dtext dim', style: 'margin-top:4px' }, `耗时 ${fmtDur(t.result.duration_ms)}`) : null,
-      (t.result.artifacts || []).length ? h('table', { class: 'dtable', style: 'margin-top:8px' },
-        h('tr', {}, h('th', {}, '产物'), h('th', {}, '大小')),
-        t.result.artifacts.map((a) => h('tr', {},
-          h('td', { class: 'mono' }, h('a', {
-            href: '#', style: 'color:var(--accent);text-decoration:none',
-            onclick: (e) => { e.preventDefault(); previewArtifactByPath(a.path); },
-          }, a.path)),
-          h('td', { class: 'mono' }, fmtBytes(a.size_bytes))))) : null);
-  }
-
-  if ((t.status_history || []).length) {
-    sec('状态历史', t.status_history.map((s) => h('div', { class: 'hist-item' },
-      h('span', { class: 'hist-time' }, fmtDateTime(s.at)),
-      h('span', { class: 'hist-flow' },
-        h('span', {}, STATUS_META[s.from_status] ? STATUS_META[s.from_status].label : s.from_status),
-        h('span', { class: 'arrow' }, ' → '),
-        h('span', {}, STATUS_META[s.to_status] ? STATUS_META[s.to_status].label : s.to_status)),
-      s.reason ? h('span', { class: 'hist-reason' }, s.reason) : null)));
-  }
-
-  d.appendChild(body);
-  $('#drawer-mask').classList.remove('hidden');
-  d.classList.remove('hidden');
-  $('#drawer-close').focus();
-}
-
-$('#drawer-mask').addEventListener('click', closeDrawer);
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') { closeDrawer(); closeModal(); }
-});
-
-/* ---------- 事件流 ---------- */
-
-function renderEventsToolbar(pane) {
-  const chips = EVENT_TYPES.map((t) => {
-    const m = EVENT_META[t];
-    return h('button', {
-      class: `fchip${S.eventFilter.has(t) ? ' on' : ''}`, 'data-ev': t,
-      style: `--ev-color:${m.color}`,
-      onclick: (e) => {
-        if (S.eventFilter.has(t)) S.eventFilter.delete(t); else S.eventFilter.add(t);
-        e.currentTarget.classList.toggle('on');
-        renderEventList();
-      },
-    }, h('span', { class: 'fdot' }), m.label);
-  });
-  const bar = h('div', { class: 'events-toolbar' },
-    h('div', { class: 'filter-chips' }, chips),
-    h('div', { class: 'events-search' },
-      h('input', { type: 'search', placeholder: '搜索事件内容…', value: S.eventSearch,
-        oninput: (e) => { S.eventSearch = e.target.value.trim().toLowerCase(); renderEventList(); } })),
-    h('label', { class: 'autoscroll-toggle' },
-      h('input', { type: 'checkbox', checked: S.autoScroll, onchange: (e) => { S.autoScroll = e.target.checked; } }), '自动滚动'),
-  );
-  (pane || $('#tab-pane')).appendChild(bar);
-}
-
-function eventSummary(ev) {
-  const d = ev.data || {};
-  switch (ev.event) {
-    case 'run_started': return `目标：${trunc(d.goal || '', 90)}`;
-    case 'plan_created': return `计划生成：${d.task_count ?? '?'} 个任务（${(d.roles || []).join('、') || '?'}）`;
-    case 'plan_rejected': return `第 ${d.attempt ?? '?'} 次计划被驳回：${trunc((d.errors || [])[0] || '', 90)}`;
-    case 'task_started': return `${d.task_id} 开始执行（${roleMeta(d.role).label}，第 ${d.attempt ?? 1} 次尝试）`;
-    case 'task_finished': return `${d.task_id} 执行完成，耗时 ${fmtDur(d.duration_ms)}`;
-    case 'task_transition': return `${d.task_id} ${STATUS_META[d.from] ? STATUS_META[d.from].label : d.from} → ${STATUS_META[d.to] ? STATUS_META[d.to].label : d.to}（${d.reason || ''}）`;
-    case 'task_notes': return `${d.task_id} 备注：${trunc(d.notes || '', 90)}`;
-    case 'gate_result': return `${d.task_id} 门禁 ${d.layer} 第 ${d.round} 轮：${d.verdict}${d.score != null ? `（分数 ${d.score}）` : ''}${(d.issues || []).length ? `，${d.issues.length} 个问题` : ''}`;
-    case 'artifact_written': return `写入产物 ${d.path}（${fmtBytes(d.size_bytes)}）`;
-    case 'llm_call': return `${roleMeta(d.role).label} 调用 ${d.model}：${fmtTokens(d.prompt_tokens)}+${fmtTokens(d.completion_tokens)} tokens，${fmtCost(d.estimated_cost_usd)}（${d.latency_ms}ms，${d.purpose || ''}）`;
-    case 'llm_degraded': return `${d.provider} 级别 ${d.from_level}→${d.to_level}：${trunc(d.reason || '', 80)}`;
-    case 'error': return `${d.where || '?'}：${d.exc_type || ''} ${trunc(d.message || '', 100)}`;
-    case 'run_finished': return `运行结束：${RUN_META[d.status] ? RUN_META[d.status].label : d.status}（退出码 ${d.exit_code ?? '?'}，耗时 ${fmtDur(d.duration_ms)}）`;
-    default: return JSON.stringify(d).slice(0, 120);
-  }
-}
-
-function renderEventList(pane) {
-  const host = pane || $('#tab-pane');
-  if (!host) return;
-  let list = $('.event-list', host);
-  if (!list) {
-    list = h('div', { class: 'event-list', id: 'event-list' });
-    host.appendChild(list);
-  }
-  const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
-  list.innerHTML = '';
-  if (S.eventsSkipped) list.appendChild(h('div', { class: 'event-note' }, `已省略更早的 ${S.eventsSkipped} 条事件（仅保留最近记录）`));
-  if (!S.events.length) {
-    list.appendChild(h('div', { class: 'event-note' }, S.run && S.run.status === 'running' ? '等待第一批事件…' : '该运行没有 ledger 事件。'));
-    return;
-  }
-  const q = S.eventSearch;
-  const shown = [];
-  for (let i = S.events.length - 1; i >= 0 && shown.length < 500; i--) {
-    const ev = S.events[i];
-    if (!S.eventFilter.has(ev.event)) continue;
-    if (q) {
-      const hay = `${ev.event} ${eventSummary(ev)}`.toLowerCase();
-      if (!hay.includes(q)) continue;
-    }
-    shown.push(ev);
-  }
-  if (shown.length >= 500) list.appendChild(h('div', { class: 'event-note' }, '最多显示最近 500 条，可按类型过滤'));
-  for (let i = shown.length - 1; i >= 0; i--) {
-    const ev = shown[i];
-    const m = EVENT_META[ev.event] || { color: '#9aa7bd', label: ev.event };
-    list.appendChild(h('div', { class: `event-row${ev.event === 'error' ? ' ev-error' : ''}` },
-      h('span', { class: 'event-ts' }, fmtClock(ev.ts)),
-      h('span', { class: 'event-type', style: `--ev-color:${m.color};color:${m.color}` }, m.label),
-      h('span', { class: 'event-text' }, eventSummary(ev))));
-  }
-  const badge = $$('.tab').find((t) => t.dataset.tab === 'events');
-  if (badge) badge.innerHTML = '事件流 ' + (S.events.length ? `<span class="tab-badge">${S.events.length}</span>` : '');
-  if (S.autoScroll || nearBottom) list.scrollTop = list.scrollHeight;
-}
-
-/* ---------- 产物 ---------- */
-
-async function renderArtifacts(pane) {
-  if (!S.artifacts) {
-    try { S.artifacts = await callIpc(window.studio.listArtifacts, S.selectedDir); }
-    catch { S.artifacts = { entries: [], manifestError: '读取产物列表失败' }; }
-  }
-  const { entries, manifestError } = S.artifacts;
-  const layout = h('div', { class: 'art-layout' });
-
-  const list = h('div', { class: 'art-list' });
-  if (manifestError) list.appendChild(h('div', { class: 'event-note', style: 'color:var(--st-running)' }, `⚠ ${manifestError}，已回退为目录扫描`));
-  if (!entries.length) list.appendChild(h('div', { class: 'art-placeholder' }, '没有产物。运行结束后 artifacts/ 会写入交付物。'));
-
-  const groups = new Map();
-  for (const e of entries) {
-    const top = e.path.includes('/') ? e.path.split('/')[0] : '';
-    if (!groups.has(top)) groups.set(top, []);
-    groups.get(top).push(e);
-  }
-  for (const [g, items] of groups) {
-    if (g) list.appendChild(h('div', { class: 'art-group-title' }, g + '/'));
-    for (const e of items) {
-      const rm = roleMeta(e.role);
-      list.appendChild(h('button', {
-        class: `art-item${S.artifactSel === e.path ? ' active' : ''}`, 'data-path': e.path,
-        onclick: () => previewArtifact(e),
-      },
-        h('span', { class: 'art-path', title: e.path }, e.path.split('/').pop()),
-        e.role ? h('span', { class: 'role-chip', style: `--chip-color:${rm.color}` }, rm.label) : null,
-        h('span', { class: 'art-size' }, fmtBytes(e.sizeBytes)),
-        e.exists ? null : h('span', { class: 'art-missing', title: '文件缺失' }, '缺失')));
-    }
-  }
-
-  const preview = h('div', { class: 'art-preview', id: 'art-preview' },
-    h('div', { class: 'art-placeholder', id: 'art-placeholder' }, '选择左侧文件预览内容'));
-  layout.appendChild(list);
-  layout.appendChild(preview);
-  (pane || $('#tab-pane')).appendChild(layout);
-  // 快照重渲染后恢复正在预览的产物
-  if (S.artifactSel) {
-    const cur = entries.find((x) => x.path === S.artifactSel);
-    if (cur) previewArtifact(cur);
-  }
-}
-
-async function previewArtifact(e) {
-  S.artifactSel = e.path;
-  $$('.art-item').forEach((n) => n.classList.toggle('active', n.dataset.path === e.path));
-  const pv = $('#art-preview');
-  if (!pv) return;
-  pv.innerHTML = '';
-  try {
-    const r = await callIpc(window.studio.readArtifact, S.selectedDir, e.path);
-    if (r.binary) {
-      pv.appendChild(h('div', { class: 'art-preview-head' },
-        h('span', { class: 'art-preview-path' }, e.path),
-        h('span', { class: 'art-size' }, fmtBytes(r.sizeBytes)),
-        h('button', { class: 'btn btn-sm', onclick: () => revealArtifact(e.path) }, '在资源管理器中显示')));
-      pv.appendChild(h('div', { class: 'art-placeholder' }, '二进制文件，不支持文本预览'));
-      return;
-    }
-    pv.appendChild(h('div', { class: 'art-preview-head' },
-      h('span', { class: 'art-preview-path', title: e.path }, `artifacts/${e.path}`),
-      h('span', { class: 'art-size' }, `${fmtBytes(r.sizeBytes)}${r.truncated ? '（超过 2MB，已截断）' : ''}`),
-      h('button', {
-        class: 'btn btn-sm', onclick: async (ev) => {
-          try { await navigator.clipboard.writeText(r.content); ev.target.textContent = '已复制'; setTimeout(() => { ev.target.textContent = '复制'; }, 1500); } catch { toast('error', '复制失败', '剪贴板不可用'); }
-        },
-      }, '复制'),
-      h('button', { class: 'btn btn-sm', onclick: () => revealArtifact(e.path) }, '打开位置')));
-    const pre = h('pre', { class: 'art-preview-body' }, r.content);
-    pv.appendChild(pre);
-  } catch (err) {
-    pv.appendChild(h('div', { class: 'art-placeholder' }, `无法读取：${trunc(String(err && err.message || err), 120)}`));
-  }
-}
-
-function revealArtifact(relPath) {
-  const full = `${S.selectedDir}\\artifacts\\${relPath}`.replace(/\//g, '\\');
-  window.studio.revealFile(full);
-}
-
-function previewArtifactByPath(relPath) {
-  closeDrawer();
-  S.tab = 'artifacts';
-  $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === 'artifacts'));
-  const pane = $('#tab-pane');
-  if (pane) { pane.innerHTML = ''; renderArtifacts(pane).then(() => { const item = $(`.art-item[data-path="${CSS.escape(relPath)}"]`); if (item) item.click(); }); }
-}
-
-async function exportArtifactsNow() {
-  try {
-    const r = await callIpc(window.studio.exportArtifacts, S.selectedDir);
-    if (r && r.saved) toast('success', '产物已导出', `${r.saved}（${fmtBytes(r.size)}）`);
-  } catch (e) {
-    toast('error', '导出失败', String(e && e.message || e));
-  }
-}
-
-/* ---------- 图表 ---------- */
-
-function llmStatsByRole() {
-  const m = new Map();
-  for (const ev of S.events) {
-    if (ev.event !== 'llm_call') continue;
-    const d = ev.data || {};
-    const cur = m.get(d.role) || { role: d.role, calls: 0, cost: 0, tokens: 0 };
-    cur.calls += 1;
-    cur.cost += Number(d.estimated_cost_usd || 0);
-    cur.tokens += Number(d.prompt_tokens || 0) + Number(d.completion_tokens || 0);
-    m.set(d.role, cur);
-  }
-  return [...m.values()].sort((a, b) => b.cost - a.cost);
-}
-
-function renderCharts(pane) {
-  const host = pane || $('#tab-pane');
-  if (!host) return;
-  host.innerHTML = '';
-  const rows = llmStatsByRole();
-  host.appendChild(h('div', { class: 'chart-block' },
-    h('h3', {}, '各角色 LLM 用量'),
-    S.eventsSkipped ? h('div', { class: 'form-hint', style: 'margin-bottom:10px' }, `仅基于已加载的最近 ${S.events.length} 条事件计算（更早 ${S.eventsSkipped} 条未加载）`) : null,
-    rows.length ? rows.map((r) => chartRow(r)) : h('div', { class: 'form-hint' }, '暂无 llm_call 事件。')));
-  const gates = S.events.filter((e) => e.event === 'gate_result');
-  if (gates.length) {
-    const appr = gates.filter((g) => g.data && g.data.verdict === 'approve').length;
-    const rej = gates.filter((g) => g.data && g.data.verdict === 'reject').length;
-    host.appendChild(h('div', { class: 'chart-block' },
-      h('h3', {}, '门禁裁决'),
-      h('div', { class: 'chart-bar-track', style: 'height:16px;display:flex' },
-        h('i', { class: 'chart-bar-fill', style: `width:${(appr / gates.length) * 100}%;background:var(--st-succeeded)` }),
-        h('i', { class: 'chart-bar-fill', style: `width:${(rej / gates.length) * 100}%;background:var(--st-failed)` })),
-      h('div', { class: 'form-hint', style: 'margin-top:8px' }, `通过 ${appr} 次 · 驳回 ${rej} 次（共 ${gates.length} 轮）`)));
-  }
-}
-
-function chartRow(r) {
-  const rm = roleMeta(r.role);
-  const maxCalls = Math.max(1, ...llmStatsByRole().map((x) => x.calls));
-  const maxCost = Math.max(0.0000001, ...llmStatsByRole().map((x) => x.cost));
-  return h('div', { class: 'chart-row' },
-    h('div', { class: 'chart-role-label' },
-      h('span', { class: 'role-chip', style: `--chip-color:${rm.color}` }, rm.label)),
-    h('div', { class: 'chart-bars' },
-      h('div', { class: 'chart-bar-track', title: `${r.calls} 次调用` },
-        h('i', { class: 'chart-bar-fill', style: `width:${(r.calls / maxCalls) * 100}%;background:${rm.color}` })),
-      h('div', { class: 'chart-bar-track', title: fmtCost(r.cost) },
-        h('i', { class: 'chart-bar-fill', style: `width:${(r.cost / maxCost) * 100}%;background:var(--accent)` }))),
-    h('div', { class: 'chart-value' }, `${r.calls} 次 · ${fmtCost(r.cost)}`));
-}
-
-/* ---------- 子进程：启动 / 取消 / 恢复 ---------- */
-
-function wireProcPush() {
-  window.studio.on('proc:log', (p) => {
-    const log = $('#nr-log');
-    if (log && S.activeProcKey === p.key) {
-      const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 30;
-      const span = h('span', { class: p.stream === 'err' ? 'err-line' : '' }, p.text);
-      log.appendChild(span);
-      while (log.childNodes.length > 900) log.removeChild(log.firstChild);
-      if (atBottom) log.scrollTop = log.scrollHeight;
-    }
-  });
-  window.studio.on('proc:run-dir', (p) => {
-    S.procsByRunDir.set(p.runDir, p.key);
-    if (S.activeProcKey === p.key) {
-      toast('success', '运行已建立', `run 目录：${p.runId}`);
-      refreshRuns();
-      selectRun(p.runDir);
-      const btn = $('#nr-goto');
-      if (btn) { btn.classList.remove('hidden'); }
-    }
-  });
-  window.studio.on('proc:exit', (p) => {
-    refreshRuns();
-    if (S.activeProcKey !== p.key) return;
-    const log = $('#nr-log');
-    if (log) log.appendChild(h('span', { class: 'err-line' }, `\n[进程退出：退出码 ${p.code}（${p.meaning}）]\n`));
-    const startBtn = $('#nr-start');
-    if (startBtn) {
-      startBtn.textContent = '重新启动';
-      startBtn.disabled = false;
-    }
-    const cancelBtn = $('#nr-cancel');
-    if (cancelBtn) cancelBtn.classList.add('hidden');
-  });
-  window.studio.on('proc:error', (p) => {
-    toast('error', 'CLI 进程异常', p.message);
-    const startBtn = $('#nr-start');
-    if (startBtn) { startBtn.disabled = false; startBtn.textContent = '启动'; }
-  });
-}
-
-async function refreshProcMap() {
-  try {
-    const list = await window.studio.listProcs();
-    S.procsByRunDir.clear();
-    for (const p of list) if (p.runDir) S.procsByRunDir.set(p.runDir, p.key);
-    if (S.run && S.run.status === 'running') {
-      // 进程状态可能影响“取消/恢复”按钮可见性，轻量刷新头部
-      const hasBtn = $('#btn-cancel-run');
-      const should = S.procsByRunDir.has(S.selectedDir) || isStale(S.run);
-      if (!!hasBtn !== should) renderRunView();
-    }
-  } catch { /* 忽略 */ }
-}
-
-async function cancelSelected() {
-  const key = S.procsByRunDir.get(S.selectedDir);
-  try {
-    if (key) {
-      await callIpc(window.studio.cancelRun, key);
-      toast('info', '已发送终止信号', 'CLI 进程已终止，正在补写取消状态…');
-    } else {
-      await callIpc(window.studio.cancelOffline, S.selectedDir);
-      toast('info', '已请求离线取消', '后台将把该 run 标记为 cancelled');
-    }
-    setTimeout(refreshRuns, 600);
-  } catch { /* callIpc 已提示 */ }
-}
-
-async function resumeSelected() {
-  try {
-    const r = await callIpc(window.studio.resumeRun, {
-      runDir: S.selectedDir,
-      mock: !!S.settings.defaultMock,
-      auto: !!S.settings.defaultAuto,
-    });
-    S.activeProcKey = r.key;
-    toast('success', '已发起恢复', `${S.run ? S.run.run_id : ''} 继续执行`);
-    selectRun(S.selectedDir);
-  } catch { /* callIpc 已提示 */ }
-}
-
-async function confirmDeleteRun(r) {
-  // P0-4：删除单个 run，不可恢复；running 状态按钮已禁用，这里双重守卫
-  if (r.status === 'running') {
-    toast('warn', '无法删除', '运行中的 run 请先取消');
-    return;
-  }
-  const runId = r.runId || r.dir;
-  const ok = window.confirm(`确认删除 run ${runId}？\n\n目标：${r.goal || '（无）'}\n状态：${r.status || 'unknown'}\n\n此操作不可恢复，整个 run 目录将被删除。`);
-  if (!ok) return;
-  try {
-    await callIpc(window.studio.deleteRun, r.dir);
-    toast('success', '已删除', `run ${runId} 已删除`);
-    if (S.selectedDir === r.dir) {
-      goBackToList();
-    }
-    refreshRuns();
-  } catch (e) {
-    toast('error', '删除失败', String(e && e.message || e));
-  }
-}
-
-/* ---------- 模态框架 ---------- */
-
-function closeModal() {
-  $('#modal').classList.add('hidden');
-  $('#modal-mask').classList.add('hidden');
-}
+function showModal(node){ const m=$('#modal'); m.innerHTML=''; m.appendChild(node); $('#modal-mask').classList.remove('hidden'); m.classList.remove('hidden'); }
+function closeModal(){ $('#modal').classList.add('hidden'); $('#modal-mask').classList.add('hidden'); }
 $('#modal-mask').addEventListener('click', closeModal);
-
-function showModal(node, kind) {
-  const m = $('#modal');
-  m.innerHTML = '';
-  m.dataset.kind = kind;
-  m.appendChild(node);
-  $('#modal-mask').classList.remove('hidden');
-  m.classList.remove('hidden');
+function confirmAction(title, message, onOk, okLabel) {
+  showModal(h('div',{},
+    h('h3',{class:'modal-title'},title),
+    h('div',{class:'confirm-text'},message),
+    h('div',{class:'modal-actions'},
+      h('button',{class:'btn',onclick:closeModal},'取消'),
+      h('button',{class:'btn btn-danger',onclick:()=>{closeModal();onOk();}},okLabel||'确认'))));
 }
 
-/* ---------- 新运行 ---------- */
+/* ============================================================
+   Mock 数据（对齐 reference-run 真实结构）
+   ============================================================ */
+// 生成 ledger 风格 ts："YYYY-MM-DD HH:MM:SS.ffffff"
+function nowTs(offsetMin) {
+  const d = new Date(Date.now() - (offsetMin||0)*60000);
+  const p = (x,n=2)=>String(x).padStart(n,'0');
+  const us = String(d.getMilliseconds()).padStart(3,'0')+'000';
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${us}`;
+}
+const RUN_ID = 'run-a7f3c2';
 
-function openNewRunModal() {
-  const s = S.settings || {};
-  const form = h('div', {},
-    h('h3', { class: 'modal-title' }, '启动新运行'),
-    h('div', { class: 'form-row' },
-      h('label', { for: 'nr-goal' }, '项目目标'),
-      h('textarea', { id: 'nr-goal', placeholder: '用一句话描述要交付的东西，例如：开发一个短链接生成服务，含 API、文档与测试…' }),
-      h('div', { class: 'form-hint' }, '将执行 python main.py run --goal …（需求拆解 → 代码生成 → 门禁审查 → 交付物产出）')),
-    h('div', { class: 'form-row form-checks' },
-      h('label', { class: 'form-check' }, h('input', { type: 'checkbox', id: 'nr-demo' }), '使用内置示例目标（--demo，Todo Web）'),
-      h('label', { class: 'form-check' }, h('input', { type: 'checkbox', id: 'nr-mock', checked: !!s.defaultMock }), '离线模式（--mock，无需 API Key）'),
-      h('label', { class: 'form-check' }, h('input', { type: 'checkbox', id: 'nr-auto', checked: !!s.defaultAuto }), '跳过人工闸门（--auto）')),
-    h('div', { class: 'form-row' },
-      h('label', { class: 'form-check' }, h('input', { type: 'checkbox', id: 'nr-slow' }), '慢速 mock（每次模拟调用延时 1.2s，便于观察实时进度）')),
-    h('div', { class: 'form-row' },
-      h('label', { for: 'nr-outdir' }, '输出目录'),
-      h('input', { type: 'text', id: 'nr-outdir', value: s.outputDir || '' }),
-      h('div', { class: 'form-hint' }, '运行产物写入该目录下的 <run_id>/ 子目录；GUI 始终附加 --no-live')),
-    h('div', { class: 'form-row form-row-inline' },
-      h('div', { class: 'form-field' },
-        h('label', { for: 'nr-max-cost' }, '成本上限 (USD)'),
-        h('input', { type: 'number', id: 'nr-max-cost', step: '0.01', min: '0', placeholder: '不限制' }),
-        h('div', { class: 'form-hint' }, '累计 LLM 成本超限则优雅收尾')),
-      h('div', { class: 'form-field' },
-        h('label', { for: 'nr-max-llm' }, 'LLM 调用上限'),
-        h('input', { type: 'number', id: 'nr-max-llm', step: '1', min: '0', placeholder: '不限制' }),
-        h('div', { class: 'form-hint' }, '累计调用次数超限则优雅收尾'))),
-    h('div', { class: 'form-hint err hidden', id: 'nr-error' }),
-    h('div', { class: 'modal-log hidden', id: 'nr-log' }),
-    h('div', { class: 'modal-actions' },
-      h('button', { class: 'btn btn-danger hidden', id: 'nr-cancel', onclick: async () => {
-        const key = S.activeProcKey;
-        if (key) { try { await callIpc(window.studio.cancelRun, key); } catch { /* 已提示 */ } }
-      } }, '终止'),
-      h('button', { class: 'btn hidden', id: 'nr-goto', onclick: () => closeModal() }, '转到看板'),
-      h('button', { class: 'btn', id: 'nr-close', onclick: () => closeModal() }, '关闭'),
-      h('button', { class: 'btn btn-primary', id: 'nr-start' }, '启动')),
-  );
-  showModal(form, 'new-run');
-
-  $('#nr-demo').addEventListener('change', (e) => { $('#nr-goal').disabled = e.target.checked; });
-  $('#nr-start').addEventListener('click', startNewRun);
+function buildMockRun() {
+  return {
+    run_id: RUN_ID,
+    dir: null,
+    project_goal: '开发一个高并发短链接生成服务：含 REST API、Redis 缓存、限流、部署流水线与完整文档',
+    status: 'running',          // RunStatus
+    phase: 'execution',         // planning/execution/delivery
+    provider: 'OpenAI',
+    model: 'gpt-4o',
+    budget_limit_usd: 1.0,
+    started_at: nowTs(12),
+    updated_at: nowTs(0),
+    config_snapshot: { default_model: 'gpt-4o', max_concurrency: 4, mock: false, max_cost_usd: 1.0 },
+    stats: {
+      started_at: nowTs(12), finished_at: null,
+      total_tasks: 14, succeeded: 4, failed: 0, blocked: 1, skipped: 0,
+      llm_calls: 87, prompt_tokens: 142300, completion_tokens: 38400, estimated_cost_usd: 0.3821,
+    },
+  };
 }
 
-async function startNewRun() {
-  const errBox = $('#nr-error');
-  const goal = $('#nr-goal').value.trim();
-  const demo = $('#nr-demo').checked;
-  const mock = $('#nr-mock').checked;
-  const auto = $('#nr-auto').checked;
-  const slow = $('#nr-slow').checked;
-  const outputDir = $('#nr-outdir').value.trim() || (S.settings && S.settings.outputDir);
-  const maxCost = $('#nr-max-cost').value.trim();
-  const maxLlmCalls = $('#nr-max-llm').value.trim();
-  if (!demo && !goal) {
-    errBox.textContent = '请填写项目目标，或勾选“使用内置示例目标”。';
-    errBox.classList.remove('hidden');
+// 任务：字段对齐 tasks.json。dependencies / attempts / rework_count / result(null) / reviews
+function T(id, title, role, deps, status, extra) {
+  return Object.assign({
+    id, title, description: '', brief: '', role, priority: 5,
+    dependencies: deps, attempts: 1, rework_count: 0,
+    max_attempts: 3, max_reworks: 2, timeout_seconds: 300,
+    status, result: null, reviews: [],
+    progress: status==='running' ? 45 : 0,
+    error: null,
+  }, extra||{});
+}
+function buildMockTasks() {
+  return [
+    T('T-01','需求收集与澄清','project_manager',[],'succeeded',{brief:'与干系人确认功能边界与 SLA', result:{summary:'已澄清并发目标 5000 QPS 与 99.9% SLA', duration_ms:420000, artifacts:[{path:'docs/PRD.md',size_bytes:8200}]}}),
+    T('T-02','产品原型定义','product_manager',[],'succeeded',{brief:'输出 API 草图与验收标准', result:{summary:'完成 API 草图与页面流程', duration_ms:510000, artifacts:[{path:'docs/prototype.md',size_bytes:5400}]}}),
+    T('T-03','系统架构设计','architect',['T-01'],'succeeded',{brief:'分层架构与技术选型', result:{summary:'确定分层架构与 Redis 缓存策略', duration_ms:680000, artifacts:[{path:'docs/arch.md',size_bytes:12000}]}}),
+    T('T-04','前端原型搭建','frontend_dev',['T-02'],'succeeded',{brief:'后台页面与落地页原型', result:{summary:'完成控制台与跳转落地页原型', duration_ms:590000, artifacts:[{path:'frontend/proto.html',size_bytes:6100}]}}),
+    T('T-05','数据模型设计','backend_dev',['T-03'],'running',{brief:'设计 url_map 表与 TTL 策略', progress:62}),
+    T('T-06','API 接口设计','architect',['T-03','T-05'],'blocked',{brief:'定义 RESTful 接口与错误码', description:'定义 RESTful 接口、错误码与鉴权方案。'}),
+    T('T-07','后端用户模块','backend_dev',['T-05','T-06'],'pending',{brief:'注册、API Key 与鉴权中间件'}),
+    T('T-08','后端短链模块','backend_dev',['T-05','T-06'],'pending',{brief:'短链生成、映射解析与统计'}),
+    T('T-09','前端页面实现','frontend_dev',['T-06','T-04'],'pending',{brief:'对接接口实现控制台与落地页'}),
+    T('T-10','测试用例编写','qa_engineer',['T-07','T-08'],'pending',{brief:'接口与端到端测试用例'}),
+    T('T-11','集成联调','backend_dev',['T-07','T-08','T-09'],'pending',{brief:'前后端打通完整链路'}),
+    T('T-12','部署流水线','devops_engineer',['T-11'],'pending',{brief:'CI/CD、容器化与灰度发布'}),
+    T('T-13','系统测试','qa_engineer',['T-11','T-10'],'pending',{brief:'压测、回归与安全扫描'}),
+    T('T-14','交付文档','technical_writer',['T-13','T-12'],'pending',{brief:'部署、API 与运维文档'}),
+  ];
+}
+
+function buildMockAgents() {
+  // agent status 派生自任务：queued/executing/reviewing/done
+  return {
+    project_manager:  { status:'done',      task:'空闲',     action:'已交付需求文档',   done:1, fail:0, model:'gpt-4o',      tokens:8200,  cost:0.021, updated:nowTs(10) },
+    product_manager:  { status:'done',      task:'空闲',     action:'已完成原型评审',   done:1, fail:0, model:'gpt-4o',      tokens:11400, cost:0.034, updated:nowTs(9) },
+    architect:        { status:'queued',    task:'T-06 API 接口设计', action:'等待 T-05 数据模型', done:1, fail:0, model:'gpt-4o', tokens:15600, cost:0.048, updated:nowTs(1) },
+    backend_dev:      { status:'executing', task:'T-05 数据模型设计', action:'正在建表与索引',   done:0, fail:0, model:'gpt-4o', tokens:9800, cost:0.029, updated:nowTs(0) },
+    frontend_dev:     { status:'done',      task:'空闲',     action:'等待接口契约',     done:1, fail:0, model:'gpt-4o', tokens:9800, cost:0.027, updated:nowTs(8) },
+    qa_engineer:      { status:'queued',    task:'空闲',     action:'等待可测构建',     done:0, fail:0, model:'gpt-4o-mini', tokens:0, cost:0, updated:nowTs(12) },
+    devops_engineer:  { status:'queued',    task:'空闲',     action:'等待联调产物',     done:0, fail:0, model:'gpt-4o-mini', tokens:0, cost:0, updated:nowTs(12) },
+    technical_writer: { status:'queued',    task:'空闲',     action:'等待交付物',       done:0, fail:0, model:'gpt-4o-mini', tokens:0, cost:0, updated:nowTs(12) },
+  };
+}
+
+// 三层门禁：layer static(G1)/llm(G2)/delivery(G3)。状态为 UI 派生聚合。
+function buildMockGates() {
+  return [
+    { id:'G1', layer:'static', name:'静态校验', status:'running', checks:{total:12, passed:8, failed:0}, duration_ms:null,
+      verdict:'正在运行 lint / 类型检查 / 依赖扫描', rework:true, need_human:false, task_ref:'T-07, T-08' },
+    { id:'G2', layer:'llm', name:'LLM 评审', status:'pending', checks:{total:8, passed:0, failed:0}, duration_ms:null,
+      verdict:'等待集成联调完成后触发', rework:true, need_human:true, task_ref:'T-11' },
+    { id:'G3', layer:'delivery', name:'交付确认', status:'pending', checks:{total:5, passed:0, failed:0}, duration_ms:null,
+      verdict:'等待系统测试通过后由人工确认', rework:false, need_human:true, task_ref:'T-14' },
+  ];
+}
+
+// ledger 事件：{ ts, run_id, event, data }
+function ev(tsOffset, event, data, taskId, role) {
+  return { ts: nowTs(tsOffset), run_id: RUN_ID, event, data: Object.assign(taskId?{task_id:taskId}:{}, role?{role}:{}, data||{}) };
+}
+function buildMockEvents() {
+  return [
+    ev(12,'run_started',{ goal:'短链接生成服务' }),
+    ev(11,'plan_created',{ task_count:14, roles:Object.keys(ROLE_META), planner_attempts:1 }),
+    ev(11,'plan_scored',{ total:0.81, coverage:0.8, specificity:0.85, dependency_quality:0.9, deliverable_clarity:0.8 }),
+    ev(10,'task_started',{ attempt:1 },'T-01','project_manager'),
+    ev(10,'task_finished',{ attempt:1, duration_ms:420000 },'T-01','project_manager'),
+    ev(9,'task_started',{ attempt:1 },'T-02','product_manager'),
+    ev(9,'task_finished',{ attempt:1, duration_ms:510000 },'T-02','product_manager'),
+    ev(7,'task_started',{ attempt:1 },'T-03','architect'),
+    ev(7,'task_finished',{ attempt:1, duration_ms:680000 },'T-03','architect'),
+    ev(6,'task_started',{ attempt:1 },'T-04','frontend_dev'),
+    ev(6,'task_finished',{ attempt:1, duration_ms:590000 },'T-04','frontend_dev'),
+    ev(3,'checkpoint_saved',{ reason:'周期检查点' }),
+    ev(2,'task_started',{ attempt:1 },'T-05','backend_dev'),
+    ev(1,'llm_failover',{ from:'OpenAI', to:'Anthropic', reason:'429 rate limit' }),
+    ev(0,'budget_warning',{ pct:38 }),
+  ];
+}
+
+function initMockData() {
+  S.dash = {
+    run: buildMockRun(), tasks: buildMockTasks(),
+    agents: buildMockAgents(), gates: buildMockGates(), events: buildMockEvents(),
+  };
+}
+
+/* ============================================================
+   DAG 布局（拓扑分层，用 dependencies 字段）
+   ============================================================ */
+function computeLayers(tasks) {
+  const byId = new Map(tasks.map(t=>[t.id,t]));
+  const layerOf = new Map(tasks.map(t=>[t.id,0]));
+  let changed=true, guard=0;
+  while (changed && guard++<50) {
+    changed=false;
+    for (const t of tasks) {
+      const deps=t.dependencies||[]; if(!deps.length) continue;
+      const up=Math.max(...deps.map(d=>layerOf.get(d)??0));
+      if (layerOf.get(t.id)!==up+1){ layerOf.set(t.id,up+1); changed=true; }
+    }
+  }
+  const layers=[];
+  for (const [id,l] of layerOf){ while(layers.length<=l) layers.push([]); layers[l].push(id); }
+  return { byId, layerOf, layers };
+}
+const NW=200, NH=78, COL_GAP=78, ROW_GAP=46;
+function layoutDAG(tasks) {
+  const { byId, layerOf, layers } = computeLayers(tasks);
+  const pos = new Map();
+  layers.forEach((ids,li)=>{ ids.sort((a,b)=>a.localeCompare(b)); ids.forEach((id,ri)=>pos.set(id,{x:li*(NW+COL_GAP), y:ri*(NH+ROW_GAP)})); });
+  const maxLayer=layers.length-1, maxRows=Math.max(...layers.map(l=>l.length));
+  return { byId, layers, pos, width:(maxLayer+1)*(NW+COL_GAP), height:maxRows*(NH+ROW_GAP) };
+}
+
+/* ============================================================
+   SVG DAG 渲染
+   ============================================================ */
+function renderDAG() {
+  const svg=$('#dag-svg'); if(!svg) return;
+  const tasks=S.dash.tasks; const L=layoutDAG(tasks);
+  svg.innerHTML='';
+  const pad=30, totalW=L.width+pad*2, totalH=L.height+pad*2;
+  svg.setAttribute('viewBox',`0 0 ${totalW} ${totalH}`);
+  const vp=s('g',{id:'dag-viewport', transform:`translate(${S.view.x} ${S.view.y}) scale(${S.view.zoom})`});
+
+  const runningIds=new Set(tasks.filter(t=>['running','review','rework'].includes(t.status)).map(t=>t.id));
+  const hotEdges=new Set();
+  for (const rid of runningIds){ const q=[rid],seen=new Set();
+    while(q.length){ const cur=q.shift(); if(seen.has(cur))continue; seen.add(cur);
+      const t=L.byId.get(cur); if(!t)continue;
+      for(const dep of (t.dependencies||[])){ hotEdges.add(dep+'->'+cur); q.push(dep); } } }
+
+  for (const t of tasks){
+    const to=L.pos.get(t.id); if(!to) continue;
+    for(const dep of (t.dependencies||[])){
+      const from=L.pos.get(dep); if(!from)continue;
+      const x1=from.x+NW/2, y1=from.y+NH, x2=to.x+NW/2, y2=to.y;
+      const hot=hotEdges.has(dep+'->'+t.id);
+      const up=L.byId.get(dep); const upOk=up&&(up.status==='succeeded');
+      vp.appendChild(s('path',{ d:`M ${x1} ${y1} C ${x1} ${y1+28}, ${x2} ${y2-28}, ${x2} ${y2}`,
+        fill:'none', stroke:hot?C.blue:(upOk?'rgba(60,60,67,0.35)':'rgba(60,60,67,0.18)'),
+        'stroke-width':hot?2.4:1.4,
+        'stroke-dasharray':up&&up.status==='failed'?'4 3':'none' }));
+    }
+  }
+  for (const t of tasks){
+    const p=L.pos.get(t.id); if(!p)continue;
+    const meta=STATUS_META[t.status]||STATUS_META.unknown;
+    const rm=roleMeta(t.role);
+    // 重试中视觉：attempts>1 且运行/就绪
+    const isRetry=(t.attempts||1)>1 && ['running','ready','rework'].includes(t.status);
+    const node=s('g',{class:'dag-node', transform:`translate(${p.x+pad} ${p.y+pad})`, 'data-task':t.id});
+    node.appendChild(s('rect',{class:'node-box', width:NW, height:NH, rx:6, fill:meta.fill, stroke:meta.color, 'stroke-width':t.status==='running'?2:1.4,
+      'stroke-dasharray':isRetry?'5 3':'none'}));
+    node.appendChild(s('rect',{x:0,y:0,width:4,height:NH,rx:2,fill:meta.color}));
+    node.appendChild(s('text',{x:12,y:20,'font-size':10,fill:'#8E8E93','font-family':'ui-monospace, Menlo, monospace'}, t.id));
+    node.appendChild(s('text',{x:12,y:38,'font-size':12,'font-weight':600,fill:'#1C1C1E'}, trunc(t.title,16)));
+    node.appendChild(s('circle',{cx:16,cy:56,r:4,fill:rm.color}));
+    node.appendChild(s('text',{x:24,y:60,'font-size':10,fill:'#6E6E73'}, rm.full));
+    node.appendChild(s('text',{x:NW-12,y:60,'font-size':10,fill:meta.color,'text-anchor':'end','font-weight':60}, isRetry?'重试中':meta.label));
+    if (t.result && t.result.duration_ms!=null)
+      node.appendChild(s('text',{x:NW-12,y:20,'font-size':9,fill:'#8E8E93','text-anchor':'end'}, fmtDur(t.result.duration_ms)));
+    if ((t.rework_count||0)>0)
+      node.appendChild(s('text',{x:NW-12,y:32,'font-size':9,fill:C.warn,'text-anchor':'end'},`返工 ${t.rework_count}`));
+    if (t.status==='running'){
+      node.appendChild(s('rect',{x:12,y:NH-8,width:NW-24,height:3,rx:1.5,fill:'rgba(60,60,67,0.12)'}));
+      node.appendChild(s('rect',{x:12,y:NH-8,width:(NW-24)*(t.progress||0)/100,height:3,rx:1.5,fill:C.blue}));
+    }
+    if (t.status==='failed' && t.error)
+      node.appendChild(s('text',{x:12,y:NH-10,'font-size':9,fill:C.error}, trunc(t.error,24)));
+    node.addEventListener('click',()=>openTaskDetail(t.id));
+    vp.appendChild(node);
+  }
+  svg.appendChild(vp);
+  wireDAGControls(svg, vp, totalW, totalH);
+}
+
+function wireDAGControls(svg, vp, totalW, totalH) {
+  const wrap=$('#dag-canvas-wrap');
+  const apply=()=>{ vp.setAttribute('transform',`translate(${S.view.x} ${S.view.y}) scale(${S.view.zoom})`);
+    const lbl=$('#dag-zoom-label'); if(lbl) lbl.textContent=Math.round(S.view.zoom*100)+'%'; };
+  const zoomAt=(factor,cx,cy)=>{ const nz=Math.max(0.3,Math.min(3,S.view.zoom*factor));
+    const rect=wrap.getBoundingClientRect(); const px=cx??rect.width/2, py=cy??rect.height/2;
+    const wx=(px-S.view.x)/S.view.zoom, wy=(py-S.view.y)/S.view.zoom;
+    S.view.zoom=nz; S.view.x=px-wx*nz; S.view.y=py-wy*nz; apply(); };
+  $('#dag-zoom-in').onclick=()=>zoomAt(1.2);
+  $('#dag-zoom-out').onclick=()=>zoomAt(1/1.2);
+  $('#dag-reset').onclick=()=>{ S.view.zoom=1;S.view.x=0;S.view.y=0;apply(); };
+  $('#dag-fit').onclick=()=>{ const rect=wrap.getBoundingClientRect();
+    S.view.zoom=Math.min(1.2,Math.max(0.3,Math.min(rect.width/totalW,rect.height/totalH)));
+    S.view.x=(rect.width-totalW*S.view.zoom)/2; S.view.y=(rect.height-totalH*S.view.zoom)/2; apply(); };
+  wrap.onwheel=(e)=>{ e.preventDefault(); const r=wrap.getBoundingClientRect();
+    zoomAt(e.deltaY<0?1.1:1/1.1, e.clientX-r.left, e.clientY-r.top); };
+  let dragging=false,sx=0,sy=0,ox=0,oy=0;
+  wrap.onmousedown=(e)=>{ if(e.target.closest('.dag-node'))return;
+    dragging=true; wrap.classList.add('panning'); sx=e.clientX;sy=e.clientY;ox=S.view.x;oy=S.view.y; };
+  window.addEventListener('mousemove',(e)=>{ if(!dragging)return; S.view.x=ox+(e.clientX-sx); S.view.y=oy+(e.clientY-sy); apply(); });
+  window.addEventListener('mouseup',()=>{ dragging=false; wrap.classList.remove('panning'); });
+}
+
+function renderDAGFallback() {
+  const host=$('#dag-list-fallback'); if(!host)return; host.innerHTML='';
+  const tasks=S.dash.tasks; const groups={};
+  for(const t of tasks){ (groups[t.status]=groups[t.status]||[]).push(t); }
+  const order=['running','review','rework','ready','blocked','pending','succeeded','failed','skipped'];
+  for(const st of order){ const items=groups[st]; if(!items||!items.length)continue;
+    const meta=STATUS_META[st];
+    host.appendChild(h('div',{class:'dag-group-title'},`${meta.label}（${items.length}）`));
+    for(const t of items){ const rm=roleMeta(t.role);
+      host.appendChild(h('div',{class:'dag-task-row',onclick:()=>openTaskDetail(t.id)},
+        h('span',{class:'dot',style:`background:${meta.color}`}),
+        h('span',{class:'mono',style:`color:${C.ter}`},t.id),
+        h('span',{},t.title),
+        h('span',{style:`color:${rm.color};margin-left:auto;font-size:11px`},rm.full)));
+    }
+  }
+}
+
+/* ============================================================
+   Dashboard 渲染
+   ============================================================ */
+function renderRunStatusBar() {
+  const host=$('#run-status-bar'); if(!host)return;
+  const run=S.dash.run; const meta=RUN_META[run.status]||RUN_META.idle;
+  const stats=run.stats||{};
+  const elapsed=run.status==='running'&&stats.started_at ? (Date.now()-parseTs(stats.started_at).getTime()) : null;
+  const cost=stats.estimated_cost_usd||0;
+  const actions=[];
+  if (run.status==='running'){
+    actions.push(h('button',{class:'btn',onclick:()=>confirmAction('暂停运行','暂停后所有 Agent 将在当前任务完成后停止，可随时恢复。',
+      ()=>{ run.status='paused'; toast('warning','已暂停','运行已挂起'); renderDashboard(); })},
+      iconPause(),'暂停'));
+    actions.push(h('button',{class:'btn btn-danger',onclick:()=>confirmAction('取消运行','取消后本次运行将被终止，未完成任务标记为失败。',
+      ()=>{ run.status='cancelled'; pushEvent('run_cancelled',{}); toast('error','已取消','运行已终止'); stopSim(); renderDashboard(); })},
+      iconX(),'取消'));
+  } else if (run.status==='paused'){
+    actions.push(h('button',{class:'btn btn-primary',onclick:()=>{ run.status='running'; pushEvent('human_approved',{note:'resume from checkpoint'}); toast('success','已恢复','从检查点继续运行'); startSim(); renderDashboard(); }},
+      iconPlay(),'恢复'));
+  }
+  actions.push(h('button',{class:'btn',onclick:()=>toast('info','重新运行','已用相同目标启动新运行')},'重新运行'));
+  actions.push(h('button',{class:'btn',onclick:()=>{ pushEvent('checkpoint_saved',{manual:true}); toast('success','检查点','已从最近检查点继续'); }},'从检查点继续'));
+
+  host.innerHTML='';
+  host.appendChild(h('div',{},
+    h('div',{class:'rs-top'},
+      h('span',{class:'rs-id',title:'点击复制 Run ID',onclick:(e)=>{navigator.clipboard.writeText(run.run_id);toast('success','已复制',run.run_id);}},run.run_id),
+      h('span',{class:'rs-goal',title:run.project_goal},run.project_goal),
+      h('div',{class:'rs-stage-seg'}, PHASES.map((p,i)=>h('button',{class:(['planning','execution','delivery'][i])===run.phase?'on':'',disabled:true},p))),
+      h('span',{class:`rs-status-chip ${meta.chip}`}, h('span',{class:`dot ${meta.dot}`}), meta.label)),
+    h('div',{class:'rs-stats'},
+      rsStat('已运行时间', elapsed!=null?fmtDur(elapsed):'—'),
+      rsStat('Token 用量', fmtTokens((stats.prompt_tokens||0)+(stats.completion_tokens||0))),
+      rsStat('估算费用', `${fmtCost(cost)} / $${run.budget_limit_usd}`),
+      rsStat('运行模型', run.model),
+      rsStat('任务进度', `${stats.succeeded||0}/${stats.total_tasks||0} 完成`),
+      rsStat('最近更新', relTime(run.updated_at))),
+    h('div',{class:'rs-actions'}, actions)));
+}
+function rsStat(k,v){ return h('div',{class:'rs-stat'},h('div',{class:'k'},k),h('div',{class:'v'},v)); }
+function iconPause(){ return h('svg',{width:13,height:13,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor','stroke-width':2,'stroke-linecap':'round'},h('path',{d:'M9 5v14M15 5v14'})); }
+function iconX(){ return h('svg',{width:13,height:13,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor','stroke-width':2},h('circle',{cx:12,cy:12,r:9}),h('path',{d:'M15 9l-6 6M9 9l6 6'})); }
+function iconPlay(){ return h('svg',{width:13,height:13,viewBox:'0 0 24 24',fill:'currentColor'},h('path',{d:'M7 5l12 7-12 7z'})); }
+
+function renderAgents() {
+  const grid=$('#agents-grid'); if(!grid)return; grid.innerHTML='';
+  const agents=S.dash.agents;
+  const order=['project_manager','product_manager','architect','backend_dev','frontend_dev','qa_engineer','devops_engineer','technical_writer'];
+  for(const rid of order){ const a=agents[rid]; const rm=roleMeta(rid);
+    const active=S.detail&&S.detail.kind==='agent'&&S.detail.id===rid;
+    grid.appendChild(h('div',{class:`agent-card${active?' active':''}`,onclick:()=>openAgentDetail(rid)},
+      h('div',{class:'ac-head'},
+        h('span',{class:'ac-dot',style:`background:${rm.color}`}),
+        h('span',{class:'ac-name'},rm.full),
+        h('span',{class:'ac-status'}, agentStatusLabel(a.status))),
+      h('div',{class:'ac-task',title:a.task},a.task),
+      h('div',{class:'ac-action',title:a.action},a.action),
+      h('div',{class:'ac-meta'},
+        metaCell('完成',String(a.done)), metaCell('失败/重试',String(a.fail)),
+        metaCell('模型',a.model), metaCell('Token',fmtTokens(a.tokens)),
+        metaCell('费用',fmtCost(a.cost)), metaCell('更新',relTime(a.updated)))));
+  }
+}
+function metaCell(k,v){ return h('div',{},h('div',{style:'color:#8E8E93'},k),h('b',{},v)); }
+function agentStatusLabel(st){ return {queued:'等待派发',executing:'执行中',reviewing:'评审中',done:'空闲'}[st]||st; }
+
+function renderGates() {
+  const grid=$('#gates-grid'); if(!grid)return; grid.innerHTML='';
+  for(const g of S.dash.gates){
+    const c={pending:'pending',running:'running',passed:'passed',failed:'failed',review:'review'}[g.status]||'pending';
+    const failDetail=g.status==='failed'?h('div',{class:'gate-fail-detail'},
+      h('div',{},h('span',{class:'lbl'},'失败原因：'),g.fail_reason||'关键检查未通过'),
+      h('div',{},h('span',{class:'lbl'},'影响范围：'),g.impact||g.task_ref),
+      h('div',{},h('span',{class:'lbl'},'建议处理：'),g.suggestion||'修复后重新提交'),
+      h('div',{},h('span',{class:'lbl'},'返回节点：'),g.return_task||'T-11'),
+      h('div',{},h('span',{class:'lbl'},'预计成本：'),g.extra_cost||'$0.05')):null;
+    grid.appendChild(h('div',{class:`gate-card ${g.status==='failed'?'failed':g.status==='running'?'running':''}`},
+      h('div',{class:'gate-head'},
+        h('span',{class:'gate-num'},g.id),
+        h('span',{class:'gate-name'},g.name),
+        h('span',{class:`gate-status-chip ${c}`},gateStatusLabel(g.status)),
+        h('div',{class:'gate-tags'},
+          g.rework?h('span',{class:'gate-tag'},'允许返工'):h('span',{class:'gate-tag'},'不可返工'),
+          g.need_human?h('span',{class:'gate-tag'},'需人工确认'):null)),
+      h('div',{class:'gate-summary'},
+        `检查项 ${g.checks.total} · 通过 ${g.checks.passed} · 失败 ${g.checks.failed}`+
+        (g.duration_ms!=null?` · 耗时 ${fmtDur(g.duration_ms)}`:'')+` — ${g.verdict}`),
+      failDetail,
+      h('div',{class:'gate-actions'},
+        h('button',{class:'btn btn-sm',onclick:()=>toast('info','门禁详情',`${g.id} 检查项：${g.checks.total} 项`)},'查看详情'),
+        h('button',{class:'btn btn-sm btn-primary',onclick:()=>acceptGate(g)},'接受结果'),
+        h('button',{class:'btn btn-sm btn-danger',onclick:()=>rejectGate(g)},'驳回并返工'),
+        h('button',{class:'btn btn-sm',onclick:()=>{g.status='running';g.checks={total:g.checks.total,passed:0,failed:0};toast('info','重试门禁',g.name+' 重新运行');renderDashboard();}},'重试门禁'),
+        h('button',{class:'btn btn-sm',onclick:()=>{const t=(g.task_ref||'').split(',')[0].trim();if(t)openTaskDetail(t);}},'相关任务'))));
+  }
+}
+function gateStatusLabel(st){ return {pending:'未开始',running:'进行中',passed:'通过',failed:'失败',review:'等待人工确认'}[st]||st; }
+function acceptGate(g){ g.status='passed'; g.checks={...g.checks,failed:0}; pushEvent('gate_result',{layer:g.layer,verdict:'approve',gate:g.id}); toast('success','门禁通过',g.name+' 已接受'); renderDashboard(); }
+function rejectGate(g){ confirmAction('驳回并返工',`将 ${g.name} 打回返工，预计增加约 $0.05 模型成本。`,
+  ()=>{ g.status='failed'; pushEvent('gate_result',{layer:g.layer,verdict:'reject',gate:g.id}); toast('warning','已驳回',g.name+' 已退回相关任务'); renderDashboard(); }); }
+
+function renderEvents() {
+  const list=$('#events-list'), filter=$('#events-filter'); if(!list)return;
+  const mainTypes=['run_started','plan_created','task_started','task_finished','gate_result','llm_failover','budget_warning','checkpoint_saved','artifact_written','human_approved','error'];
+  filter.innerHTML='';
+  for(const ty of mainTypes){ const m=EVENT_META[ty];
+    filter.appendChild(h('button',{class:`fchip${S.eventFilter.has(ty)?' on':''}`,
+      style:`--ev-color:${m.color};--ev-soft:${m.color}22`,
+      onclick:()=>{ S.eventFilter.has(ty)?S.eventFilter.delete(ty):S.eventFilter.add(ty); renderEvents(); }},
+      h('span',{class:'fdot'}), m.label));
+  }
+  list.innerHTML='';
+  const evs=[...S.dash.events].reverse().filter(e=>S.eventFilter.has(e.event));
+  for(const e of evs){
+    const m=EVENT_META[e.event]||{color:'#8E8E93',label:e.event};
+    const key=e.ts+e.event; const expanded=S.eventExpanded.has(key);
+    const tid=e.data&&e.data.task_id;
+    list.appendChild(h('div',{class:`event-row${['error','gate_failed'].includes(e.event)?' ev-error':''}`},
+      h('span',{class:'event-ts'},relTime(e.ts)),
+      h('span',{class:'event-type',style:`color:${m.color}`},m.label),
+      h('div',{class:'event-body'},
+        h('div',{class:'event-text'}, eventSummary(e),
+          tid?h('span',{class:'event-task-link',onclick:()=>openTaskDetail(tid)},` ${tid}`):null,
+          h('span',{class:'event-toggle',onclick:(ev2)=>{ev2.stopPropagation(); expanded?S.eventExpanded.delete(key):S.eventExpanded.add(key); renderEvents();}}, expanded?'收起':'详情')),
+        expanded?h('div',{class:'event-payload'},h('pre',{},JSON.stringify(e.data,null,2))):null)));
+  }
+}
+function eventSummary(e) {
+  const d=e.data||{};
+  switch(e.event){
+    case 'run_started': return `运行创建：${trunc(d.goal||'',40)}`;
+    case 'plan_created': return `任务生成：${d.task_count} 个任务`;
+    case 'task_started': return `${d.task_id||''} 开始执行（${roleMeta(d.role).full}，第 ${d.attempt||1} 次）`;
+    case 'task_finished': return `${d.task_id||''} 完成，耗时 ${fmtDur(d.duration_ms)}`;
+    case 'task_transition': return `${d.task_id||''} ${d.from} → ${d.to}（${d.reason||''}）`;
+    case 'artifact_written': return `产物生成：${d.path}`;
+    case 'gate_result': return `门禁 ${d.gate||d.layer}：${d.verdict}${d.score!=null?`（分数 ${d.score}）`:''}`;
+    case 'llm_failover': return `Provider 故障转移：${d.from||'?'} → ${d.to||'?'}（${trunc(d.reason||'',30)}）`;
+    case 'budget_warning': return `预算预警：已使用 ${d.pct}%`;
+    case 'budget_exhausted': return '预算硬上限耗尽，运行优雅收尾';
+    case 'task_timeout': return `${d.task_id||''} 超时`;
+    case 'checkpoint_saved': return `检查点保存${d.manual?'（手动）':''}`;
+    case 'human_approved': return `人工批准：${trunc(d.note||'',40)}`;
+    case 'error': return `${d.where||''}：${trunc(d.message||'',50)}`;
+    default: return JSON.stringify(d).slice(0,80);
+  }
+}
+
+/* ============================================================
+   右侧详情面板
+   ============================================================ */
+function openDetailPanel(node){
+  const p=$('#detail-panel'); p.innerHTML=''; p.appendChild(node);
+  $('#detail-mask').classList.remove('hidden'); $('#detail-mask').classList.add('show');
+  p.classList.remove('hidden'); p.classList.add('show');
+}
+function closeDetailPanel(){
+  const p=$('#detail-panel'); p.classList.remove('show'); $('#detail-mask').classList.remove('show');
+  setTimeout(()=>{p.classList.add('hidden');$('#detail-mask').classList.add('hidden');},220);
+}
+$('#detail-mask').addEventListener('click',closeDetailPanel);
+document.addEventListener('keydown',(e)=>{ if(e.key==='Escape'){ closeDetailPanel(); closeModal(); } });
+
+function openTaskDetail(taskId){
+  const t=S.dash.tasks.find(x=>x.id===taskId); if(!t)return;
+  S.detail={kind:'task',id:taskId};
+  const meta=STATUS_META[t.status]||STATUS_META.unknown;
+  const rm=roleMeta(t.role);
+  const up=(t.dependencies||[]).map(d=>S.dash.tasks.find(x=>x.id===d)).filter(Boolean);
+  const down=S.dash.tasks.filter(x=>(x.dependencies||[]).includes(t.id));
+  const res=t.result;
+  openDetailPanel(h('div',{style:'display:flex;flex-direction:column;height:100%'},
+    h('div',{class:'dp-head'},
+      h('div',{class:'dp-title-row'},
+        h('div',{},
+          h('div',{class:'mono',style:`color:${meta.color};font-size:12px`},t.id),
+          h('div',{class:'dp-title'},t.title)),
+        h('button',{class:'btn btn-icon',style:'width:28px;height:28px','aria-label':'关闭',title:'关闭',onclick:closeDetailPanel},'✕'))),
+    h('div',{class:'dp-body'},
+      sec('状态', h('span',{class:'dp-tag',style:`color:${meta.color}`},meta.label),
+        h('span',{class:'dp-tag'},`阶段：${phaseLabel(S.dash.run.phase)}`)),
+      sec('负责 Agent', h('span',{class:'dp-tag'},h('span',{class:'dot',style:`background:${rm.color};display:inline-block;margin-right:4px`}),rm.full)),
+      t.brief?sec('一句话摘要',h('div',{class:'dp-text dim'},t.brief)):null,
+      sec('描述',h('div',{class:'dp-text dim'},t.description||'（无描述）')),
+      sec('上游依赖',up.length?h('div',{class:'dep-list'},up.map(u=>h('span',{class:'dp-dep-link',onclick:()=>openTaskDetail(u.id)},`${u.id} ${trunc(u.title,10)}`))):h('div',{class:'dp-text dim'},'无')),
+      sec('下游依赖',down.length?h('div',{class:'dep-list'},down.map(u=>h('span',{class:'dp-dep-link',onclick:()=>openTaskDetail(u.id)},`${u.id} ${trunc(u.title,10)}`))):h('div',{class:'dp-text dim'},'无')),
+      sec('执行配置',h('div',{class:'dp-meta-grid'},
+        metaCell('尝试次数',`${t.attempts||1}/${t.max_attempts}`),
+        metaCell('返工次数',`${t.rework_count||0}/${t.max_reworks}`),
+        metaCell('超时',`${t.timeout_seconds||300}s`),
+        metaCell('优先级',`P${t.priority||5}`))),
+      sec('输出产物', res&&res.artifacts&&res.artifacts.length
+        ? h('div',{},res.artifacts.map(a=>h('div',{class:'dp-text',style:'margin:2px 0'},`📄 ${a.path} · ${fmtBytes(a.size_bytes)}`)))
+        : h('div',{class:'dp-text dim'},'待生成')),
+      t.error?sec('最近错误',h('div',{class:'dp-text',style:'color:#FF3B30'},t.error)):null,
+      sec('运行日志',h('div',{class:'dp-log'},
+        h('div',{},`$ running ${t.id}`),
+        h('div',{},`> role=${rm.full} model=${S.dash.run.model}`),
+        res&&res.summary?h('div',{},`> ${trunc(res.summary,80)}`):h('div',{},'> loading context…'),
+        t.status==='failed'?h('div',{class:'err'},`✗ ${t.error||'失败'}`):h('div',{},'> done')))),
+    h('div',{class:'dp-actions'},
+      h('button',{class:'btn btn-sm',onclick:()=>toast('info','重试任务',t.id)},'重试任务'),
+      h('button',{class:'btn btn-sm',onclick:()=>{t.status='skipped';toast('info','已跳过',t.id);renderDashboard();}},'跳过任务'),
+      h('button',{class:'btn btn-sm',onclick:()=>{t.status='review';toast('info','人工处理',t.id+' 标记为人工处理');renderDashboard();}},'人工处理'),
+      h('button',{class:'btn btn-sm btn-primary',onclick:()=>toast('info','恢复运行','从 '+t.id+' 恢复')},'从此恢复'))));
+  renderAgents();
+}
+function openAgentDetail(roleId){
+  const a=S.dash.agents[roleId]; if(!a)return;
+  S.detail={kind:'agent',id:roleId};
+  const rm=roleMeta(roleId);
+  const myTasks=S.dash.tasks.filter(t=>t.role===roleId);
+  openDetailPanel(h('div',{style:'display:flex;flex-direction:column;height:100%'},
+    h('div',{class:'dp-head'},h('div',{class:'dp-title-row'},
+      h('div',{},h('div',{class:'mono',style:'color:#8E8E93;font-size:12px'},'AGENT'),h('div',{class:'dp-title'},rm.full)),
+      h('button',{class:'btn btn-icon',style:'width:28px;height:28px','aria-label':'关闭',title:'关闭',onclick:closeDetailPanel},'✕'))),
+    h('div',{class:'dp-body'},
+      sec('状态',h('span',{class:'dp-tag'},agentStatusLabel(a.status)),h('span',{class:'dp-tag'},a.model)),
+      sec('当前任务',h('div',{class:'dp-text'},a.task)),
+      sec('最近动作',h('div',{class:'dp-text dim'},a.action)),
+      sec('统计',h('div',{class:'dp-meta-grid'},
+        metaCell('已完成',String(a.done)),metaCell('失败/重试',String(a.fail)),
+        metaCell('Token',fmtTokens(a.tokens)),metaCell('费用',fmtCost(a.cost)))),
+      sec('负责任务列表', myTasks.length?h('div',{style:'display:flex;flex-direction:column;gap:4px'},
+        myTasks.map(t=>{const m=STATUS_META[t.status]||STATUS_META.unknown;
+          return h('div',{class:'dag-task-row',onclick:()=>openTaskDetail(t.id)},
+            h('span',{class:'dot',style:`background:${m.color}`}),
+            h('span',{class:'mono',style:'color:#8E8E93'},t.id),
+            h('span',{},trunc(t.title,16)),
+            h('span',{style:`margin-left:auto;font-size:11px;color:${m.color}`},m.label));}))
+        :h('div',{class:'dp-text dim'},'暂无任务'))),
+    h('div',{class:'dp-actions'},
+      h('button',{class:'btn btn-sm',onclick:()=>toast('info','查看事件',rm.full+' 的事件')},'查看事件'),
+      h('button',{class:'btn btn-sm',onclick:()=>toast('info','查看产物',rm.full+' 的产物')},'查看产物'))));
+  renderAgents();
+}
+function phaseLabel(p){ return {planning:'规划',execution:'执行',delivery:'交付'}[p]||p; }
+function sec(title,...kids){ return h('div',{class:'dp-section'},h('h4',{},title),...kids); }
+
+/* ============================================================
+   模拟实时更新
+   ============================================================ */
+function pushEvent(event, data, taskId, role){
+  S.dash.events.push({ts:nowTs(0), run_id:RUN_ID, event, data:Object.assign(taskId?{task_id:taskId}:{},role?{role}:{},data||{})});
+  window.__st.ledgerBatches += 1;
+}
+function startSim(){ if(S.simTimer)return; S.simTimer=setInterval(simTick,2500); }
+function stopSim(){ if(S.simTimer){clearInterval(S.simTimer);S.simTimer=null;} }
+
+function simTick(){
+  const d=S.dash; if(!d)return;
+  const run=d.run; if(run.status!=='running')return;
+  window.__st.snapshots += 1;
+
+  for(const t of d.tasks){
+    if(t.status==='running'){
+      t.progress=Math.min(100,(t.progress||0)+15+Math.random()*12);
+      if(t.progress>=100){
+        // T-08 第一次失败后重试：running → ready（reason:retry），attempts+1
+        if(t.id==='T-08' && t.attempts===1){
+          t.status='ready'; t.error='连接数据库超时（ETIMEDOUT）'; t.attempts=2; t.progress=0;
+          pushEvent('task_transition',{from:'running',to:'ready',reason:'retry: ETIMEDOUT'} ,t.id,t.role);
+          pushEvent('error',{where:t.id,message:'ETIMEDOUT'},t.id,t.role);
+          toast('error','任务失败将重试',`${t.id} 第 ${t.attempts} 次尝试`);
+        } else {
+          t.status='review'; t.progress=0;
+          const dur=300000+Math.random()*400000;
+          t.result={summary:'任务产物已生成并通过初检', duration_ms:dur, artifacts:[{path:`artifacts/${t.id}/output.md`,size_bytes:2000+Math.random()*8000}]};
+          pushEvent('task_finished',{attempt:t.attempts,duration_ms:dur},t.id,t.role);
+          // 门禁：G1 static approve → succeeded
+          t.reviews=[{round:1,layer:'static',verdict:'approve',score:null,reviewer:'static:contract'}];
+          pushEvent('gate_result',{task_id:t.id,round:1,layer:'static',verdict:'approve',score:null});
+          t.status='succeeded';
+          pushEvent('task_transition',{from:'review',to:'succeeded',reason:'gate-succeeded'},t.id,t.role);
+          // 解除下游
+          for(const down of d.tasks){
+            if((down.dependencies||[]).includes(t.id)){
+              const deps=down.dependencies.map(x=>d.tasks.find(z=>z.id===x));
+              if(deps.every(z=>z.status==='succeeded') && down.status==='blocked'){
+                down.status='ready'; pushEvent('task_transition',{from:'blocked',to:'ready',reason:'dependencies-recovered'},down.id,down.role);
+              }
+            }
+          }
+        }
+      }
+    } else if(t.status==='ready'){
+      t.status='running'; t.progress=5;
+      const ag=d.agents[t.role]; if(ag){ag.status='executing';ag.task=`${t.id} ${t.title}`;ag.action='正在执行';ag.updated=nowTs(0);}
+      pushEvent('task_started',{attempt:t.attempts},t.id,t.role);
+    }
+  }
+  // 依赖满足：pending → ready；上游失败 → blocked
+  for(const t of d.tasks){
+    if(t.status==='pending'||t.status==='blocked'){
+      const deps=(t.dependencies||[]).map(x=>d.tasks.find(z=>z.id===x)).filter(Boolean);
+      if(!deps.length){ if(t.status==='pending')t.status='ready'; }
+      else{
+        const allOk=deps.every(z=>z.status==='succeeded');
+        const anyFail=deps.some(z=>['failed','cancelled'].includes(z.status));
+        if(allOk) t.status='ready';
+        else if(anyFail) t.status='blocked';
+      }
+    }
+  }
+  // 统计递增
+  const st=run.stats;
+  st.llm_calls+=2; st.prompt_tokens+=Math.round(1500+Math.random()*2000);
+  st.completion_tokens+=Math.round(400+Math.random()*800);
+  st.estimated_cost_usd+=0.004+Math.random()*0.006;
+  st.succeeded=d.tasks.filter(t=>t.status==='succeeded').length;
+  run.updated_at=nowTs(0);
+
+  const pct=st.estimated_cost_usd/run.budget_limit_usd*100;
+  if(pct>=90 && !d._budgetWarned){ d._budgetWarned=true; toast('warning','预算预警',`已使用 ${Math.round(pct)}%`); pushEvent('budget_warning',{pct:Math.round(pct)}); }
+
+  const unfinished=d.tasks.filter(t=>!['succeeded','failed','skipped','cancelled'].includes(t.status));
+  if(unfinished.length===0){
+    run.status='completed'; run.phase='delivery';
+    pushEvent('run_finished',{status:'completed',exit_code:0,duration_ms:Date.now()-parseTs(st.started_at).getTime()});
+    toast('success','运行完成','所有任务已通过，产物已就绪'); stopSim();
+  }
+  renderDashboard();
+}
+
+/* ============================================================
+   导航 & 占位页
+   ============================================================ */
+const PLACEHOLDERS={
+  tasks:{title:'任务图',desc:'完整 DAG 编辑器与任务调试视图正在开发中。当前请使用上方运行总览中的依赖图。'},
+  agents:{title:'Agents',desc:'Agent 编排与提示词配置面板正在开发中。当前请使用上方的 Agent 协作状态卡片。'},
+  gates:{title:'质量门禁',desc:'门禁规则配置与历史报告正在开发中。当前请使用上方的三层质量门禁概览。'},
+  artifacts:{title:'产物',desc:'产物浏览器与预览正在开发中。运行完成后 artifacts/ 目录将自动填充交付物。'},
+  events:{title:'事件日志',desc:'完整 ledger 搜索与过滤正在开发中。当前请使用上方的最近事件时间线。'},
+  settings:{title:'设置',desc:'连接设置、预算策略与主题配置正在开发中。'},
+};
+function switchNav(key){
+  S.nav=key;
+  $$('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.nav===key));
+  const dash=$('#dashboard-view'), ph=$('#placeholder-view');
+  if(key==='dashboard'){ ph.classList.add('hidden'); dash.classList.remove('hidden'); }
+  else{ dash.classList.add('hidden'); ph.classList.remove('hidden');
+    const p=PLACEHOLDERS[key]||{title:key,desc:'该页面开发中。'};
+    ph.innerHTML='';
+    ph.appendChild(h('div',{class:'ph-icon'},h('svg',{width:30,height:30,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor','stroke-width':1.6,'stroke-linecap':'round','stroke-linejoin':'round'},h('rect',{x:'3',y:'3',width:'18',height:'18',rx:'3'}),h('path',{d:'M8 12h8'}))));
+    ph.appendChild(h('h2',{},p.title)); ph.appendChild(h('p',{},p.desc));
+    ph.appendChild(h('button',{class:'btn btn-primary',onclick:()=>switchNav('dashboard')},'返回运行总览'));
+  }
+}
+
+/* ============================================================
+   Dashboard 主渲染 & 顶栏同步
+   ============================================================ */
+function renderDashboard(){
+  if(!S.dash)return;
+  renderRunStatusBar(); renderDAG(); renderDAGFallback();
+  renderAgents(); renderGates(); renderEvents(); renderChrome();
+}
+function renderChrome(){
+  const d=S.dash; if(!d)return; const run=d.run; const st=run.stats||{};
+  const meta=RUN_META[run.status]||RUN_META.idle;
+  $('#tb-run-dot').className='dot '+meta.dot; $('#tb-run-label').textContent=meta.label;
+  $('#tb-workspace').textContent=trunc(run.project_goal,24);
+  const cost=st.estimated_cost_usd||0, pct=Math.min(100,cost/run.budget_limit_usd*100);
+  $('#tb-budget-tokens').textContent=fmtTokens((st.prompt_tokens||0)+(st.completion_tokens||0));
+  $('#tb-budget-cost').textContent=fmtCost(cost);
+  $('#tb-budget-pct').textContent=Math.round(pct)+'%';
+  $('#tb-budget-fill').style.width=pct+'%';
+  const tb=$('#tb-budget'); tb.classList.toggle('warn',pct>=90&&pct<100); tb.classList.toggle('err',pct>=100);
+  $('#sb-provider').textContent=run.provider; $('#sb-model').textContent=run.model;
+  $('#sb-budget-pct').textContent=Math.round(pct)+'%'; $('#sb-budget-fill').style.width=pct+'%';
+  const sbf=document.querySelector('.sb-progress'); sbf.classList.toggle('warn',pct>=90&&pct<100); sbf.classList.toggle('err',pct>=100);
+  $('#sb-conn-dot').className='dot running'; $('#sb-conn-label').textContent='已连接';
+}
+
+/* ============================================================
+   演示边界状态
+   ============================================================ */
+function applyDemoState(state){
+  stopSim();
+  if(state==='empty'){
+    // 无运行记录：清空数据层，在状态条显示引导；重置按钮直接重载页面恢复骨架
+    S.dash=null; stopSim();
+    $('#run-status-bar').innerHTML='';
+    $('#run-status-bar').appendChild(h('div',{class:'banner info',style:'margin:0'},
+      '没有运行记录。点击右上角「新建运行」开始第一次多智能体协作。'));
+    $('#run-status-bar').appendChild(h('button',{class:'btn btn-primary',style:'margin-top:8px',onclick:()=>location.reload()},'创建示例运行'));
+    renderChrome();
     return;
   }
-  errBox.classList.add('hidden');
-  const btn = $('#nr-start');
-  btn.disabled = true;
-  btn.textContent = '启动中…';
+  initMockData(); const d=S.dash; const run=d.run;
+  if(state==='planning'){ run.status='planning'; run.phase='planning'; for(const t of d.tasks)t.status='pending'; d.gates.forEach(g=>g.status='pending'); }
+  if(state==='budget_warn'){ run.stats.estimated_cost_usd=0.92; toast('warning','预算预警','已使用 92%'); }
+  if(state==='budget_exhausted'){ run.status='running'; run.stats.estimated_cost_usd=1.05; pushEvent('budget_exhausted',{}); toast('error','预算耗尽','运行将优雅收尾'); }
+  if(state==='paused'){ run.status='paused'; }
+  if(state==='failed'){ run.status='failed'; const t=d.tasks.find(x=>x.id==='T-11'); t.status='failed'; t.error='集成测试 12 项断言失败'; pushEvent('error',{where:'T-11',message:'断言失败'},'T-11','backend_dev'); }
+  if(state==='gates_failed'){ const g=d.gates[1]; g.status='failed'; g.checks={total:8,passed:5,failed:3};
+    g.fail_reason='关键代码评审发现鉴权中间件漏洞'; g.impact='影响交付物 T-11、T-14'; g.suggestion='修复鉴权后重新提交'; g.return_task='T-07'; g.extra_cost='$0.08';
+    pushEvent('gate_result',{layer:'llm',verdict:'reject',gate:'G2'}); }
+  if(state==='completed'){ run.status='completed'; run.phase='delivery'; for(const t of d.tasks)t.status='succeeded'; d.gates.forEach(g=>{g.status='passed';g.checks={total:g.checks.total,passed:g.checks.total,failed:0};}); }
+  renderDashboard();
+  if(state==='running') startSim();
+}
+
+/* ============================================================
+   Boot
+   ============================================================ */
+async function boot(){
+  $('#btn-new-run').addEventListener('click',openNewRunModal);
+  $('#btn-notify').addEventListener('click',()=>{ $('#notify-dot').classList.add('hidden'); toast('info','通知','暂无新通知'); });
+  $('#btn-user').addEventListener('click',openUserMenu);
+  $$('.nav-item').forEach(b=>b.addEventListener('click',()=>switchNav(b.dataset.nav)));
+  window.addEventListener('error',(e)=>toast('error','界面错误',e.message));
+  window.addEventListener('unhandledrejection',(e)=>toast('error','未处理异常',String(e.reason&&e.reason.message||e.reason)));
+
+  try { const r=await window.studio.getSettings(); S.settings=r.settings; S.env=r.env; } catch { S.settings={}; }
+  try { await window.studio.detectPython(); } catch {}
+
+  // 真实数据优先：有运行则加载最近一个，否则 mock
+  let usedReal=false;
   try {
-    const r = await callIpc(window.studio.startRun, {
-      goal, demo, mock, auto, outputDir,
-      maxCost: maxCost || undefined,
-      maxLlmCalls: maxLlmCalls || undefined,
-      env: slow ? { AGENTCREW_MOCK_LATENCY_MS: '1200' } : undefined,
-    });
-    S.activeProcKey = r.key;
-    const log = $('#nr-log');
-    log.classList.remove('hidden');
-    log.textContent = '已发起 CLI：python main.py run …（--no-live 模式下 CLI 输出很少，实时进度请“转到看板”查看）\n';
-    $('#nr-cancel').classList.remove('hidden');
-    btn.textContent = '运行中…';
-  } catch (e) {
-    btn.disabled = false;
-    btn.textContent = '启动';
-    errBox.textContent = `启动失败：${String(e && e.message || e)}`;
-    errBox.classList.remove('hidden');
-  }
+    const runs=await window.studio.listRuns();
+    if(runs&&runs.length){
+      try {
+        const snap=await window.studio.loadRun(runs[0].dir);
+        if(snap&&snap.run){
+          initMockData();
+          S.dash.run.dir=runs[0].dir;
+          S.dash.run.run_id=snap.run.run_id||runs[0].runId;
+          S.dash.run.project_goal=snap.run.project_goal||runs[0].goal;
+          usedReal=true;
+        }
+      } catch {}
+    }
+  } catch {}
+  if(!usedReal) initMockData();
+
+  renderDashboard();
+  switchNav('dashboard');
+  startSim();
+  setInterval(renderChrome,1000);
 }
 
-/* ---------- 结束报告 ---------- */
-
-function openReportModal() {
-  const run = S.run;
-  if (!run) return;
-  const st = RUN_META[run.status] || RUN_META.unknown;
-  const stats = run.stats || {};
-  const fin = S.events.filter((e) => e.event === 'run_finished').pop();
-  const exitInfo = fin && fin.data ? `退出码 ${fin.data.exit_code} · ${fmtDur(fin.data.duration_ms)}` : '';
-  const grid = h('div', { class: 'report-grid' },
-    cell('成功', String(stats.succeeded ?? '—'), 'color:var(--st-succeeded)'),
-    cell('失败', String(stats.failed ?? '—'), stats.failed ? 'color:var(--st-failed)' : ''),
-    cell('阻塞', String(stats.blocked ?? '—'), stats.blocked ? 'color:var(--st-blocked)' : ''),
-    cell('跳过', String(stats.skipped ?? '—'), ''),
-    cell('任务总数', String(stats.total_tasks ?? '—'), ''),
-    cell('LLM 调用', fmtTokens(stats.llm_calls), ''),
-    cell('Tokens', fmtTokens((stats.prompt_tokens || 0) + (stats.completion_tokens || 0)),
-      `提示 ${fmtTokens(stats.prompt_tokens || 0)} / 补全 ${fmtTokens(stats.completion_tokens || 0)}`),
-    cell('成本（估算）', fmtCost(stats.estimated_cost_usd), ''),
-    cell('耗时', fmtDur(runDurationMs(run, S.tasks)), ''));
-  const budgetEvt = S.events.filter((e) => e.event === 'budget_exhausted').pop();
-  const failoverCount = S.events.filter((e) => e.event === 'llm_failover').length;
-  const node = h('div', {},
-    h('h3', { class: 'modal-title' }, '结束报告'),
-    h('div', { class: 'report-status' },
-      h('span', { class: 'status-chip big', style: `--chip-color:${st.color}` }, st.label),
-      exitInfo ? h('span', { class: 'run-id' }, exitInfo) : null),
-    budgetEvt ? h('div', { class: 'warn-banner', style: 'border-color:color-mix(in srgb,var(--st-failed) 40%,transparent);color:var(--st-failed)' },
-      `预算耗尽：${budgetEvt.data && budgetEvt.data.kind === 'cost_usd' ? `成本 $${budgetEvt.data.current?.toFixed(4)} 超过上限 $${budgetEvt.data.limit}` : `LLM 调用 ${budgetEvt.data?.current} 次超过上限 ${budgetEvt.data?.limit} 次`}。run 已优雅收尾，在跑任务完成后停止派发。`) : null,
-    failoverCount ? h('div', { class: 'form-hint', style: 'margin-bottom:8px' }, `Provider 故障转移 ${failoverCount} 次（详见事件流 llm_failover）`) : null,
-    grid,
-    h('div', { class: 'form-hint', style: 'margin-top:10px' }, `${run.run_id || ''} · ${trunc(run.project_goal || '', 100)}`),
-    h('div', { class: 'modal-actions' },
-      h('button', { class: 'btn', onclick: () => { closeModal(); S.tab = 'artifacts'; $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === 'artifacts')); renderTabPane(); } }, '查看产物'),
-      h('button', { class: 'btn btn-primary', onclick: closeModal }, '关闭')));
-  showModal(node, 'report');
-
-  function cell(label, value, colorStyle, sub) {
-    return h('div', { class: 'report-cell' },
-      h('div', { class: 'stat-label' }, label),
-      h('div', { class: 'stat-value', style: colorStyle || '' }, value),
-      sub ? h('div', { class: 'stat-sub' }, sub) : null);
-  }
+function openUserMenu(){
+  const states=[['running','正常运行（模拟推进）'],['planning','正在规划'],['budget_warn','预算预警（90%）'],['budget_exhausted','预算耗尽'],
+    ['paused','用户暂停'],['failed','运行失败'],['gates_failed','门禁失败'],['completed','运行完成'],['empty','无运行记录']];
+  showModal(h('div',{},
+    h('h3',{class:'modal-title'},'账户与演示'),
+    h('div',{class:'confirm-text',style:'color:#8E8E93'},'工作区：'+(S.settings&&S.settings.outputDir||'默认')),
+    h('div',{style:'margin:10px 0;font-weight:600;font-size:13px'},'演示边界状态：'),
+    ...states.map(([k,label])=>h('button',{class:'btn',style:'display:flex;width:100%;margin-bottom:6px;justify-content:flex-start',onclick:()=>{closeModal();applyDemoState(k);}},label)),
+    h('div',{class:'modal-actions'},h('button',{class:'btn',onclick:closeModal},'关闭'))));
 }
 
-/* ---------- 设置 ---------- */
-
-function openSettingsModal() {
-  const s = S.settings || {};
-  const node = h('div', {},
-    h('h3', { class: 'modal-title' }, '设置'),
-    h('div', { class: 'form-row' },
-      h('label', { for: 'set-python' }, 'Python 命令'),
-      h('div', { style: 'display:flex;gap:8px' },
-        h('input', { type: 'text', id: 'set-python', value: s.pythonCmd || '', placeholder: 'python（留空自动探测：python / python3 / py -3）', style: 'flex:1' }),
-        h('button', { class: 'btn', id: 'set-python-test' }, '检测')),
-      h('div', { class: 'form-hint', id: 'set-python-result' }, '点击“检测”验证命令可用性')),
-    h('div', { class: 'form-row' },
-      h('label', { for: 'set-repo' }, '仓库根目录（main.py 所在处）'),
-      h('input', { type: 'text', id: 'set-repo', value: s.repoRoot || '' }),
-      h('div', { class: 'form-hint', id: 'set-repo-hint' }, S.env && S.env.repoOk ? '✓ 已找到 main.py' : '⚠ 未找到 main.py，启动运行会失败')),
-    h('div', { class: 'form-row' },
-      h('label', { for: 'set-outdir' }, '输出目录（扫描运行列表的根）'),
-      h('input', { type: 'text', id: 'set-outdir', value: s.outputDir || '' })),
-    h('div', { class: 'form-row form-checks' },
-      h('label', { class: 'form-check' }, h('input', { type: 'checkbox', id: 'set-mock', checked: !!s.defaultMock }), '新运行默认 --mock'),
-      h('label', { class: 'form-check' }, h('input', { type: 'checkbox', id: 'set-auto', checked: !!s.defaultAuto }), '新运行默认 --auto')),
-    h('div', { class: 'form-row' },
-      h('label', {}, '主题'),
-      h('div', { class: 'form-checks' },
-        h('label', { class: 'form-check' }, h('input', { type: 'radio', name: 'set-theme', value: 'auto', checked: (s.theme || 'dark') === 'auto' }), '自动'),
-        h('label', { class: 'form-check' }, h('input', { type: 'radio', name: 'set-theme', value: 'dark', checked: (s.theme || 'dark') === 'dark' }), '深色'),
-        h('label', { class: 'form-check' }, h('input', { type: 'radio', name: 'set-theme', value: 'light', checked: s.theme === 'light' }), '浅色'))),
-    h('div', { class: 'form-row' },
-      h('label', {}, '强调色'),
-      h('div', { class: 'accent-picker', id: 'accent-picker' },
-        ...ACCENT_THEMES.map((a) => h('button', {
-          type: 'button',
-          class: `accent-swatch${(s.accent || 'orange') === a.id ? ' active' : ''}`,
-          'data-accent': a.id,
-          style: `background:${a.color}`,
-          title: a.label,
-          onclick: () => {
-            document.querySelectorAll('.accent-swatch').forEach((b) => b.classList.toggle('active', b.dataset.accent === a.id));
-            document.getElementById('accent-custom').value = a.color;
-            applyTheme(getSettingsTheme(), a.id);
-          },
-        })),
-        h('label', { class: 'accent-custom-wrap', title: '自定义颜色' },
-          h('input', {
-            type: 'color', id: 'accent-custom',
-            value: (s.accent && s.accent.startsWith('#')) ? s.accent : '#e07a5f',
-            class: 'accent-custom-input',
-            oninput: () => {
-              const c = document.getElementById('accent-custom').value;
-              document.querySelectorAll('.accent-swatch').forEach((b) => b.classList.remove('active'));
-              applyTheme(getSettingsTheme(), c);
-            },
-          }),
-          h('span', { class: 'accent-custom-label' }, '自定义')),
-      )),
-    h('div', { class: 'modal-actions' },
-      h('button', { class: 'btn', onclick: closeModal }, '取消'),
-      h('button', { class: 'btn btn-primary', id: 'set-save' }, '保存')),
-  );
-  showModal(node, 'settings');
-
-  $('#set-python-test').addEventListener('click', async () => {
-    const out = $('#set-python-result');
-    out.className = 'form-hint';
-    out.textContent = '检测中…';
-    try {
-      const r = await callIpc(window.studio.detectPython, $('#set-python').value.trim() || null);
-      if (r) { out.className = 'form-hint ok'; out.textContent = `✓ ${r.version}`; }
-      else { out.className = 'form-hint err'; out.textContent = '✗ 该命令不可用或不是 Python 3'; }
-    } catch (e) { out.className = 'form-hint err'; out.textContent = `✗ ${trunc(String(e), 80)}`; }
-  });
-
-  $('#set-save').addEventListener('click', async () => {
-    const activeSwatch = document.querySelector('.accent-swatch.active');
-    const accentVal = activeSwatch ? activeSwatch.dataset.accent : ($('#accent-custom') || {}).value || 'orange';
-    const next = {
-      pythonCmd: $('#set-python').value.trim(),
-      repoRoot: $('#set-repo').value.trim(),
-      outputDir: $('#set-outdir').value.trim(),
-      defaultMock: $('#set-mock').checked,
-      defaultAuto: $('#set-auto').checked,
-      theme: ($('input[name="set-theme"]:checked') || {}).value || 'dark',
-      accent: accentVal,
-    };
-    try {
-      const saved = await callIpc(window.studio.setSettings, next);
-      S.settings = saved;
-      const env = await window.studio.getSettings();
-      S.env = env.env;
-      applyTheme(S.settings.theme);
-      closeModal();
-      toast('success', '设置已保存', '正在按新配置刷新…');
-      refreshPythonFoot();
-      refreshRuns();
-    } catch { /* callIpc 已提示 */ }
-  });
+function openNewRunModal(){
+  showModal(h('div',{},
+    h('h3',{class:'modal-title'},'启动新运行'),
+    h('div',{class:'confirm-text'},'用一句话描述要交付的目标：'),
+    h('textarea',{id:'nr-goal',rows:3,style:'width:100%;border:1px solid rgba(60,60,67,.2);border-radius:6px;padding:8px;font-family:inherit',placeholder:'例如：开发一个短链接生成服务…'}),
+    h('div',{class:'modal-actions'},
+      h('button',{class:'btn',onclick:closeModal},'取消'),
+      h('button',{class:'btn btn-primary',onclick:()=>{closeModal();toast('success','已启动','新运行已提交（演示）');initMockData();renderDashboard();startSim();}},'启动'))));
 }
-
-/* ---------- 启动 ---------- */
 
 boot();

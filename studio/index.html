@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="dark">
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;">
@@ -7,103 +7,164 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<div id="app">
-  <!-- 顶栏 -->
+<div id="app" class="layout">
+
+  <!-- ===== 1. 顶部导航栏（紧凑） ===== -->
   <header id="topbar">
-    <div class="brand">
-      <svg class="brand-mark" width="20" height="20" viewBox="0 0 18 18" aria-hidden="true">
+    <div class="tb-left">
+      <svg class="brand-mark" width="22" height="22" viewBox="0 0 18 18" aria-hidden="true">
         <rect x="1"  y="1"  width="7" height="7" rx="1.5"/>
-        <rect x="10" y="1"  width="7" height="7" rx="1.5" opacity=".55"/>
-        <rect x="1"  y="10" width="7" height="7" rx="1.5" opacity=".55"/>
+        <rect x="10" y="1"  width="7" height="7" rx="1.5" opacity=".5"/>
+        <rect x="1"  y="10" width="7" height="7" rx="1.5" opacity=".5"/>
         <rect x="10" y="10" width="7" height="7" rx="1.5"/>
       </svg>
-      <span class="brand-name">AgentCrew&nbsp;<em>Studio</em></span>
+      <span class="brand-name">AgentCrew <em>Studio</em></span>
+      <span class="tb-sep"></span>
+      <span class="tb-workspace" id="tb-workspace" title="当前工作区">未选择工作区</span>
     </div>
-    <div class="top-actions">
-      <button id="btn-new-run" class="btn btn-primary" type="button">
-        <span class="btn-plus">+</span> 新运行
+
+    <div class="tb-run-status" id="tb-run-status">
+      <span class="dot" id="tb-run-dot"></span>
+      <span id="tb-run-label">空闲</span>
+    </div>
+
+    <div class="tb-center">
+      <button id="btn-new-run" class="btn btn-primary" type="button" title="启动一次新的运行">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        新建运行
       </button>
-      <button id="btn-refresh-runs" class="btn btn-icon" type="button" title="刷新" aria-label="刷新">⟳</button>
+    </div>
+
+    <div class="tb-right">
+      <div class="tb-budget" id="tb-budget" title="Token 用量 / 费用 / 预算">
+        <span class="tb-budget-tokens" id="tb-budget-tokens">0 tok</span>
+        <span class="tb-budget-sep">·</span>
+        <span class="tb-budget-cost" id="tb-budget-cost">$0.000</span>
+        <div class="tb-budget-bar"><i id="tb-budget-fill"></i></div>
+        <span class="tb-budget-pct" id="tb-budget-pct">0%</span>
+      </div>
+      <button id="btn-notify" class="btn btn-icon" type="button" title="通知" aria-label="通知">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>
+        </svg>
+        <span class="notify-dot hidden" id="notify-dot"></span>
+      </button>
+      <button id="btn-user" class="btn btn-icon" type="button" title="账户" aria-label="账户">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+        </svg>
+      </button>
     </div>
   </header>
 
-  <div id="layout">
-    <!-- 左侧图标导航栏 -->
-    <nav id="icon-rail">
-      <button class="rail-item active" data-view="runs" title="运行列表" aria-label="运行列表">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3" y="3" width="7" height="7" rx="1.5"/>
-          <rect x="14" y="3" width="7" height="7" rx="1.5"/>
-          <rect x="3" y="14" width="7" height="7" rx="1.5"/>
-          <rect x="14" y="14" width="7" height="7" rx="1.5"/>
-        </svg>
-      </button>
-      <button class="rail-item" data-view="settings" title="设置" aria-label="设置">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="3"/>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-        </svg>
-      </button>
-      <div class="rail-spacer"></div>
-      <button class="rail-item" id="btn-theme" title="切换主题" aria-label="切换主题">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
-        </svg>
-      </button>
+  <div class="body-row">
+    <!-- ===== 2. 左侧项目导航 ===== -->
+    <nav id="sidebar">
+      <div class="nav-items" id="nav-items">
+        <button class="nav-item active" data-nav="dashboard" type="button">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+          <span>运行总览</span>
+        </button>
+        <button class="nav-item" data-nav="tasks" type="button">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8.2 7.2 11 15.8M15.8 7.2 13 15.8M8.5 6h7"/></svg>
+          <span>任务图</span>
+        </button>
+        <button class="nav-item" data-nav="agents" type="button">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 1 3 3v1h1a3 3 0 0 1 3 3v9H5V9a3 3 0 0 1 3-3h1V5a3 3 0 0 1 3-3z"/><path d="M9 13h.01M15 13h.01"/></svg>
+          <span>Agents</span>
+        </button>
+        <button class="nav-item" data-nav="gates" type="button">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/><path d="M9 12l2 2 4-4"/></svg>
+          <span>质量门禁</span>
+        </button>
+        <button class="nav-item" data-nav="artifacts" type="button">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l9-5-9 5 9-5M3 8l9 5 9-5M12 13v8"/><path d="M3 8l9 5 9-5M12 13v8"/></svg>
+          <span>产物</span>
+        </button>
+        <button class="nav-item" data-nav="events" type="button">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+          <span>事件日志</span>
+        </button>
+        <button class="nav-item" data-nav="settings" type="button">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span>设置</span>
+        </button>
+      </div>
+
+      <div class="sidebar-bottom">
+        <div class="sb-meta">
+          <div class="sb-row"><span class="sb-label">Provider</span><span class="sb-value" id="sb-provider">OpenAI</span></div>
+          <div class="sb-row"><span class="sb-label">模型</span><span class="sb-value" id="sb-model">gpt-4o</span></div>
+          <div class="sb-budget">
+            <div class="sb-row"><span class="sb-label">预算</span><span class="sb-value" id="sb-budget-pct">0%</span></div>
+            <div class="sb-progress"><i id="sb-budget-fill"></i></div>
+          </div>
+          <div class="sb-row sb-conn">
+            <span class="dot" id="sb-conn-dot"></span><span id="sb-conn-label">已连接</span>
+          </div>
+        </div>
+      </div>
     </nav>
 
-    <!-- 主内容区 -->
+    <!-- ===== 主内容区 ===== -->
     <main id="main" tabindex="-1">
-      <!-- 运行列表视图（卡片式） -->
-      <section id="runs-view">
-        <div class="runs-header">
-          <div class="runs-title-group">
-            <h1 class="runs-title">运行</h1>
-            <span id="runs-count" class="runs-count-badge"></span>
-          </div>
-          <div class="runs-toolbar">
-            <div class="runs-search">
-              <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-              </svg>
-              <input id="run-search" type="search" placeholder="搜索目标或 run id" autocomplete="off">
+      <!-- Dashboard 视图 -->
+      <section id="dashboard-view">
+        <!-- 3. 当前运行状态区（由 JS 渲染） -->
+        <div id="run-status-bar"></div>
+
+        <!-- 4. 任务 DAG 概览（核心） -->
+        <section class="dash-block" id="dag-section">
+          <div class="block-head">
+            <h2 class="block-title">任务依赖图</h2>
+            <div class="dag-controls">
+              <button class="btn btn-sm" id="dag-zoom-out" type="button" title="缩小" aria-label="缩小">−</button>
+              <span class="dag-zoom-label" id="dag-zoom-label">100%</span>
+              <button class="btn btn-sm" id="dag-zoom-in" type="button" title="放大" aria-label="放大">＋</button>
+              <button class="btn btn-sm" id="dag-fit" type="button" title="适应屏幕" aria-label="适应屏幕">适应</button>
+              <button class="btn btn-sm" id="dag-reset" type="button" title="重置" aria-label="重置">重置</button>
             </div>
           </div>
-        </div>
+          <div class="dag-canvas-wrap" id="dag-canvas-wrap">
+            <svg id="dag-svg" xmlns="http://www.w3.org/2000/svg"></svg>
+          </div>
+          <!-- 窄屏降级：任务列表 -->
+          <div class="dag-list-fallback hidden" id="dag-list-fallback"></div>
+        </section>
+
+        <!-- 5. Agent 协作状态 -->
+        <section class="dash-block" id="agents-section">
+          <div class="block-head"><h2 class="block-title">Agent 协作状态</h2></div>
+          <div class="agents-grid" id="agents-grid"></div>
+        </section>
+
+        <!-- 6. 三层质量门禁 -->
+        <section class="dash-block" id="gates-section">
+          <div class="block-head"><h2 class="block-title">质量门禁</h2></div>
+          <div class="gates-grid" id="gates-grid"></div>
+        </section>
+
+        <!-- 7. 最近事件时间线 -->
+        <section class="dash-block" id="events-section">
+          <div class="block-head">
+            <h2 class="block-title">最近事件</h2>
+            <div class="events-filter" id="events-filter"></div>
+          </div>
+          <div class="events-list" id="events-list"></div>
+        </section>
       </section>
 
-      <!-- 运行详情视图 -->
-      <section id="run-view" class="hidden"></section>
-
-      <!-- 空态 -->
-      <section id="empty-view" class="hidden">
-        <div class="empty-inner">
-          <div class="empty-glyph">
-            <svg width="48" height="48" viewBox="0 0 18 18" aria-hidden="true">
-              <rect x="1" y="1" width="7" height="7" rx="1.5"/>
-              <rect x="10" y="1" width="7" height="7" rx="1.5" opacity=".5"/>
-              <rect x="1" y="10" width="7" height="7" rx="1.5" opacity=".5"/>
-              <rect x="10" y="10" width="7" height="7" rx="1.5"/>
-            </svg>
-          </div>
-          <h1>多智能体协作的驾驶舱</h1>
-          <p>从运行列表选择一次运行，查看任务看板、事件流与产物；或启动一次新运行。</p>
-          <div class="empty-actions">
-            <button id="btn-empty-new" class="btn btn-primary" type="button">
-              <span class="btn-plus">+</span> 新运行
-            </button>
-          </div>
-        </div>
-      </section>
+      <!-- 其他页面：开发中空状态 -->
+      <section id="placeholder-view" class="hidden"></section>
     </main>
   </div>
 </div>
 
-<!-- 任务详情 / 产物预览 抽屉 -->
-<div id="drawer-mask" class="drawer-mask hidden"></div>
-<aside id="drawer" class="hidden" role="dialog" aria-modal="true"></aside>
+<!-- ===== 右侧任务详情面板 ===== -->
+<div id="detail-mask" class="hidden"></div>
+<aside id="detail-panel" class="hidden" role="dialog" aria-modal="true" aria-label="任务详情"></aside>
 
-<!-- 模态（新运行 / 设置 / 结束报告） -->
+<!-- 模态（确认弹窗 / 新运行 / 设置） -->
 <div id="modal-mask" class="hidden"></div>
 <div id="modal" class="hidden" role="dialog" aria-modal="true"></div>
 
