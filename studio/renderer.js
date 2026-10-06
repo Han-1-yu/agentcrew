@@ -755,7 +755,7 @@ function openTaskDetail(taskId){
             h('button',{class:'btn btn-sm',onclick:()=>toast('info','重试任务',t.id)},'重试任务'),
             h('button',{class:'btn btn-sm',onclick:()=>{t.status='skipped';toast('info','已跳过',t.id);renderDashboard();}},'跳过任务'),
             h('button',{class:'btn btn-sm',onclick:()=>{t.status='review';toast('info','人工处理',t.id+' 标记为人工处理');renderDashboard();}},'人工处理'),
-            h('button',{class:'btn btn-sm btn-primary',onclick:()=>toast('info','恢复运行','从 '+t.id+' 恢复')},'从此恢复'))));
+            h('button',{class:'btn btn-sm btn-primary',onclick:()=>toast('info','恢复运行','从 '+t.id+' 恢复')},'从此恢复')))));
   renderAgents();
 }
 function openAgentDetail(roleId){
@@ -1470,7 +1470,7 @@ async function loadRunList() {
           } },
           h('svg', { width: 13, height: 13, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' },
             h('polyline', { points: '3 6 5 6 21 6' }),
-            h('path', { d: 'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2' })))));
+            h('path', { d: 'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2' }))));
       listEl.appendChild(item);
     }
   } catch (e) {

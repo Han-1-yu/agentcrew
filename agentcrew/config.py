@@ -49,6 +49,7 @@ _ENV_TO_FIELD: dict[str, str] = {
     "AGENTCREW_MAX_LLM_CALLS": "max_llm_calls",
     "AGENTCREW_HEALTH_CHECK_ENABLED": "health_check_enabled",
     "AGENTCREW_HEALTH_CHECK_INTERVAL": "health_check_interval_secs",
+    "AGENTCREW_LLM_CACHE_ENABLED": "llm_cache_enabled",
 }
 
 #: ``AGENTCREW_MODEL_<ROLE>`` → ``role_bindings[<role 小写>]``（spec §17.2）。
@@ -335,6 +336,15 @@ class Settings(BaseModel):
 
     后台任务每隔这么多秒对所有已缓存的别名做一次健康探测。
     环境变量 ``AGENTCREW_HEALTH_CHECK_INTERVAL``。
+    """
+    llm_cache_enabled: bool = False
+    """LLM 响应缓存总开关（P3-2）。
+
+    ``True`` 时工厂为本次 run 启用进程内响应缓存，对 ``temperature == 0`` 的
+    确定性调用按 alias+messages+采样参数复用结果，命中不消耗 token/成本。
+    ``False``（默认）时工厂不挂缓存，所有 LLM 调用原样走 Provider，行为与改造前
+    完全一致 —— 默认关闭是为了避免意外改变既有输出/计费口径。
+    环境变量 ``AGENTCREW_LLM_CACHE_ENABLED``。
     """
     gate_config: dict[str, Any] = Field(default_factory=dict)
     """门禁规则配置化（P2-5）：G1/G2/G3 开关与评审参数。
