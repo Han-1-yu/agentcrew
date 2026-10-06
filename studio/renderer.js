@@ -478,7 +478,8 @@ function renderDAG() {
 function wireDAGControls(svg, vp, totalW, totalH) {
   const wrap=$('#dag-canvas-wrap');
   const apply=()=>{ vp.setAttribute('transform',`translate(${S.view.x} ${S.view.y}) scale(${S.view.zoom})`);
-    const lbl=$('#dag-zoom-label'); if(lbl) lbl.textContent=Math.round(S.view.zoom*100)+'%'; };
+    const lbl=$('#dag-zoom-label'); if(lbl) lbl.textContent=Math.round(S.view.zoom*100)+'%';
+    try { localStorage.setItem('agentcrew:dagView', JSON.stringify(S.view)); } catch {} };
   const zoomAt=(factor,cx,cy)=>{ const nz=Math.max(0.3,Math.min(3,S.view.zoom*factor));
     const rect=wrap.getBoundingClientRect(); const px=cx??rect.width/2, py=cy??rect.height/2;
     const wx=(px-S.view.x)/S.view.zoom, wy=(py-S.view.y)/S.view.zoom;
@@ -1153,6 +1154,7 @@ function renderEventsPage(container) {
       h('input', { id: 'ev-search', type: 'text', placeholder: '搜索事件…',
         style: 'width:200px;padding:6px 10px;border:1px solid rgba(60,60,67,.18);border-radius:6px;font-size:12px;font-family:inherit',
         oninput: () => renderEventsList() }),
+      h('button', { class: 'btn', onclick: () => exportEvents() }, '导出 JSON'),
       h('button', { class: 'btn', onclick: () => switchNav('dashboard') }, '返回'))));
 
   const filterBar = h('div', { class: 'ev-filter-bar', id: 'ev-filter-bar' });
@@ -1216,6 +1218,20 @@ function renderEventsList() {
   }
 }
 
+/* 导出事件为 JSON 文件下载 */
+function exportEvents() {
+  const events = S.dash.events || [];
+  if (!events.length) { toast('warning', '无事件', '当前运行没有事件记录'); return; }
+  const data = JSON.stringify({ run_id: S.dash.run.run_id, exported_at: new Date().toISOString(), count: events.length, events }, null, 2);
+  const blob = new Blob([data], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `events-${S.dash.run.run_id || 'export'}.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast('success', '已导出', `${events.length} 条事件`);
+}
+
 function summarizeEvent(e) {
   const d = e.data || {};
   if (e.event === 'task_started') return `${d.task_id || ''} 开始执行（第 ${d.attempt || 1} 次）`;
@@ -1234,33 +1250,63 @@ function summarizeEvent(e) {
    任务图全屏页（分层列表视图）
    ============================================================ */
 function renderDagPage(container) {
+  S.taskFilter = S.taskFilter || { q: '', status: 'all' };
+  const renderList = () => {
+    wrap.innerHTML = '';
+    const allTasks = S.dash.tasks || [];
+    const q = (S.taskFilter.q || '').toLowerCase();
+    const filtered = allTasks.filter(t => {
+      if (S.taskFilter.status !== 'all' && t.status !== S.taskFilter.status) return false;
+      if (!q) return true;
+      return (t.id || '').toLowerCase().includes(q) ||
+             (t.title || '').toLowerCase().includes(q) ||
+             (t.role || '').toLowerCase().includes(q) ||
+             (t.description || '').toLowerCase().includes(q);
+    });
+    if (!filtered.length) { wrap.appendChild(h('div', { class: 'ph-empty' }, '无匹配任务')); return; }
+    const { layers } = computeLayers(filtered);
+    layers.forEach((ids, li) => {
+      const layerTasks = ids.map(id => filtered.find(t => t.id === id)).filter(Boolean);
+      const layerEl = h('div', { class: 'dag-layer' },
+        h('div', { class: 'dag-layer-head' }, `第 ${li + 1} 层 · ${layerTasks.length} 个任务`));
+      const listEl = h('div', { class: 'dag-layer-tasks' });
+      for (const t of layerTasks) {
+        const meta = ROLE_META[t.role] || { label: t.role, color: '#8E8E93' };
+        listEl.appendChild(h('div', { class: 'dag-task-row', onclick: () => openTaskDetail(t.id) },
+          h('span', { class: `ts-dot ts-${t.status}` }),
+          h('span', { class: 'dag-task-id' }, t.id),
+          h('span', { class: 'dag-task-title' }, trunc(t.title, 40)),
+          h('span', { class: 'dag-task-role', style: `color:${meta.color}` }, meta.label || t.role),
+          h('span', { class: 'dag-task-deps' }, (t.dependencies || []).length ? `← ${t.dependencies.join(', ')}` : '—'),
+          h('span', { class: `dag-task-status status-${t.status}` }, t.status)));
+      }
+      layerEl.appendChild(listEl);
+      wrap.appendChild(layerEl);
+    });
+  };
+
   container.appendChild(h('div', { class: 'page-head' },
     h('h2', {}, '任务依赖图'),
-    h('button', { class: 'btn', onclick: () => switchNav('dashboard') }, '返回总览 DAG')));
+    h('div', { style: 'display:flex;gap:8px;align-items:center' },
+      h('input', { type: 'text', placeholder: '搜索任务…', value: S.taskFilter.q,
+        style: 'width:180px;padding:6px 10px;border:1px solid rgba(60,60,67,.18);border-radius:6px;font-size:12px;font-family:inherit',
+        oninput: (e) => { S.taskFilter.q = e.target.value; renderList(); } }),
+      h('button', { class: 'btn', onclick: () => switchNav('dashboard') }, '返回'))));
+
+  // 状态筛选 chips
+  const statuses = ['all', 'pending', 'ready', 'running', 'blocked', 'review', 'succeeded', 'failed', 'skipped'];
+  const statusLabels = { all: '全部', pending: '待处理', ready: '就绪', running: '运行中', blocked: '阻塞', review: '评审中', succeeded: '已完成', failed: '失败', skipped: '已跳过' };
+  const filterBar = h('div', { class: 'ev-filter-bar', style: 'margin-bottom:12px' });
+  statuses.forEach(st => {
+    filterBar.appendChild(h('button', { class: 'ev-filter-btn' + (S.taskFilter.status === st ? ' active' : ''),
+      onclick: () => { S.taskFilter.status = st; $$('#placeholder-view .ev-filter-btn').forEach(b => b.classList.remove('active')); filterBar.querySelectorAll('.ev-filter-btn').forEach(b => b.classList.remove('active')); event.target.classList.add('active'); renderList(); } },
+      statusLabels[st] || st));
+  });
+  container.appendChild(filterBar);
+
   const wrap = h('div', { class: 'dag-full-wrap' });
   container.appendChild(wrap);
-  const tasks = S.dash.tasks || [];
-  if (!tasks.length) { wrap.appendChild(h('div', { class: 'ph-empty' }, '暂无任务')); return; }
-  // 按拓扑层分组
-  const { layers } = computeLayers(tasks);
-  layers.forEach((ids, li) => {
-    const layerTasks = ids.map(id => tasks.find(t => t.id === id)).filter(Boolean);
-    const layerEl = h('div', { class: 'dag-layer' },
-      h('div', { class: 'dag-layer-head' }, `第 ${li + 1} 层 · ${layerTasks.length} 个任务`));
-    const listEl = h('div', { class: 'dag-layer-tasks' });
-    for (const t of layerTasks) {
-      const meta = ROLE_META[t.role] || { label: t.role, color: '#8E8E93' };
-      listEl.appendChild(h('div', { class: 'dag-task-row', onclick: () => openTaskDetail(t.id) },
-        h('span', { class: `ts-dot ts-${t.status}` }),
-        h('span', { class: 'dag-task-id' }, t.id),
-        h('span', { class: 'dag-task-title' }, trunc(t.title, 40)),
-        h('span', { class: 'dag-task-role', style: `color:${meta.color}` }, meta.label || t.role),
-        h('span', { class: 'dag-task-deps' }, (t.dependencies || []).length ? `← ${t.dependencies.join(', ')}` : '—'),
-        h('span', { class: `dag-task-status status-${t.status}` }, t.status)));
-    }
-    layerEl.appendChild(listEl);
-    wrap.appendChild(layerEl);
-  });
+  renderList();
 }
 
 /* ============================================================
@@ -1707,6 +1753,12 @@ async function boot(){
     }
   } catch {}
   if(!S.realMode) initMockData();
+
+  // 恢复 DAG 缩放/平移状态
+  try {
+    const savedView = localStorage.getItem('agentcrew:dagView');
+    if (savedView) { const v = JSON.parse(savedView); S.view = { zoom: v.zoom || 1, x: v.x || 0, y: v.y || 0 }; }
+  } catch {}
 
   renderDashboard();
   // 恢复上次查看的页面
