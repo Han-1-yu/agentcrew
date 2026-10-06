@@ -499,3 +499,105 @@ def score_plan(tasks: Sequence[Task], goal: str) -> PlanScore:
         deliverable_clarity=deliverable_clarity,
         details=details,
     )
+
+
+# ── P2-7：增量计划编辑（添加 / 删除 / 修改，不可变，返回新列表）───────────────
+
+#: 增量编辑允许就地修改的字段（运行期状态字段不在这里 —— 它们由 TaskBoard 管）。
+_EDITABLE_TASK_FIELDS = frozenset(
+    {
+        "title",
+        "description",
+        "role",
+        "acceptance_criteria",
+        "deliverables",
+        "dependencies",
+        "priority",
+        "brief",
+    }
+)
+
+
+def add_task_to_plan(tasks: Sequence[Task], new_task: Task) -> list[Task]:
+    """在计划末尾、``T-FINAL`` **之前**插入 ``new_task``，返回新列表。
+
+    ``T-FINAL`` 是平台追加的收尾任务，必须始终排在最后（它依赖全部叶子任务），
+    因此新任务插到它前面；计划里没有 ``T-FINAL`` 时直接追加。id 与已有任务重复
+    时抛 :class:`ValueError` —— 这是用户手误，早报比等校验把整条列表退回更友好。
+    不修改输入列表，也不修改 ``new_task``。
+    """
+    if any(task.id == new_task.id for task in tasks):
+        raise ValueError(f"任务 id 已存在：{new_task.id}")
+    result = list(tasks)
+    if result and result[-1].id == FINAL_TASK_ID:
+        result.insert(len(result) - 1, new_task)
+    else:
+        result.append(new_task)
+    return result
+
+
+def remove_task_from_plan(tasks: Sequence[Task], task_id: str) -> list[Task]:
+    """删除指定任务，并从其他任务的 ``dependencies`` 里清掉对它的引用。
+
+    不清理依赖会留下悬空边（:func:`validate_plan` 校验 3 会把它当错误）；删除
+    ``T-FINAL``（平台保留任务）或不存在的 id 抛 :class:`ValueError`。返回新列表。
+    """
+    if task_id == FINAL_TASK_ID:
+        raise ValueError("不能删除平台保留的收尾任务 T-FINAL")
+    if not any(task.id == task_id for task in tasks):
+        raise ValueError(f"任务 id 不存在：{task_id}")
+    result: list[Task] = []
+    for task in tasks:
+        if task.id == task_id:
+            continue
+        deps = [dep for dep in task.dependencies if dep != task_id]
+        if deps == list(task.dependencies):
+            result.append(task)
+        else:
+            result.append(task.model_copy(update={"dependencies": deps}))
+    return result
+
+
+def modify_task_in_plan(
+    tasks: Sequence[Task], task_id: str, updates: dict[str, Any]
+) -> list[Task]:
+    """就地修改某任务的可编辑字段，返回新列表（其他任务原样保留）。
+
+    只允许改 :data:`_EDITABLE_TASK_FIELDS` 里的字段（运行期状态 / 评审记录不在此列，
+    它们只能经 ``TaskBoard`` 改）；未知字段或不存在的任务 id 抛 :class:`ValueError`。
+    修改经 ``model_copy(update=...)`` 完成，不触碰原对象。
+    """
+    unknown = set(updates) - _EDITABLE_TASK_FIELDS
+    if unknown:
+        raise ValueError(f"不可修改的字段：{sorted(unknown)}")
+    if not any(task.id == task_id for task in tasks):
+        raise ValueError(f"任务 id 不存在：{task_id}")
+    return [
+        task.model_copy(update=dict(updates)) if task.id == task_id else task
+        for task in tasks
+    ]
+
+
+def validate_incremental_edit(
+    original: Sequence[Task], edited: Sequence[Task]
+) -> list[str]:
+    """对增量编辑后的计划做结构校验，返回**全部错误**（空列表 = 通过）。
+
+    复用 :func:`validate_plan` 里不需要角色目录的那几条检查（id 唯一、依赖存在且
+    不自引用、无环、产物路径冲突、验收标准非空、要求文档的标准有文档交付物）。
+    「只检查受影响部分」在工程上等价于全量结构重检：编辑来自一份**此前已通过校验**
+    的计划，未被改动的任务保持合法，因此全量重检报出的任何错误必然落在被改动的部分
+    （或被改动引入的冲突）。角色是否已注册需要 ``RoleCatalog``，由调用方在真正落盘
+    前用 :func:`validate_plan` 兜底（CLI 编辑路径正是这么做的）。
+
+    与 :func:`validate_plan` 不同，本函数**不抛异常**：它把错误收集成列表返回，
+    便于 CLI 在子菜单里逐条展示并继续编辑。
+    """
+    errors: list[str] = []
+    errors.extend(_check_ids(edited))
+    errors.extend(_check_dependencies(edited))
+    errors.extend(_check_cycles(edited))
+    errors.extend(_check_artifact_paths(edited))
+    errors.extend(_check_acceptance_criteria(edited))
+    errors.extend(_check_criteria_have_deliverables(edited))
+    return errors

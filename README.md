@@ -550,6 +550,24 @@ Ledger 此前只被终端看板 / 状态命令消费，现在 REST 也能直接�
 - 实现：`agentcrew/runtime/ledger.py::LedgerReader`（只读查询器，run_id 路径越界
   一律拒绝），`agentcrew/api/server.py::_get_ledger` / `_get_stats`
 
+### P2-10. Web UI 操作化
+
+Dashboard 从纯查看升级为可操作（同一服务器提供页面与 API，天然同域）：
+
+- **运行列表**：页面加载即 `GET /runs` 拉取全部 run 并每 5 秒自动刷新，卡片展示
+  目标、状态徽章与操作按钮
+- **取消 / 删除**：运行中的 run 卡片显示「取消」（`POST /runs/{id}/cancel`，确认后
+  执行）；非运行状态显示「删除」（`DELETE /runs/{id}?confirm=1`，前端两次确认、
+  API 强制 `?confirm=1`，running 状态服务端 409 拒绝）；操作后自动刷新列表
+- **模型切换**：顶部模型选择器（P1-6）在连接任意 run 后即可用，调
+  `PUT /runs/{id}/model`
+- **事件日志标签页**：调 `GET /runs/{id}/ledger` 展示事件列表，支持按事件类型
+  过滤（如 `llm_call`），连接 run 时自动加载
+- **统计标签页**：调 `GET /runs/{id}/stats` 展示 LLM 调用数 / token / 估算成本 /
+  任务完成率与平均时长 / 工具调用成败 / 事件分布
+- 错误处理：所有 API 调用失败时弹出错误提示，不影响看板其余部分；看板、实时
+  SSE 事件流等原有查看功能保持不变
+
 ### P2-6. 计划质量评分
 
 PM 拆解通过 §7.2 二元校验后，再由 `score_plan()` 做一次**多维度质量评分**，

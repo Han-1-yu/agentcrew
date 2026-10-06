@@ -42,10 +42,14 @@ from agentcrew.gate.gatekeeper import DeliveryDecision, PlanDecision
 from agentcrew.roles.builtin import BUILTIN_ROLES
 from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.runtime.checkpoint import CheckpointStore, RunRecord
+from agentcrew.artifacts.spec import ArtifactSpec
 from agentcrew.task.planner import (
     FINAL_TASK_ID,
     PlanOutput,
     PlanValidationError,
+    add_task_to_plan,
+    modify_task_in_plan,
+    remove_task_from_plan,
     to_tasks,
     validate_plan,
     with_final_task,
@@ -94,6 +98,8 @@ class CliPrompter:
         )
         self._console = Console() if console is None else console
         self._crew = crew
+        # P2-7：增量编辑子菜单落盘前用同一份目录重跑 §7.2 校验。
+        self._catalog = catalog
 
     # ── 卡点一：计划 ─────────────────────────────────────────────────────
 
@@ -112,12 +118,12 @@ class CliPrompter:
             if choice == "a":
                 return PlanDecision(action="approve", tasks=planned)
             if choice == "e":
-                try:
-                    edited = list(self._edit(planned))
-                except PlanValidationError as exc:
-                    self._print_errors(exc.errors)
-                    continue
-                return PlanDecision(action="edit", tasks=edited)
+                # P2-7：进入编辑会话（增量添加/删除/修改 + 全量编辑器）。
+                # 返回 None 表示会话内放弃（EOF 在子提示里），回到主菜单。
+                decision = await self._edit_session(planned)
+                if decision is not None:
+                    return decision
+                continue
             if choice == "m":
                 await self._switch_model()
                 continue
@@ -133,6 +139,175 @@ class CliPrompter:
                 "a/e/m/s/q",
             )
         return (_PLAN_MENU, _PLAN_CHOICES)
+
+    # ── P2-7：增量编辑会话 ──────────────────────────────────────────────
+
+    _EDIT_MENU = (
+        "[a] 添加任务 / [d] 删除任务 / [m] 修改任务 / "
+        "[e] 全量编辑器 / [b] 完成提交 / [q] 取消"
+    )
+    _EDIT_CHOICES = "a/d/m/e/b/q"
+
+    async def _edit_session(
+        self, starting: Sequence[Task]
+    ) -> PlanDecision | None:
+        """``[e]`` 进入的编辑子菜单：在 ``starting``（含 T-FINAL）上做增量修改。
+
+        每次增量操作后立即用 :func:`with_final_task` + :func:`validate_plan` 重校验：
+        失败则打印错误并**丢弃本次操作**（working 不变），允许继续编辑。
+        全量编辑器 ``[e]`` 保持原有行为 —— 成功后立即提交（与旧实现一致）。
+        ``[b]`` 提交累积的增量修改；``[q]`` 取消整次计划卡点。每次成功的增量操作
+        都记进 ``incremental_edits``，供 Crew 落 ``plan_incremental_edit`` 事件。
+        """
+        working = list(starting)
+        changes: list[dict[str, Any]] = []
+        while True:
+            choice = self._choose(
+                self._EDIT_MENU, self._EDIT_CHOICES,
+                default="b", eof_label="取消",
+            )
+            if choice == "q":
+                return PlanDecision(action="cancel")
+            if choice == "b":
+                return PlanDecision(
+                    action="edit", tasks=working, incremental_edits=changes
+                )
+            if choice == "e":
+                try:
+                    edited = list(self._edit(working))
+                except PlanValidationError as exc:
+                    self._print_errors(exc.errors)
+                    continue
+                changes.append({"action": "full_editor"})
+                return PlanDecision(
+                    action="edit", tasks=edited, incremental_edits=changes
+                )
+            if choice == "a":
+                applied = self._op_add(working)
+            elif choice == "d":
+                applied = self._op_remove(working)
+            else:  # m
+                applied = self._op_modify(working)
+            if applied is None:
+                continue
+            working, change = applied
+            changes.append(change)
+            self._console.print(
+                Text("已应用，当前任务：" + "、".join(t.id for t in working)),
+                soft_wrap=True,
+            )
+
+    def _validate_working(
+        self, working: Sequence[Task]
+    ) -> tuple[list[Task] | None, list[str]]:
+        """重跑 §7.2（含 T-FINAL 重建）；返回 ``(通过后的列表, 错误)``。"""
+        catalog = self._catalog or RoleCatalog(BUILTIN_ROLES)
+        try:
+            rebuilt = with_final_task(working)
+            validate_plan(rebuilt, catalog)
+        except PlanValidationError as exc:
+            return None, list(exc.errors)
+        return rebuilt, []
+
+    def _op_add(
+        self, working: Sequence[Task]
+    ) -> tuple[list[Task], dict[str, Any]] | None:
+        """子菜单 ``[a]``：交互式收集新任务字段，插到 T-FINAL 之前。"""
+        try:
+            new_id = self._input("新任务 id（如 T-003）> ").strip()
+            title = self._input("标题> ").strip()
+            description = self._input("描述> ").strip()
+            role = self._input("角色 key（如 backend_dev）> ").strip()
+            criteria_raw = self._input("验收标准（逗号分隔）> ").strip()
+            path = self._input("交付物路径（留空=无）> ").strip()
+        except EOFError:
+            self._console.print(Text("输入已结束，放弃本次添加。"), soft_wrap=True)
+            return None
+        if not new_id or not title:
+            self._console.print(Text("id 与标题不能为空。"), soft_wrap=True)
+            return None
+        criteria = [c.strip() for c in criteria_raw.split(",") if c.strip()] or ["完成"]
+        deliverables = (
+            [ArtifactSpec(path=path, kind=_kind_for_path(path), description=title)]
+            if path else []
+        )
+        task = Task(
+            id=new_id, title=title, description=description,
+            role=role or "backend_dev", acceptance_criteria=criteria,
+            deliverables=deliverables,
+        )
+        try:
+            candidate = add_task_to_plan(working, task)
+        except ValueError as exc:
+            self._console.print(Text(str(exc)), soft_wrap=True)
+            return None
+        rebuilt, errors = self._validate_working(candidate)
+        if errors:
+            self._print_errors(errors)
+            return None
+        return rebuilt, {"action": "add", "task_id": new_id}
+
+    def _op_remove(
+        self, working: Sequence[Task]
+    ) -> tuple[list[Task], dict[str, Any]] | None:
+        """子菜单 ``[d]``：删除指定任务并清理对它的依赖引用。"""
+        try:
+            task_id = self._input("要删除的任务 id> ").strip()
+        except EOFError:
+            self._console.print(Text("输入已结束，放弃本次删除。"), soft_wrap=True)
+            return None
+        try:
+            candidate = remove_task_from_plan(working, task_id)
+        except ValueError as exc:
+            self._console.print(Text(str(exc)), soft_wrap=True)
+            return None
+        rebuilt, errors = self._validate_working(candidate)
+        if errors:
+            self._print_errors(errors)
+            return None
+        return rebuilt, {"action": "remove", "task_id": task_id}
+
+    def _op_modify(
+        self, working: Sequence[Task]
+    ) -> tuple[list[Task], dict[str, Any]] | None:
+        """子菜单 ``[m]``：交互式选择字段并写新值。"""
+        try:
+            task_id = self._input("要修改的任务 id> ").strip()
+            field = self._input(
+                "要修改的字段（title/description/role/acceptance_criteria/deliverables）> "
+            ).strip().lower()
+            raw = self._input("新值> ").strip()
+        except EOFError:
+            self._console.print(Text("输入已结束，放弃本次修改。"), soft_wrap=True)
+            return None
+        if field == "acceptance_criteria":
+            updates: dict[str, Any] = {
+                "acceptance_criteria": [c.strip() for c in raw.split(",") if c.strip()]
+            }
+        elif field == "deliverables":
+            updates = {
+                "deliverables": [] if not raw
+                else [ArtifactSpec(path=raw, kind=_kind_for_path(raw), description="d")]
+            }
+        elif field in ("title", "description", "role"):
+            updates = {field: raw}
+        else:
+            self._console.print(Text(f"暂不支持修改字段：{field!r}"), soft_wrap=True)
+            return None
+        try:
+            candidate = modify_task_in_plan(working, task_id, updates)
+        except ValueError as exc:
+            self._console.print(Text(str(exc)), soft_wrap=True)
+            return None
+        rebuilt, errors = self._validate_working(candidate)
+        if errors:
+            self._print_errors(errors)
+            return None
+        return rebuilt, {
+            "action": "modify",
+            "task_id": task_id,
+            "changes": sorted(updates.keys()),
+        }
 
     # ── 卡点二：交付 ─────────────────────────────────────────────────────
 
@@ -394,6 +569,26 @@ def _draft(task: Task) -> dict[str, Any]:
         "priority": task.priority,
         "brief": task.brief,
     }
+
+
+def _kind_for_path(path: str) -> str:
+    """按扩展名猜交付物 ``kind``（增量添加/修改任务时用；猜不中回落 text）。"""
+    lowered = path.lower()
+    if lowered.endswith((".md", ".markdown")):
+        return "markdown"
+    if lowered.endswith(".py"):
+        return "python"
+    if lowered.endswith(".json"):
+        return "json"
+    if lowered.endswith((".html", ".htm")):
+        return "html"
+    if lowered.endswith(".css"):
+        return "css"
+    if lowered.endswith(".js"):
+        return "js"
+    if lowered.endswith((".yaml", ".yml")):
+        return "yaml"
+    return "text"
 
 
 # ── 展示辅助 ──────────────────────────────────────────────────────────────

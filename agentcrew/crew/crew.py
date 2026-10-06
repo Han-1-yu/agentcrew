@@ -497,7 +497,11 @@ class Crew:
                 f"计划已保存（save_exit）：用 resume {run.record.run_id} 续跑"
             )
         if decision.action == "edit":
-            board = self._build_board(run, self._accepted_plan(decision.tasks or []))
+            edited_tasks = self._accepted_plan(decision.tasks or [])
+            # P2-7：增量编辑（添加/删除/修改）逐条留痕；全量编辑器无此记录。
+            for change in decision.incremental_edits:
+                run.ledger.emit("plan_incremental_edit", **change)
+            board = self._build_board(run, edited_tasks)
         # 规划一成功就落盘：进程死在执行开始之前时，resume 仍有面板可续（否则
         # load_board 抛 FileNotFoundError，只能整轮重拆）。
         run.checkpoint.save_tasks(board)
