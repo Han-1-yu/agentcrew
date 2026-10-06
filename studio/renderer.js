@@ -566,6 +566,7 @@ function renderRunStatusBar() {
     actions.push(h('button',{class:'btn',onclick:openModelSwitcher},'切换模型'));
     actions.push(h('button',{class:'btn',onclick:()=>window.studio.openPath(run.dir)},'打开目录'));
     actions.push(h('button',{class:'btn',onclick:exportRun},'导出运行'));
+    actions.push(h('button',{class:'btn',onclick:exportReport},'导出报告'));
   } else {
     actions.push(h('button',{class:'btn',onclick:()=>toast('info','重新运行','已用相同目标启动新运行')},'重新运行'));
     actions.push(h('button',{class:'btn',onclick:()=>{ pushEvent('checkpoint_saved',{manual:true}); toast('success','检查点','已从最近检查点继续'); }},'从检查点继续'));
@@ -1365,6 +1366,83 @@ function exportRun() {
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
   toast('success', '已导出', `运行 ${run.run_id} 完整数据`);
+}
+
+/* 导出 Markdown 格式运行报告 */
+function exportReport() {
+  const run = S.dash.run; if (!run) { toast('warning', '无运行', '当前没有可导出的运行'); return; }
+  const tasks = S.dash.tasks || [];
+  const agents = S.dash.agents || {};
+  const gates = S.dash.gates || [];
+  const events = S.dash.events || [];
+  const st = run.stats || {};
+
+  const success = tasks.filter(t => t.status === 'passed' || t.status === 'succeeded').length;
+  const failed = tasks.filter(t => t.status === 'failed').length;
+  const running = tasks.filter(t => t.status === 'running').length;
+  const pending = tasks.filter(t => ['pending', 'ready', 'blocked'].includes(t.status)).length;
+
+  let md = `# AgentCrew 运行报告\n\n`;
+  md += `## 基本信息\n\n`;
+  md += `- **Run ID**: ${run.run_id || '—'}\n`;
+  md += `- **目标**: ${run.goal || '—'}\n`;
+  md += `- **状态**: ${run.status || '—'}\n`;
+  md += `- **模型**: ${run.model || run.config_snapshot?.default_model || '—'}\n`;
+  md += `- **创建时间**: ${run.created_at || run.start_time || '—'}\n`;
+  md += `- **更新时间**: ${run.updated_at || '—'}\n\n`;
+
+  md += `## 统计\n\n`;
+  md += `| 指标 | 值 |\n|---|---|\n`;
+  md += `| 任务总数 | ${tasks.length} |\n`;
+  md += `| 成功 | ${success} |\n`;
+  md += `| 失败 | ${failed} |\n`;
+  md += `| 运行中 | ${running} |\n`;
+  md += `| 等待中 | ${pending} |\n`;
+  md += `| LLM 调用 | ${st.llm_calls || 0} |\n`;
+  md += `| 输入 Token | ${fmtTokens(st.prompt_tokens || 0)} |\n`;
+  md += `| 输出 Token | ${fmtTokens(st.completion_tokens || 0)} |\n`;
+  md += `| 估算费用 | $${(st.estimated_cost_usd || 0).toFixed(4)} |\n`;
+  md += `| 预算上限 | $${(run.budget_limit_usd || 0).toFixed(2)} |\n\n`;
+
+  md += `## 任务列表\n\n`;
+  md += `| ID | 标题 | 负责 | 状态 | 耗时 | 费用 |\n|---|---|---|---|---|---|\n`;
+  for (const t of tasks) {
+    const dur = t.result?.duration_ms ? fmtDur(t.result.duration_ms) : '—';
+    const cost = t.result?.cost_usd ? `$${t.result.cost_usd.toFixed(4)}` : '—';
+    md += `| ${t.id} | ${(t.title || '').replace(/\|/g, '\\|')} | ${t.role || '—'} | ${t.status || '—'} | ${dur} | ${cost} |\n`;
+  }
+  md += `\n`;
+
+  md += `## Agent 状态\n\n`;
+  md += `| 角色 | 状态 | 当前任务 | 已完成 | 失败 | Token | 费用 |\n|---|---|---|---|---|---|---|\n`;
+  for (const [role, a] of Object.entries(agents)) {
+    const meta = ROLE_META[role] || { label: role };
+    md += `| ${meta.label || role} | ${a.status || '—'} | ${a.task || '—'} | ${a.done || 0} | ${a.fail || 0} | ${fmtTokens(a.tokens || 0)} | $${(a.cost || 0).toFixed(4)} |\n`;
+  }
+  md += `\n`;
+
+  if (gates.length) {
+    md += `## 质量门禁\n\n`;
+    md += `| 层级 | 状态 | 通过 | 失败 | 结论 |\n|---|---|---|---|---|\n`;
+    for (const g of gates) {
+      md += `| ${g.layer || g.name || '—'} | ${g.status || '—'} | ${g.checks?.passed || 0} | ${g.checks?.failed || 0} | ${g.verdict || '—'} |\n`;
+    }
+    md += `\n`;
+  }
+
+  md += `## 最近事件（前 20 条）\n\n`;
+  for (const e of events.slice(-20)) {
+    md += `- \`${e.ts || ''}\` **${e.event || ''}** — ${summarizeEvent(e) || ''}\n`;
+  }
+  md += `\n---\n*由 AgentCrew Studio 生成于 ${new Date().toISOString()}*\n`;
+
+  const blob = new Blob([md], { type: 'text/markdown' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `agentcrew-report-${run.run_id || 'run'}.md`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast('success', '已导出', `运行报告 ${run.run_id || ''}.md`);
 }
 
 function summarizeEvent(e) {
