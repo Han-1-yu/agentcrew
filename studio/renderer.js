@@ -1567,7 +1567,7 @@ function renderGatesPage(container) {
         h('button', { class: 'btn btn-sm btn-primary', onclick: () => { acceptGate(g); renderGatesPage(container.parentElement); } }, '批准通过'),
         h('button', { class: 'btn btn-sm btn-danger', onclick: () => { rejectGate(g); renderGatesPage(container.parentElement); } }, '驳回返工'),
         h('button', { class: 'btn btn-sm', onclick: () => { g.status = 'running'; g.checks = { total: g.checks.total, passed: 0, failed: 0 }; toast('info', '重试门禁', g.name + ' 重新运行'); renderGatesPage(container.parentElement); } }, '重试'))
-        : h('div', { class: 'gate-full-readonly' }, '真实模式下门禁审批需通过 CLI 或 API 执行'))));
+        : h('div', { class: 'gate-full-readonly' }, '真实模式下门禁审批需通过 CLI 或 API 执行')));
   }
 }
 
