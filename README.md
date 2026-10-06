@@ -177,11 +177,12 @@ uvicorn app.main:app --reload
 | 子命令 | 用途 | 常用参数 |
 |---|---|---|
 | `python main.py run` | 执行一次完整 run（规划 → 执行 → 交付） | `--goal TEXT` 与 `--demo` 二选一；`--mock`；`--auto`；`--gate both\|plan\|delivery\|none`；`--max-concurrency N`；`--default-model ALIAS`；`--output-dir DIR`；`--context-budget N`；`--no-live` |
-| `python main.py resume <run_id>` | 续跑一个中断或未完成的 run | `--force`（配置快照不一致时仍继续）；以及 `run` 的全部配置参数（`--mock` / `--auto` / `--gate` / `--max-concurrency` / `--default-model` / `--output-dir` / `--context-budget` / `--no-live`） |
+| `python main.py resume <run_id>` | 续跑一个中断或未完成的 run | `--force`（配置快照不一致时仍继续）；以及 `run` 的全部配置参数 |
 | `python main.py status <run_id>` | 打印 run 记录、统计与任务看板 | `--output-dir DIR` |
 | `python main.py roles` | 列出 8 个内置角色的职责 / 边界 / 产出 | 无 |
 | `python main.py clean` | 保留最近 N 个 run，删除更旧的（默认 N=5） | `--keep N`；`--dry-run`（只列不删）；`--output-dir DIR` |
 | `python main.py cancel <run_id>` | 给离线 run 打 cancelled 标记（下次 resume 直接收尾） | `--output-dir DIR` |
+| `python main.py serve` | 启动 HTTP API + Web UI 面板（V2） | `--host HOST`（默认 127.0.0.1）；`--port PORT`（默认 8765） |
 
 行为说明：
 
@@ -205,6 +206,90 @@ uvicorn app.main:app --reload
 | `3` | 配置 / 参数错误（缺 Key、参数非法、resume 配置不一致未加 `--force` 等） |
 | `4` | 停滞（死锁：没有可运行任务但仍有任务未终结） |
 | `130` | 用户中断（`Ctrl-C` → `INTERRUPTED`）或取消（`cancel` → `CANCELLED`） |
+
+---
+
+## V2 增强功能
+
+V2 在 V1 基础上新增七项增强，全部向后兼容（未配置时行为与 V1 完全一致）。
+
+### 1. LLM 摘要式上下文压缩
+
+当上游任务的自述摘要超出上下文预算时，自动调用 LLM 将其压缩为简短摘要，
+避免长上下文截断关键信息。未配置摘要模型时走纯截断（零额外开销）。
+
+- 实现：`agentcrew/context/summarizer.py`
+- 接入点：Scheduler 在 `build()` 前调用 `prefetch_summaries(task)`
+- 配置：无需额外配置，默认使用 `default_model` 做摘要
+
+### 2. 按复杂度自动选模型
+
+根据任务的认知复杂度（角色权重 + 验收标准数 + 依赖数 + 交付物数 + 描述长度）
+自动分级为 LOW / MEDIUM / HIGH，不同级别可绑定不同模型。
+
+```bash
+# .env 中按级指定模型
+AGENTCREW_TIER_LOW=openai:gpt-4o-mini
+AGENTCREW_TIER_MEDIUM=openai:gpt-4o
+AGENTCREW_TIER_HIGH=openai:gpt-4o
+```
+
+优先级：`role_bindings[role]` > `model_tiers[复杂度]` > `default_model`。
+
+### 3. 外部 CLI 引擎接入
+
+通过命令行工具接入任意 LLM 引擎（ollama CLI、llama.cpp、本地脚本等），
+无需 HTTP API。prompt 通过 stdin 传入，stdout 作为补全文本。
+
+在 `agentcrew.yaml` 的 `models.providers` 中配置：
+
+```yaml
+models:
+  providers:
+    cli:
+      command: "ollama run {model}"
+```
+
+然后用 `cli:my-model` 作为模型别名即可。
+
+### 4. 树状任务拆解
+
+Task 新增 `parent_id` 字段，支持父子层级的任务树。父任务自动成为子任务的
+依赖（父子边是 DAG 边的子集），因此现有拓扑排序和环检测天然保证父先于子执行。
+
+- 查询：`TaskGraph.children(id)` / `ancestors(id)` / `subtree(id)` / `roots()` / `leaves()` / `depth(id)`
+
+### 5. HTTP API + SSE 实时事件流
+
+零依赖 async HTTP 服务器，提供 REST 端点和 SSE 实时事件推送：
+
+| 端点 | 方法 | 用途 |
+|---|---|---|
+| `/health` | GET | 健康检查 |
+| `/runs/{id}/status` | GET | 运行状态与任务看板 |
+| `/runs/{id}/events` | GET | SSE 事件流（实时推送） |
+| `/runs/{id}/events` | POST | 注入事件（调试用） |
+
+### 6. MCP 协议互操作
+
+零依赖 stdio MCP 客户端，支持连接外部 MCP 服务器发现和调用工具：
+
+```python
+from agentcrew.mcp import MCPClient
+
+async with MCPClient(["npx", "-y", "@modelcontextprotocol/server-filesystem", "/tmp"]) as client:
+    tools = await client.list_tools()
+    result = await client.call_tool("read_file", {"path": "/tmp/x.txt"})
+    print(result.text)
+```
+
+实现 JSON-RPC 2.0 + initialize 握手 + tools/list + tools/call。
+
+### 7. Web UI 面板
+
+`python main.py serve` 启动后，浏览器打开 `http://127.0.0.1:8765/` 即可访问
+Kanban 任务看板（10 状态列）+ 实时事件流日志。输入 Run ID 后点击连接，
+通过 SSE 自动刷新任务状态。
 
 ---
 
@@ -523,6 +608,15 @@ V1 的功能边界如下，请在使用前明确知悉。这些限制不是「�
 5. **mock 产物不是模型生成的**。`--mock` 的产物来自 `examples/fixtures/` 中手写的
    预置回复，用于离线演示编排流程与支撑 hermetic 测试，**不代表模型能力**；
    真实生成能力需要 `--goal` + 真实 API Key 验证。
+
+V2 新增能力的已知边界：
+
+6. **HTTP API 为内部控制面设计**。手写 HTTP/1.1 解析，仅支持 GET/POST，无认证、
+   无速率限制、无请求体大小上限（64KB 硬编码），不建议直接暴露公网。
+7. **MCP 客户端仅支持 stdio 传输**。未实现 SSE/HTTP 传输、resources/prompts 能力、
+   progress 通知；连接真实 MCP 服务器前建议先用 `list_tools()` 验证兼容性。
+8. **Web UI 为只读看板**。不支持人工闸门交互（G3 仍需 CLI）、无产物预览、
+   无任务详情面板；适合监控，不适合操作。
 
 ---
 
