@@ -47,6 +47,8 @@ _ENV_TO_FIELD: dict[str, str] = {
     "AGENTCREW_REVIEW_SCORE_THRESHOLD": "review_score_threshold",
     "AGENTCREW_MAX_COST_USD": "max_cost_usd",
     "AGENTCREW_MAX_LLM_CALLS": "max_llm_calls",
+    "AGENTCREW_HEALTH_CHECK_ENABLED": "health_check_enabled",
+    "AGENTCREW_HEALTH_CHECK_INTERVAL": "health_check_interval_secs",
 }
 
 #: ``AGENTCREW_MODEL_<ROLE>`` → ``role_bindings[<role 小写>]``（spec §17.2）。
@@ -315,6 +317,19 @@ class Settings(BaseModel):
 
     ``None`` = 不限制。与 ``max_cost_usd`` 任一超限即触发预算耗尽收尾。
     环境变量 ``AGENTCREW_MAX_LLM_CALLS``。
+    """
+    health_check_enabled: bool = True
+    """Provider 主动健康监控开关（P2-11）。
+
+    启用后后台定期探测所有已缓存 Provider 的健康状态，failover 时优先跳过
+    不健康的 Provider。``False`` = 不启动监控，行为与改动前完全一致。
+    环境变量 ``AGENTCREW_HEALTH_CHECK_ENABLED``。
+    """
+    health_check_interval_secs: int = 30
+    """健康探测间隔秒数（P2-11）。
+
+    后台任务每隔这么多秒对所有已缓存的别名做一次健康探测。
+    环境变量 ``AGENTCREW_HEALTH_CHECK_INTERVAL``。
     """
     """G2 评审 score 阈值放行（P0-1）。
 

@@ -30,11 +30,13 @@ spec §7.3 的两级并发限额里，任务槽位由 Scheduler 持有，本模�
 """
 
 import asyncio
+import time
 from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from agentcrew.config import Settings
 from agentcrew.models import structured
@@ -79,6 +81,12 @@ _IMPLEMENTATIONS: tuple[str, ...] = ("openai_compat", "anthropic", "mock", "cli"
 
 #: 建议预算相对窗口上限预留的头部空间（spec §11.2 的建议值公式）。
 _SUGGESTED_BUDGET_HEADROOM = 1024
+
+#: P2-11：健康探测中延迟超过此值（毫秒）视为 degraded。
+_HEALTH_DEGRADED_THRESHOLD_MS = 2000.0
+
+#: P2-11：健康探测单次超时（秒）。
+_HEALTH_CHECK_TIMEOUT_SECS = 5.0
 
 #: P0-2：触发故障转移的异常类型 —— Provider 内部重试耗尽后的瞬时故障。
 #: openai_compat / anthropic 抛 TransientError；cli 抛 TimeoutError / ConnectionError。
@@ -136,6 +144,28 @@ class BudgetExhaustedError(ModelFactoryError):
             f"预算耗尽：{kind} 累计 {current} 已达上限 {limit}")
 
 
+#: Provider 健康状态：healthy = 正常快速；degraded = 正常但慢（>=2s）；
+#: unavailable = 不可用（异常/超时）。
+HealthStatus = Literal["healthy", "degraded", "unavailable"]
+
+
+class HealthRecord(BaseModel):
+    """单个 Provider 别名的健康状态记录（P2-11 主动健康监控）。
+
+    由后台探测任务定期更新，failover 路由据此跳过不健康的别名。
+    ``consecutive_failures`` 记录连续失败次数，便于诊断抖动 Provider。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    alias: str
+    status: HealthStatus
+    latency_ms: float | None = None
+    last_check: datetime
+    error: str | None = None
+    consecutive_failures: int = 0
+
+
 class ModelFactory:
     """按别名缓存 Provider，并独占全局 LLM 调用信号量与用量统计。"""
 
@@ -159,6 +189,9 @@ class ModelFactory:
         self._total_prompt_tokens = 0
         self._total_completion_tokens = 0
         self._total_cost_usd = 0.0
+        # P2-11：主动健康监控 —— 各别名的健康状态缓存与后台探测任务。
+        self._health: dict[str, HealthRecord] = {}
+        self._health_task: asyncio.Task | None = None
 
     # ── 只读视图 ──────────────────────────────────────────────────────────
 
@@ -264,6 +297,115 @@ class ModelFactory:
             from_alias=from_alias,
             to_alias=to_alias,
             scope=scope,
+        )
+
+    # ── P2-11：主动健康监控 ────────────────────────────────────────────────
+
+    async def health_check(self, alias: str) -> HealthRecord:
+        """对单个别名做一次健康探测，返回并缓存结果。
+
+        探测方式：发一条 "ping" 消息（max_tokens=1），5 秒超时。
+        成功且延迟 < 2000ms → healthy；成功但 >= 2000ms → degraded；
+        失败（异常/超时）→ unavailable，consecutive_failures++。
+        MockProvider 直接返回 healthy（不真实调用）。
+        每次探测都记 ledger 事件 ``provider_health``。
+        """
+        provider = self.get(alias)
+
+        # MockProvider 无需真实探测，直接标记 healthy。
+        if isinstance(provider, MockProvider):
+            record = HealthRecord(
+                alias=alias,
+                status="healthy",
+                latency_ms=0.0,
+                last_check=datetime.now(),
+                consecutive_failures=0,
+            )
+            self._health[alias] = record
+            self._emit_health(record)
+            return record
+
+        start = time.perf_counter()
+        try:
+            await asyncio.wait_for(
+                provider.complete(
+                    [{"role": "user", "content": "ping"}],
+                    temperature=0,
+                    max_tokens=1,
+                ),
+                timeout=_HEALTH_CHECK_TIMEOUT_SECS,
+            )
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            status: HealthStatus = (
+                "healthy" if elapsed_ms < _HEALTH_DEGRADED_THRESHOLD_MS else "degraded"
+            )
+            record = HealthRecord(
+                alias=alias,
+                status=status,
+                latency_ms=elapsed_ms,
+                last_check=datetime.now(),
+                consecutive_failures=0,
+            )
+        except Exception as exc:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            prev = self._health.get(alias)
+            consecutive = (prev.consecutive_failures + 1) if prev is not None else 1
+            record = HealthRecord(
+                alias=alias,
+                status="unavailable",
+                latency_ms=elapsed_ms,
+                last_check=datetime.now(),
+                error=f"{type(exc).__name__}: {exc}",
+                consecutive_failures=consecutive,
+            )
+
+        self._health[alias] = record
+        self._emit_health(record)
+        return record
+
+    async def _health_loop(self) -> None:
+        """后台健康探测循环：每隔 interval 秒检查所有已缓存别名。"""
+        while True:
+            try:
+                await asyncio.sleep(self._settings.health_check_interval_secs)
+            except asyncio.CancelledError:
+                return
+            for alias in list(self._cache.keys()):
+                try:
+                    await self.health_check(alias)
+                except Exception:
+                    # health_check 内部已捕获并记录错误；这里再兜一层防止循环崩溃。
+                    pass
+
+    def start_health_monitoring(self) -> None:
+        """启动后台健康探测任务（如果配置启用且尚未运行）。"""
+        if not self._settings.health_check_enabled:
+            return
+        if self._health_task is not None and not self._health_task.done():
+            return
+        self._health_task = asyncio.create_task(self._health_loop())
+
+    def stop_health_monitoring(self) -> None:
+        """取消后台健康探测任务（可重复调用）。"""
+        if self._health_task is not None:
+            self._health_task.cancel()
+            self._health_task = None
+
+    def get_health(self, alias: str) -> HealthRecord | None:
+        """查询某别名的最新健康状态；未探测过返回 None。"""
+        return self._health.get(alias)
+
+    def _emit_health(self, record: HealthRecord) -> None:
+        """记一条 ``provider_health`` 事件（P2-11：诚实留痕）。"""
+        if self._ledger is None:
+            return
+        self._ledger.emit(
+            "provider_health",
+            alias=record.alias,
+            status=record.status,
+            latency_ms=record.latency_ms,
+            error=record.error,
+            consecutive_failures=record.consecutive_failures,
         )
 
     # ── 解析与缓存 ────────────────────────────────────────────────────────
@@ -481,6 +623,11 @@ class ModelFactory:
         去重保序：备用列表里若重复出现 primary 或自身重复，只留首次 —— 避免
         同一个不可用 provider 被反复尝试。未配置 failover 时返回 ``[alias]``，
         行为与改动前完全一致（向后兼容）。
+
+        P2-11：如果健康监控已启用且有探测数据，将 ``unavailable`` 的别名移到
+        列表末尾（优先尝试健康的）；``degraded`` 的别名保持原位。如果所有别名
+        都 unavailable，仍返回原列表（最后一搏）。健康监控未启用或无数据时
+        行为不变。
         """
         backups = self._settings.model_failover.get(alias, [])
         seen: set[str] = {alias}
@@ -489,6 +636,19 @@ class ModelFactory:
             if backup not in seen:
                 seen.add(backup)
                 result.append(backup)
+        # P2-11：健康感知重排 —— unavailable 的别名移到末尾。
+        if self._settings.health_check_enabled and self._health:
+            healthy_part: list[str] = []
+            unavailable_part: list[str] = []
+            for a in result:
+                rec = self._health.get(a)
+                if rec is not None and rec.status == "unavailable":
+                    unavailable_part.append(a)
+                else:
+                    healthy_part.append(a)
+            if unavailable_part and healthy_part:
+                result = healthy_part + unavailable_part
+            # 全部 unavailable 时保持原序（最后一搏）。
         return result
 
     def _emit_failover(self, from_alias: str, to_alias: str, exc: Exception) -> None:
@@ -497,15 +657,23 @@ class ModelFactory:
         每次从一个别名切换到下一个备用别名时调用，含 from_alias / to_alias /
         error 三个字段。操作者事后可从 ledger 看出「哪个模型挂了、切到了谁、
         原始错误是什么」。没有 ledger 时静默跳过（纯逻辑测试）。
+
+        P2-11：如果有健康数据，追加 from_status / to_status 字段。
         """
         if self._ledger is None:
             return
-        self._ledger.emit(
-            "llm_failover",
-            from_alias=from_alias,
-            to_alias=to_alias,
-            error=f"{type(exc).__name__}: {exc}",
-        )
+        data: dict[str, Any] = {
+            "from_alias": from_alias,
+            "to_alias": to_alias,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+        from_health = self._health.get(from_alias)
+        to_health = self._health.get(to_alias)
+        if from_health is not None:
+            data["from_status"] = from_health.status
+        if to_health is not None:
+            data["to_status"] = to_health.status
+        self._ledger.emit("llm_failover", **data)
 
     def _account(self, result: CompletionResult, *, purpose: str, role: str) -> None:
         """累加用量、估算成本并发一条 ``llm_call`` —— **两条调用路径共用**。

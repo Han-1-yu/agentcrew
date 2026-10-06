@@ -495,6 +495,33 @@ PM 拆解通过 §7.2 二元校验后，再由 `score_plan()` 做一次**多维�
   `total < MIN_PLAN_SCORE`（默认 0.5）时再落一条 `plan_low_quality` 警告
 - 评分是观测信号、不抛异常：非法拆解早在 `validate_plan` 就被拦下
 
+### P2-11. Provider 主动健康监控
+
+后台定期探测所有已缓存 Provider 的健康状态，failover 时优先跳过不健康的别名，
+不浪费调用在已知不可用的 Provider 上。
+
+- **健康状态三级**：`healthy`（正常，延迟 < 2s）/ `degraded`（正常但慢，>= 2s）/
+  `unavailable`（异常或超时）
+- **探测方式**：对每个已缓存别名发一条 "ping" 消息（max_tokens=1），5 秒超时；
+  MockProvider 直接标记 healthy（不真实调用）
+- **后台循环**：每隔 `health_check_interval_secs`（默认 30s）自动探测所有已缓存别名；
+  `start_health_monitoring()` / `stop_health_monitoring()` 控制启停
+- **failover 感知**：`_failover_aliases()` 自动将 `unavailable` 的别名排到列表末尾
+  （优先尝试健康的）；`degraded` 的别名保持原位；全部不可用时保持原序（最后一搏）
+- **诚实留痕**：每次探测记 `provider_health` ledger 事件（含 alias / status /
+  latency_ms / error / consecutive_failures）；failover 事件追加 `from_status` /
+  `to_status`
+- `get_health(alias)` 查询某别名的最新健康状态
+
+```bash
+# .env
+AGENTCREW_HEALTH_CHECK_ENABLED=true
+AGENTCREW_HEALTH_CHECK_INTERVAL=30
+```
+
+默认启用（`true`），间隔 30 秒。设 `AGENTCREW_HEALTH_CHECK_ENABLED=false` 关闭，
+行为与改动前完全一致。
+
 ---
 
 ## 自定义角色 / 团队开发指南
