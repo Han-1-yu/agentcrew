@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "./run.json",
+  "title": "RunRecord (run.json)",
+  "description": "对应 output/<run_id>/run.json。Run 级元信息 + 汇总统计 + 配置快照，由 agentcrew/runtime/checkpoint.py:RunRecord 经 model_dump(mode='json') 落盘。atomic_write_text 保证整文件要么旧完整、要么新完整。时间字段为 naive 本地时间（datetime.now()），序列化为 ISO 8601 但无时区后缀；不是 UTC。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["run_id", "schema_version", "project_goal", "status", "created_at", "updated_at", "config_snapshot", "stats"],
+  "properties": {
+    "run_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "run 目录名；默认由 slugify_run_id 生成 YYYYMMDD-HHMMSS-<4hex>。路径段，不允许 '.' / '..'。"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "RunRecord schema 版本；读到不一致（含缺失）抛 SchemaMismatchError，不做静默迁移。"
+    },
+    "project_goal": {
+      "type": "string",
+      "description": "本次 run 的目标（CLI --goal 或 --demo 内置目标）。"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["running", "interrupted", "completed", "failed", "cancelled"],
+      "description": "RunStatus 枚举，见 state-enums.md。"
+    },
+    "created_at": {
+      "type": "string",
+      "description": "创建时间，naive 本地时间，格式 YYYY-MM-DDTHH:MM:SS.ffffff（Python datetime.isoformat()，无时区后缀）。"
+    },
+    "updated_at": {
+      "type": "string",
+      "description": "最近一次落盘时间，naive 本地时间，格式同 created_at。"
+    },
+    "config_snapshot": {
+      "type": "object",
+      "description": "Settings.config_snapshot() 的快照（run 创建时捕获，resume 时对比差异）。provider_overrides / mcp_servers 中的疑似密钥字段已被脱敏为 \"***\"。字段见下表。",
+      "required": [
+        "default_model", "max_concurrency", "context_budget_tokens", "gate",
+        "output_dir", "log_level", "mock", "mock_latency_ms",
+        "plan_max_attempts", "role_bindings", "provider_overrides",
+        "model_tiers", "model_failover", "mcp_servers"
+      ],
+      "properties": {
+        "default_model": {"type": "string", "description": "默认模型别名，形如 provider:model。"},
+        "max_concurrency": {"type": "integer", "minimum": 1, "description": "全局并发上限（含 LLM 调用）。"},
+        "context_budget_tokens": {"type": "integer", "minimum": 0, "description": "上下文预算，整数 token。"},
+        "gate": {"type": "string", "enum": ["both", "plan", "delivery", "none"], "description": "人工闸门模式。"},
+        "output_dir": {"type": "string", "description": "run 输出根目录绝对路径。"},
+        "log_level": {"type": "string", "enum": ["DEBUG", "INFO", "WARNING", "ERROR"]},
+        "mock": {"type": "boolean", "description": "true = 全部别名强制走 MockProvider。"},
+        "mock_latency_ms": {"type": "integer", "minimum": 0, "description": "Mock 注入延迟，整数毫秒。"},
+        "plan_max_attempts": {"type": "integer", "minimum": 1, "description": "规划阶段最大重试轮数。"},
+        "role_bindings": {"type": "object", "additionalProperties": {"type": "string"}, "description": "role key → 模型别名。"},
+        "roles_dir": {"type": ["string", "null"], "description": "自定义角色目录绝对路径或 null。"},
+        "provider_overrides": {"type": "object", "additionalProperties": {"type": "object"}, "description": "provider → 覆盖字段映射；疑似密钥值已脱敏为 \"***\"。"},
+        "model_tiers": {"type": "object", "additionalProperties": {"type": "string"}, "description": "复杂度级别(low/medium/high) → 模型别名。"},
+        "model_failover": {
+          "type": "object",
+          "description": "别名 → 备用列表；列表项为字符串别名或 {alias, weight} 对象。",
+          "additionalProperties": {"type": "array"}
+        },
+        "mcp_servers": {"type": "object", "additionalProperties": {"type": "object"}, "description": "MCP 服务器名 → 启动参数；疑似密钥字段已脱敏。"},
+        "review_score_threshold": {"type": ["number", "null"], "description": "G2 score 旁路阈值；null = 不启用。"},
+        "max_cost_usd": {"type": ["number", "null"], "description": "累计成本硬上限，USD decimal；null = 不限。"},
+        "max_llm_calls": {"type": ["integer", "null"], "description": "累计 LLM 调用次数硬上限；null = 不限。"},
+        "health_check_enabled": {"type": "boolean"},
+        "health_check_interval_secs": {"type": "integer", "minimum": 0}
+      }
+    },
+    "stats": {
+      "$ref": "#/$defs/RunStats"
+    }
+  },
+  "$defs": {
+    "RunStats": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "一次 run 的汇总统计（agentcrew/task/task.py:RunStats）。",
+      "required": [
+        "total_tasks", "succeeded", "failed", "blocked", "skipped",
+        "llm_calls", "prompt_tokens", "completion_tokens", "estimated_cost_usd"
+      ],
+      "properties": {
+        "total_tasks": {"type": "integer", "minimum": 0},
+        "succeeded": {"type": "integer", "minimum": 0},
+        "failed": {"type": "integer", "minimum": 0},
+        "blocked": {"type": "integer", "minimum": 0},
+        "skipped": {"type": "integer", "minimum": 0},
+        "llm_calls": {"type": "integer", "minimum": 0, "description": "整数次数。"},
+        "prompt_tokens": {"type": "integer", "minimum": 0, "description": "整数 token。"},
+        "completion_tokens": {"type": "integer", "minimum": 0, "description": "整数 token。"},
+        "estimated_cost_usd": {"type": "number", "description": "估算累计成本，USD decimal（浮点，非 integer）。"},
+        "started_at": {"type": ["string", "null"], "description": "run 开始时间，naive 本地 ISO；未开始为 null。"},
+        "finished_at": {"type": ["string", "null"], "description": "run 结束时间，naive 本地 ISO；进行中为 null。"}
+      }
+    }
+  }
+}

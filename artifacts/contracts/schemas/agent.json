@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "./agent.json",
+  "title": "Agent 运行时状态（非独立持久化文件）",
+  "description": "重要：代码中不存在独立的 agents.json / agent state 文件。AgentCrew 的 Agent 是无状态的执行器——状态唯一事实源是 Task（tasks.json），Agent 的运行时事实分散在 (a) task.result（TaskResult）、(b) ledger.jsonl 中的 task_started/task_finished/tool_call/llm_call 事件、(c) on_event 推给看板的 task_dispatched/task_completed 回调。本 schema 描述「一个 Agent 实例在一次任务执行中可被外部观测到的状态形状」，供看板/API 重建用。代码中也不存在 AgentStatus 枚举（见 state-enums.md）；Agent 的生命周期完全由 Task.status 承载。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["task_id", "role", "status", "attempt", "started_at"],
+  "properties": {
+    "task_id": {"type": "string", "description": "该 Agent 实例当前执行的任务 id。"},
+    "role": {"type": "string", "description": "RoleSpec.key，如 product_manager / architect / backend_dev / frontend_dev / qa_engineer / devops_engineer / technical_writer / project_manager / generic。"},
+    "status": {
+      "type": "string",
+      "description": "派生状态（非代码枚举，由 Task.status + 是否有 worker 推导）：queued（在 READY/REWORK 队列） / executing（RUNNING，有 worker） / reviewing（REVIEW，门禁中） / done（SUCCEEDED/FAILED/CANCELLED/SKIPPED/BLOCKED）。",
+      "enum": ["queued", "executing", "reviewing", "done"]
+    },
+    "attempt": {"type": "integer", "minimum": 1, "description": "本次执行是第几次 attempts（1-based；与 task.attempts 一致）。"},
+    "started_at": {"type": ["string", "null"], "description": "本次执行开始时间，naive 本地 ISO；未开始为 null。"},
+    "finished_at": {"type": ["string", "null"], "description": "本次执行结束时间；未结束为 null。"},
+    "duration_ms": {"type": ["integer", "null"], "minimum": 0, "description": "本次执行耗时，整数毫秒；未结束为 null。"},
+    "summary": {"type": ["string", "null"], "description": "执行完成后 Agent 自述摘要（来自 task.result.summary）。"},
+    "artifacts": {
+      "type": "array",
+      "description": "本次执行落盘的产物清单（来自 task.result.artifacts）。",
+      "items": {"$ref": "task.json#/$defs/ArtifactRecord"}
+    },
+    "model_alias": {"type": ["string", "null"], "description": "本次执行实际使用的模型别名（三级解析后）；未调用为 null。"},
+    "error": {
+      "type": ["string", "null"],
+      "description": "执行失败时的错误串（\"<ExceptionType>: <message>\"）；成功为 null。对应 ledger error 事件的 message 字段。"
+    }
+  }
+}

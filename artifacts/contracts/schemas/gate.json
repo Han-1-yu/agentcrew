@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "./gate.json",
+  "title": "门禁裁决（Gate Result）",
+  "description": "对应两类持久化形态：(1) tasks.json 中 task.reviews[] 的 ReviewRecord；(2) ledger.jsonl 中 event=\"gate_result\" 的 data 字段。二者字段基本一致，但 ledger 版本额外携带 layer=\"llm\" 的 suggestions 字段（不写回 ReviewRecord，因为 suggestions 不参与裁决）。代码中不存在独立的 GateStatus 枚举；门禁结果用 ReviewRecord.verdict (approve/reject) + Task.status (review/rework/succeeded/failed) 联合表达。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["task_id", "round", "layer", "verdict", "issues", "reviewer"],
+  "properties": {
+    "task_id": {"type": "string"},
+    "round": {"type": "integer", "minimum": 1, "description": "第几轮评审（从 1 起；每次 G1 static 出现即计一轮）。"},
+    "layer": {
+      "type": "string",
+      "enum": ["static", "llm", "human"],
+      "description": "G1 = static（零 token，产物存在性/语法/契约）；G2 = llm（LLM 评审，带 score）；G3 = human（人工 CLI 闸门）。"
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["approve", "reject"],
+      "description": "approve = 通过；reject = 驳回。score-bypass 时 ledger 事件里 verdict 会被改写为 approve，但 issues 原样保留。"
+    },
+    "score": {
+      "type": ["number", "null"],
+      "minimum": 0, "maximum": 1,
+      "description": "G2 LLM 评审分数（0..1）；static / human 层恒为 null。"
+    },
+    "issues": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "驳回理由列表；approve 时通常为空数组。"
+    },
+    "fix_hints": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "返工修复提示（仅 ReviewRecord 形态有；ledger gate_result 事件不写此份，它已落在 ReviewRecord 上）。"
+    },
+    "suggestions": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "仅 ledger gate_result（layer=llm）事件携带：评审员在标准之外的意见，不阻塞、不进 ReviewRecord.issues。"
+    },
+    "reviewer": {
+      "type": "string",
+      "description": "评审人标识：\"static:contract\" / 角色 key / \"human:cli\" / \"human:delivery\" / \"<role>:score-bypass\"（G2 驳回但 score 超阈值被旁路放行时）。"
+    },
+    "created_at": {"type": "string", "description": "评审时间，naive 本地 ISO（仅 ReviewRecord 形态有；ledger 版本用外层 ts）。"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"layer": {"const": "static"}}},
+      "then": {
+        "properties": {
+          "score": {"type": "null"},
+          "reviewer": {"type": "string", "const": "static:contract"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"layer": {"const": "llm"}}},
+      "then": {
+        "required": ["score"]
+      }
+    }
+  ]
+}

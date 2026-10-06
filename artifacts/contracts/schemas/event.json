@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "./event.json",
+  "title": "Ledger 事件（ledger.jsonl 每行）",
+  "description": "对应 output/<run_id>/ledger.jsonl 的一行 JSON。由 agentcrew/runtime/ledger.py:LedgerEvent 定义信封：ts + run_id + event + data。追加式 JSONL，每行 flush+fsync。注意：ts 由 datetime.__str__() 生成，分隔符是空格而不是 T（与 run.json 里的 T 分隔不同），格式 'YYYY-MM-DD HH:MM:SS.ffffff'，naive 本地时间、无时区后缀。data 形状随 event 名变化，见 event-types.md。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ts", "run_id", "event", "data"],
+  "properties": {
+    "ts": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}(\\.\\d+)?$",
+      "description": "事件时间，naive 本地时间；分隔符为空格（Python datetime.__str__），非 T。"
+    },
+    "run_id": {"type": "string", "description": "所属 run。"},
+    "event": {
+      "type": "string",
+      "enum": [
+        "run_started", "run_finished",
+        "plan_created", "plan_rejected", "plan_scored", "plan_low_quality",
+        "plan_incremental_edit",
+        "human_decision",
+        "task_started", "task_finished", "task_transition", "task_notes",
+        "gate_result",
+        "artifact_written", "manifest_repaired",
+        "llm_call", "llm_retry", "llm_failover", "llm_degraded",
+        "llm_routed", "llm_model_switched", "model_switched",
+        "provider_health", "mock_fallback",
+        "tool_call", "tool_loop_exhausted",
+        "subtask_created", "subtask_malformed",
+        "budget_exhausted", "error"
+      ],
+      "description": "事件类型；权威来源是 ledger.py 与各模块的 ledger.emit() 调用点，见 event-types.md。"
+    },
+    "data": {
+      "type": "object",
+      "description": "事件负载，字段随 event 名变化；允许额外键（未来新增事件不需要改本 schema）。金额统一 USD decimal（number），耗时统一毫秒（integer），token 统一整数（integer）。",
+      "additionalProperties": true
+    }
+  }
+}

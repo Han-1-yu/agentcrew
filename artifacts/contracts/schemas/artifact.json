@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "./artifact.json",
+  "title": "产物记录（ArtifactRecord / Manifest）",
+  "description": "对应两类持久化：(1) output/<run_id>/artifacts/MANIFEST.json（Manifest 全量清单）；(2) tasks.json 中 task.result.artifacts[] 的条目（ArtifactRecord）。MANIFEST.json 顶层形状见下方 Manifest；本 schema 默认描述单条 ArtifactRecord。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["path", "kind", "size_bytes", "sha256", "produced_by_task", "produced_by_role", "written_at"],
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "相对 artifacts/ 根的 POSIX 路径（已由 safe_relpath 归一化，无 ../）。"
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["python", "json", "yaml", "toml", "markdown", "text",
+               "html", "css", "js", "dockerfile", "sql", "shell"],
+      "description": "文件类型；权威在任务交付物契约 ArtifactSpec.kind，模型在围栏上标的语言名仅作提示。"
+    },
+    "size_bytes": {"type": "integer", "minimum": 0, "description": "文件 UTF-8 编码后的字节数。"},
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "文件内容 SHA-256 十六进制摘要（小写）。"
+    },
+    "produced_by_task": {"type": "string", "description": "产出该文件的任务 id。"},
+    "produced_by_role": {"type": "string", "description": "产出该文件的角色 key。"},
+    "written_at": {"type": "string", "description": "落盘时间，naive 本地 ISO。"}
+  },
+  "$defs": {
+    "Manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "output/<run_id>/artifacts/MANIFEST.json 顶层形状（agentcrew/artifacts/spec.py:Manifest）。",
+      "required": ["run_id", "generated_at", "entries"],
+      "properties": {
+        "run_id": {"type": "string"},
+        "generated_at": {"type": "string", "description": "清单生成时间，naive 本地 ISO。"},
+        "entries": {"type": "array", "items": {"$ref": "#"}}
+      }
+    }
+  }
+}

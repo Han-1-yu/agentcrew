@@ -1,0 +1,792 @@
+# AgentCrew HTTP API — OpenAPI 3.0
+# 由 agentcrew/api/server.py 逆向得到（零依赖 asyncio.start_server 手写 HTTP/1.1）。
+# 注意：本文件严格按代码中实际注册的端点与实际返回字段撰写，未凭空补端点。
+
+openapi: 3.0.3
+
+info:
+  title: AgentCrew API
+  version: 1.0.0          # 取自 pyproject.toml [project].version
+  description: >
+    多智能体协作平台的 HTTP + SSE API。
+    - 实时推送使用 Server-Sent Events（单向长连接），事件源与 Ledger 同构（on_event 回调）。
+    - 错误响应统一为 `{"error": "<人类可读消息>"}`（代码中未实现 code/message/details 三段式）。
+    - 所有时间字段为 ISO 8601 字符串（Python datetime.isoformat()；落盘记录为 naive 本地时间，
+      API 直接透传，不带时区后缀）。
+    - 金额字段（cost_usd / estimated_cost_usd）单位为 USD，浮点 decimal。
+    - 可选字段在代码中可能缺失或为空字符串，均未列入 required。
+
+servers:
+  - url: http://127.0.0.1:8765
+    description: 默认监听地址（ApiServer 默认 host=127.0.0.1, port=8765）
+
+tags:
+  - name: system
+    description: 健康检查与 Dashboard 静态页
+  - name: runs
+    description: run 的列表 / 详情 / 删除 / 创建
+  - name: run-actions
+    description: run 生命周期动作（cancel / resume）
+  - name: run-model
+    description: 运行时模型绑定的查看与切换
+  - name: events
+    description: SSE 实时事件流与测试事件注入
+
+paths:
+
+  ##########################################################################
+  # system
+  ##########################################################################
+  /:
+    get:
+      tags: [system]
+      summary: Dashboard 首页 HTML
+      description: 路径匹配 `/` 或 `/index.html`，返回内嵌的仪表盘 HTML。
+      responses:
+        '200':
+          description: Dashboard HTML
+          content:
+            text/html:
+              schema:
+                type: string
+                format: binary
+
+  /health:
+    get:
+      tags: [system]
+      summary: 健康检查
+      responses:
+        '200':
+          description: 服务存活
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  ##########################################################################
+  # runs
+  ##########################################################################
+  /runs:
+    get:
+      tags: [runs]
+      summary: 列出全部 run
+      description: >
+        合并「盘上 run.json 记录」与「内存中正在运行的 Crew 实时状态」。
+        盘上记录按 `created_at` 字符串倒序排序（新→旧）；运行中的 run 会以实时状态
+        覆盖盘上记录的 status，并附带 `active: true`。
+        **本端点无分页参数**（代码一次性返回全部 run，无 limit/offset）。
+      parameters: []
+      responses:
+        '200':
+          description: run 列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [runs]
+                properties:
+                  runs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RunSummary'
+    post:
+      tags: [runs]
+      summary: 创建并后台启动一个 run
+      description: >
+        校验 body → 经 crew_factory 建 Crew → asyncio.create_task 后台执行。
+        收到 `run_started` 事件后回传 run_id；启动过程 30 秒未等到 run_started 则 504。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRunRequest'
+      responses:
+        '202':
+          description: run 已创建并进入运行
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateRunResponse'
+        '400':
+          description: 请求体非法（非法 JSON / body 非对象 / goal 为空 / options 非对象）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: run 在首个事件前启动失败（crew.run 抛异常）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: server 未配置 crew_factory/settings，无法创建 run
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '504':
+          description: run 启动超时（30s 内未收到 run_started 事件）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /runs/{run_id}:
+    delete:
+      tags: [runs]
+      summary: 删除一个 run
+      description: >
+        物理删除 `output_dir/<run_id>/` 目录。必须显式带 `?confirm=1` 防误删。
+        `running` 状态的 run 由内部拒绝（409）。成功返回释放的字节数。
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - name: confirm
+          in: query
+          required: true
+          description: 必须为 "1"，否则 400（防误删）
+          schema:
+            type: string
+            enum: ["1"]
+            example: "1"
+      responses:
+        '200':
+          description: 删除成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteRunResponse'
+        '400':
+          description: 未带 ?confirm=1
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: run 不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: run 正在运行中，拒绝删除（请先 cancel）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: server 未配置 output_dir，或删除时发生 OSError / ValueError
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /runs/{run_id}/status:
+    get:
+      tags: [runs]
+      summary: 获取单个 run 的运行状态与任务快照
+      description: >
+        注意：代码中**不存在** `GET /runs/{run_id}` 这个裸路径；单个 run 的详情走本子路径。
+        返回内存中的实时快照（任务字典来自 task_transition 事件累计）。
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: run 状态
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunStatusResponse'
+        '404':
+          description: run not found（内存中无该 run）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /runs/{run_id}/ledger:
+    get:
+      tags: [runs]
+      summary: 分页查询 run 的 Ledger 事件（JSONL 审计日志）
+      description: >
+        从 `output_dir/<run_id>/ledger.jsonl` 按写盘顺序读取事件。
+        run 目录不存在 → 404；run 存在但从未 emit（空文件）→ 200 空列表（不是错误）。
+        分页方式：**offset + limit**（无 cursor）。
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - name: event
+          in: query
+          required: false
+          description: 按事件名精确过滤（如 llm_call / task_started / task_finished / tool_call / task_transition / run_started / run_finished ...）
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          description: 每页条数；非法值回退默认 100，且被压到 ≥ 1
+          schema:
+            type: integer
+            default: 100
+            minimum: 1
+        - name: offset
+          in: query
+          required: false
+          description: 偏移量；非法值回退默认 0，且被压到 ≥ 0
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+      responses:
+        '200':
+          description: 分页事件列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LedgerListResponse'
+        '400':
+          description: run_id 非法 / 路径越界（ValueError）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: run 不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: server 未配置 output_dir
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /runs/{run_id}/stats:
+    get:
+      tags: [runs]
+      summary: run 的事件分布 / LLM 用量 / 任务成功率 / 工具调用统计
+      description: 空 ledger 返回各项为零的统计对象（200），仅 run 目录不存在才 404。
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: 统计结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunStatsResponse'
+        '400':
+          description: run_id 非法 / 路径越界
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: run 不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: server 未配置 output_dir
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  ##########################################################################
+  # run-actions
+  ##########################################################################
+  /runs/{run_id}/cancel:
+    post:
+      tags: [run-actions]
+      summary: 软取消运行中的 run
+      description: >
+        置取消标志并转发给当前 Scheduler 停止派发新任务；在跑任务自然收尾后以
+        CANCELLED 封版。可重复调用。
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '202':
+          description: 取消请求已接受
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CancelResponse'
+        '404':
+          description: run 不在运行中（可先 POST /runs/{id}/resume 恢复）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: 该 run 驱动对象不支持取消（无 cancel 方法）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /runs/{run_id}/resume:
+    post:
+      tags: [run-actions]
+      summary: 从 checkpoint 恢复 run 并后台执行
+      description: >
+        经 `Crew.resume_from(settings, run_id)` 绑定既有 run 目录、修复状态后后台续跑。
+        30s 内未等到 run_started 视为启动失败（500）。
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '202':
+          description: resume 已接受，run 重新进入运行
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResumeResponse'
+        '404':
+          description: 无法恢复该 run（目录缺失 / checkpoint 损坏 / schema_version 不匹配）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: run 已在运行中
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: resume 启动失败（首个事件前抛异常）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: server 未配置 settings，无法 resume
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  ##########################################################################
+  # run-model
+  ##########################################################################
+  /runs/{run_id}/model:
+    get:
+      tags: [run-model]
+      summary: 获取当前 run 的模型绑定（默认 + 角色级）
+      description: 仅运行中的 run 可读；run 未装配 ModelFactory 时 409。
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: 当前模型绑定
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelBindings'
+        '404':
+          description: run 不在运行中（只能切换运行中的 run）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: run 尚未装配 ModelFactory（RuntimeError）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      tags: [run-model]
+      summary: 更新（切换）run 的模型绑定
+      description: >
+        body `{"alias": "<模型别名>", "role": "<可选角色>"}`。
+        `role` 缺省（null/省略）→ 切默认模型；指定 `role` → 切角色级绑定。
+        别名格式 `<provider>/<model>`，经 parse_alias 校验，非法别名 400。
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PutModelRequest'
+      responses:
+        '200':
+          description: 切换成功，返回新的绑定
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelBindings'
+        '400':
+          description: 非法 JSON / body 非对象 / alias 为空 / role 非字符串 / 模型切换失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: run 不在运行中
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  ##########################################################################
+  # events (SSE + 测试注入)
+  ##########################################################################
+  /runs/{run_id}/events:
+    get:
+      tags: [events]
+      summary: SSE 实时事件流
+      description: >
+        Server-Sent Events 长连接。连接建立后先推一条 `event: connected`，
+        之后 Crew 的 on_event 产生的所有事件原样广播给所有订阅者。
+        服务端每 30s 无事件时发心跳注释行 `: ping` 防代理超时。
+        事件格式（SSE 帧）：
+        ```
+        event: <event_name>\n
+        data: <JSON 字符串，内含 run_id 等字段>\n
+        \n
+        ```
+        常见事件名：connected / run_started / run_finished / run_completed /
+        run_failed / task_transition / llm_call / task_started / task_finished /
+        tool_call / llm_model_switched。
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: SSE 流（保持打开，直到客户端断开）
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  事件流文本。每个事件两部分：
+                  - `event:` 行给出事件名（字符串）
+                  - `data:` 行给出 JSON 载荷，结构见 Event 组件
+              examples:
+                connected:
+                  summary: 初始连接事件
+                  value: |
+                    event: connected
+                    data: {"run_id": "20261006-120000-a1b2"}
+                run_started:
+                  summary: run 启动
+                  value: |
+                    event: run_started
+                    data: {"run_id": "20261006-120000-a1b2", "goal": "..."}
+                task_transition:
+                  summary: 任务状态跃迁
+                  value: |
+                    event: task_transition
+                    data: {"run_id": "...", "task_id": "...", "to_status": "RUNNING", "role": "planner"}
+                heartbeat:
+                  summary: 30s 空闲心跳（注释行，非事件）
+                  value: ": ping\n\n"
+    post:
+      tags: [events]
+      summary: 注入一条测试事件（仅测试/调试用）
+      description: >
+        body 为任意 JSON 对象；可选 `_event` 字段指定事件名（缺省 "custom"）。
+        自动补上 `run_id`。事件会经 on_event 广播给 SSE 订阅者。
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InjectEventRequest'
+      responses:
+        '202':
+          description: 事件已接受并广播
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InjectEventResponse'
+        '400':
+          description: body 不是合法 JSON
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  ##########################################################################
+  # 兜底：未匹配路径 → 404；未实现方法 → 405
+  ##########################################################################
+
+components:
+
+  parameters:
+    RunId:
+      name: run_id
+      in: path
+      required: true
+      description: run 标识（slug，形如 `YYYYMMDD-HHMMSS-<4hex>`；字符集 [A-Za-z0-9._-]+）
+      schema:
+        type: string
+
+  schemas:
+
+    # ── 通用 ─────────────────────────────────────────────────────────────
+    Error:
+      type: object
+      description: >
+        统一错误响应。代码实际只返回 `{"error": "<消息>"}` 单字段；
+        未实现 code/details 字段。
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: 人类可读的错误描述（中文，含上下文，如 run_id）
+          example: "run \"abc\" 不在运行中"
+
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+          example: ok
+
+    # ── Run ──────────────────────────────────────────────────────────────
+    RunStatusEnum:
+      type: string
+      description: run 级状态
+      enum: [pending, running, completed, failed, cancelled, interrupted]
+
+    RunSummary:
+      type: object
+      description: 列表中的 run 摘要（来自 run.json + 内存实时状态叠加）
+      required: [run_id, goal, status, created_at]
+      properties:
+        run_id:
+          type: string
+        goal:
+          type: string
+          description: run 目标；仅内存中刚启动、未落盘的 run 可能为空串
+        status:
+          $ref: '#/components/schemas/RunStatusEnum'
+        created_at:
+          type: string
+          format: date-time
+          description: ISO 8601（Python datetime.isoformat()，naive 本地时间无 tz 后缀）；内存中未落盘的 run 为空串
+        updated_at:
+          type: string
+          format: date-time
+          description: ISO 8601；仅盘上记录有此字段
+        active:
+          type: boolean
+          description: 是否为当前内存中运行中的 run（仅运行中的条目带此字段）
+          example: true
+
+    RunStatusResponse:
+      type: object
+      description: GET /runs/{id}/status 返回的实时快照
+      required: [run_id, goal, status, task_count, tasks]
+      properties:
+        run_id: { type: string }
+        goal: { type: string }
+        status: { $ref: '#/components/schemas/RunStatusEnum' }
+        task_count:
+          type: integer
+          description: tasks 字典长度
+        tasks:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/TaskBrief'
+          description: task_id → 任务快照（来自 task_transition 事件累计）
+
+    TaskBrief:
+      type: object
+      description: 内存中累计的任务快照
+      properties:
+        status:
+          type: string
+          description: to_status（任务状态枚举值，如 PENDING/READY/RUNNING/SUCCEEDED/FAILED/REWORK/REVIEW/BLOCKED/SKIPPED/CANCELLED）
+        role:
+          type: string
+          description: 任务角色（如 planner / coder / reviewer ...）
+
+    # ── 创建 / 取消 / 恢复 ─────────────────────────────────────────────
+    CreateRunRequest:
+      type: object
+      required: [goal]
+      properties:
+        goal:
+          type: string
+          description: run 目标（非空字符串，trim 后不得为空）
+          example: "实现用户登录模块"
+        options:
+          type: object
+          description: 可选配置覆盖（merge 进 settings；API 服务器会强制 gate=none）
+          additionalProperties: true
+
+    CreateRunResponse:
+      type: object
+      required: [run_id, status]
+      properties:
+        run_id: { type: string }
+        status:
+          type: string
+          enum: [running]
+          example: running
+
+    CancelResponse:
+      type: object
+      required: [run_id, cancelled]
+      properties:
+        run_id: { type: string }
+        cancelled:
+          type: boolean
+          example: true
+
+    ResumeResponse:
+      type: object
+      required: [run_id, status]
+      properties:
+        run_id: { type: string }
+        status:
+          type: string
+          enum: [running]
+
+    DeleteRunResponse:
+      type: object
+      required: [deleted, freed_bytes]
+      properties:
+        deleted:
+          type: string
+          description: 被删除的 run_id
+        freed_bytes:
+          type: integer
+          format: int64
+          description: 删除前统计的目录总字节数
+
+    # ── 模型绑定 ─────────────────────────────────────────────────────────
+    ModelBindings:
+      type: object
+      description: 当前生效的模型绑定
+      required: [default, role_bindings]
+      properties:
+        default:
+          type: string
+          description: 默认模型别名（形如 `<provider>/<model>`）
+          example: "openai/gpt-4o"
+        role_bindings:
+          type: object
+          additionalProperties:
+            type: string
+          description: 角色 → 模型别名 的映射
+          example: { planner: "openai/o4-mini", reviewer: "anthropic/claude-sonnet-5" }
+
+    PutModelRequest:
+      type: object
+      required: [alias]
+      properties:
+        alias:
+          type: string
+          description: 目标模型别名（非空）
+          example: "openai/gpt-4o"
+        role:
+          type: string
+          nullable: true
+          description: 目标角色；省略或 null 表示切默认模型
+          example: "planner"
+
+    # ── Ledger / Stats ──────────────────────────────────────────────────
+    LedgerEvent:
+      type: object
+      description: 一条 ledger 事件
+      required: [ts, run_id, event, data]
+      properties:
+        ts:
+          type: string
+          format: date-time
+          description: ISO 8601 事件落盘时间
+        run_id: { type: string }
+        event:
+          type: string
+          description: 事件名（run_started / task_transition / llm_call / task_started / task_finished / tool_call / run_finished ...）
+        data:
+          type: object
+          additionalProperties: true
+          description: 事件载荷（字段随事件名变化；已脱敏，不含 API Key）
+
+    LedgerListResponse:
+      type: object
+      required: [events, total]
+      properties:
+        events:
+          type: array
+          items: { $ref: '#/components/schemas/LedgerEvent' }
+          description: 当前分页的事件（按写盘顺序）
+        total:
+          type: integer
+          description: 满足过滤条件的事件总数（用于前端算页数）
+
+    RunStatsResponse:
+      type: object
+      description: GET /runs/{id}/stats 的聚合结果
+      required: [run_id, event_counts, llm, tasks, tools]
+      properties:
+        run_id: { type: string }
+        event_counts:
+          type: object
+          additionalProperties: { type: integer }
+          description: 各事件类型计数（key 为事件名）
+        llm:
+          type: object
+          required: [calls, prompt_tokens, completion_tokens, total_tokens, cost_usd]
+          properties:
+            calls: { type: integer }
+            prompt_tokens: { type: integer }
+            completion_tokens: { type: integer }
+            total_tokens: { type: integer }
+            cost_usd:
+              type: number
+              format: float
+              description: 估算成本，单位 USD，6 位小数
+        tasks:
+          type: object
+          required: [started, finished, success_rate, avg_duration_ms]
+          properties:
+            started: { type: integer }
+            finished: { type: integer }
+            success_rate:
+              type: number
+              format: float
+              nullable: true
+              description: finished/started；无 task_started 时为 null（不拿 0/0 装 100%），4 位小数
+            avg_duration_ms:
+              type: number
+              format: float
+              nullable: true
+              description: task_finished.duration_ms 均值；无 finished 时为 null，2 位小数
+        tools:
+          type: object
+          required: [calls, success, failed]
+          properties:
+            calls: { type: integer }
+            success: { type: integer }
+            failed: { type: integer }
+
+    # ── SSE 事件注入 ────────────────────────────────────────────────────
+    InjectEventRequest:
+      type: object
+      description: 任意 JSON 对象；可选 `_event` 指定事件名
+      properties:
+        _event:
+          type: string
+          description: 事件名（缺省 "custom"）
+      additionalProperties: true
+
+    InjectEventResponse:
+      type: object
+      required: [accepted]
+      properties:
+        accepted:
+          type: boolean
+          example: true

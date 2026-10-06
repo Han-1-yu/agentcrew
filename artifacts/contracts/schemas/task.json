@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "./task.json",
+  "title": "Task (tasks.json 中的单个任务)",
+  "description": "对应 output/<run_id>/tasks.json 的 {\"tasks\": [...]} 数组中每个元素，由 agentcrew/task/task.py:Task 经 model_dump(mode='json') 序列化。注意 tasks.json 顶层是 {\"tasks\": [Task, ...]}，本 schema 描述其中一个 Task。时间字段为 naive 本地 ISO（T 分隔，无时区后缀）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id", "title", "description", "role", "acceptance_criteria", "deliverables",
+    "dependencies", "parent_id", "dynamic", "priority", "brief",
+    "timeout_seconds", "status", "attempts", "rework_count",
+    "max_attempts", "max_reworks", "result", "reviews", "status_history",
+    "created_at", "updated_at"
+  ],
+  "properties": {
+    "id": {"type": "string", "pattern": "^T-[0-9A-Z-]+$", "description": "run 内唯一任务 id，形如 T-001 / T-FINAL / T-DYN-001。"},
+    "title": {"type": "string"},
+    "description": {"type": "string", "description": "发给 Agent 的任务描述。"},
+    "role": {"type": "string", "description": "RoleSpec.key（如 product_manager / architect / backend_dev ...）。"},
+    "acceptance_criteria": {"type": "array", "items": {"type": "string"}, "description": "验收标准，供 G2 评审。"},
+    "deliverables": {
+      "type": "array",
+      "description": "交付物契约列表（ArtifactSpec）。",
+      "items": {"$ref": "#/$defs/ArtifactSpec"}
+    },
+    "dependencies": {
+      "type": "array", "items": {"type": "string"},
+      "description": "前置任务 id 列表；空数组 = 无依赖。"
+    },
+    "parent_id": {
+      "type": ["string", "null"],
+      "description": "V2 树状拆解的父任务 id；null = 根任务。"
+    },
+    "dynamic": {
+      "type": "boolean",
+      "description": "true = 运行时由 Agent 请求动态创建（P2-1）；false = 规划阶段静态拆解。"
+    },
+    "priority": {"type": "integer", "minimum": 1, "maximum": 9, "description": "数字小者优先，默认 5。"},
+    "brief": {"type": "string", "description": "PM 写给下游的一句话摘要（供上下文压缩）。"},
+    "timeout_seconds": {"type": "integer", "minimum": 1, "description": "单次执行超时秒数，默认 300；超时走 attempts 重试通道。"},
+
+    "status": {
+      "type": "string",
+      "enum": ["pending", "ready", "running", "review", "rework",
+               "succeeded", "failed", "blocked", "cancelled", "skipped"],
+      "description": "TaskStatus 十态，与 agentcrew/task/state_machine.py:ALLOWED_TRANSITIONS 完全一致；见 state-enums.md。"
+    },
+    "attempts": {"type": "integer", "minimum": 0, "description": "执行尝试次数；READY→RUNNING 派发时即扣除（中断也消耗一次）。"},
+    "rework_count": {"type": "integer", "minimum": 0, "description": "返工次数；REVIEW→REWORK 时 bump。"},
+    "max_attempts": {"type": "integer", "minimum": 1, "description": "执行重试上限（含首次），默认 3。"},
+    "max_reworks": {"type": "integer", "minimum": 0, "description": "返工上限，默认 2。"},
+    "result": {
+      "anyOf": [{"$ref": "#/$defs/TaskResult"}, {"type": "null"}],
+      "description": "Agent 执行结果；未执行完为 null。"
+    },
+    "reviews": {
+      "type": "array",
+      "description": "历次门禁评审记录（G1 static / G2 llm / G3 human），按时间顺序追加。",
+      "items": {"$ref": "#/$defs/ReviewRecord"}
+    },
+    "status_history": {
+      "type": "array",
+      "description": "全部状态跃迁审计记录，按时间顺序追加。FAILED→READY 的人工重试也在此留痕（reason=\"manual-retry\"）。",
+      "items": {"$ref": "#/$defs/StatusChange"}
+    },
+    "created_at": {"type": "string", "description": "创建时间，naive 本地 ISO。"},
+    "updated_at": {"type": "string", "description": "最近一次状态/运行时字段变更时间，naive 本地 ISO。"}
+  },
+
+  "$defs": {
+    "ArtifactSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "交付物契约（agentcrew/artifacts/spec.py:ArtifactSpec）。",
+      "required": ["path", "kind", "description", "required", "min_bytes", "must_contain", "max_bytes"],
+      "properties": {
+        "path": {"type": "string", "description": "相对 artifacts/ 根的 POSIX 路径（./a.py 已归一化为 a.py）。"},
+        "kind": {
+          "type": "string",
+          "enum": ["python", "json", "yaml", "toml", "markdown", "text",
+                   "html", "css", "js", "dockerfile", "sql", "shell"]
+        },
+        "description": {"type": "string", "description": "该文件应包含什么。"},
+        "required": {"type": "boolean"},
+        "min_bytes": {"type": "integer", "minimum": 1, "description": "最小字节数（G1 判据）。"},
+        "must_contain": {"type": "array", "items": {"type": "string"}, "description": "必须出现的子串。"},
+        "max_bytes": {"type": "integer", "minimum": 1, "description": "单文件上限字节数，默认 512KB。"}
+      }
+    },
+    "ArtifactRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "一个实际落盘产物的清单条目（agentcrew/artifacts/spec.py:ArtifactRecord）。",
+      "required": ["path", "kind", "size_bytes", "sha256", "produced_by_task", "produced_by_role", "written_at"],
+      "properties": {
+        "path": {"type": "string", "description": "相对 artifacts/ 的 POSIX 路径。"},
+        "kind": {
+          "type": "string",
+          "enum": ["python", "json", "yaml", "toml", "markdown", "text",
+                   "html", "css", "js", "dockerfile", "sql", "shell"]
+        },
+        "size_bytes": {"type": "integer", "minimum": 0},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "文件内容 SHA-256 十六进制摘要。"},
+        "produced_by_task": {"type": "string"},
+        "produced_by_role": {"type": "string"},
+        "written_at": {"type": "string", "description": "落盘时间，naive 本地 ISO。"}
+      }
+    },
+    "TaskResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "任务执行结果（agentcrew/task/task.py:TaskResult），嵌入 task.result。",
+      "required": ["task_id", "role", "summary", "artifacts", "notes", "started_at", "finished_at", "duration_ms"],
+      "properties": {
+        "task_id": {"type": "string"},
+        "role": {"type": "string"},
+        "summary": {"type": "string", "description": "Agent 自述摘要（进下游上下文包）。"},
+        "artifacts": {"type": "array", "items": {"$ref": "#/$defs/ArtifactRecord"}},
+        "notes": {"type": "string", "description": "围栏块之外的说明文字。"},
+        "started_at": {"type": "string", "description": "执行开始时间，naive 本地 ISO。"},
+        "finished_at": {"type": "string", "description": "执行结束时间，naive 本地 ISO。"},
+        "duration_ms": {"type": "integer", "minimum": 0, "description": "执行耗时，整数毫秒。"}
+      }
+    },
+    "ReviewRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "一次门禁评审裁决（agentcrew/task/task.py:ReviewRecord）。",
+      "required": ["task_id", "round", "layer", "verdict", "issues", "fix_hints", "reviewer", "created_at"],
+      "properties": {
+        "task_id": {"type": "string"},
+        "round": {"type": "integer", "minimum": 1, "description": "第几轮评审，从 1 起。"},
+        "layer": {"type": "string", "enum": ["static", "llm", "human"], "description": "G1 static / G2 llm / G3 human。"},
+        "verdict": {"type": "string", "enum": ["approve", "reject"]},
+        "score": {"type": ["number", "null"], "minimum": 0, "maximum": 1, "description": "0..1；仅 llm 层有值，static 层恒为 null。"},
+        "issues": {"type": "array", "items": {"type": "string"}},
+        "fix_hints": {"type": "array", "items": {"type": "string"}, "description": "返工修复提示，回灌给下一次执行。"},
+        "reviewer": {
+          "type": "string",
+          "description": "评审人标识：\"static:contract\" / 角色 key（如 project_manager）/ \"human:cli\" / \"human:delivery\" / \"<role>:score-bypass\"。"
+        },
+        "created_at": {"type": "string", "description": "评审时间，naive 本地 ISO。"}
+      }
+    },
+    "StatusChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "一次状态跃迁审计记录（agentcrew/task/task.py:StatusChange）。",
+      "required": ["from_status", "to_status", "reason", "at"],
+      "properties": {
+        "from_status": {"type": "string", "enum": ["pending", "ready", "running", "review", "rework",
+          "succeeded", "failed", "blocked", "cancelled", "skipped"]},
+        "to_status": {"type": "string", "enum": ["pending", "ready", "running", "review", "rework",
+          "succeeded", "failed", "blocked", "cancelled", "skipped"]},
+        "reason": {
+          "type": "string",
+          "description": "跃迁原因。常见值：dispatched / rework-dispatched / executed / gate-succeeded / gate-rework / gate-failed / upstream-failed / upstream-skipped / dependencies-met / dependencies-recovered / resume-repair / manual-retry / delivery-rework / hard-cancel / attempts-exhausted / gate-error / retry: <错误串> / dynamic-created。"
+        },
+        "at": {"type": "string", "description": "跃迁时间，naive 本地 ISO。"}
+      }
+    }
+  }
+}
