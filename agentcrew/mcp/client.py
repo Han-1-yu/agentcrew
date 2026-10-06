@@ -92,7 +92,7 @@ class MCPClient:
             self._proc = None
         self._initialized = False
 
-    async def __aenter__(self) -> "MCPClient":
+    async def __aenter__(self) -> MCPClient:
         await self.start()
         return self
 
