@@ -60,7 +60,7 @@ _YAML_SCALAR_KEYS = ("max_concurrency", "context_budget_tokens", "gate", "roles_
 #: 分层合并时按 key 覆盖而非整体替换的字段。
 _MAPPING_FIELDS = (
     "role_bindings", "provider_overrides", "model_tiers", "model_failover",
-    "mcp_servers",
+    "mcp_servers", "gate_config",
 )
 
 #: ``AGENTCREW_TIER_<LEVEL>`` → ``model_tiers[<level>]``（V2：按复杂度选模型）。
@@ -218,6 +218,11 @@ def _yaml_values() -> dict[str, object]:
         if not isinstance(mcp_servers, dict):
             raise ValueError(f"配置文件 mcp_servers 段必须是映射：{path}")
         values["mcp_servers"] = dict(mcp_servers)
+    gate_config = data.get("gate_config")
+    if gate_config:
+        if not isinstance(gate_config, dict):
+            raise ValueError(f"配置文件 gate_config 段必须是映射：{path}")
+        values["gate_config"] = dict(gate_config)
     return values
 
 
@@ -330,6 +335,22 @@ class Settings(BaseModel):
 
     后台任务每隔这么多秒对所有已缓存的别名做一次健康探测。
     环境变量 ``AGENTCREW_HEALTH_CHECK_INTERVAL``。
+    """
+    gate_config: dict[str, Any] = Field(default_factory=dict)
+    """门禁规则配置化（P2-5）：G1/G2/G3 开关与评审参数。
+
+    支持的键（缺省回落硬编码默认值；空 dict = 旧行为）：
+
+    - ``g1_enabled`` (bool=True)：G1 静态校验是否执行；
+    - ``g2_enabled`` (bool=True)：G2 LLM 评审是否执行；
+    - ``g3_enabled`` (bool=True)：G3 人工卡点（与 gate 模式配合，``gate="none"`` 时
+      全部关闭）；
+    - ``g2_reviewers`` (int=1)：并行评审人数（P1-2），取目录前 N 个评审人；
+    - ``convergence_threshold`` (int=2)：P2-3 收敛阈值，0/None 关闭；
+    - ``review_score_threshold`` (float|None=None)：P0-1 score 阈值；
+    - ``max_review_attempts`` (int=3)：最大评审轮次。
+
+    经 YAML ``gate_config:`` 段加载；进 ``config_snapshot`` 落盘。
     """
     """G2 评审 score 阈值放行（P0-1）。
 

@@ -154,6 +154,9 @@ class Reviewer:
         self._ledger = ledger
         self._excerpt_budget_tokens = excerpt_budget_tokens
         self._format_retry_attempts = format_retry_attempts
+        # P2-5：限制并行评审人数（None = 用 catalog 给出的全部评审人）。由
+        # Gatekeeper 从 gate_config 的 g2_reviewers 写入。
+        self.max_reviewers: int | None = None
 
     async def review(self, task: Task, *, round_no: int) -> ReviewRecord:
         """评审一个任务，返回本轮的 ``ReviewRecord``（``layer="llm"``）。
@@ -165,6 +168,9 @@ class Reviewer:
         调用本身也已受全局信号量限流，并行不会突破并发上限。
         """
         reviewer_keys = self._catalog.reviewer_for(task.role)
+        # P2-5：gate_config.g2_reviewers 限制评审人数（取前 N，保持目录顺序）。
+        if self.max_reviewers is not None:
+            reviewer_keys = list(reviewer_keys[:self.max_reviewers])
         if not reviewer_keys:
             return self._finish(
                 task, round_no,

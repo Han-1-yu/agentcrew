@@ -515,6 +515,23 @@ G1 原本只做契约校验（缺产物 / 未声明 / 占位 / must_contain）�
   `warnings`）。全程不抛异常，畸形产物以中文消息回灌返工方。
 - **向后兼容**：默认启用，但只对 python 产物做语法检查，不影响非代码产物。
 
+### P2-5. 门禁配置化
+
+门禁规则此前硬编码在 `Gatekeeper` 里。本项把它们收进 `Settings.gate_config`，
+从 YAML `gate_config:` 段读取，缺省回落硬编码默认值：
+
+- **配置键**（`gate_config: dict`）：`g1_enabled` / `g2_enabled` / `g3_enabled`
+  （三层开关）、`g2_reviewers`（并行评审人数，取目录前 N 个评审人）、
+  `convergence_threshold`（P2-3 收敛阈值）、`review_score_threshold`（P0-1）、
+  `max_review_attempts`。
+- **生效方式**：`Gatekeeper(..., gate_config={...})` 读取各键；`g1_enabled=False`
+  时跳过 G1 静态校验（记一条 `static:disabled` 放行记录），`g2_enabled=False` 时
+  跳过 LLM 评审，`g2_reviewers` 写到 `Reviewer.max_reviewers` 限制评审人数，
+  `convergence_threshold` / `review_score_threshold` 覆盖构造参数。
+- **落盘**：`gate_config` 加入 `_MAPPING_FIELDS`（分层按 key 合并），并进
+  `config_snapshot`。
+- **向后兼容**：`gate_config=None`（或空 dict）时行为与原来完全一致。
+
 ### P2-1. 运行时动态子任务
 
 规划阶段任务固定，执行阶段 Agent 可以**在执行中**请求拆出独立子任务，子任务

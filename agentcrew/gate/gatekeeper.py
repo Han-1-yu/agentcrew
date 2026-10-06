@@ -39,6 +39,7 @@ G2 驳回 M），重复一条就是报告里的错数。状态跃迁的 ``reason
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
+from datetime import datetime
 from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -146,6 +147,7 @@ class Gatekeeper:
         context_bus: ContextBus | None = None,
         review_score_threshold: float | None = None,
         convergence_threshold: int | None = 2,
+        gate_config: dict[str, Any] | None = None,
     ) -> None:
         if prompter is None and (gate in _PLAN_GATES or gate in _DELIVERY_GATES):
             raise ValueError(
@@ -160,9 +162,22 @@ class Gatekeeper:
         self._ledger = ledger
         self._prompter = prompter
         self._context_bus = context_bus
-        self._review_score_threshold = review_score_threshold
-        # P2-3：连续 N 轮意见不变判收敛；0 / None 关闭（向后兼容旧行为）。
-        self._convergence_threshold = convergence_threshold
+        # P2-5：门禁规则从 gate_config 读取，缺省回落构造参数 / 硬编码默认值；
+        # gate_config=None 时行为与原来完全一致。
+        cfg = dict(gate_config or {})
+        self._g1_enabled: bool = cfg.get("g1_enabled", True)
+        self._g2_enabled: bool = cfg.get("g2_enabled", True)
+        self._g3_enabled: bool = cfg.get("g3_enabled", True)
+        self._max_review_attempts: int = cfg.get("max_review_attempts", 3)
+        # gate_config 中的阈值显式覆盖构造参数（构造参数本身即旧默认值）。
+        self._review_score_threshold = cfg.get(
+            "review_score_threshold", review_score_threshold)
+        self._convergence_threshold = cfg.get(
+            "convergence_threshold", convergence_threshold)
+        # g2_reviewers 限制并行评审人数：写到 Reviewer 上，review() 截取前 N 个。
+        g2_reviewers = cfg.get("g2_reviewers")
+        if g2_reviewers is not None:
+            reviewer.max_reviewers = g2_reviewers
         # task_id → 历次 LLM 驳回的规范化 issue 集合指纹（跨返工轮次的内存追踪）。
         self._convergence_history: dict[str, list[frozenset[str]]] = {}
 
@@ -176,28 +191,35 @@ class Gatekeeper:
         ``rework_count`` 停在自增之前，据此判断额度会永远判不出去。
         """
         task_id = task.id
-        static = run_static(self._board.get(task_id), self._store, round_no=round_no)
-        # P2-4：扩展代码可执行性校验 —— 在既有契约检查之后跑，error 并入 G1 issues
-        # （阻断），warning 只记 ledger。未产出的路径不读（缺失已由 run_static 报）。
-        ext = self._run_extended_checks(self._board.get(task_id))
-        self._ledger.emit(
-            "g1_extended_check",
-            task_id=task_id,
-            round=round_no,
-            errors=list(ext.errors),
-            warnings=list(ext.warnings),
-        )
-        if ext.errors:
-            static = static.model_copy(update={
-                "verdict": "reject",
-                "issues": static.issues + list(ext.errors),
-                "fix_hints": static.fix_hints + [
-                    f"修正 {issue}" for issue in ext.errors],
-            })
+        if self._g1_enabled:
+            static = run_static(self._board.get(task_id), self._store, round_no=round_no)
+            # P2-4：扩展代码可执行性校验 —— 在既有契约检查之后跑，error 并入 G1 issues
+            # （阻断），warning 只记 ledger。未产出的路径不读（缺失已由 run_static 报）。
+            ext = self._run_extended_checks(self._board.get(task_id))
+            self._ledger.emit(
+                "g1_extended_check",
+                task_id=task_id,
+                round=round_no,
+                errors=list(ext.errors),
+                warnings=list(ext.warnings),
+            )
+            if ext.errors:
+                static = static.model_copy(update={
+                    "verdict": "reject",
+                    "issues": static.issues + list(ext.errors),
+                    "fix_hints": static.fix_hints + [
+                        f"修正 {issue}" for issue in ext.errors],
+                })
+        else:
+            # P2-5：g1_enabled=False → 跳过静态校验，记一条「已停用」的放行记录。
+            static = ReviewRecord(
+                task_id=task_id, round=round_no, layer="static",
+                verdict="approve", score=None, issues=[], fix_hints=[],
+                reviewer="static:disabled", created_at=datetime.now())
         self._board.record_review(task_id, static)
         self._emit(static)          # G2 的 gate_result 由 Reviewer 自己发
         records = [static]
-        if static.verdict == "approve":
+        if static.verdict == "approve" and self._g2_enabled:
             llm = await self._reviewer.review(
                 self._board.get(task_id), round_no=round_no)
             self._board.record_review(task_id, llm)
