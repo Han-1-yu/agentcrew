@@ -966,7 +966,10 @@ async function previewArtifact(preview, f) {
   preview.appendChild(h('div', { class: 'art-preview-head' },
     h('span', { class: 'art-preview-path' }, f.path || ''),
     h('span', { class: 'art-preview-meta' },
-      `${fmtBytes(f.sizeBytes)} · ${f.role || '—'} · ${f.task || '—'}`)));
+      `${fmtBytes(f.sizeBytes)} · ${f.role || '—'} · ${f.task || '—'}`),
+    h('button', { class: 'btn btn-sm', title: '在文件管理器中显示',
+      onclick: () => { const p = S.dash.run.dir + '\\' + (f.path || '').replace(/\//g, '\\'); window.studio.revealFile(p); } },
+      '📂 显示')));
   const content = h('pre', { class: 'art-preview-content' });
   preview.appendChild(content);
   try {
@@ -1618,6 +1621,12 @@ async function switchRun(dir) {
 
 async function boot(){
   $('#btn-new-run').addEventListener('click',openNewRunModal);
+  $('#btn-refresh').addEventListener('click', async () => {
+    if (S.realMode && S.watchDir) {
+      try { await loadRealRun(S.watchDir); renderDashboard(); toast('info', '已刷新', '数据已重新加载'); }
+      catch (e) { toast('error', '刷新失败', String(e.message || e)); }
+    } else { renderDashboard(); toast('info', '已刷新', '演示数据已重新渲染'); }
+  });
   $('#btn-notify').addEventListener('click',()=>{ $('#notify-dot').classList.add('hidden'); toast('info','通知','暂无新通知'); });
   $('#btn-user').addEventListener('click',openUserMenu);
   $('#tb-workspace').addEventListener('click',(e)=>{ e.stopPropagation(); toggleRunDropdown(); });
