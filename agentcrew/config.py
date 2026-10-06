@@ -61,7 +61,7 @@ _YAML_SCALAR_KEYS = ("max_concurrency", "context_budget_tokens", "gate", "roles_
 #: 分层合并时按 key 覆盖而非整体替换的字段。
 _MAPPING_FIELDS = (
     "role_bindings", "provider_overrides", "model_tiers", "model_failover",
-    "mcp_servers", "gate_config",
+    "mcp_servers", "gate_config", "tool_permissions",
 )
 
 #: ``AGENTCREW_TIER_<LEVEL>`` → ``model_tiers[<level>]``（V2：按复杂度选模型）。
@@ -224,6 +224,11 @@ def _yaml_values() -> dict[str, object]:
         if not isinstance(gate_config, dict):
             raise ValueError(f"配置文件 gate_config 段必须是映射：{path}")
         values["gate_config"] = dict(gate_config)
+    tool_permissions = data.get("tool_permissions")
+    if tool_permissions:
+        if not isinstance(tool_permissions, dict):
+            raise ValueError(f"配置文件 tool_permissions 段必须是映射：{path}")
+        values["tool_permissions"] = dict(tool_permissions)
     return values
 
 
@@ -369,6 +374,16 @@ class Settings(BaseModel):
     verdict="reject" 但 score >= threshold 时，Gatekeeper 改为放行，记
     ``gate_result`` 事件 verdict 标为 "approve"、issues 保留、reviewer 追加
     ``:score-bypass``。环境变量 ``AGENTCREW_REVIEW_SCORE_THRESHOLD=0.8``。
+    """
+    tool_permissions: dict[str, list[str]] = Field(default_factory=dict)
+    """角色级工具权限白名单（P3-9）：角色 key → 允许的工具名列表。
+
+    形状为 ``{"backend_dev": ["read_file", "run_python"]}``；Crew 层据此在
+    :class:`~agentcrew.tools.registry.ToolRegistry` 上调用
+    :meth:`~agentcrew.tools.registry.ToolRegistry.set_role_permissions`。未列出的
+    角色默认可使用全部工具（向后兼容）；``["*"]`` 或空列表表示全部允许。被拒绝
+    的工具记 ``tool_permission_denied`` ledger 事件、绝不执行。经 YAML
+    ``tool_permissions:`` 段加载。
     """
 
     @field_validator("output_dir")

@@ -1,13 +1,14 @@
-"""MCP (Model Context Protocol) stdio 客户端（V2 第 6 项）。
+"""MCP (Model Context Protocol) 客户端（V2 第 6 项；P3-9 传输可插拔）。
 
 实现 MCP 协议的最小可用子集：
-- 通过 stdio 启动外部 MCP 服务器
 - JSON-RPC 2.0 请求/响应（含通知）
 - initialize 握手 + notifications/initialized
 - tools/list 发现工具
 - tools/call 执行工具
 
-不依赖官方 MCP SDK，零额外依赖。协议参考：
+传输层（stdio / SSE / HTTP）由 :class:`~agentcrew.mcp.transports.MCPTransport`
+抽象承载（P3-9）：客户端只面向收发接口编程，通过 ``from_config`` 按配置选择
+传输。不依赖官方 MCP SDK，零额外依赖。协议参考：
 https://modelcontextprotocol.io/specification/2025-03-26/
 """
 
@@ -16,11 +17,16 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import shutil
-import sys
 from typing import Any
 
 from agentcrew.mcp.tool import MCPTool, MCPToolResult
+from agentcrew.mcp.transports import (
+    HTTPTransport,
+    MCPTransport,
+    MCPTransportError,
+    SSETransport,
+    StdioTransport,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -35,46 +41,76 @@ class MCPError(RuntimeError):
 
 
 class MCPClient:
-    """连接一个 stdio MCP 服务器，发现并调用其工具。
+    """连接一个 MCP 服务器（默认 stdio），发现并调用其工具。
 
-    用法::
+    用法（旧 API 保持兼容）::
 
         async with MCPClient(["npx", "-y", "@modelcontextprotocol/server-filesystem", "/tmp"]) as client:
             tools = await client.list_tools()
             result = await client.call_tool("read_file", {"path": "/tmp/x.txt"})
-            print(result.text)
+
+    P3-9：也可直接传入一个 :class:`~agentcrew.mcp.transports.MCPTransport`，或用
+    :meth:`from_config` 按配置选择 stdio / SSE / HTTP。
     """
 
-    def __init__(self, command: list[str], *, env: dict[str, str] | None = None) -> None:
-        self._command = command
-        self._env = env
-        self._proc: asyncio.subprocess.Process | None = None
+    def __init__(
+        self,
+        command: list[str] | None = None,
+        *,
+        env: dict[str, str] | None = None,
+        transport: MCPTransport | None = None,
+    ) -> None:
+        if transport is not None:
+            self._transport = transport
+        else:
+            if command is None:
+                raise MCPError("MCPClient 需要 command 或 transport")
+            self._transport = StdioTransport(command, env=env)
         self._request_id = 0
         self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
         self._reader_task: asyncio.Task[None] | None = None
         self._initialized = False
 
+    @classmethod
+    def from_config(cls, server_config: dict[str, Any]) -> "MCPClient":
+        """按 ``mcp_servers`` 配置构造客户端，``transport`` 字段选通道。
+
+        - ``stdio``（默认）：``command`` + 可选 ``env``；
+        - ``sse`` / ``http``：``url`` + 可选 ``headers``。
+        """
+        transport_type = str(server_config.get("transport", "stdio")).lower()
+        if transport_type == "stdio":
+            command = server_config.get("command")
+            if not command:
+                raise MCPError("stdio 传输需要 command 字段")
+            return cls(list(command), env=server_config.get("env"))
+        if transport_type == "sse":
+            url = server_config.get("url")
+            if not url:
+                raise MCPError("sse 传输需要 url 字段")
+            return cls(
+                transport=SSETransport(str(url), headers=server_config.get("headers"))
+            )
+        if transport_type == "http":
+            url = server_config.get("url")
+            if not url:
+                raise MCPError("http 传输需要 url 字段")
+            return cls(
+                transport=HTTPTransport(str(url), headers=server_config.get("headers"))
+            )
+        raise MCPError(f"未知 MCP 传输类型: {transport_type!r}")
+
     async def start(self) -> None:
-        """启动服务器进程并完成 initialize 握手。"""
-        # Windows：create_subprocess_exec 不解析 PATHEXT（.cmd/.bat），
-        # 用 shutil.which 解析完整路径，否则 npx/npm 等命令找不到。
-        cmd = list(self._command)
-        if sys.platform == "win32":
-            resolved = shutil.which(cmd[0])
-            if resolved:
-                cmd[0] = resolved
-        self._proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=self._env,
-        )
+        """建立传输连接并完成 initialize 握手。"""
+        try:
+            await self._transport.connect()
+        except MCPTransportError as exc:
+            raise MCPError(str(exc)) from exc
         self._reader_task = asyncio.create_task(self._read_loop())
         await self._initialize()
 
     async def stop(self) -> None:
-        """停止服务器进程。"""
+        """关闭传输连接。"""
         if self._reader_task is not None:
             self._reader_task.cancel()
             try:
@@ -82,14 +118,7 @@ class MCPClient:
             except asyncio.CancelledError:
                 pass
             self._reader_task = None
-        if self._proc is not None:
-            try:
-                self._proc.terminate()
-                await asyncio.wait_for(self._proc.wait(), timeout=5)
-            except (ProcessLookupError, asyncio.TimeoutError):
-                self._proc.kill()
-                await self._proc.wait()
-            self._proc = None
+        await self._transport.close()
         self._initialized = False
 
     async def __aenter__(self) -> MCPClient:
@@ -136,20 +165,21 @@ class MCPClient:
 
     async def _request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         """发送 JSON-RPC 请求并等待响应。"""
-        if self._proc is None or self._proc.stdin is None:
-            raise MCPError("MCP 进程未启动")
         self._request_id += 1
         req_id = self._request_id
         future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
         self._pending[req_id] = future
-        message = json.dumps({
+        message: dict[str, Any] = {
             "jsonrpc": "2.0",
             "id": req_id,
             "method": method,
             "params": params,
-        }) + "\n"
-        self._proc.stdin.write(message.encode("utf-8"))
-        await self._proc.stdin.drain()
+        }
+        try:
+            await self._transport.send(message)
+        except MCPTransportError as exc:
+            self._pending.pop(req_id, None)
+            raise MCPError(str(exc)) from exc
         try:
             return await asyncio.wait_for(future, timeout=_RPC_TIMEOUT)
         except asyncio.TimeoutError:
@@ -158,35 +188,25 @@ class MCPClient:
 
     async def _notify(self, method: str, params: dict[str, Any]) -> None:
         """发送 JSON-RPC 通知（无 id，不需要响应）。"""
-        if self._proc is None or self._proc.stdin is None:
-            raise MCPError("MCP 进程未启动")
-        message = json.dumps({
+        message: dict[str, Any] = {
             "jsonrpc": "2.0",
             "method": method,
             "params": params,
-        }) + "\n"
-        self._proc.stdin.write(message.encode("utf-8"))
-        await self._proc.stdin.drain()
+        }
+        try:
+            await self._transport.send(message)
+        except MCPTransportError as exc:
+            raise MCPError(str(exc)) from exc
 
     async def _read_loop(self) -> None:
-        """持续读取服务器 stdout，分发 JSON-RPC 响应。"""
-        if self._proc is None or self._proc.stdout is None:
-            return
+        """持续从传输层读消息，分发 JSON-RPC 响应。"""
         while True:
             try:
-                line = await self._proc.stdout.readline()
-            except (asyncio.CancelledError, ConnectionError):
+                message = await self._transport.receive()
+            except MCPTransportError:
                 break
-            if not line:
+            if message is None:
                 break
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                message = json.loads(line.decode("utf-8"))
-            except json.JSONDecodeError:
-                _logger.warning("MCP 服务器输出非 JSON：%s", line[:200])
-                continue
             # 响应（有 id）→ 唤醒对应 future
             msg_id = message.get("id")
             if msg_id is not None and msg_id in self._pending:
