@@ -115,6 +115,32 @@ h1,h2,h3,h4 { margin: 0; font-weight: 600; letter-spacing: -0.1px; }
   background: #fff; transition: border-color .15s; box-sizing: border-box; }
 .settings-field input:focus { outline: none; border-color: #007AFF; box-shadow: 0 0 0 3px rgba(0,122,255,0.1); }
 .settings-about { font-size: 12px; color: #8E8E93; line-height: 1.7; padding: 10px 0; }
+
+/* 事件日志页 */
+.ev-filter-bar { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 20px;
+  border-bottom: 1px solid rgba(60,60,67,0.06); background: #FAFAFA; }
+.ev-filter-btn { padding: 3px 10px; border: 1px solid rgba(60,60,67,0.15); border-radius: 12px;
+  font-size: 11px; color: #6E6E73; background: #fff; cursor: pointer; transition: all .12s;
+  font-family: inherit; }
+.ev-filter-btn:hover { border-color: rgba(60,60,67,0.3); }
+.ev-filter-btn.active { background: #007AFF; color: #fff; border-color: #007AFF; }
+.ev-full-list { overflow-y: auto; height: calc(100vh - 160px); padding: 4px 0; }
+.ev-full-item { border-bottom: 1px solid rgba(60,60,67,0.05); }
+.ev-full-main { display: flex; align-items: center; gap: 12px; padding: 7px 20px;
+  cursor: pointer; transition: background .1s; }
+.ev-full-main:hover { background: rgba(60,60,67,0.03); }
+.ev-full-ts { font-size: 11px; color: #8E8E93; font-variant-numeric: tabular-nums;
+  font-family: "SF Mono", Menlo, monospace; flex: 0 0 68px; }
+.ev-full-type { font-size: 11px; font-weight: 600; color: #007AFF; flex: 0 0 auto;
+  min-width: 100px; }
+.ev-full-task { font-size: 11px; color: #6E6E73; flex: 0 0 60px; font-family: "SF Mono", Menlo, monospace; }
+.ev-full-role { font-size: 11px; color: #8E8E93; flex: 0 0 110px; }
+.ev-full-summary { font-size: 12px; color: #1C1C1E; flex: 1; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+.ev-full-detail { display: none; padding: 8px 20px 12px 100px; margin: 0;
+  font-family: "SF Mono", Menlo, monospace; font-size: 11px; color: #6E6E73;
+  background: #FAFAFA; white-space: pre-wrap; word-break: break-all; line-height: 1.5; }
+.ev-full-item.expanded .ev-full-detail { display: block; }
 .tb-run-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #1C1C1E; font-weight: 500; }
 .tb-center { flex: 1; display: flex; justify-content: center; }
 .tb-right { display: flex; align-items: center; gap: 6px; }

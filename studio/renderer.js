@@ -985,6 +985,80 @@ async function renderSettingsPage(container) {
       h('br'), '8 角色协作 · 三层门禁 · DAG 编排 · 实时可观测')));
 }
 
+/* ============================================================
+   事件日志页（全量）
+   ============================================================ */
+function renderEventsPage(container) {
+  container.appendChild(h('div', { class: 'page-head' },
+    h('h2', {}, '事件日志'),
+    h('div', { style: 'display:flex;gap:8px;align-items:center' },
+      h('input', { id: 'ev-search', type: 'text', placeholder: '搜索事件…',
+        style: 'width:200px;padding:6px 10px;border:1px solid rgba(60,60,67,.18);border-radius:6px;font-size:12px;font-family:inherit',
+        oninput: () => renderEventsList() }),
+      h('button', { class: 'btn', onclick: () => switchNav('dashboard') }, '返回'))));
+
+  const filterBar = h('div', { class: 'ev-filter-bar', id: 'ev-filter-bar' });
+  container.appendChild(filterBar);
+
+  const listEl = h('div', { class: 'ev-full-list', id: 'ev-full-list' });
+  container.appendChild(listEl);
+
+  // 构建类型筛选
+  const allTypes = [...new Set((S.dash.events || []).map(e => e.event))].sort();
+  S.eventFilter = new Set(allTypes);
+  for (const t of allTypes) {
+    const btn = h('button', { class: 'ev-filter-btn active', 'data-type': t,
+      onclick: () => {
+        btn.classList.toggle('active');
+        if (S.eventFilter.has(t)) S.eventFilter.delete(t); else S.eventFilter.add(t);
+        renderEventsList();
+      }}, t);
+    filterBar.appendChild(btn);
+  }
+
+  renderEventsList();
+}
+
+function renderEventsList() {
+  const listEl = $('#ev-full-list');
+  if (!listEl) return;
+  const q = ($('#ev-search')?.value || '').toLowerCase();
+  const evs = [...(S.dash.events || [])].reverse()
+    .filter(e => S.eventFilter.has(e.event))
+    .filter(e => !q || JSON.stringify(e).toLowerCase().includes(q));
+  listEl.innerHTML = '';
+  if (!evs.length) {
+    listEl.appendChild(h('div', { class: 'ph-empty' }, '无匹配事件'));
+    return;
+  }
+  for (const e of evs) {
+    const item = h('div', { class: 'ev-full-item' },
+      h('div', { class: 'ev-full-main', onclick: () => item.classList.toggle('expanded') },
+        h('span', { class: 'ev-full-ts' }, fmtClock(e.ts)),
+        h('span', { class: 'ev-full-type' }, e.event),
+        h('span', { class: 'ev-full-task' }, e.data?.task_id || ''),
+        h('span', { class: 'ev-full-role' }, e.data?.role || ''),
+        h('span', { class: 'ev-full-summary' }, summarizeEvent(e))));
+    const detail = h('pre', { class: 'ev-full-detail' }, JSON.stringify(e, null, 2));
+    item.appendChild(detail);
+    listEl.appendChild(item);
+  }
+}
+
+function summarizeEvent(e) {
+  const d = e.data || {};
+  if (e.event === 'task_started') return `${d.task_id || ''} 开始执行（第 ${d.attempt || 1} 次）`;
+  if (e.event === 'task_succeeded') return `${d.task_id || ''} 完成`;
+  if (e.event === 'task_failed') return `${d.task_id || ''} 失败：${d.error || ''}`;
+  if (e.event === 'gate_result') return `${d.layer || ''} ${d.verdict || ''}`;
+  if (e.event === 'run_started') return `目标：${d.goal || ''}`;
+  if (e.event === 'run_finished') return `状态：${d.status || ''}`;
+  if (e.event === 'llm_call') return `${d.role || ''} · ${d.model || ''} · ${d.tokens || 0} tok`;
+  if (e.event === 'llm_failover') return `${d.from_alias || ''} → ${d.to_alias || ''}`;
+  if (e.event === 'budget_exhausted') return `已用 $${d.used || 0} / 上限 $${d.limit || 0}`;
+  return d.summary || Object.keys(d).join(', ');
+}
+
 function switchNav(key){
   S.nav=key;
   $$('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.nav===key));
@@ -994,6 +1068,7 @@ function switchNav(key){
   ph.innerHTML='';
   if(key==='artifacts'){ renderArtifactsPage(ph); return; }
   if(key==='settings'){ renderSettingsPage(ph); return; }
+  if(key==='events'){ renderEventsPage(ph); return; }
   const p=PLACEHOLDERS[key]||{title:key,desc:'该页面开发中。'};
   ph.appendChild(h('div',{class:'ph-icon'},h('svg',{width:30,height:30,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor','stroke-width':1.6,'stroke-linecap':'round','stroke-linejoin':'round'},h('rect',{x:'3',y:'3',width:'18',height:'18',rx:'3'}),h('path',{d:'M8 12h8'}))));
   ph.appendChild(h('h2',{},p.title)); ph.appendChild(h('p',{},p.desc));
