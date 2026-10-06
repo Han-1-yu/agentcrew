@@ -317,7 +317,7 @@ def _record(status: RunStatus, **stats: int) -> RunRecord:
     now = datetime.now()
     return RunRecord(
         run_id="R", project_goal="g", status=status, created_at=now, updated_at=now,
-        config_snapshot={}, stats=RunStats(**stats))
+        config_snapshot={}, stats=RunStats.model_validate(stats))
 
 
 def test_run_failed_tasks_map_to_1():

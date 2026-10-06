@@ -11,6 +11,7 @@
 
 import asyncio
 import os
+from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -82,7 +83,7 @@ class OfflineRun:
 
 
 @pytest.fixture(scope="module")
-def offline_run(tmp_path_factory) -> OfflineRun:
+def offline_run(tmp_path_factory) -> Generator[OfflineRun, None, None]:
     """跑一次完整的离线 mock run，并挂上四个调用计数器。
 
     与 brief 样例的三处刻意差异，每一处都有理由：

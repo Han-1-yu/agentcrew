@@ -14,7 +14,7 @@ def _task(task_id: str, **kwargs) -> Task:
         deliverables=[ArtifactSpec(path=f"{task_id}.py", kind="python", description="d")],
     )
     defaults.update(kwargs)
-    return Task(**defaults)
+    return Task.model_validate(defaults)
 
 
 class TestTaskTree:

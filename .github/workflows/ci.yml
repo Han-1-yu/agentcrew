@@ -43,7 +43,7 @@ jobs:
         run: ruff check .
 
       - name: mypy
-        run: mypy agentcrew/
+        run: mypy agentcrew/ tests/
 
       - name: pytest
         run: pytest -q

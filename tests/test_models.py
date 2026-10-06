@@ -35,7 +35,7 @@ def mk_task(**overrides) -> Task:
         dependencies=[],
     )
     fields.update(overrides)
-    return Task(**fields)
+    return Task.model_validate(fields)
 
 
 def test_task_status_has_exactly_ten_members():

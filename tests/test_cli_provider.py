@@ -22,7 +22,7 @@ def _binding(**kwargs) -> ModelBinding:
         command="echo {prompt}",
     )
     defaults.update(kwargs)
-    return ModelBinding(**defaults)
+    return ModelBinding.model_validate(defaults)
 
 
 class TestCliProvider:

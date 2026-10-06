@@ -16,7 +16,7 @@ def _task(**kwargs) -> Task:
         acceptance_criteria=["完成"], deliverables=[ArtifactSpec(path="a.py", kind="python", description="d")],
     )
     defaults.update(kwargs)
-    return Task(**defaults)
+    return Task.model_validate(defaults)
 
 
 class TestComplexityEvaluator:

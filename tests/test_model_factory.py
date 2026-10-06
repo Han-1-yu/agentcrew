@@ -672,7 +672,7 @@ class _Always429Client:
         self.calls += 1
         exc = Exception("Error code: 429 - rate limited")
         if self._retry_after is not None:
-            exc.response = SimpleNamespace(headers={"Retry-After": self._retry_after})
+            exc.response = SimpleNamespace(headers={"Retry-After": self._retry_after})  # type: ignore[attr-defined]
         raise exc
 
 

@@ -158,6 +158,7 @@ def _task(task_id: str, *, status: TaskStatus = TaskStatus.PENDING) -> Task:
         role="backend_dev",
         acceptance_criteria=["a"],
         deliverables=[],
+        priority=5,
         status=status,
     )
 
@@ -1136,6 +1137,7 @@ def _install_status_writer_traps(monkeypatch, hits):
     def caller() -> tuple[str, str]:
         frame = sys._getframe(2)
         while frame.f_code.co_name in ("<listcomp>", "<genexpr>", "<dictcomp>"):
+            assert frame.f_back is not None
             frame = frame.f_back
         return Path(frame.f_code.co_filename).name, frame.f_code.co_name
 

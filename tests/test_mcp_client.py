@@ -123,3 +123,55 @@ class TestMCPClient:
         assert len(tools) == 2
         await client.stop()
         assert not client._initialized
+
+    @pytest.mark.asyncio
+    async def test_windows_resolves_cmd_extension(self, monkeypatch):
+        """Windows 上 create_subprocess_exec 不解析 PATHEXT，必须用 shutil.which 预解析。"""
+        import asyncio
+        import shutil
+
+        captured: list[str] = []
+
+        async def fake_create_subprocess_exec(*args, **kwargs):
+            captured.extend(args)
+            # 不真正启动进程，直接抛异常让 start() 失败
+            raise RuntimeError("captured")
+
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(shutil, "which", lambda cmd: f"C:\\fake\\{cmd}.cmd")
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+        client = MCPClient(["npx", "-y", "server"])
+        with pytest.raises(RuntimeError, match="captured"):
+            await client.start()
+        # 第一个参数应该是 shutil.which 解析后的完整路径，而不是原始的 "npx"
+        assert captured[0] == "C:\\fake\\npx.cmd"
+        assert captured[1] == "-y"
+        assert captured[2] == "server"
+
+    @pytest.mark.asyncio
+    async def test_non_windows_skips_which_resolution(self, monkeypatch):
+        """非 Windows 平台不应调用 shutil.which，命令原样传递。"""
+        import asyncio
+        import shutil
+
+        captured: list[str] = []
+        which_called = {"count": 0}
+
+        def fake_which(cmd):
+            which_called["count"] += 1
+            return f"/usr/bin/{cmd}"
+
+        async def fake_create_subprocess_exec(*args, **kwargs):
+            captured.extend(args)
+            raise RuntimeError("captured")
+
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(shutil, "which", fake_which)
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+        client = MCPClient(["npx", "-y", "server"])
+        with pytest.raises(RuntimeError, match="captured"):
+            await client.start()
+        assert which_called["count"] == 0
+        assert captured[0] == "npx"
