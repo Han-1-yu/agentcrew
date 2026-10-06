@@ -973,11 +973,91 @@ async function previewArtifact(preview, f) {
     const r = await window.studio.readArtifact(S.dash.run.dir, f.path);
     const text = r && r.content != null ? String(r.content) : (r && typeof r === 'string' ? r : '');
     if (!text) { content.textContent = '（空文件或二进制）'; return; }
-    if (text.length > 100000) { content.textContent = text.slice(0, 100000) + '\n…（已截断，共 ' + text.length + ' 字符）'; }
-    else { content.textContent = text; }
+    const truncated = text.length > 100000 ? text.slice(0, 100000) + '\n…（已截断，共 ' + text.length + ' 字符）' : text;
+    content.innerHTML = highlightCode(truncated, f.path || '');
   } catch (e) {
     content.textContent = '读取失败：' + String(e.message || e);
   }
+}
+
+/* 轻量语法高亮（零依赖，基于正则） */
+function highlightCode(text, filename) {
+  const ext = (filename.split('.').pop() || '').toLowerCase();
+  const lang = ({
+    py: 'python', js: 'javascript', ts: 'javascript', jsx: 'javascript', tsx: 'javascript',
+    json: 'json', yaml: 'yaml', yml: 'yaml', md: 'markdown', markdown: 'markdown',
+    html: 'html', htm: 'html', css: 'css', sh: 'shell', bash: 'shell',
+    toml: 'toml', ini: 'ini', cfg: 'ini', xml: 'html', svg: 'html',
+  })[ext] || 'text';
+  let escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  if (lang === 'text') return escaped;
+  const patterns = {
+    python: [
+      [/(&quot;.*?&quot;|'.*?')/g, 'tok-str'],
+      [/#[^\n]*/g, 'tok-com'],
+      [/\b(def|class|return|if|elif|else|for|while|import|from|as|try|except|finally|with|lambda|yield|raise|pass|break|continue|global|nonlocal|assert|del|in|is|not|and|or|True|False|None|async|await)\b/g, 'tok-kw'],
+      [/\b(self|cls)\b/g, 'tok-self'],
+    ],
+    javascript: [
+      [/(&quot;.*?&quot;|'.*?'|`.*?`)/g, 'tok-str'],
+      [/\/\/[^\n]*/g, 'tok-com'],
+      [/\/\*[\s\S]*?\*\//g, 'tok-com'],
+      [/\b(const|let|var|function|return|if|else|for|while|do|switch|case|break|continue|new|class|extends|super|this|import|export|from|default|try|catch|finally|throw|async|await|yield|typeof|instanceof|in|of|true|false|null|undefined)\b/g, 'tok-kw'],
+    ],
+    json: [
+      [/&quot;([^&]+?)&quot;(\s*:)/g, '<span class="tok-key">&quot;$1&quot;</span>$2'],
+      [/(&quot;.*?&quot;)/g, 'tok-str'],
+      [/\b(true|false|null)\b/g, 'tok-kw'],
+    ],
+    yaml: [
+      [/#[^\n]*/g, 'tok-com'],
+      [/^(\s*[\w\-]+:)/gm, 'tok-key'],
+      [/(&quot;.*?&quot;|'.*?')/g, 'tok-str'],
+      [/\b(true|false|null|yes|no|on|off)\b/g, 'tok-kw'],
+    ],
+    markdown: [
+      [/^(#{1,6}\s.+)$/gm, 'tok-md-h'],
+      [/(\*\*[^*]+\*\*|__[^_]+__)/g, 'tok-md-bold'],
+      [/(`[^`]+`)/g, 'tok-md-code'],
+      [/^(\s*[-*+]\s)/gm, 'tok-md-list'],
+    ],
+    html: [
+      [/(&lt;\/?[\w\-]+)/g, 'tok-tag'],
+      [/([\w\-]+=)(&quot;.*?&quot;|'.*?')/g, '$1<span class="tok-str">$2</span>'],
+      [/(&lt;!--[\s\S]*?--&gt;)/g, 'tok-com'],
+    ],
+    css: [
+      [/\/\*[\s\S]*?\*\//g, 'tok-com'],
+      [/([\w\-]+)\s*:/g, '<span class="tok-key">$1</span>:'],
+      [/(&quot;.*?&quot;|'.*?')/g, 'tok-str'],
+      [/(#[0-9a-fA-F]{3,8})\b/g, 'tok-num'],
+    ],
+    shell: [
+      [/#[^\n]*/g, 'tok-com'],
+      [/(&quot;.*?&quot;|'.*?')/g, 'tok-str'],
+      [/\b(echo|cd|ls|mkdir|rm|cp|mv|cat|grep|sed|awk|export|source|if|then|else|fi|for|do|done|while|case|esac|function|return|exit)\b/g, 'tok-kw'],
+    ],
+    toml: [
+      [/#[^\n]*/g, 'tok-com'],
+      [/^(\s*[\w\-.]+\s*=)/gm, 'tok-key'],
+      [/(&quot;.*?&quot;|'.*?')/g, 'tok-str'],
+      [/\b(true|false)\b/g, 'tok-kw'],
+    ],
+    ini: [
+      [/^(\[.*\])/gm, 'tok-key'],
+      [/^(\s*[\w\-.]+\s*=)/gm, 'tok-key'],
+      [/[;#][^\n]*/g, 'tok-com'],
+    ],
+  };
+  const rules = patterns[lang] || [];
+  for (const [pat, cls] of rules) {
+    if (typeof cls === 'string') {
+      escaped = escaped.replace(pat, (m) => `<span class="${cls}">${m}</span>`);
+    } else {
+      escaped = escaped.replace(pat, cls);
+    }
+  }
+  return escaped;
 }
 
 function fmtBytes(n) {
