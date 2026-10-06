@@ -294,6 +294,11 @@ h1,h2,h3,h4 { margin: 0; font-weight: 600; letter-spacing: -0.1px; }
 .gate-full-actions { display: flex; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(60,60,67,0.08); }
 .gate-full-readonly { font-size: 11px; color: #8E8E93; margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(60,60,67,0.08); }
 
+/* 产物统计摘要 */
+.art-summary { display: flex; flex-wrap: wrap; gap: 4px 8px; padding: 8px 12px; font-size: 11px; color: #6E6E73;
+  border-bottom: 1px solid rgba(60,60,67,0.08); background: rgba(60,60,67,0.02); }
+.art-summary-sep { color: rgba(60,60,67,0.2); }
+
 /* Agent 统计网格 */
 .agent-full-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 10px 0; padding: 10px; background: rgba(60,60,67,0.03); border-radius: 6px; }
 .af-stat { text-align: center; }

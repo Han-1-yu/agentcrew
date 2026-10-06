@@ -965,6 +965,17 @@ async function renderArtifactsPage(container) {
     return;
   }
 
+  // 文件统计摘要
+  const totalSize = entries.reduce((s, e) => s + (e.sizeBytes || 0), 0);
+  const kinds = {};
+  for (const e of entries) { const k = e.kind || 'other'; kinds[k] = (kinds[k] || 0) + 1; }
+  const summary = h('div', { class: 'art-summary' },
+    h('span', {}, `${entries.length} 个文件`),
+    h('span', { class: 'art-summary-sep' }, '·'),
+    h('span', {}, fmtBytes(totalSize)),
+    ...Object.entries(kinds).map(([k, v]) => [h('span', { class: 'art-summary-sep' }, '·'), h('span', {}, `${ARTIFACT_ICONS[k] || '📄'} ${v}`)]).flat());
+  tree.insertBefore(summary, listEl);
+
   // 按目录分组
   const groups = {};
   for (const e of entries) {
@@ -997,9 +1008,11 @@ async function previewArtifact(preview, f) {
     h('span', { class: 'art-preview-path' }, f.path || ''),
     h('span', { class: 'art-preview-meta' },
       `${fmtBytes(f.sizeBytes)} · ${f.role || '—'} · ${f.task || '—'}`),
-    h('button', { class: 'btn btn-sm', title: '在文件管理器中显示',
-      onclick: () => { const p = S.dash.run.dir + '\\' + (f.path || '').replace(/\//g, '\\'); window.studio.revealFile(p); } },
-      '📂 显示')));
+    h('div', { style: 'display:flex;gap:4px' },
+      f.task ? h('button', { class: 'btn btn-sm', onclick: () => { closeTaskDetail(); openTaskDetail(f.task); } }, '关联任务') : null,
+      h('button', { class: 'btn btn-sm', title: '在文件管理器中显示',
+        onclick: () => { const p = S.dash.run.dir + '\\' + (f.path || '').replace(/\//g, '\\'); window.studio.revealFile(p); } },
+        '📂 显示'))));
   const content = h('pre', { class: 'art-preview-content' });
   preview.appendChild(content);
   try {
