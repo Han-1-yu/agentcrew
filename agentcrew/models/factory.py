@@ -115,6 +115,22 @@ class ProviderUnavailableError(RuntimeError):
     """
 
 
+class BudgetExhaustedError(ModelFactoryError):
+    """成本预算耗尽（P0-3）：累计成本或 LLM 调用次数超出硬上限。
+
+    ``_account()`` 在每次记账后检查；超限即抛，Crew 捕获后优雅收尾
+    （等在跑任务完成，不再派发新任务），记 ``budget_exhausted`` 事件，退出码 1。
+    携带当前累计值与上限，便于日志定位。
+    """
+
+    def __init__(self, *, kind: str, current: float, limit: float) -> None:
+        self.kind = kind
+        self.current = current
+        self.limit = limit
+        super().__init__(
+            f"预算耗尽：{kind} 累计 {current} 已达上限 {limit}")
+
+
 class ModelFactory:
     """按别名缓存 Provider，并独占全局 LLM 调用信号量与用量统计。"""
 
@@ -424,6 +440,10 @@ class ModelFactory:
 
         单一记账路径是刻意的：``call()`` 与 ``complete_structured()`` 若各写一份，
         迟早漂移，而 spec §14.3 的运行报告会照抄其中一份。
+
+        P0-3：记账后检查 ``max_cost_usd`` / ``max_llm_calls`` 硬上限，超限抛
+        ``BudgetExhaustedError``。ledger 事件先于异常发出（触发超限的那次调用
+        也必须留痕），Crew 捕获异常后优雅收尾。
         """
         cost = estimate_cost(
             result.model, result.prompt_tokens, result.completion_tokens)
@@ -441,6 +461,18 @@ class ModelFactory:
                 estimated_cost_usd=cost,
                 latency_ms=result.latency_ms,
                 purpose=purpose)
+        # P0-3：预算硬上限检查（ledger 事件已发出，超限调用可追溯）。
+        # 严格大于才抛：上限本身包含在内（max_llm_calls=1 允许 1 次成功调用）。
+        if (self._settings.max_cost_usd is not None
+                and self._total_cost_usd > self._settings.max_cost_usd):
+            raise BudgetExhaustedError(
+                kind="cost_usd", current=self._total_cost_usd,
+                limit=self._settings.max_cost_usd)
+        if (self._settings.max_llm_calls is not None
+                and self._llm_calls > self._settings.max_llm_calls):
+            raise BudgetExhaustedError(
+                kind="llm_calls", current=float(self._llm_calls),
+                limit=float(self._settings.max_llm_calls))
 
     def _emit_degrade(self, event: DegradeEvent) -> None:
         """把一次降级落成 ``llm_degraded`` 事件（spec §12.3）。

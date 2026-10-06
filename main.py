@@ -204,6 +204,10 @@ def _add_run_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output-dir", metavar="DIR", help="run 输出根目录")
     parser.add_argument("--context-budget", type=int, metavar="N",
                         help="上下文预算（tokens）")
+    parser.add_argument("--max-cost", type=float, metavar="USD",
+                        help="累计 LLM 成本硬上限（USD），超限优雅收尾（P0-3）")
+    parser.add_argument("--max-llm-calls", type=int, metavar="N",
+                        help="累计 LLM 调用次数硬上限，超限优雅收尾（P0-3）")
     parser.add_argument("--no-live", action="store_true",
                         help="关闭实时看板，只保留结束报告（CI 友好）")
 
@@ -601,6 +605,10 @@ def _settings_from(args: argparse.Namespace) -> Settings:
         overrides["default_model"] = args.default_model
     if getattr(args, "context_budget", None) is not None:
         overrides["context_budget_tokens"] = args.context_budget
+    if getattr(args, "max_cost", None) is not None:
+        overrides["max_cost_usd"] = args.max_cost
+    if getattr(args, "max_llm_calls", None) is not None:
+        overrides["max_llm_calls"] = args.max_llm_calls
     if getattr(args, "output_dir", None):
         overrides["output_dir"] = Path(args.output_dir)
     return Settings.load(**overrides)

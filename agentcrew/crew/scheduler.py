@@ -61,6 +61,7 @@ from agentcrew.agents.registry import AgentFactory
 from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.context.context_bus import ContextBus
 from agentcrew.gate.gatekeeper import GateDecision, Gatekeeper
+from agentcrew.models.factory import BudgetExhaustedError
 from agentcrew.runtime.checkpoint import CheckpointStore
 from agentcrew.runtime.ledger import Ledger
 from agentcrew.task.task import Task, TaskResult, TaskStatus
@@ -138,6 +139,9 @@ class Scheduler:
         self._deadlock_report: str | None = None
         self._peak_concurrency = 0
         self._running = False
+        #: P0-3：预算耗尽标志。worker 中捕获 BudgetExhaustedError 时置位，
+        #: 主循环检测后停止派发、等在跑 worker 收尾，再重抛该异常给 Crew。
+        self._budget_exhausted: BudgetExhaustedError | None = None
 
     # ---- 只读视图 ----
 
@@ -200,12 +204,18 @@ class Scheduler:
                     outcome = await self._completion_queue.get()
                     self._handle_completion(outcome)
                     self._save_checkpoint()
+                    # P0-3：预算耗尽 —— 停止派发新任务，等在跑 worker 自然收尾。
+                    if self._budget_exhausted is not None:
+                        break
                     continue
                 # 无就绪、无在跑，却仍未终结：停滞（死锁或全部阻塞），报告后退出。
                 self._deadlock_report = self._board.explain_stall()
                 self._notify("deadlock", report=self._deadlock_report)
                 break
             await self._drain_workers()
+            # P0-3：worker 收尾完毕后重抛预算耗尽异常，由 Crew 捕获并优雅收尾。
+            if self._budget_exhausted is not None:
+                raise self._budget_exhausted
         finally:
             self._running = False
 
@@ -231,6 +241,12 @@ class Scheduler:
                 WorkerOutcome(task_id=task.id, error=CANCELLED_ERROR)
             )
             raise
+        except BudgetExhaustedError as exc:
+            # P0-3：预算耗尽 —— 置位标志让主循环停止派发，同时收敛成错误结局
+            # 回流（该任务的状态由 _handle_error 正常处理）。主循环检测到标志后
+            # 等在跑 worker 收尾再重抛此异常给 Crew。
+            self._budget_exhausted = exc
+            outcome = _error_outcome(task.id, exc)
         except Exception as exc:
             # 非预期异常（provider 网络/鉴权、门禁崩溃…）也收敛成结局回流：
             # 让主循环按板上状态决定重试/失败，绝不让 run() 等在空队列上。
@@ -256,6 +272,10 @@ class Scheduler:
                 WorkerOutcome(task_id=task_id, error=CANCELLED_ERROR)
             )
             raise
+        except BudgetExhaustedError as exc:
+            # P0-3：预算耗尽（门禁的 LLM 调用也可能触发）。
+            self._budget_exhausted = exc
+            outcome = _error_outcome(task_id, exc)
         except Exception as exc:
             outcome = _error_outcome(task_id, exc)
         self._completion_queue.put_nowait(outcome)

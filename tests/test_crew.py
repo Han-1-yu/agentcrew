@@ -36,7 +36,7 @@ from agentcrew.crew.crew import (
     _rework_targets,
 )
 from agentcrew.gate.gatekeeper import DeliveryDecision, NullPrompter, PlanDecision
-from agentcrew.models.factory import ContextBudgetError, ModelFactory
+from agentcrew.models.factory import BudgetExhaustedError, ContextBudgetError, ModelFactory
 from agentcrew.roles.spec import RoleSpec
 from agentcrew.runtime.checkpoint import CheckpointStore, RunStatus
 from agentcrew.runtime.ledger import Ledger
@@ -1285,3 +1285,32 @@ async def test_custom_role_is_actually_dispatched_end_to_end(
     assert board.get("T-001").status is TaskStatus.SUCCEEDED
     # 产物真的落盘了 —— 这是「被派发执行」而不是「被跳过」的证据
     assert (crew.checkpoint.artifacts_dir / "docs" / "audit.md").is_file()
+
+
+# ── P0-3：成本预算硬上限 ──────────────────────────────────────────────────
+
+
+async def test_budget_exhausted_graceful_shutdown(env):
+    """max_llm_calls=1：规划阶段消耗 1 次，执行阶段首次调用即超限 → BudgetExhaustedError。
+
+    Crew 捕获后优雅收尾（记 budget_exhausted 事件、FAILED 状态、退出码 1），
+    再原样重抛异常。
+    """
+    s = env["settings"].model_copy(update={"max_llm_calls": 1})
+    crew = Crew(s)
+    with pytest.raises(BudgetExhaustedError) as ei:
+        await crew.run("做一个 Todo 应用")
+    assert ei.value.kind == "llm_calls"
+    # run 以 FAILED 收尾（不是 COMPLETED，也不是中途崩溃无记录）
+    record = crew.checkpoint.load_record()
+    assert record.status is RunStatus.FAILED
+    # budget_exhausted 事件已落 ledger
+    ledger_path = crew.checkpoint.run_dir / "ledger.jsonl"
+    events = [
+        json.loads(line) for line in ledger_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    budget_events = [e for e in events if e.get("event") == "budget_exhausted"]
+    assert len(budget_events) == 1
+    assert budget_events[0]["data"]["kind"] == "llm_calls"
+    assert budget_events[0]["data"]["limit"] == 1.0

@@ -49,7 +49,7 @@ from agentcrew.context.summarizer import summarizer_from_factory
 from agentcrew.crew.scheduler import Scheduler
 from agentcrew.gate.gatekeeper import Gatekeeper, Prompter, Reviewer
 from agentcrew.models import factory as model_factory
-from agentcrew.models.factory import ModelFactory, ModelFactoryError
+from agentcrew.models.factory import BudgetExhaustedError, ModelFactory, ModelFactoryError
 from agentcrew.roles.builtin import BUILTIN_ROLES
 from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.roles.spec import RoleSpec
@@ -376,6 +376,22 @@ class Crew:
             if not self._finalized:
                 self._finalize(
                     run, RunStatus.FAILED, exit_code=EXIT_CODES["plan"]
+                )
+            raise
+        except BudgetExhaustedError as exc:
+            # P0-3：成本预算耗尽 —— 调度器已停止派发、等在跑任务收尾。
+            # 记 budget_exhausted 事件（含当前累计值与上限），以 FAILED 收尾，退出码 1。
+            run.ledger.emit(
+                "budget_exhausted",
+                kind=exc.kind,
+                current=exc.current,
+                limit=exc.limit,
+                total_cost_usd=run.models.total_cost_usd,
+                llm_calls=run.models.llm_calls,
+            )
+            if not self._finalized:
+                self._finalize(
+                    run, RunStatus.FAILED, exit_code=EXIT_CODES["failed"]
                 )
             raise
         except ModelFactoryError:

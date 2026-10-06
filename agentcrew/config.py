@@ -45,6 +45,8 @@ _ENV_TO_FIELD: dict[str, str] = {
     "AGENTCREW_MOCK": "mock",
     "AGENTCREW_MOCK_LATENCY_MS": "mock_latency_ms",
     "AGENTCREW_REVIEW_SCORE_THRESHOLD": "review_score_threshold",
+    "AGENTCREW_MAX_COST_USD": "max_cost_usd",
+    "AGENTCREW_MAX_LLM_CALLS": "max_llm_calls",
 }
 
 #: ``AGENTCREW_MODEL_<ROLE>`` → ``role_bindings[<role 小写>]``（spec §17.2）。
@@ -283,6 +285,19 @@ class Settings(BaseModel):
     环境变量 ``AGENTCREW_FAILOVER_<ALIAS>``（别名中 ``:`` 用 ``__`` 表示，值逗号分隔）。
     """
     review_score_threshold: float | None = None
+    max_cost_usd: float | None = None
+    """累计 LLM 成本硬上限（USD，P0-3）。
+
+    ``None`` = 不限制。ModelFactory 在每次记账后检查累计成本，超限时抛
+    ``BudgetExhaustedError``，Crew 优雅收尾（等在跑任务完成，不再派发新任务），
+    记 ``budget_exhausted`` 事件，退出码 1。环境变量 ``AGENTCREW_MAX_COST_USD``。
+    """
+    max_llm_calls: int | None = None
+    """累计 LLM 调用次数硬上限（P0-3）。
+
+    ``None`` = 不限制。与 ``max_cost_usd`` 任一超限即触发预算耗尽收尾。
+    环境变量 ``AGENTCREW_MAX_LLM_CALLS``。
+    """
     """G2 评审 score 阈值放行（P0-1）。
 
     ``None`` = 不启用，保持现有行为（reject 即驳回）。设置后，当 LLM 评审

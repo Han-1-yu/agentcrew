@@ -27,6 +27,7 @@ from agentcrew.config import Settings
 from agentcrew.models.config import UnknownProviderError, parse_alias
 from agentcrew.models.factory import (
     DEFAULT_FIXTURES_DIR,
+    BudgetExhaustedError,
     ModelFactory,
     ModelFactoryError,
     ProviderUnavailableError,
@@ -894,3 +895,57 @@ async def test_failover_complete_structured_switches_backup(settings, tmp_path, 
     assert result == _Answer(value=1)
     assert lg.count("llm_failover") == 1
     assert backup.calls == 1
+
+
+# ── P0-3：成本预算硬上限 ──────────────────────────────────────────────────
+
+
+async def test_budget_exhausted_on_max_llm_calls(settings, tmp_path):
+    """max_llm_calls=1：第一次调用成功，第二次调用抛 BudgetExhaustedError。"""
+    lg = Ledger(tmp_path / "l.jsonl", run_id="R")
+    s = settings.model_copy(update={"max_llm_calls": 1})
+    f = ModelFactory(s, ledger=lg)
+    p = f.get("mock:m")
+    set_purpose(p, "execute", role="r", task_id="T-1", attempt=1)
+
+    # 第一次调用：llm_calls 达到上限 1，但不抛（检查在记账之后，= 上限即超限）
+    await f.call("mock:m", [{"role": "user", "content": "x"}],
+                 temperature=0, max_tokens=10, purpose="execute", role="r")
+    assert f.llm_calls == 1
+
+    # 第二次调用：记账后 llm_calls=2 >= 1，抛 BudgetExhaustedError
+    set_purpose(p, "execute", role="r", task_id="T-2", attempt=1)
+    with pytest.raises(BudgetExhaustedError) as ei:
+        await f.call("mock:m", [{"role": "user", "content": "x"}],
+                     temperature=0, max_tokens=10, purpose="execute", role="r")
+    assert ei.value.kind == "llm_calls"
+    assert ei.value.limit == 1.0
+    # 触发超限的那次调用仍被记账（ledger 事件先于异常发出）
+    assert f.llm_calls == 2
+
+
+async def test_budget_exhausted_on_max_cost_usd(settings, tmp_path):
+    """max_cost_usd 设为负值：第一次调用后累计成本（>=0）即严格超限。"""
+    lg = Ledger(tmp_path / "l.jsonl", run_id="R")
+    s = settings.model_copy(update={"max_cost_usd": -0.01})
+    f = ModelFactory(s, ledger=lg)
+    p = f.get("mock:m")
+    set_purpose(p, "execute", role="r", task_id="T-1", attempt=1)
+    with pytest.raises(BudgetExhaustedError) as ei:
+        await f.call("mock:m", [{"role": "user", "content": "x"}],
+                     temperature=0, max_tokens=10, purpose="execute", role="r")
+    assert ei.value.kind == "cost_usd"
+    assert ei.value.current > ei.value.limit
+
+
+async def test_no_budget_limit_preserves_original_behavior(settings, tmp_path):
+    """未配置 max_cost_usd / max_llm_calls 时行为与改动前完全一致（向后兼容）。"""
+    lg = Ledger(tmp_path / "l.jsonl", run_id="R")
+    f = ModelFactory(settings, ledger=lg)
+    p = f.get("mock:m")
+    for i in range(3):
+        set_purpose(p, "execute", role="r", task_id=f"T-{i}", attempt=1)
+        await f.call("mock:m", [{"role": "user", "content": "x"}],
+                     temperature=0, max_tokens=10, purpose="execute", role="r")
+    assert f.llm_calls == 3
+    assert lg.count("llm_call") == 3

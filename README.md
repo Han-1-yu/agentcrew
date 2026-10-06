@@ -339,6 +339,26 @@ AGENTCREW_FAILOVER_OPENAI__GPT-4O-MINI=anthropic:claude-haiku,deepseek:deepseek-
 
 默认空字典 = 不启用，保持现有行为。
 
+### P0-3. 成本预算硬上限
+
+ModelFactory 累计 `total_cost_usd` 和 `llm_calls`，可配置硬上限防止失控 run 无限烧钱。
+超限后 `_account()` 抛 `BudgetExhaustedError`，Crew 捕获后优雅收尾（等在跑任务完成，
+不再派发新任务），记 `budget_exhausted` 事件，以 FAILED 收尾、退出码 1。
+
+- 触发超限的那次调用仍被记账（ledger 事件先于异常发出，可追溯）
+- 严格大于才抛：上限本身包含在内（`max_llm_calls=1` 允许 1 次成功调用）
+
+```bash
+# CLI 参数
+python main.py run --goal "..." --max-cost 1.0 --max-llm-calls 50
+
+# .env
+AGENTCREW_MAX_COST_USD=1.0
+AGENTCREW_MAX_LLM_CALLS=50
+```
+
+默认 `None` = 不限制，保持现有行为。
+
 ---
 
 ## 自定义角色 / 团队开发指南
