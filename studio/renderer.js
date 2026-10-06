@@ -519,7 +519,7 @@ function renderRunStatusBar() {
   host.appendChild(h('div',{},
     h('div',{class:'rs-top'},
       h('span',{class:'rs-id',title:'点击复制 Run ID',onclick:(e)=>{navigator.clipboard.writeText(run.run_id);toast('success','已复制',run.run_id);}},run.run_id),
-      h('span',{class:'rs-goal',title:run.project_goal},run.project_goal),
+      h('span',{class:'rs-goal',title:run.project_goal}, simplifyGoal(run.project_goal)),
       h('div',{class:'rs-stage-seg'}, PHASES.map((p,i)=>h('button',{class:(['planning','execution','delivery'][i])===run.phase?'on':'',disabled:true},p))),
       h('span',{class:`rs-status-chip ${meta.chip}`}, h('span',{class:`dot ${meta.dot}`}), meta.label)),
     h('div',{class:'rs-stats'},
@@ -532,6 +532,22 @@ function renderRunStatusBar() {
     h('div',{class:'rs-actions'}, actions)));
 }
 function rsStat(k,v){ return h('div',{class:'rs-stat'},h('div',{class:'k'},k),h('div',{class:'v'},v)); }
+/* 从完整项目目标中提取简洁标题：取冒号/句号前的核心短语 */
+function simplifyGoal(goal){
+  if(!goal) return '未命名项目';
+  let s=goal.trim();
+  // 优先取第一个冒号前（中英文冒号）
+  const colonIdx=Math.min(...[s.indexOf('：'),s.indexOf(':')].filter(i=>i>=0).concat([Infinity]));
+  if(colonIdx<Infinity && colonIdx>4) s=s.substring(0,colonIdx);
+  else{
+    // 否则取第一句话
+    const stopIdx=Math.min(...[s.indexOf('。'),s.indexOf('. '),s.indexOf('！'),s.indexOf('!')].filter(i=>i>=0).concat([Infinity]));
+    if(stopIdx<Infinity && stopIdx>6) s=s.substring(0,stopIdx);
+  }
+  s=s.trim();
+  // 兜底：超过 28 字符截断
+  return s.length>28 ? s.substring(0,28)+'…' : s;
+}
 function iconPause(){ return h('svg',{width:13,height:13,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor','stroke-width':2,'stroke-linecap':'round'},h('path',{d:'M9 5v14M15 5v14'})); }
 function iconX(){ return h('svg',{width:13,height:13,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor','stroke-width':2},h('circle',{cx:12,cy:12,r:9}),h('path',{d:'M15 9l-6 6M9 9l6 6'})); }
 function iconPlay(){ return h('svg',{width:13,height:13,viewBox:'0 0 24 24',fill:'currentColor'},h('path',{d:'M7 5l12 7-12 7z'})); }
@@ -853,7 +869,7 @@ function renderChrome(){
   const d=S.dash; if(!d)return; const run=d.run; const st=run.stats||{};
   const meta=RUN_META[run.status]||RUN_META.idle;
   $('#tb-run-dot').className='dot '+meta.dot; $('#tb-run-label').textContent=meta.label;
-  $('#tb-workspace').textContent=trunc(run.project_goal,24);
+  $('#tb-workspace').textContent=simplifyGoal(run.project_goal);
   const cost=st.estimated_cost_usd||0, pct=Math.min(100,cost/run.budget_limit_usd*100);
   $('#tb-budget-tokens').textContent=fmtTokens((st.prompt_tokens||0)+(st.completion_tokens||0));
   $('#tb-budget-cost').textContent=fmtCost(cost);

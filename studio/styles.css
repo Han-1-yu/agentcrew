@@ -126,7 +126,7 @@ h1,h2,h3,h4 { margin: 0; font-weight: 600; letter-spacing: -0.1px; }
 .rs-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .rs-id { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: #8E8E93; cursor: pointer; }
 .rs-id:hover { color: #007AFF; }
-.rs-goal { font-size: 14px; color: #1C1C1E; font-weight: 500; flex: 1; min-width: 120px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rs-goal { font-size: 15px; color: #1C1C1E; font-weight: 600; flex: 1; min-width: 120px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: -0.1px; }
 .rs-stage-seg { display: inline-flex; background: rgba(60,60,67,0.07); border-radius: 6px; padding: 2px; gap: 1px; }
 .rs-stage-seg button {
   border: none; background: transparent; padding: 4px 12px; font-size: 11px;
