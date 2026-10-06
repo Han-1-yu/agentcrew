@@ -386,6 +386,16 @@ DELETE /runs/{run_id}?confirm=1
 - mock 的 contextvar 隔离由 `set_purpose` 在每个协程内独立设置，已安全
 - 评审调用受全局信号量限流，并行不会突破并发上限
 
+### P1-3. 优先级调度
+
+`TaskBoard.take_ready()` 按 `(priority, id)` 升序派发就绪任务：priority 数字小者优先
+（1 = 最高，9 = 最低），同优先级按 id 字典序。`Task.priority`（1-9）字段此前存在但
+未被消费，现已接入调度器。
+
+- T-FINAL 的 `priority=9` 自然最后执行（与现有依赖保证一致，双重保险）
+- 无依赖的高优先级任务先于低优先级任务派发，即使后者 id 更小
+- REWORK 任务与 READY 任务共用同一优先级排序通道
+
 ---
 
 ## 自定义角色 / 团队开发指南

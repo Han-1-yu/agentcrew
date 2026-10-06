@@ -58,6 +58,29 @@ def test_take_ready_orders_by_priority_then_id_and_marks_running():
     assert b.get("A").status is S.RUNNING and b.get("B").status is S.RUNNING
     assert b.get("C").status is S.READY
 
+
+def test_p1_3_high_priority_dispatched_before_low_priority():
+    """P1-3：priority 数字小者优先；即使低优先级任务 id 更小也后派发。"""
+    # T-low id 更小但 priority=5，T-high id 更大但 priority=1
+    b = TaskBoard([mk("T-low", priority=5), mk("T-high", priority=1)])
+    b.refresh()
+    taken = b.take_ready(limit=1)
+    assert [t.id for t in taken] == ["T-high"]
+    assert b.get("T-high").status is S.RUNNING
+    assert b.get("T-low").status is S.READY
+
+
+def test_p1_3_t_final_priority_9_dispatched_last():
+    """P1-3：T-FINAL priority=9 自然最后执行（与依赖保证一致，双重保险）。"""
+    b = TaskBoard([
+        mk("T-001", priority=1),
+        mk("T-002", priority=3),
+        mk("T-FINAL", priority=9),
+    ])
+    b.refresh()
+    taken = b.take_ready(limit=3)
+    assert [t.id for t in taken] == ["T-001", "T-002", "T-FINAL"]
+
 def test_bump_attempt_increments():
     b = TaskBoard([mk("A")])
     assert b.bump_attempt("A").attempts == 1
