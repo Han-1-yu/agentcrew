@@ -564,6 +564,7 @@ function renderRunStatusBar() {
   if (isReal) {
     actions.push(h('button',{class:'btn',onclick:()=>{ openNewRunModal(); $('#nr-goal').value = run.project_goal || ''; }},'重新运行'));
     actions.push(h('button',{class:'btn',onclick:()=>window.studio.openPath(run.dir)},'打开目录'));
+    actions.push(h('button',{class:'btn',onclick:exportRun},'导出运行'));
   } else {
     actions.push(h('button',{class:'btn',onclick:()=>toast('info','重新运行','已用相同目标启动新运行')},'重新运行'));
     actions.push(h('button',{class:'btn',onclick:()=>{ pushEvent('checkpoint_saved',{manual:true}); toast('success','检查点','已从最近检查点继续'); }},'从检查点继续'));
@@ -1232,6 +1233,26 @@ function exportEvents() {
   toast('success', '已导出', `${events.length} 条事件`);
 }
 
+/* 导出完整运行数据（run + tasks + events）为 JSON */
+function exportRun() {
+  const run = S.dash.run; if (!run) { toast('warning', '无运行', '当前没有可导出的运行'); return; }
+  const data = {
+    exported_at: new Date().toISOString(),
+    run: run,
+    tasks: S.dash.tasks || [],
+    agents: S.dash.agents || {},
+    gates: S.dash.gates || [],
+    events: S.dash.events || [],
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `run-${run.run_id || 'export'}.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast('success', '已导出', `运行 ${run.run_id} 完整数据`);
+}
+
 function summarizeEvent(e) {
   const d = e.data || {};
   if (e.event === 'task_started') return `${d.task_id || ''} 开始执行（第 ${d.attempt || 1} 次）`;
@@ -1322,6 +1343,13 @@ function renderAgentsPage(container) {
   for (const [role, a] of Object.entries(agents)) {
     const meta = ROLE_META[role] || { label: role, color: '#8E8E93' };
     const myTasks = S.dash.tasks.filter(t => t.role === role);
+    // 派生统计
+    const totalCost = myTasks.reduce((s, t) => s + ((t.result && t.result.cost_usd) || 0), 0);
+    const totalRetries = myTasks.reduce((s, t) => s + Math.max(0, (t.attempts || 1) - 1), 0);
+    const durations = myTasks.filter(t => t.result && t.result.duration_ms).map(t => t.result.duration_ms);
+    const avgDur = durations.length ? durations.reduce((s, v) => s + v, 0) / durations.length : 0;
+    const total = myTasks.length || 1;
+    const successRate = Math.round((a.done || 0) / total * 100);
     grid.appendChild(h('div', { class: 'agent-full-card' },
       h('div', { class: 'agent-full-head' },
         h('span', { class: 'agent-full-dot', style: `background:${meta.color}` }),
@@ -1330,10 +1358,15 @@ function renderAgentsPage(container) {
       h('div', { class: 'agent-full-body' },
         h('div', { class: 'agent-full-row' }, h('span', { class: 'k' }, '当前任务'), h('span', { class: 'v' }, a.task || '—')),
         h('div', { class: 'agent-full-row' }, h('span', { class: 'k' }, '最近动作'), h('span', { class: 'v' }, a.action || '—')),
-        h('div', { class: 'agent-full-row' }, h('span', { class: 'k' }, '已完成'), h('span', { class: 'v' }, `${a.done} 项`)),
-        h('div', { class: 'agent-full-row' }, h('span', { class: 'k' }, '失败'), h('span', { class: 'v' }, `${a.fail} 次`)),
-        h('div', { class: 'agent-full-row' }, h('span', { class: 'k' }, 'Token'), h('span', { class: 'v' }, fmtTokens(a.tokens || 0))),
-        h('div', { class: 'agent-full-row' }, h('span', { class: 'k' }, '模型'), h('span', { class: 'v' }, a.model || '—')),
+        h('div', { class: 'agent-full-stats' },
+          h('div', { class: 'af-stat' }, h('div', { class: 'af-stat-val' }, `${a.done || 0}`), h('div', { class: 'af-stat-label' }, '已完成')),
+          h('div', { class: 'af-stat' }, h('div', { class: 'af-stat-val' }, `${a.fail || 0}`), h('div', { class: 'af-stat-label' }, '失败')),
+          h('div', { class: 'af-stat' }, h('div', { class: 'af-stat-val' }, `${successRate}%`), h('div', { class: 'af-stat-label' }, '成功率')),
+          h('div', { class: 'af-stat' }, h('div', { class: 'af-stat-val' }, `${totalRetries}`), h('div', { class: 'af-stat-label' }, '重试')),
+          h('div', { class: 'af-stat' }, h('div', { class: 'af-stat-val' }, fmtTokens(a.tokens || 0)), h('div', { class: 'af-stat-label' }, 'Token')),
+          h('div', { class: 'af-stat' }, h('div', { class: 'af-stat-val' }, totalCost ? `$${totalCost.toFixed(3)}` : '—'), h('div', { class: 'af-stat-label' }, '费用')),
+          h('div', { class: 'af-stat' }, h('div', { class: 'af-stat-val' }, avgDur ? fmtDur(avgDur) : '—'), h('div', { class: 'af-stat-label' }, '平均耗时')),
+          h('div', { class: 'af-stat' }, h('div', { class: 'af-stat-val' }, a.model || '—'), h('div', { class: 'af-stat-label' }, '模型'))),
         h('div', { class: 'agent-full-tasks' },
           h('div', { class: 'agent-full-tasks-title' }, `任务列表（${myTasks.length}）`),
           ...myTasks.map(t => h('div', { class: 'agent-full-task-item',

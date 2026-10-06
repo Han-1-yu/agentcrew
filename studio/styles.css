@@ -258,6 +258,12 @@ h1,h2,h3,h4 { margin: 0; font-weight: 600; letter-spacing: -0.1px; }
 .tok-md-code { color: #34C759; font-family: "SF Mono", Menlo, monospace; background: rgba(52,199,89,0.08); padding: 1px 4px; border-radius: 3px; }
 .tok-md-list { color: #FF9500; }
 
+/* Agent 统计网格 */
+.agent-full-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 10px 0; padding: 10px; background: rgba(60,60,67,0.03); border-radius: 6px; }
+.af-stat { text-align: center; }
+.af-stat-val { font-size: 13px; font-weight: 600; color: #1C1C1E; font-family: "SF Mono", Menlo, monospace; }
+.af-stat-label { font-size: 10px; color: #8E8E93; margin-top: 2px; }
+
 /* 事件分页 */
 .ev-pager { display: flex; align-items: center; justify-content: center; gap: 16px;
   padding: 16px; border-top: 1px solid rgba(60,60,67,0.08); margin-top: 8px; }
