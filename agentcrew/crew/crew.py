@@ -61,7 +61,9 @@ from agentcrew.runtime.checkpoint import (
 )
 from agentcrew.runtime.ledger import Ledger
 from agentcrew.task.planner import (
+    MIN_PLAN_SCORE,
     PlanValidationError,
+    score_plan,
     to_tasks,
     validate_plan,
     with_final_task,
@@ -527,6 +529,28 @@ class Crew:
                 roles=sorted({task.role for task in tasks}),
                 planner_attempts=attempt,
             )
+            # P2-6：校验通过后做质量评分。低分只警告不阻断 —— 二元校验已放行，
+            # 评分是观测信号：回灌 PM 重拆的额度已用尽再拦，只会把「能用的计划」
+            # 退成 PlanFailedError。
+            score = score_plan(tasks, run.goal)
+            run.ledger.emit(
+                "plan_scored",
+                total=round(score.total, 4),
+                coverage=round(score.coverage, 4),
+                specificity=round(score.specificity, 4),
+                dependency_quality=round(score.dependency_quality, 4),
+                deliverable_clarity=round(score.deliverable_clarity, 4),
+            )
+            if score.total < MIN_PLAN_SCORE:
+                run.ledger.emit(
+                    "plan_low_quality",
+                    total=round(score.total, 4),
+                    min_score=MIN_PLAN_SCORE,
+                    coverage=round(score.coverage, 4),
+                    specificity=round(score.specificity, 4),
+                    dependency_quality=round(score.dependency_quality, 4),
+                    deliverable_clarity=round(score.deliverable_clarity, 4),
+                )
             return tasks
         raise PlanFailedError(errors)
 

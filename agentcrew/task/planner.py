@@ -11,6 +11,7 @@
 ``ArtifactSpec.path`` 的 validator 经 ``safe_relpath`` 保证，此处不重复实现。
 """
 
+import re
 from collections.abc import Sequence
 from typing import Any
 
@@ -339,3 +340,162 @@ def with_final_task(tasks: Sequence[Task]) -> list[Task]:
         brief=_FINAL_TASK_BRIEF,
     )
     return [*base, final]
+
+
+# ── P2-6：计划质量评分（多维度，低分只警告不阻断）───────────────────────────
+
+#: 综合分低于此值记 ``plan_low_quality`` 警告（校验已通过，故**不**阻断执行）。
+MIN_PLAN_SCORE = 0.5
+
+#: specificity 归一化的标定：平均描述长度达到该字符数记满分。
+_SPEC_DESC_TARGET = 100.0
+#: specificity 归一化的标定：平均验收标准条数达到该数记满分。
+_SPEC_CRITERIA_TARGET = 2.0
+
+#: 综合分四维权重（与 spec 给的口径一致）：覆盖 0.3 / 具体 0.2 / 依赖 0.2 / 交付 0.3。
+_W_COVERAGE = 0.3
+_W_SPECIFICITY = 0.2
+_W_DEPENDENCY = 0.2
+_W_DELIVERABLE = 0.3
+
+_ASCII_TOKEN = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_\-]*")
+_CJK_RUN = re.compile(r"[\u4e00-\u9fff]+")
+
+
+class PlanScore(BaseModel):
+    """一次拆解的多维度质量评分（P2-6）。
+
+    四个维度都归一到 ``0..1``，``total`` 是四维加权平均。``details`` 保留
+    中间量（关键词命中数、平均描述长度、环数等），供 ``plan_low_quality``
+    事件与计划卡点展示，避免「一个总分」黑箱。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    total: float  # 0-1 综合分
+    coverage: float  # 任务覆盖度（是否覆盖项目目标各方面）
+    specificity: float  # 描述具体度（描述长度、验收标准数量）
+    dependency_quality: float  # 依赖关系质量（是否有循环依赖、是否合理）
+    deliverable_clarity: float  # 交付物清晰度（必需产物比例、路径规范性）
+    details: dict[str, Any]  # 详细评分信息
+
+
+def _goal_keywords(goal: str) -> list[str]:
+    """从 goal 抽取待覆盖的关键词：ASCII 词（≥2 字符）+ 中文二元滑窗。
+
+    中文没有空格分词，二元滑窗是最简单的「覆盖面」近似 —— 它不做语义分析，
+    只衡量任务正文里是否反复出现 goal 里的字组。去重保序。
+    """
+    keys: list[str] = []
+    for word in _ASCII_TOKEN.findall(goal):
+        if len(word) >= 2:
+            keys.append(word.lower())
+    for run in _CJK_RUN.findall(goal):
+        if len(run) >= 2:
+            keys.extend(run[i : i + 2] for i in range(len(run) - 1))
+        elif run:
+            keys.append(run)
+    return list(dict.fromkeys(keys))
+
+
+def _path_normative(path: str) -> bool:
+    """产物路径是否为干净的 POSIX 相对路径（无盘符/反斜杠/回退段）。"""
+    if not path or path.startswith("/") or "\\" in path:
+        return False
+    return ".." not in path.split("/")
+
+
+def score_plan(tasks: Sequence[Task], goal: str) -> PlanScore:
+    """对一份拆解做多维度质量评分（P2-6）。
+
+    只评**真实任务**（``T-FINAL`` 是平台追加的收尾任务，它永远有交付物、有依赖，
+    算进去会把任何计划的 ``deliverable_clarity`` 抬高）。四个维度：
+
+    - ``coverage``：goal 关键词在任务标题+正文里出现的比例（无关键词时给 1.0）；
+    - ``specificity``：平均描述长度（标定 100 字符）与平均验收标准条数（标定 2 条）
+      各占一半；
+    - ``dependency_quality``：有环 = 0；无环且至少有一条依赖边 = 1；完全无依赖
+      的散点计划 = 0.5（没有任何结构，下游无法复用上游产物）；
+    - ``deliverable_clarity``：有交付物的任务比例（0.5）+ 必需交付物比例（0.25）
+      + 路径规范比例（0.25）。
+
+    ``total`` 按 0.3/0.2/0.2/0.3 加权。本函数**只读**：不修改输入，也不抛异常
+    （评分是观测，不是校验 —— 非法拆解早在 :func:`validate_plan` 就被拦下）。
+    """
+    drafts = _drafts(tasks)
+
+    # ── coverage ──
+    keywords = _goal_keywords(goal)
+    corpus = " ".join(f"{task.title} {task.description}" for task in drafts).lower()
+    if keywords:
+        covered = [key for key in keywords if key in corpus]
+        coverage = len(covered) / len(keywords)
+    else:
+        covered = []
+        coverage = 1.0
+
+    # ── specificity ──
+    if drafts:
+        avg_desc = sum(len(task.description) for task in drafts) / len(drafts)
+        avg_crit = sum(len(task.acceptance_criteria) for task in drafts) / len(drafts)
+    else:
+        avg_desc = 0.0
+        avg_crit = 0.0
+    desc_score = min(1.0, avg_desc / _SPEC_DESC_TARGET)
+    crit_score = min(1.0, avg_crit / _SPEC_CRITERIA_TARGET)
+    specificity = 0.5 * desc_score + 0.5 * crit_score
+
+    # ── dependency_quality ──
+    cycles = TaskGraph.build(drafts).cycles() if drafts else []
+    if cycles:
+        dependency_quality = 0.0
+    elif any(task.dependencies for task in drafts):
+        dependency_quality = 1.0
+    else:
+        dependency_quality = 0.5
+
+    # ── deliverable_clarity ──
+    if drafts:
+        with_deliv = sum(1 for task in drafts if task.deliverables) / len(drafts)
+    else:
+        with_deliv = 0.0
+    all_deliverables = [spec for task in drafts for spec in task.deliverables]
+    if all_deliverables:
+        required_ratio = (
+            sum(1 for spec in all_deliverables if spec.required)
+            / len(all_deliverables)
+        )
+        path_ok = (
+            sum(1 for spec in all_deliverables if _path_normative(spec.path))
+            / len(all_deliverables)
+        )
+    else:
+        required_ratio = 0.0
+        path_ok = 0.0
+    deliverable_clarity = (
+        0.5 * with_deliv + 0.25 * required_ratio + 0.25 * path_ok
+    )
+
+    total = (
+        _W_COVERAGE * coverage
+        + _W_SPECIFICITY * specificity
+        + _W_DEPENDENCY * dependency_quality
+        + _W_DELIVERABLE * deliverable_clarity
+    )
+    details: dict[str, Any] = {
+        "draft_task_count": len(drafts),
+        "goal_keywords": keywords,
+        "goal_keywords_covered": covered,
+        "avg_description_len": round(avg_desc, 2),
+        "avg_acceptance_criteria": round(avg_crit, 2),
+        "cycles": cycles,
+        "deliverable_count": len(all_deliverables),
+    }
+    return PlanScore(
+        total=total,
+        coverage=coverage,
+        specificity=specificity,
+        dependency_quality=dependency_quality,
+        deliverable_clarity=deliverable_clarity,
+        details=details,
+    )

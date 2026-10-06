@@ -479,6 +479,22 @@ agent = GenericAgent(spec, models=..., store=..., ledger=...,
 - CLI 计划/交付卡点菜单新增 `[m] 切换模型`（注入 `crew` 才显示，向后兼容）
 - Dashboard 顶部新增模型选择器，选别名+可选角色即调 `PUT` 接口
 
+### P2-6. 计划质量评分
+
+PM 拆解通过 §7.2 二元校验后，再由 `score_plan()` 做一次**多维度质量评分**，
+低分只警告、不阻断执行（校验已放行，重拆额度也已用尽，再拦只会把能用的计划
+退成 `PlanFailedError`）。
+
+- `PlanScore` 四个维度（都归一到 0–1）：`coverage`（goal 关键词在任务正文的
+  覆盖率，权重 0.3）、`specificity`（平均描述长度 + 平均验收标准数，权重 0.2）、
+  `dependency_quality`（有环 = 0；无环且有依赖边 = 1；散点计划 = 0.5，权重 0.2）、
+  `deliverable_clarity`（有交付物任务比例 + 必需产物比例 + 路径规范比例，权重 0.3）
+- 只评**真实任务**：平台追加的 `T-FINAL` 永远有交付物与依赖，算进去会把任何
+  计划的清晰度抬高
+- 每次规划成功后落 ledger 事件 `plan_scored`（含 total 与四维分值）；
+  `total < MIN_PLAN_SCORE`（默认 0.5）时再落一条 `plan_low_quality` 警告
+- 评分是观测信号、不抛异常：非法拆解早在 `validate_plan` 就被拦下
+
 ---
 
 ## 自定义角色 / 团队开发指南
