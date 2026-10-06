@@ -148,6 +148,29 @@ _SUBTASK_SECTION = """\
 - 不要在最终产物回复里遗漏本任务自己的 `file=` 围栏——`<subtask>` 只是请求拆任务，不替代交付物。
 """
 
+#: P3-4 多轮对话：模型在回复里用一对 ``<message to="角色名">`` 围栏向其他角色
+#:（或 "human"）发问。``to`` 是双引号包裹的目标角色 key，标签内是消息正文。
+#: 与 ``<tool_call>`` / ``<subtask>`` 同族（标签而非反引号），不与产物围栏干扰。
+_MESSAGE_RE = re.compile(
+    r'<message\s+to="(?P<to>[^"]+)"\s*>\s*(?P<content>.*?)\s*</message>',
+    re.DOTALL,
+)
+
+#: P3-4：仅当本 Agent 注入了 ``message_router`` 时才在系统提示词里告知模型
+#: 可以跨角色对话——未注入时模型看不到这段，行为与原来完全一致。
+_MESSAGE_SECTION = """\
+## 向其他角色提问（可选）
+执行过程中如果缺少关键信息（需要向上游确认契约、向其他角色求证细节），可以在回复中用一对 `<message>` 围栏发问。围栏的 `to` 属性写目标角色名，标签内写你的问题：
+
+<message to="architect">
+后端的数据模型字段应该叫 `Todo` 还是 `TodoItem`？
+</message>
+
+- 目标角色的回复会以 `<message_reply from="角色名">…</message_reply>` 的形式返回给你；拿到回复后再继续完成本任务。
+- 可以一次发多条 `<message>`；拿到回复后**不要重复问同一个问题**。
+- 对话轮次有限制，问完即继续产出本任务自己的 `file=` 围栏交付物——`<message>` 只是补充信息，不替代交付物。
+"""
+
 
 class ParsedToolCall:
     """从模型回复里解析出的一次工具调用（轻量值对象，不进 pydantic 体系）。"""
@@ -216,6 +239,30 @@ def _extract_subtask_specs(raw: str) -> list[dict[str, Any]]:
     return specs
 
 
+class ParsedAgentMessage:
+    """从模型回复里解析出的一条跨角色消息（P3-4，轻量值对象）。"""
+
+    __slots__ = ("to", "content")
+
+    def __init__(self, to: str, content: str) -> None:
+        self.to = to
+        self.content = content
+
+
+def _extract_agent_messages(raw: str) -> list[ParsedAgentMessage]:
+    """从模型回复里提取全部 ``<message to="…">…</message>`` 围栏（P3-4）。
+
+    ``to`` 为空串的块仍保留（路由层会拒收并回灌错误文本，而不是悄悄丢掉——
+    与 tool_call 的 ``<malformed>`` 同族）。
+    """
+    messages: list[ParsedAgentMessage] = []
+    for match in _MESSAGE_RE.finditer(raw):
+        messages.append(
+            ParsedAgentMessage(to=match.group("to").strip(), content=match.group("content").strip())
+        )
+    return messages
+
+
 class AgentExecutionError(RuntimeError):
     """一次 Agent 执行失败：解析、契约校验或落盘不通过。
 
@@ -254,6 +301,8 @@ class BaseAgent(ABC):
         subtask_creator: Callable[[dict], str] | None = None,
         max_self_corrections: int = 2,
         stream: bool = False,
+        message_router: Callable[[str, str], str] | None = None,
+        max_message_rounds: int = 5,
     ) -> None:
         """``catalog`` 是本 run 的角色目录（含自定义角色），可为 ``None``。
 
@@ -280,6 +329,14 @@ class BaseAgent(ABC):
         路径，逐块收集并对每个增量块记一条 ``agent_stream_chunk`` ledger 事件；
         收集齐全文后仍走原有的 parse/validate/commit 流程。``False``（默认）
         完全走 ``models.call``，行为与改造前逐字节一致（向后兼容）。
+
+        ``message_router``（P3-4）非空时 :meth:`execute` 会检测回复里的
+        ``<message to="角色名">…</message>`` 围栏：经回调向指定角色（或用户）发问，
+        把回复以 ``<message_reply from="…">…</message_reply>`` 回灌后继续 LLM 调用，
+        直到模型不再发消息围栏。``None``（默认）不检测、系统提示词也不告知对话
+        能力，行为与原来完全一致。回调签名 ``(目标角色, 消息内容) -> 回复文本``，
+        是同步函数（路由本身不发 LLM）。``max_message_rounds`` 是一次 execute 内
+        的最大对话轮数（默认 5），触顶降级为把最后一次回复当最终产物。
         """
         self.spec = spec
         self._models = models
@@ -292,6 +349,8 @@ class BaseAgent(ABC):
         self._subtask_creator = subtask_creator
         self._max_self_corrections = max_self_corrections
         self._stream = stream
+        self._message_router = message_router
+        self._max_message_rounds = max_message_rounds
 
     def set_subtask_creator(
         self, creator: Callable[[dict], str] | None
@@ -384,6 +443,9 @@ class BaseAgent(ABC):
         # P2-1：仅在注入了子任务回调时告知模型可以请求动态子任务。
         if self._subtask_creator is not None:
             system_parts.append(_SUBTASK_SECTION)
+        # P3-4：仅在注入了消息路由时告知模型可以跨角色发问。
+        if self._message_router is not None:
+            system_parts.append(_MESSAGE_SECTION)
         system = "\n\n".join(system_parts)
         return [
             {"role": "system", "content": system},
@@ -587,7 +649,54 @@ class BaseAgent(ABC):
     async def _obtain_final_text(
         self, task: Task, messages: list[Message], alias: str
     ) -> str:
-        """取得「最终产物回复」的文本：无工具走单次调用，有工具走 ReAct 循环。
+        """取得最终产物回复。外层是跨角色对话循环（P3-4），内层是单次/ReAct 取答。
+
+        ``message_router is None``（默认）时直接返回一次 :meth:`_acquire_reply` 的
+        结果，与改造前逐字节一致。注入了路由时：拿到一次回复后检测 ``<message
+        to="…">`` 围栏——有就逐条经路由取回回复、以 ``<message_reply from="…">``
+        回灌，再问一次 LLM；直到模型不再发消息围栏，或触顶 ``max_message_rounds``
+        （触顶降级为把最后一次回复当最终产物，记 ``message_loop_exhausted``）。
+        """
+        text = await self._acquire_reply(task, messages, alias)
+        if self._message_router is None:
+            return text
+        for round_index in range(self._max_message_rounds):
+            outgoing = _extract_agent_messages(text)
+            if not outgoing:
+                return text
+            if round_index >= self._max_message_rounds - 1:
+                self._ledger.emit(
+                    "message_loop_exhausted",
+                    task_id=task.id,
+                    role=self.spec.key,
+                    max_message_rounds=self._max_message_rounds,
+                )
+                break
+            # 把这轮回复（含消息围栏）与每条路由回复回灌给模型，再问一次。
+            messages.append({"role": "assistant", "content": text})
+            for msg in outgoing:
+                reply = self._message_router(msg.to, msg.content)
+                self._ledger.emit(
+                    "agent_message",
+                    task_id=task.id,
+                    role=self.spec.key,
+                    from_role=self.spec.key,
+                    to_role=msg.to,
+                    content=msg.content[:300],
+                )
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": f'<message_reply from="{msg.to}">\n{reply}\n</message_reply>',
+                    }
+                )
+            text = await self._acquire_reply(task, messages, alias)
+        return text
+
+    async def _acquire_reply(
+        self, task: Task, messages: list[Message], alias: str
+    ) -> str:
+        """单次/ReAct 取答：无工具走单次调用，有工具走 ReAct 循环。
 
         两次路径在截断检查、mock 回放上下文、temperature/max_tokens 上完全一致；
         唯一区别是有工具时会循环把工具结果回灌、直到模型不再发 ``<tool_call>``。
@@ -651,6 +760,16 @@ class BaseAgent(ABC):
                 result_text = (
                     f"错误：工具 {call.name!r} 不存在或未授权。"
                     f"本角色可用工具：{'、'.join(sorted(available)) or '（无）'}"
+                )
+                success = False
+            elif self._tool_registry is not None and not self._tool_registry.enforce(
+                self.spec.key, call.name
+            ):
+                # P3-9：角色级权限闸门——拒绝的工具绝不执行（enforce 已记
+                # tool_permission_denied 事件）。
+                result_text = (
+                    f"错误：工具 {call.name!r} 未授权给角色 "
+                    f"{self.spec.key!r}，已拒绝执行。"
                 )
                 success = False
             else:

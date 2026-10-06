@@ -859,6 +859,64 @@ store.apply_deltas()          # 手动合并回 tasks.json
 在前、`notes` 在后合并（整体上限 1500 字符）；**无产物时完全回落到旧的 notes
 截断逻辑**，向后兼容。批量摘要由 `summarize_records(records, store)` 拼接。
 
+### P3-9. MCP SSE/HTTP 传输 + 工具权限管控
+
+MCP 客户端原本只支持 stdio 子进程传输。`agentcrew/mcp/transports.py` 把 JSON-RPC
+消息收发抽象成 `MCPTransport` 接口（`connect`/`send`/`receive`/`close`），内置三种
+实现，零第三方依赖（HTTP 基于 `asyncio.open_connection` 手写最小 HTTP/1.1，仅
+`http://`）：
+
+- `StdioTransport`：从客户端抽出的子进程 stdin/stdout（旧行为不变）；
+- `SSETransport`：GET 长连接读服务器推送（`endpoint` 事件给出 POST 地址，
+  `data:` 事件即 JSON-RPC 消息），POST 发请求（简化：单次连接、不自动重连）；
+- `HTTPTransport`：纯 HTTP 请求-响应，每次 send 即一次 POST，响应体进接收队列。
+
+`MCPClient` 构造接受 `transport=` 注入（旧 `MCPClient([cmd])` API 不变），并新增
+`MCPClient.from_config(server_config)`：按 `transport` 字段（`stdio`/`sse`/`http`，
+默认 stdio）选通道——stdio 需 `command`，sse/http 需 `url`（可选 `headers`）。传输层
+IO / 协议帧错误统一抛 `MCPTransportError`。
+
+同时在 `ToolRegistry` 增加**角色级工具权限白名单**：
+
+- `set_role_permissions(role, [工具名...])` 设置白名单；`["*"]` 或空列表 = 全部允许；
+- `is_allowed(role, tool)` / `filter_by_role(role, tools)` 判断与过滤；
+- `enforce(role, tool)` 是执行期闸门：被拒时记 `tool_permission_denied` ledger 事件
+  （含 `role`、`tool_name`）并返回 `False`，**被拒工具绝不真正执行**。
+
+未配置任何角色权限时所有角色可用全部工具（向后兼容）。配置经
+`Settings.tool_permissions: {角色: [工具名...]}`（YAML `tool_permissions:` 段）
+加载；`mcp_servers` 各项可带 `transport` 字段。
+
+### P3-4. 多轮 Agent 对话
+
+Agent 在执行过程中可以向其他角色（或 "human"）发问、拿到回复后再继续，而不再
+只能靠上下文包里的静态摘要。
+
+- **对话围栏**：模型在回复里写 `<message to="角色名">问题</message>`。Agent
+  检测到后调用注入的 `message_router(目标角色, 问题) -> 回复`，把回复以
+  `<message_reply from="角色名">…</message_reply>` 作为一条 user 消息回灌，再问
+  一次 LLM，直到模型不再发消息围栏。
+- **留痕**：每发一条消息记 `agent_message`（含 `task_id` / `from_role` /
+  `to_role` / 问题摘要）；对话轮数触顶（默认 5，`max_message_rounds` 可调）时
+  记 `message_loop_exhausted` 并降级为把最后一次回复当最终产物。
+- **路由**：`Crew._route_message(from_role, to_role, content)` 给出简化路由——
+  `to="human"` 返回无人值守占位回复，其他角色从目录取一句职责说明。默认**不**
+  注入 Agent，需要对话能力时再把它作为 `message_router` 传进构造。
+- **向后兼容**：`message_router=None`（默认）时不检测 message 围栏、系统提示词
+  也不告知对话能力，行为与原来完全一致。
+
+```python
+from agentcrew.agents.generic import GenericAgent
+
+def my_router(to_role: str, question: str) -> str:
+    return f"关于{to_role}：已确认，请继续。"
+
+agent = GenericAgent(
+    spec, models=models, store=store, ledger=ledger,
+    project_goal="目标", message_router=my_router,  # 省略则不对话
+)
+```
+
 ---
 
 ## 自定义角色 / 团队开发指南

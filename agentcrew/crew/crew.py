@@ -251,6 +251,29 @@ class Crew:
         """角色目录（``register_role`` 与测试使用；注册顺序保持稳定）。"""
         return self._catalog
 
+    def _route_message(self, from_role: str, to_role: str, content: str) -> str:
+        """P3-4 多轮对话路由：把某 Agent 发出的 ``<message to="…">`` 转成回复。
+
+        同步、轻量——不真去派发另一个 Agent 的一次完整执行，只给一条「足够让
+        提问方继续」的回复：
+
+        - ``to_role == "human"``：本环境无人值守时返回固定占位回复（接了
+          ``prompter`` 才真去问人，这里先给占位，接线是显式可选的）；
+        - 其他角色：从目录取该角色的一句话职责（title + goal），作为简要答复；
+          未知角色也回一条占位文本，不抛错——路由不该因为一个名字而打断任务。
+
+        默认**不**把本方法注入 Agent（``message_router`` 默认 ``None``）；需要
+        对话能力时由装配方把 ``functools.partial(self._route_message, from_role=...)``
+        传进对应 Agent 构造。
+        """
+        del from_role, content  # 当前为简化路由，发问方/原文不参与答复
+        if to_role == "human":
+            return "（无人值守：请按最合理的默认值继续完成本任务。）"
+        if not self._catalog.has(to_role):
+            return f"（未注册角色 {to_role!r}：按通用做法继续即可。）"
+        spec = self._catalog.get(to_role)
+        return f"来自{spec.title}的说明：{spec.goal}"
+
     @property
     def checkpoint(self) -> CheckpointStore | None:
         """当前 run 的 checkpoint；``run()`` / ``resume_from()`` 之前为 ``None``。"""
