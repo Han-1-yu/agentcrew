@@ -710,6 +710,58 @@ model_failover:
 旧格式（纯字符串列表）行为完全不变；权重格式通过 YAML 配置，环境变量
 `AGENTCREW_FAILOVER_*` 仍只产生旧格式。
 
+### P3-3. LLM 流式输出
+
+长输出时不再等整段生成完才看到进度：Agent 可切到流式路径，按增量块（SSE/chunk）
+边生成边收集，并实时留痕。
+
+- **接口分层**：`BaseProvider.stream_complete()` 逐块 yield `StreamChunk(delta,
+  finish_reason)`；默认实现退化为一次性 `complete()` 后吐一个完整块，未覆写的
+  Provider 仍可工作（只是没有实时性）。`MockProvider` 覆写为按固定长度分块，
+  拼接所有块必然等于 `complete()` 的文本。
+- **工厂入口**：`ModelFactory.stream_call()` 与 `call()` 同形，只是走流式路径；
+  信号量同样只包住流消费。**流式不做故障转移**（已吐出的块无法回滚），Provider
+  不可用直接上抛。流完整消费后把全部 `delta` 拼成全文，按同口径估算 token 并
+  复用 `_account` 落一条 `llm_call`（token/成本/预算检查与非流式一致）。
+- **Agent 开关**：构造 `BaseAgent(..., stream=True)` 即启用；流式路径逐块收集，
+  每块记一条 `agent_stream_chunk` ledger 事件（含 `task_id` / `role` /
+  `delta_length`），收集齐全文后仍走原有的 parse / validate / commit 流程。
+- **向后兼容**：`stream=False`（默认）时完全走 `models.call`，行为与改造前
+  逐字节一致，也不产生任何 `agent_stream_chunk` 事件。
+
+```python
+from agentcrew.agents.generic import GenericAgent
+
+agent = GenericAgent(
+    spec, models=models, store=store, ledger=ledger,
+    project_goal="目标", stream=True,   # 流式；省略则为默认的非流式
+)
+```
+
+### P3-5. 成功经验沉淀
+
+run 以 `COMPLETED` 收尾后，引擎自动把每个成功任务的「任务描述 → 解决方案 / 关键
+决策 / 产物」映射沉淀进**全局**经验库 `output/knowledge/experiences.jsonl`（JSONL，
+每行一条 `Experience`）。它不在任何单个 run 目录之下，因此 run 被 `clean` 删掉后
+经验依然保留，供后续 run 复用。
+
+- **只收成功任务**：`SUCCEEDED` 的任务才进库；失败 / 取消 / 跳过的任务不沉淀
+  （它们的「解决方案」不成立）。`solution_summary` 取 Agent 自述 summary（截断到
+  200 字），`artifacts` 取该任务实际落盘的产物路径，`key_decisions` 取 ContextBus
+  里与该任务相关的决策记录。
+- **诚实留痕**：每沉淀一条经验，ledger 记一条 `experience_captured` 事件
+  （含 `task_id` / `experience_id` / `role`）。
+- **开关**：构造 `Crew(settings, capture_experiences=False)` 可关闭（默认开启），
+  关闭时不写经验库、也不发任何事件。
+
+```python
+from agentcrew.knowledge.experience import ExperienceStore
+
+store = ExperienceStore(settings.output_dir)
+for exp in store.all():
+    print(exp.task_description, "→", exp.solution_summary)
+```
+
 ---
 
 ## 自定义角色 / 团队开发指南

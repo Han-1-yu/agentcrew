@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
+from uuid import uuid4
 
 from agentcrew.agents.base_agent import BaseAgent
 from agentcrew.agents.project_manager import ProjectManagerAgent
@@ -48,7 +49,9 @@ from agentcrew.context.context_bus import ContextBus
 from agentcrew.context.summarizer import summarizer_from_factory
 from agentcrew.crew.scheduler import Scheduler
 from agentcrew.gate.gatekeeper import Gatekeeper, Prompter, Reviewer
+from agentcrew.knowledge.experience import Experience, ExperienceStore
 from agentcrew.models import factory as model_factory
+from agentcrew.models.complexity import ComplexityCalibrator, set_calibrator
 from agentcrew.models.factory import BudgetExhaustedError, ModelFactory, ModelFactoryError
 from agentcrew.roles.builtin import BUILTIN_ROLES
 from agentcrew.roles.catalog import RoleCatalog
@@ -191,6 +194,7 @@ class Crew:
         checkpoint: CheckpointStore | None = None,
         prompter: Prompter | None = None,
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
+        capture_experiences: bool = True,
     ) -> None:
         """``catalog`` / ``store`` 缺省由本类按需构造；``prompter`` **原样透传**。
 
@@ -205,12 +209,17 @@ class Crew:
         自己的 run 目录，总是新建）。``on_event`` 是调度事件的观察接口
         （``(事件名, 数据)``，与 ``Scheduler.on_event`` 同形），Task 32 用它接
         ``BoardView``，不接线时零开销。
+
+        ``capture_experiences``（P3-5，默认开启）：run 以 COMPLETED 收尾后，把每个
+        成功任务的「描述 → 解决方案 / 关键决策 / 产物」沉淀进全局经验库；置 False
+        时本次 run 不写任何经验。
         """
         self._settings = settings
         self._catalog = catalog if catalog is not None else build_catalog(settings)
         self._prompter = prompter
         self._on_event = on_event
         self._injected_store = store
+        self._capture_experiences_enabled = capture_experiences
         self._run: _Run | None = None
         self._injected_checkpoint = checkpoint
         self._resume_board: TaskBoard | None = None
@@ -218,6 +227,10 @@ class Crew:
         self._stalled = False
         self._active = False
         self._finalized = False
+        # P3-1：每次 Crew 构造都装入一个全新的全局校准器 —— 本次 run 的执行结果
+        # 据此调整后续任务的复杂度选模。未注入（旧测试直连 ModelFactory）时
+        # ``get_calibrator()`` 为 None，工厂走静态评估，行为不变。
+        set_calibrator(ComplexityCalibrator())
         #: 外部取消请求（API ``POST /runs/{id}/cancel``）：软取消 —— 不再派发新任务，
         #: 等在跑任务收尾后以 CANCELLED 收尾（退出码 130）。
         self._cancel_event = asyncio.Event()
@@ -645,6 +658,9 @@ class Crew:
             if decision.action == "abort":
                 return self._finalize(run, RunStatus.CANCELLED)
             if decision.action != "rework" or not decision.task_ids:
+                # P3-5：全部任务 SUCCEEDED 且交付卡点放行 —— run 真的成功了，
+                # 此刻才沉淀经验（失败 / 取消 / 停滞的 run 不进经验库）。
+                self._capture_experiences(run, board, bus)
                 return self._finalize(run, outcome)
             board, replaced = self._apply_rework(run, board, decision.task_ids)
             self._board = board
@@ -857,6 +873,33 @@ class Crew:
             return EXIT_CODES["cancelled"]
         return EXIT_CODES["failed"]
 
+    def _capture_experiences(
+        self, run: _Run, board: TaskBoard, bus: ContextBus
+    ) -> None:
+        """P3-5：run 成功（COMPLETED）后把成功任务沉淀进全局经验库。
+
+        只沉淀 ``SUCCEEDED`` 任务——失败 / 取消 / 被跳过的任务不进经验库（它们的
+        「解决方案」不成立）。每条经验落盘后记一条 ``experience_captured`` 事件
+        （含 task_id / experience_id），与 Ledger 的「诚实留痕」一致。开关关闭时
+        （``capture_experiences=False``）整个方法零副作用。
+        """
+        if not self._capture_experiences_enabled:
+            return
+        extracted = _extract_experiences(
+            board, bus, store=run.store, run_id=run.record.run_id
+        )
+        if not extracted:
+            return
+        knowledge = ExperienceStore(self._settings.output_dir)
+        for task_id, exp in extracted:
+            knowledge.add(exp)
+            run.ledger.emit(
+                "experience_captured",
+                task_id=task_id,
+                experience_id=exp.id,
+                role=exp.role,
+            )
+
     def _finalize(
         self, run: _Run, status: RunStatus, *, exit_code: int | None = None
     ) -> RunRecord:
@@ -958,6 +1001,49 @@ def _fixtures_dir() -> Path:
     ``agentcrew.models.factory.DEFAULT_FIXTURES_DIR`` 注入临时夹具。
     """
     return Path(model_factory.DEFAULT_FIXTURES_DIR)
+
+
+def _extract_experiences(
+    board: TaskBoard,
+    bus: ContextBus,
+    *,
+    store: ArtifactStore,
+    run_id: str,
+) -> list[tuple[str, Experience]]:
+    """从面板里提取成功任务的经验（P3-5 的纯逻辑，可单测）。
+
+    只收 ``SUCCEEDED`` 任务；``solution_summary`` 取 Agent 自述 summary，缺则回落
+    notes 前 200 字；``artifacts`` 取该任务实际落盘的产物路径；``key_decisions``
+    取 ContextBus 里 task_id 命中的决策文本。返回 ``(task_id, Experience)`` 对——
+    task_id 不在 :class:`Experience` 的字段里（它描述的是「任务」而非 run 内定位），
+    但 ledger 事件要它，故成对返回。
+    """
+    decisions_by_task: dict[str, list[str]] = {}
+    for record in bus.decisions():
+        decisions_by_task.setdefault(record.task_id, []).append(record.decision)
+    extracted: list[tuple[str, Experience]] = []
+    for task in board.all():
+        if task.status is not TaskStatus.SUCCEEDED:
+            continue
+        result = task.result
+        if result is not None:
+            summary = (result.summary or result.notes)[:200]
+        else:
+            summary = ""
+        artifacts = sorted(record.path for record in store.by_task(task.id))
+        exp = Experience(
+            id=uuid4().hex,
+            task_description=task.description,
+            role=task.role,
+            solution_summary=summary,
+            artifacts=artifacts,
+            key_decisions=decisions_by_task.get(task.id, []),
+            success=True,
+            run_id=run_id,
+            created_at=datetime.now(),
+        )
+        extracted.append((task.id, exp))
+    return extracted
 
 
 def _rework_targets(board: TaskBoard, task_ids: Sequence[str]) -> list[str]:
