@@ -30,6 +30,9 @@ G1（:mod:`agentcrew.gate.static_checks`）零 token 拦下机器可判的问题
 （G1 已保证必需产物存在），不存在的可选产物不读、不报错。
 """
 
+from __future__ import annotations
+
+import asyncio
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
@@ -154,11 +157,11 @@ class Reviewer:
     async def review(self, task: Task, *, round_no: int) -> ReviewRecord:
         """评审一个任务，返回本轮的 ``ReviewRecord``（``layer="llm"``）。
 
-        评审人是 ``catalog.reviewer_for(task.role)`` 的全部角色，按目录顺序
-        **串行**评审：聚合语义（全 approve 才 approve）与「哪个评审人说了什么」
-        都要求逐人拿到完整意见；mock 回放上下文的隔离已由 ``set_purpose`` 的
-        contextvar 保证（C1），故串行是刻意保留的现有形状，不再是并发安全性的
-        妥协（评审调用本身也已受全局信号量限流）。
+        评审人是 ``catalog.reviewer_for(task.role)`` 的全部角色。P1-2 起多评审人
+        通过 ``asyncio.gather`` **并行**执行（单评审人保持原串行路径）：聚合语义
+        （全 approve 才 approve）与「哪个评审人说了什么」都要求逐人拿到完整意见；
+        mock 回放上下文的隔离已由 ``set_purpose`` 的 contextvar 保证（C1），评审
+        调用本身也已受全局信号量限流，并行不会突破并发上限。
         """
         reviewer_keys = self._catalog.reviewer_for(task.role)
         if not reviewer_keys:
@@ -169,9 +172,19 @@ class Reviewer:
                 reviewer=_NO_REVIEWER_KEY)
 
         material = self._render_material(task, round_no)
-        opinions: list[tuple[str, _Opinion]] = []
-        for key in reviewer_keys:
-            opinions.append((key, await self._opinion(key, task, material)))
+        # P1-2：多评审人并行（asyncio.gather），单评审人保持原串行路径。
+        # mock 的 contextvar 隔离由 set_purpose 在每个 _opinion 协程内独立设置，
+        # 已安全；评审调用本身也受全局信号量限流，并行不会突破并发上限。
+        if len(reviewer_keys) == 1:
+            key = reviewer_keys[0]
+            opinions: list[tuple[str, _Opinion]] = [
+                (key, await self._opinion(key, task, material)),
+            ]
+        else:
+            results = await asyncio.gather(
+                *[self._opinion(key, task, material) for key in reviewer_keys]
+            )
+            opinions = list(zip(reviewer_keys, results))
 
         approved = all(opinion.approved for _, opinion in opinions)
         scores = [

@@ -23,6 +23,7 @@
   ``criterion_index`` 逐条全覆盖，并写明 suggestions 不构成不满足、不会导致返工。
 """
 
+import asyncio
 import json
 from datetime import datetime
 
@@ -482,3 +483,65 @@ async def test_artifacts_are_read_through_store(env, tmp_path):
     await Reviewer(fake, RoleCatalog(BUILTIN_ROLES), env["store"],
                    env["ledger"]).review(env["task"], round_no=1)
     assert reads == ["a.py"]
+
+
+# ── P1-2：并行 G2 评审 ────────────────────────────────────────────────────
+
+
+class _ParallelFakeModels:
+    """用 asyncio.Event 验证两个评审人确实并发执行。
+
+    architect 协程启动后等待 ``started`` 事件被设置；product_manager 协程启动时
+    设置该事件。若并行：product_manager 在 architect 等待期间启动并设置事件，
+    architect 随即返回。若串行：architect 先启动并永远等不到事件（product_manager
+    还没开始），``asyncio.wait_for`` 超时即证明不是并行。
+    """
+
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+        self.started = asyncio.Event()
+        self.calls: list[str] = []
+
+    def get(self, alias: str) -> object:
+        return object()
+
+    async def complete_structured(self, alias, messages, schema, *,
+                                   temperature, max_tokens, purpose, role):
+        self.calls.append(role)
+        if role == "architect":
+            # 等待 product_manager 启动并设置事件（最多等 2 秒）
+            await asyncio.wait_for(self.started.wait(), timeout=2.0)
+        elif role == "product_manager":
+            # 通知 architect：我已经启动了
+            self.started.set()
+            await asyncio.sleep(0.01)  # 让 architect 有机会被调度
+        return ReviewVerdict(**{
+            "judgements": [_judgement(0), _judgement(1)],
+            "suggestions": [], "score": 0.9,
+        })
+
+
+async def test_dual_reviewers_run_in_parallel(env, tmp_path):
+    """P1-2：两个评审人通过 asyncio.gather 并发执行（用 Event 确认时序）。"""
+    env["task"].role = "project_manager"
+    fake = _ParallelFakeModels(env["settings"])
+    r = await Reviewer(fake, RoleCatalog(BUILTIN_ROLES), env["store"],
+                       env["ledger"]).review(env["task"], round_no=1)
+    # 聚合结果正确（全 approve）
+    assert r.verdict == "approve"
+    assert r.reviewer == "architect+product_manager"
+    # 两个评审人都被调用了
+    assert set(fake.calls) == {"architect", "product_manager"}
+    # architect 的 started 事件被 product_manager 设置了 → 证明并行
+    assert fake.started.is_set()
+
+
+async def test_single_reviewer_keeps_serial_path(env, tmp_path):
+    """单评审人不走 gather，保持原串行路径（行为不变）。"""
+    env["task"].role = "backend_dev"  # backend_dev 只有一个评审人 architect
+    fake = _FakeModels({"architect": APPROVE}, env["settings"])
+    r = await Reviewer(fake, RoleCatalog(BUILTIN_ROLES), env["store"],
+                       env["ledger"]).review(env["task"], round_no=1)
+    assert r.verdict == "approve"
+    assert len(fake.calls) == 1
+    assert fake.calls[0]["role"] == "architect"

@@ -31,6 +31,7 @@ python -m pytest -q
 - [x] **P0-4** 可删除会话 — `runtime/checkpoint.py` + `main.py` + `api/server.py` + `api/dashboard.py`，CLI `delete` / API `DELETE /runs/{id}?confirm=1`
 
 ### 阶段二 P1（近期做）
+- [x] **P1-2** 并行 G2 评审 — `gate/reviewer.py`，多评审人 asyncio.gather 并行，单评审人保持串行
 - [ ] P1-1 MCP 工具集成到 Agent 执行链路
 - [ ] P1-2 并行 G2 评审
 - [ ] P1-3 优先级调度

@@ -376,6 +376,16 @@ DELETE /runs/{run_id}?confirm=1
 - 返回释放的字节数；Web UI 顶部有删除按钮（running 状态置灰，带确认对话框）
 - 与 `clean` 共享同一套边界校验（链接样式 / output_dir 之外一律拒绝）
 
+### P1-2. 并行 G2 评审
+
+多评审人（如 PM 任务的 architect + product_manager 双评审）从串行改为
+`asyncio.gather` 并行，评审延迟从「N 人 × 单次延迟」降为「max(单次延迟)」。
+
+- 单评审人保持原串行路径（行为不变，无 gather 开销）
+- 聚合逻辑不变：全 approve 才 approve，issues 并集去重，score 取最小值
+- mock 的 contextvar 隔离由 `set_purpose` 在每个协程内独立设置，已安全
+- 评审调用受全局信号量限流，并行不会突破并发上限
+
 ---
 
 ## 自定义角色 / 团队开发指南
