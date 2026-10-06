@@ -1962,7 +1962,13 @@ async function loadRunList() {
           } },
           h('svg', { width: 13, height: 13, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' },
             h('polyline', { points: '3 6 5 6 21 6' }),
-            h('path', { d: 'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2' }))));
+            h('path', { d: 'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2' }))),
+        !isActive ? h('button', { class: 'rd-cmp', title: '与当前运行对比',
+          onclick: (e) => { e.stopPropagation(); closeRunDropdown(); openCompareModal(r); } },
+          h('svg', { width: 13, height: 13, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' },
+            h('path', { d: 'M14 3v4a1 1 0 0 0 1 1h4' }),
+            h('path', { d: 'M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z' }),
+            h('path', { d: 'M9 13h6M9 17h6' }))) : null));
       listEl.appendChild(item);
     }
   } catch (e) {
@@ -1983,6 +1989,64 @@ function toggleRunDropdown() {
 function closeRunDropdown() {
   const dd = $('#run-dropdown');
   if (dd) dd.classList.add('hidden');
+}
+
+async function openCompareModal(otherRun) {
+  // 加载另一个 run 的数据
+  let otherData = null;
+  try {
+    const [run, tasks, events] = await Promise.all([
+      window.studio.readRun(otherRun.dir),
+      window.studio.readTasks(otherRun.dir).catch(() => ({ tasks: [] })),
+      window.studio.readLedger(otherRun.dir).catch(() => []),
+    ]);
+    otherData = { run, tasks: tasks.tasks || [], events };
+  } catch (e) {
+    toast('error', '加载失败', String(e.message || e));
+    return;
+  }
+
+  const cur = S.dash.run, curTasks = S.dash.tasks || [];
+  const curCost = cur?.stats?.estimated_cost_usd || 0;
+  const otherCost = otherData.run?.stats?.estimated_cost_usd || 0;
+  const curTokens = (cur?.stats?.prompt_tokens || 0) + (cur?.stats?.completion_tokens || 0);
+  const otherTokens = (otherData.run?.stats?.prompt_tokens || 0) + (otherData.run?.stats?.completion_tokens || 0);
+  const curSuccess = curTasks.filter(t => t.status === 'passed' || t.status === 'succeeded').length;
+  const otherSuccess = otherData.tasks.filter(t => t.status === 'passed' || t.status === 'succeeded').length;
+  const curFailed = curTasks.filter(t => t.status === 'failed').length;
+  const otherFailed = otherData.tasks.filter(t => t.status === 'failed').length;
+
+  const rows = [
+    ['状态', cur?.status || '—', otherData.run?.status || '—'],
+    ['任务数', String(curTasks.length), String(otherData.tasks.length)],
+    ['成功', String(curSuccess), String(otherSuccess)],
+    ['失败', String(curFailed), String(otherFailed)],
+    ['费用', `$${curCost.toFixed(4)}`, `$${otherCost.toFixed(4)}`],
+    ['Token', fmtTokens(curTokens), fmtTokens(otherTokens)],
+    ['LLM 调用', String(cur?.stats?.llm_calls || 0), String(otherData.run?.stats?.llm_calls || 0)],
+    ['模型', cur?.model || cur?.config_snapshot?.default_model || '—', otherData.run?.model || otherData.run?.config_snapshot?.default_model || '—'],
+    ['创建时间', fmtDateTime(cur?.created_at || cur?.start_time), fmtDateTime(otherData.run?.created_at || otherData.run?.start_time)],
+  ];
+
+  const diff = (a, b) => {
+    const na = parseFloat(a), nb = parseFloat(b);
+    if (isNaN(na) || isNaN(nb)) return '';
+    const d = na - nb;
+    if (Math.abs(d) < 0.0001) return '<span class="cmp-diff zero">0</span>';
+    return `<span class="cmp-diff ${d > 0 ? 'pos' : 'neg'}">${d > 0 ? '+' : ''}${d.toFixed(4)}</span>`;
+  };
+
+  openModal('运行对比', h('div', { class: 'cmp-wrap' },
+    h('div', { class: 'cmp-headers' },
+      h('div', { class: 'cmp-header' }, '指标'),
+      h('div', { class: 'cmp-header cur' }, simplifyGoal(cur?.goal || cur?.run_id || '当前')),
+      h('div', { class: 'cmp-header' }, simplifyGoal(otherRun.goal || otherRun.runId || '对比')),
+      h('div', { class: 'cmp-header' }, '差值')),
+    ...rows.map(([label, a, b]) => h('div', { class: 'cmp-row' },
+      h('div', { class: 'cmp-label' }, label),
+      h('div', { class: 'cmp-val' }, String(a)),
+      h('div', { class: 'cmp-val' }, String(b)),
+      h('div', { class: 'cmp-diff-cell' }, diff(a, b))))));
 }
 
 async function switchRun(dir) {
