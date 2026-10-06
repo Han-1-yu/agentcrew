@@ -152,3 +152,22 @@ class TestApiServer:
             port = server._server.sockets[0].getsockname()[1]
             assert port > 0
         assert server._server is None
+
+    @pytest.mark.asyncio
+    async def test_dashboard_served_at_root(self):
+        server = ApiServer(port=0)
+        await server.start()
+        try:
+            port = server._server.sockets[0].getsockname()[1]
+            reader, writer = await asyncio.open_connection("127.0.0.1", port)
+            writer.write(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            await writer.drain()
+            response = await reader.read(65536)
+            writer.close()
+            await writer.wait_closed()
+            text = response.decode()
+            assert "200 OK" in text
+            assert "text/html" in text
+            assert "AgentCrew" in text
+        finally:
+            await server.stop()

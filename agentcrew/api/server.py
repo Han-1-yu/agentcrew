@@ -143,6 +143,17 @@ class ApiServer:
             await writer.wait_closed()
 
     async def _handle_get(self, path: str, writer: asyncio.StreamWriter) -> None:
+        if path == "/" or path == "/index.html":
+            from agentcrew.api.dashboard import DASHBOARD_HTML
+            payload = DASHBOARD_HTML.encode("utf-8")
+            writer.write(
+                b"HTTP/1.1 200 OK\r\n"
+                b"Content-Type: text/html; charset=utf-8\r\n"
+                + f"Content-Length: {len(payload)}\r\n".encode()
+                + b"\r\n" + payload
+            )
+            await writer.drain()
+            return
         if path == "/health":
             await self._send_json(writer, 200, {"status": "ok"})
             return

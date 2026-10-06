@@ -182,7 +182,7 @@ def build_parser() -> argparse.ArgumentParser:
     cancel.add_argument("--output-dir", metavar="DIR")
 
     serve = sub.add_parser(
-        "serve", help="启动 HTTP API + SSE 事件流服务器（V2）")
+        "serve", help="启动 HTTP API + Web UI 面板（V2）")
     serve.add_argument("--host", default="127.0.0.1", metavar="HOST")
     serve.add_argument("--port", type=int, default=8765, metavar="PORT")
 
@@ -550,6 +550,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         server = ApiServer(host=args.host, port=args.port)
         await server.start()
         print(f"AgentCrew API server listening on http://{args.host}:{args.port}")
+        print(f"  Web UI: http://{args.host}:{args.port}/")
         print("  GET  /health              健康检查")
         print("  GET  /runs/{id}/status    运行状态")
         print("  GET  /runs/{id}/events    SSE 事件流")
