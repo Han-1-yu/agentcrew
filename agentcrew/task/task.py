@@ -88,6 +88,7 @@ class Task(BaseModel):
     acceptance_criteria: list[str]  # 验收标准，供 G2 评审使用
     deliverables: list[ArtifactSpec]  # 交付物契约
     dependencies: list[str] = Field(default_factory=list)  # 前置任务 id
+    parent_id: str | None = None  # V2：树状拆解的父任务 id（None = 根任务）
     priority: int = Field(5, ge=1, le=9)  # 数字小者优先
     brief: str = ""  # PM 写给下游的一句话摘要（供上下文压缩）
 

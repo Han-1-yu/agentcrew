@@ -53,10 +53,15 @@ class TaskGraph:
     ``deps`` / ``dependents_map`` 两张表的键都覆盖图中出现过的每个 id（含只
     作为依赖出现、自身不在 ``tasks`` 里的悬挂 id）：无前置的节点映射到
     ``frozenset()``。
+
+    V2 树状拆解：``parent_id`` 形成的父子层级是 DAG 边的子集——build 时自动
+    把父任务加入子任务的依赖，因此父先于子执行由现有拓扑排序保证。
     """
 
     deps: dict[str, frozenset[str]]
     dependents_map: dict[str, frozenset[str]]
+    parents: dict[str, str | None]
+    children_map: dict[str, frozenset[str]]
 
     @classmethod
     def build(cls, tasks: Sequence[Task]) -> TaskGraph:
@@ -66,22 +71,41 @@ class TaskGraph:
         节点」收录：它是两张表的键（``deps`` 为空），并保有出边。本模块既不
         崩、也不替它伪造前置——悬挂依赖的校验是 planner（Task 9）的职责，
         而只要它没被满足，:func:`ready_ids` 就不会放行下游任务。
+
+        V2：若任务声明了 ``parent_id``，自动将父任务加入 ``dependencies``
+        （父子层级是 DAG 边的子集），保证父先于子执行。
         """
         deps: dict[str, set[str]] = {}
         dependents: dict[str, set[str]] = {}
+        parents: dict[str, str | None] = {}
+        children: dict[str, set[str]] = {}
         for task in tasks:
             deps.setdefault(task.id, set())
             dependents.setdefault(task.id, set())
+            parents[task.id] = task.parent_id
+            children.setdefault(task.id, set())
         for task in tasks:
-            for dep in task.dependencies:
+            # V2：父任务自动成为依赖（若尚未显式声明）
+            all_deps = list(task.dependencies)
+            if task.parent_id and task.parent_id not in all_deps:
+                all_deps.append(task.parent_id)
+            for dep in all_deps:
                 deps.setdefault(dep, set())
                 dependents.setdefault(dep, set())
+                children.setdefault(dep, set())
                 deps[task.id].add(dep)
                 dependents[dep].add(task.id)
+            if task.parent_id:
+                children.setdefault(task.parent_id, set())
+                children[task.parent_id].add(task.id)
         return cls(
             deps={node: frozenset(edges) for node, edges in deps.items()},
             dependents_map={
                 node: frozenset(edges) for node, edges in dependents.items()
+            },
+            parents=parents,
+            children_map={
+                node: frozenset(edges) for node, edges in children.items()
             },
         )
 
@@ -92,6 +116,61 @@ class TaskGraph:
     def dependents(self, task_id: str) -> frozenset[str]:
         """直接依赖 ``task_id`` 的任务（直接后继）；未知 id 抛 ``KeyError``。"""
         return self.dependents_map[task_id]
+
+    # ── V2 树状查询 ──────────────────────────────────────────────────────
+
+    def children(self, task_id: str) -> frozenset[str]:
+        """``task_id`` 的直接子任务；未知 id 抛 ``KeyError``。"""
+        return self.children_map.get(task_id, frozenset())
+
+    def parent(self, task_id: str) -> str | None:
+        """``task_id`` 的父任务 id；根任务返回 None；未知 id 抛 ``KeyError``。"""
+        if task_id not in self.parents:
+            raise KeyError(task_id)
+        return self.parents[task_id]
+
+    def ancestors(self, task_id: str) -> list[str]:
+        """从父到根的全部祖先 id（不含自身），按「父 → 祖父 → … → 根」顺序。
+
+        带已访集合防御父链环（build 不校验树环，由 planner/门禁负责）。
+        """
+        result: list[str] = []
+        seen: set[str] = set()
+        current = self.parents.get(task_id)
+        while current is not None and current not in seen:
+            seen.add(current)
+            result.append(current)
+            current = self.parents.get(current)
+        return result
+
+    def subtree(self, task_id: str) -> set[str]:
+        """``task_id`` 的全部后代（传递子任务），不含自身；未知 id 抛 ``KeyError``。"""
+        seen: set[str] = {task_id}
+        stack = list(self.children_map.get(task_id, frozenset()))
+        while stack:
+            node = stack.pop()
+            if node in seen:
+                continue
+            seen.add(node)
+            stack.extend(self.children_map.get(node, frozenset()))
+        return seen - {task_id}
+
+    def roots(self) -> list[str]:
+        """无父任务的根任务 id 列表，按 id 升序。"""
+        return sorted(
+            tid for tid, parent in self.parents.items() if parent is None
+        )
+
+    def leaves(self) -> list[str]:
+        """无子任务的叶子任务 id 列表，按 id 升序。"""
+        return sorted(
+            tid for tid in self.parents
+            if not self.children_map.get(tid)
+        )
+
+    def depth(self, task_id: str) -> int:
+        """从根到 ``task_id`` 的深度（根 = 0）；未知 id 抛 ``KeyError``。"""
+        return len(self.ancestors(task_id))
 
     def descendants(self, task_id: str) -> set[str]:
         """``task_id`` 的全部传递后继，不含自身；未知 id 抛 ``KeyError``。
