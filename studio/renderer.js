@@ -1562,7 +1562,12 @@ function renderGatesPage(container) {
         ...reviews.slice(0, 10).map(r => h('div', { class: 'gate-review-item' },
           h('span', { class: `gate-review-verdict ${r.verdict}` }, r.verdict),
           h('span', { class: 'gate-review-task' }, r.task_id || ''),
-          h('span', { class: 'gate-review-text' }, trunc(r.summary || r.issues?.join('; ') || '', 80))))) : null));
+          h('span', { class: 'gate-review-text' }, trunc(r.summary || r.issues?.join('; ') || '', 80))))) : null,
+      !S.realMode ? h('div', { class: 'gate-full-actions' },
+        h('button', { class: 'btn btn-sm btn-primary', onclick: () => { acceptGate(g); renderGatesPage(container.parentElement); } }, '批准通过'),
+        h('button', { class: 'btn btn-sm btn-danger', onclick: () => { rejectGate(g); renderGatesPage(container.parentElement); } }, '驳回返工'),
+        h('button', { class: 'btn btn-sm', onclick: () => { g.status = 'running'; g.checks = { total: g.checks.total, passed: 0, failed: 0 }; toast('info', '重试门禁', g.name + ' 重新运行'); renderGatesPage(container.parentElement); } }, '重试'))
+        : h('div', { class: 'gate-full-readonly' }, '真实模式下门禁审批需通过 CLI 或 API 执行'))));
   }
 }
 
