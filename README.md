@@ -313,6 +313,32 @@ AGENTCREW_REVIEW_SCORE_THRESHOLD=0.8
 
 默认 `None` = 不启用，保持现有行为。
 
+### P0-2. Provider 故障转移
+
+当主别名的 Provider 抛出不可用错误（503/429/连接超时/读取超时，内部重试耗尽后），
+ModelFactory 按 `model_failover` 配置的备用别名列表依次尝试，每次切换记
+`llm_failover` 事件（含 from_alias / to_alias / error）。
+
+- 故障转移不消耗任务的 attempts（那是执行失败，不是模型不可用）
+- 失败别名已消耗的 token 仍记账（真实 LLM 调用）
+- 全部备用都失败时抛 `ProviderUnavailableError`（未配置 failover 时原样抛出原始错误，向后兼容）
+- `call()` 和 `complete_structured()` 均支持
+
+```yaml
+# agentcrew.yaml
+model_failover:
+  openai:gpt-4o-mini:
+    - anthropic:claude-haiku
+    - deepseek:deepseek-chat
+```
+
+```bash
+# .env（别名中 : 用 __ 表示，值逗号分隔）
+AGENTCREW_FAILOVER_OPENAI__GPT-4O-MINI=anthropic:claude-haiku,deepseek:deepseek-chat
+```
+
+默认空字典 = 不启用，保持现有行为。
+
 ---
 
 ## 自定义角色 / 团队开发指南

@@ -54,10 +54,15 @@ _ROLE_MODEL_ENV_PREFIX = "AGENTCREW_MODEL_"
 _YAML_SCALAR_KEYS = ("max_concurrency", "context_budget_tokens", "gate", "roles_dir")
 
 #: 分层合并时按 key 覆盖而非整体替换的字段。
-_MAPPING_FIELDS = ("role_bindings", "provider_overrides", "model_tiers")
+_MAPPING_FIELDS = ("role_bindings", "provider_overrides", "model_tiers", "model_failover")
 
 #: ``AGENTCREW_TIER_<LEVEL>`` → ``model_tiers[<level>]``（V2：按复杂度选模型）。
 _TIER_ENV_PREFIX = "AGENTCREW_TIER_"
+
+#: ``AGENTCREW_FAILOVER_<ALIAS>`` → ``model_failover[<alias>]``（P0-2：Provider 故障转移）。
+#: 别名中的 ``:`` 在环境变量名里用 ``__`` 表示：``AGENTCREW_FAILOVER_OPENAI__GPT-4O-MINI``
+#: 对应别名 ``openai:gpt-4o-mini``；值为逗号分隔的备用别名列表。
+_FAILOVER_ENV_PREFIX = "AGENTCREW_FAILOVER_"
 
 #: ``provider_overrides.<provider>`` 允许出现的键 = ``ProviderPreset`` 的字段。
 #: 引擎只读这些（``parse_alias._apply_override``）；别的键会被静默忽略，
@@ -227,6 +232,17 @@ def _env_values() -> dict[str, object]:
                 model_tiers[level] = raw.strip()
     if model_tiers:
         values["model_tiers"] = model_tiers
+    # P0-2：Provider 故障转移 —— AGENTCREW_FAILOVER_<ALIAS>（别名中 : 用 __ 表示）
+    model_failover: dict[str, list[str]] = {}
+    for env_name, raw in os.environ.items():
+        if env_name.startswith(_FAILOVER_ENV_PREFIX) and raw.strip():
+            suffix = env_name[len(_FAILOVER_ENV_PREFIX):].lower()
+            alias = suffix.replace("__", ":")
+            backups = [b.strip() for b in raw.split(",") if b.strip()]
+            if backups:
+                model_failover[alias] = backups
+    if model_failover:
+        values["model_failover"] = model_failover
     return values
 
 
@@ -258,6 +274,14 @@ class Settings(BaseModel):
     roles_dir: Path | None = None
     provider_overrides: dict[str, dict] = Field(default_factory=dict)
     model_tiers: dict[str, str] = Field(default_factory=dict)
+    model_failover: dict[str, list[str]] = Field(default_factory=dict)
+    """Provider 故障转移（P0-2）：别名 → 备用别名列表。
+
+    当主别名的 Provider 抛出不可用错误（503/429/连接超时/读取超时，重试耗尽后），
+    ModelFactory 按列表依次尝试备用别名，记 ``llm_failover`` 事件。故障转移不消耗
+    任务的 attempts（那是执行失败，不是模型不可用）。全部备用都失败时抛原始错误。
+    环境变量 ``AGENTCREW_FAILOVER_<ALIAS>``（别名中 ``:`` 用 ``__`` 表示，值逗号分隔）。
+    """
     review_score_threshold: float | None = None
     """G2 评审 score 阈值放行（P0-1）。
 

@@ -56,6 +56,7 @@ from agentcrew.models.providers.openai_compat import (
 )
 from agentcrew.models.structured import DegradeEvent
 from agentcrew.runtime.ledger import Ledger
+from agentcrew.utils.retry import TransientError
 
 if TYPE_CHECKING:
     from agentcrew.task.task import Task
@@ -73,6 +74,12 @@ _IMPLEMENTATIONS: tuple[str, ...] = ("openai_compat", "anthropic", "mock", "cli"
 
 #: 建议预算相对窗口上限预留的头部空间（spec §11.2 的建议值公式）。
 _SUGGESTED_BUDGET_HEADROOM = 1024
+
+#: P0-2：触发故障转移的异常类型 —— Provider 内部重试耗尽后的瞬时故障。
+#: openai_compat / anthropic 抛 TransientError；cli 抛 TimeoutError / ConnectionError。
+_PROVIDER_UNAVAILABLE_TYPES: tuple[type[BaseException], ...] = (
+    TransientError, TimeoutError, ConnectionError,
+)
 
 
 class ModelFactoryError(RuntimeError):
@@ -94,6 +101,18 @@ class ContextBudgetError(ModelFactoryError):
             f"max_context_tokens={window}，建议把 AGENTCREW_CONTEXT_BUDGET 调低到 "
             f"{suggested_budget}（= 窗口 - max_output_tokens - "
             f"{_SUGGESTED_BUDGET_HEADROOM}）")
+
+
+class ProviderUnavailableError(RuntimeError):
+    """Provider 不可用错误标记类（P0-2 故障转移）。
+
+    503/429/连接超时/读取超时等瞬时故障在 Provider 内部重试耗尽后，以
+    :class:`~agentcrew.utils.retry.TransientError`（openai_compat / anthropic）
+    或 :class:`TimeoutError` / :class:`ConnectionError`（cli）传播。工厂的
+    故障转移循环捕获这些类型，依次尝试备用别名；全部备用耗尽时把最后一次
+    错误包装成 ``ProviderUnavailableError`` 抛出，便于调用方区分「模型不可用」
+    与「执行失败」。
+    """
 
 
 class ModelFactory:
@@ -260,16 +279,40 @@ class ModelFactory:
 
         信号量只包住 ``complete()``：记账与落盘是本地小操作，占着全局调用额度
         只会无谓拉长排队。
+
+        P0-2：Provider 不可用（503/429/超时/连接错误，重试耗尽后）时按
+        ``model_failover`` 列表依次尝试备用别名，每次切换记 ``llm_failover`` 事件。
+        故障转移不消耗任务 attempts（那是执行失败，不是模型不可用）。
         """
-        provider = self.get(alias)
-        async with self._llm_semaphore:
-            result = await provider.complete(
-                messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                response_format=response_format)
-        self._account(result, purpose=purpose, role=role)
-        return result
+        aliases = self._failover_aliases(alias)
+        last_error: Exception | None = None
+        for idx, current_alias in enumerate(aliases):
+            try:
+                provider = self.get(current_alias)
+                async with self._llm_semaphore:
+                    result = await provider.complete(
+                        messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        response_format=response_format)
+                self._account(result, purpose=purpose, role=role)
+                return result
+            except _PROVIDER_UNAVAILABLE_TYPES as exc:
+                last_error = exc
+                if idx < len(aliases) - 1:
+                    self._emit_failover(current_alias, aliases[idx + 1], exc)
+                    continue
+                # 仅当实际尝试过备用别名（len>1）时才包装为 ProviderUnavailableError；
+                # 未配置 failover 时原样抛出，保持向后兼容（现有测试期望 TransientError）。
+                if len(aliases) > 1:
+                    raise ProviderUnavailableError(
+                        f"全部故障转移别名均不可用（primary={alias!r}，"
+                        f"尝试了 {len(aliases)} 个）：{exc}") from exc
+                raise
+        # 理论不可达：aliases 至少含 primary，循环要么 return 要么 raise
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError(f"call({alias!r}) 未产生结果也未抛出异常")
 
     async def complete_structured(
         self,
@@ -301,28 +344,80 @@ class ModelFactory:
         降级、1/2 级失败下降）都落一条 ``llm_degraded`` 事件（spec §12.3），
         PM 拆解与 G2 评审不接线也查得到「哪家 provider 只能到第几级」。显式传入
         回调则**替换**默认处理器，由调用方自行决定如何留痕。
+
+        P0-2：Provider 不可用时按 ``model_failover`` 依次尝试备用别名；每次切换
+        记 ``llm_failover`` 事件。失败别名已消耗的 token 仍记账（真实 LLM 调用）。
         """
-        provider = self.get(alias)
-        collecting = _CollectingProvider(provider)
-        if on_degrade is None:
-            on_degrade = self._emit_degrade
-        try:
-            async with self._llm_semaphore:
-                return await structured.complete_structured(
-                    collecting,
-                    messages,
-                    schema,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    repair_attempts=repair_attempts,
-                    on_degrade=on_degrade)
-        finally:
-            # 信号量已释放（async with 先于本 finally 退出）；阶梯成功与失败
-            # 走同一条记账路径，已消耗的 token 一条都不丢。
-            for result in collecting.results:
-                self._account(result, purpose=purpose, role=role)
+        aliases = self._failover_aliases(alias)
+        last_error: Exception | None = None
+        for idx, current_alias in enumerate(aliases):
+            provider = self.get(current_alias)
+            collecting = _CollectingProvider(provider)
+            degrade_cb = on_degrade if on_degrade is not None else self._emit_degrade
+            try:
+                async with self._llm_semaphore:
+                    return await structured.complete_structured(
+                        collecting,
+                        messages,
+                        schema,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        repair_attempts=repair_attempts,
+                        on_degrade=degrade_cb)
+            except _PROVIDER_UNAVAILABLE_TYPES as exc:
+                last_error = exc
+                if idx < len(aliases) - 1:
+                    self._emit_failover(current_alias, aliases[idx + 1], exc)
+                    continue
+                if len(aliases) > 1:
+                    raise ProviderUnavailableError(
+                        f"全部故障转移别名均不可用（primary={alias!r}，"
+                        f"尝试了 {len(aliases)} 个）：{exc}") from exc
+                raise
+            finally:
+                # 信号量已释放（async with 先于本 finally 退出）；阶梯成功与失败
+                # 走同一条记账路径，已消耗的 token 一条都不丢。故障转移时失败别名
+                # 的消耗也照记（真实 LLM 调用）。
+                for result in collecting.results:
+                    self._account(result, purpose=purpose, role=role)
+        # 理论不可达
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError(f"complete_structured({alias!r}) 未产生结果也未抛出异常")
 
     # ── 内部 ──────────────────────────────────────────────────────────────
+
+    def _failover_aliases(self, alias: str) -> list[str]:
+        """返回 ``[primary] + 备用别名`` 的尝试列表（P0-2 故障转移）。
+
+        去重保序：备用列表里若重复出现 primary 或自身重复，只留首次 —— 避免
+        同一个不可用 provider 被反复尝试。未配置 failover 时返回 ``[alias]``，
+        行为与改动前完全一致（向后兼容）。
+        """
+        backups = self._settings.model_failover.get(alias, [])
+        seen: set[str] = {alias}
+        result = [alias]
+        for backup in backups:
+            if backup not in seen:
+                seen.add(backup)
+                result.append(backup)
+        return result
+
+    def _emit_failover(self, from_alias: str, to_alias: str, exc: Exception) -> None:
+        """记一条 ``llm_failover`` 事件（P0-2：诚实留痕）。
+
+        每次从一个别名切换到下一个备用别名时调用，含 from_alias / to_alias /
+        error 三个字段。操作者事后可从 ledger 看出「哪个模型挂了、切到了谁、
+        原始错误是什么」。没有 ledger 时静默跳过（纯逻辑测试）。
+        """
+        if self._ledger is None:
+            return
+        self._ledger.emit(
+            "llm_failover",
+            from_alias=from_alias,
+            to_alias=to_alias,
+            error=f"{type(exc).__name__}: {exc}",
+        )
 
     def _account(self, result: CompletionResult, *, purpose: str, role: str) -> None:
         """累加用量、估算成本并发一条 ``llm_call`` —— **两条调用路径共用**。

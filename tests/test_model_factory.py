@@ -29,6 +29,7 @@ from agentcrew.models.factory import (
     DEFAULT_FIXTURES_DIR,
     ModelFactory,
     ModelFactoryError,
+    ProviderUnavailableError,
 )
 from agentcrew.models.providers.base import (
     BaseProvider,
@@ -736,3 +737,160 @@ async def test_retry_events_are_skipped_without_ledger(
         await f.call("openai:gpt-4o-mini", [{"role": "user", "content": "x"}],
                      temperature=0, max_tokens=10, purpose="execute", role="r")
     assert client.calls == 4
+
+
+# ── P0-2：Provider 故障转移 ────────────────────────────────────────────────
+
+
+def _failover_settings(settings, **mapping: list[str]):
+    """构造带 model_failover 的 settings（frozen model_copy）。"""
+    return settings.model_copy(update={"model_failover": dict(mapping)})
+
+
+async def test_failover_switches_to_backup_on_transient_error(settings, tmp_path):
+    """primary 抛 TransientError → 自动切换到 backup 并成功返回。"""
+    lg = Ledger(tmp_path / "l.jsonl", run_id="R")
+    s = _failover_settings(settings, **{"mock:primary": ["mock:backup"]})
+    f = ModelFactory(s, ledger=lg)
+
+    # primary 的 complete 恒抛 TransientError（模拟 503/429/超时耗尽重试）
+    primary_provider = f.get("mock:primary")
+
+    async def _raise_transient(*a, **kw):
+        raise TransientError("503 service unavailable")
+
+    primary_provider.complete = _raise_transient  # type: ignore[method-assign]
+
+    # backup 正常回放
+    backup_provider = f.get("mock:backup")
+    set_purpose(backup_provider, "execute", role="r", task_id="T-1", attempt=1)
+
+    result = await f.call("mock:primary", [{"role": "user", "content": "x"}],
+                          temperature=0, max_tokens=10, purpose="execute", role="r")
+    assert result is not None
+    assert f.llm_calls == 1                          # 只有 backup 成功调用被记账
+
+
+async def test_failover_emits_llm_failover_event(settings, tmp_path):
+    """每次别名切换记一条 llm_failover 事件（含 from_alias / to_alias / error）。"""
+    lg = Ledger(tmp_path / "l.jsonl", run_id="R")
+    s = _failover_settings(settings, **{"mock:primary": ["mock:backup"]})
+    f = ModelFactory(s, ledger=lg)
+
+    primary_provider = f.get("mock:primary")
+
+    async def _raise_transient(*a, **kw):
+        raise TransientError("429 rate limited")
+
+    primary_provider.complete = _raise_transient  # type: ignore[method-assign]
+
+    backup_provider = f.get("mock:backup")
+    set_purpose(backup_provider, "execute", role="r", task_id="T-1", attempt=1)
+
+    await f.call("mock:primary", [{"role": "user", "content": "x"}],
+                 temperature=0, max_tokens=10, purpose="execute", role="r")
+
+    events = list(lg.events("llm_failover"))
+    assert len(events) == 1
+    assert events[0].data["from_alias"] == "mock:primary"
+    assert events[0].data["to_alias"] == "mock:backup"
+    assert "429" in events[0].data["error"]
+
+
+async def test_failover_exhausted_raises_provider_unavailable(settings, tmp_path):
+    """全部备用别名都失败 → 抛 ProviderUnavailableError（包装最后一次错误）。"""
+    lg = Ledger(tmp_path / "l.jsonl", run_id="R")
+    s = _failover_settings(settings, **{"mock:a": ["mock:b", "mock:c"]})
+    f = ModelFactory(s, ledger=lg)
+
+    # 三个别名全部抛 TransientError
+    for alias in ("mock:a", "mock:b", "mock:c"):
+        provider = f.get(alias)
+
+        async def _raise(*a, **kw):
+            raise TransientError(f"down")
+
+        provider.complete = _raise  # type: ignore[method-assign]
+
+    with pytest.raises(ProviderUnavailableError) as ei:
+        await f.call("mock:a", [{"role": "user", "content": "x"}],
+                     temperature=0, max_tokens=10, purpose="execute", role="r")
+    assert "全部故障转移别名均不可用" in str(ei.value)
+    assert isinstance(ei.value.__cause__, TransientError)
+    # 两次切换：a→b, b→c
+    assert lg.count("llm_failover") == 2
+    assert f.llm_calls == 0                          # 没有成功调用
+
+
+async def test_failover_not_triggered_for_permanent_error(settings, tmp_path):
+    """非不可用错误（如 ValueError）不触发故障转移，直接原样抛出。"""
+    lg = Ledger(tmp_path / "l.jsonl", run_id="R")
+    s = _failover_settings(settings, **{"mock:primary": ["mock:backup"]})
+    f = ModelFactory(s, ledger=lg)
+
+    primary_provider = f.get("mock:primary")
+
+    async def _raise_permanent(*a, **kw):
+        raise ValueError("bad request")
+
+    primary_provider.complete = _raise_permanent  # type: ignore[method-assign]
+
+    with pytest.raises(ValueError, match="bad request"):
+        await f.call("mock:primary", [{"role": "user", "content": "x"}],
+                     temperature=0, max_tokens=10, purpose="execute", role="r")
+    assert lg.count("llm_failover") == 0            # 没有切换
+
+
+async def test_no_failover_configuration_preserves_original_behavior(settings, tmp_path):
+    """未配置 model_failover 时行为与改动前完全一致（向后兼容）。"""
+    lg = Ledger(tmp_path / "l.jsonl", run_id="R")
+    f = ModelFactory(settings, ledger=lg)
+    provider = f.get("mock:m")
+    set_purpose(provider, "execute", role="r", task_id="T-1", attempt=1)
+    result = await f.call("mock:m", [{"role": "user", "content": "x"}],
+                          temperature=0, max_tokens=10, purpose="execute", role="r")
+    assert result is not None
+    assert f.llm_calls == 1
+    assert lg.count("llm_failover") == 0
+
+
+async def test_failover_deduplicates_aliases(settings, tmp_path):
+    """备用列表中重复的别名只尝试一次（去重保序）。"""
+    lg = Ledger(tmp_path / "l.jsonl", run_id="R")
+    s = _failover_settings(settings, **{"mock:a": ["mock:b", "mock:b", "mock:c"]})
+    f = ModelFactory(s, ledger=lg)
+    assert f._failover_aliases("mock:a") == ["mock:a", "mock:b", "mock:c"]
+
+
+async def test_failover_complete_structured_switches_backup(settings, tmp_path, monkeypatch):
+    """complete_structured 同样支持故障转移：primary 不可用 → 切换 backup 成功。"""
+    lg = Ledger(tmp_path / "l.jsonl", run_id="R")
+    s = _failover_settings(settings, **{"mock:primary": ["mock:backup"]})
+    f = ModelFactory(s, ledger=lg)
+
+    class _FailingProvider(BaseProvider):
+        """complete 恒抛 TransientError（模拟 provider 不可用）。"""
+
+        def __init__(self) -> None:
+            super().__init__(parse_alias("mock:primary"))
+
+        async def complete(self, messages, *, temperature, max_tokens,
+                           response_format=None):
+            raise TransientError("503")
+
+    failing = _FailingProvider()
+    backup = _StructuredProvider(alias="mock:backup")
+
+    def _resolve_switch(alias: str):
+        if alias == "mock:primary":
+            return failing
+        return backup
+
+    monkeypatch.setattr(f, "_resolve", _resolve_switch)
+
+    result = await f.complete_structured(
+        "mock:primary", [{"role": "user", "content": "x"}], _Answer,
+        temperature=0, max_tokens=10, purpose="review", role="architect")
+    assert result == _Answer(value=1)
+    assert lg.count("llm_failover") == 1
+    assert backup.calls == 1
