@@ -291,6 +291,28 @@ async with MCPClient(["npx", "-y", "@modelcontextprotocol/server-filesystem", "/
 Kanban 任务看板（10 状态列）+ 实时事件流日志。输入 Run ID 后点击连接，
 通过 SSE 自动刷新任务状态。
 
+## V3 增强功能
+
+V3 在 V2 基础上新增三十二项增强，全部向后兼容（未配置时行为与 V2 完全一致）。
+按优先级分为 P0（立即做）、P1（近期做）、P2（中期做）、P3（长期做）四阶段。
+
+### P0-1. G2 评审 score 阈值放行
+
+G2 LLM 评审的 `score` 字段（0–1 诊断性质量分）此前只落 ledger、不参与裁决。
+启用阈值后，当评审 verdict="reject" 但 score >= threshold 时，Gatekeeper 改为
+放行（SUCCEEDED），避免"有小瑕疵但整体质量高"的产物被无意义返工。
+
+- 放行时记补充 `gate_result` 事件：verdict 标 "approve"、issues 原样保留（审计可见被绕过的驳回理由）、reviewer 追加 `:score-bypass`
+- 仅对 LLM 层生效（G1 静态校验 score 恒为 None，不会被误旁路）
+- 旁路不消耗返工额度
+
+```bash
+# .env 中设置阈值
+AGENTCREW_REVIEW_SCORE_THRESHOLD=0.8
+```
+
+默认 `None` = 不启用，保持现有行为。
+
 ---
 
 ## 自定义角色 / 团队开发指南

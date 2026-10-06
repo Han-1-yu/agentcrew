@@ -44,6 +44,7 @@ _ENV_TO_FIELD: dict[str, str] = {
     "AGENTCREW_LOG_LEVEL": "log_level",
     "AGENTCREW_MOCK": "mock",
     "AGENTCREW_MOCK_LATENCY_MS": "mock_latency_ms",
+    "AGENTCREW_REVIEW_SCORE_THRESHOLD": "review_score_threshold",
 }
 
 #: ``AGENTCREW_MODEL_<ROLE>`` → ``role_bindings[<role 小写>]``（spec §17.2）。
@@ -257,6 +258,14 @@ class Settings(BaseModel):
     roles_dir: Path | None = None
     provider_overrides: dict[str, dict] = Field(default_factory=dict)
     model_tiers: dict[str, str] = Field(default_factory=dict)
+    review_score_threshold: float | None = None
+    """G2 评审 score 阈值放行（P0-1）。
+
+    ``None`` = 不启用，保持现有行为（reject 即驳回）。设置后，当 LLM 评审
+    verdict="reject" 但 score >= threshold 时，Gatekeeper 改为放行，记
+    ``gate_result`` 事件 verdict 标为 "approve"、issues 保留、reviewer 追加
+    ``:score-bypass``。环境变量 ``AGENTCREW_REVIEW_SCORE_THRESHOLD=0.8``。
+    """
 
     @field_validator("output_dir")
     @classmethod

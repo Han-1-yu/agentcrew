@@ -49,6 +49,10 @@ GOOD = {"judgements": [{"criterion_index": 0, "satisfied": True,
 BAD = {"judgements": [{"criterion_index": 0, "satisfied": False,
                        "evidence": "补充业务规则"}],
        "suggestions": [], "score": 0.2}
+#: 同 BAD 但 score 很高（0.85）：用于验证 score 阈值旁路 —— reject 但分数够高时放行。
+HIGH_SCORE_BAD = {"judgements": [{"criterion_index": 0, "satisfied": False,
+                                   "evidence": "补充业务规则"}],
+                   "suggestions": [], "score": 0.85}
 
 
 @pytest.fixture
@@ -186,9 +190,8 @@ class _RecordingPrompter:
 
 
 def _gk(env, tmp_path, *, gate="none", prompter=None, context_bus=None,
-        reviews=None) -> Gatekeeper:
-    """可指定 gate / prompter / context_bus 的构造器（brief 的 ``gk`` 固定
-    NullPrompter，覆盖不到这些维度）。"""
+        reviews=None, review_score_threshold=None) -> Gatekeeper:
+    """可指定 gate / prompter / context_bus / review_score_threshold 的构造器。"""
     fx = tmp_path / "fx"
     fx.mkdir(exist_ok=True)
     reviews = {"T-2": GOOD} if reviews is None else reviews
@@ -197,7 +200,8 @@ def _gk(env, tmp_path, *, gate="none", prompter=None, context_bus=None,
     rev = Reviewer(models, RoleCatalog(BUILTIN_ROLES), env["store"], env["ledger"])
     return Gatekeeper(rev, env["store"], env["board"], gate=gate,
                       ledger=env["ledger"], prompter=prompter,
-                      context_bus=context_bus)
+                      context_bus=context_bus,
+                      review_score_threshold=review_score_threshold)
 
 
 async def test_repeated_rejections_exhaust_budget_instead_of_looping(env, tmp_path):
@@ -347,3 +351,73 @@ async def test_transition_reason_uses_status_value_not_enum(env, tmp_path):
     change = env["board"].get("T-2").status_history[-1]
     assert change.from_status is S.REVIEW and change.to_status is S.REWORK
     assert change.reason == "gate-rework"            # 不是 "gate-TaskStatus.REWORK"
+
+
+# ── P0-1: score 阈值旁路 ────────────────────────────────────────────────────
+
+
+async def test_score_bypass_reject_with_high_score_approves(env, tmp_path):
+    """reject 但 score >= threshold：改为放行，状态 SUCCEEDED，verdict 变 approve。"""
+    commit(env, "def f():\n    return 1\n")
+    d = await _gk(env, tmp_path, reviews={"T-2": HIGH_SCORE_BAD},
+                  review_score_threshold=0.5).evaluate(env["task"], round_no=1)
+    assert d.verdict == "approve"                     # 旁路后裁决变为 approve
+    assert d.next_status is S.SUCCEEDED               # 直接成功，不返工
+    assert d.record.reviewer.endswith(":score-bypass")
+    assert env["board"].get("T-2").status is S.SUCCEEDED
+
+
+async def test_score_bypass_preserves_issues_in_ledger(env, tmp_path):
+    """旁路的 gate_result 事件：verdict=approve 但 issues 保留，reviewer 追加后缀。"""
+    commit(env, "def f():\n    return 1\n")
+    await _gk(env, tmp_path, reviews={"T-2": HIGH_SCORE_BAD},
+              review_score_threshold=0.5).evaluate(env["task"], round_no=1)
+    events = list(env["ledger"].events("gate_result"))
+    # 原始 LLM 事件（reject）+ 旁路事件（approve）
+    bypass_events = [e for e in events if ":score-bypass" in e.data.get("reviewer", "")]
+    assert len(bypass_events) == 1
+    data = bypass_events[0].data
+    assert data["verdict"] == "approve"
+    assert data["score"] == 0.85
+    assert data["issues"] == ["未满足验收标准：a —— 补充业务规则"]  # issues 保留
+    assert data["reviewer"] == "architect:score-bypass"
+
+
+async def test_no_bypass_when_score_below_threshold(env, tmp_path):
+    """reject 且 score < threshold：正常驳回，走返工通道。"""
+    commit(env, "def f():\n    return 1\n")
+    d = await _gk(env, tmp_path, reviews={"T-2": BAD},
+                  review_score_threshold=0.5).evaluate(env["task"], round_no=1)
+    assert d.verdict == "reject"
+    assert d.next_status is S.REWORK
+    assert not d.record.reviewer.endswith(":score-bypass")
+    assert env["board"].get("T-2").status is S.REWORK
+
+
+async def test_no_bypass_when_threshold_is_none(env, tmp_path):
+    """threshold=None（默认）：完全保持现有行为，reject 即驳回。"""
+    commit(env, "def f():\n    return 1\n")
+    d = await _gk(env, tmp_path, reviews={"T-2": HIGH_SCORE_BAD},
+                  review_score_threshold=None).evaluate(env["task"], round_no=1)
+    assert d.verdict == "reject" and d.next_status is S.REWORK
+    bypass_events = [e for e in env["ledger"].events("gate_result")
+                     if ":score-bypass" in e.data.get("reviewer", "")]
+    assert bypass_events == []                          # 没有旁路事件
+
+
+async def test_no_bypass_for_static_rejection(env, tmp_path):
+    """G1 静态校验驳回（score=None）：即使设了 threshold 也不旁路。"""
+    commit(env, "def g():\n    return 1\n")           # 缺 must_contain → G1 恒驳回
+    d = await _gk(env, tmp_path, reviews={"T-2": HIGH_SCORE_BAD},
+                  review_score_threshold=0.5).evaluate(env["task"], round_no=1)
+    assert d.verdict == "reject" and d.next_status is S.REWORK
+    assert d.record.layer == "static"                  # 短路，没到 LLM
+    assert env["ledger"].count("llm_call") == 0
+
+
+async def test_score_bypass_does_not_consume_rework_quota(env, tmp_path):
+    """旁路放行不消耗返工额度：rework_count 保持 0。"""
+    commit(env, "def f():\n    return 1\n")
+    await _gk(env, tmp_path, reviews={"T-2": HIGH_SCORE_BAD},
+              review_score_threshold=0.5).evaluate(env["task"], round_no=1)
+    assert env["board"].get("T-2").rework_count == 0

@@ -642,6 +642,7 @@ class Crew:
             ledger=run.ledger,
             prompter=self._prompter,
             context_bus=bus,
+            review_score_threshold=self._settings.review_score_threshold,
         )
 
     def _validate_config(self, run: _Run) -> None:

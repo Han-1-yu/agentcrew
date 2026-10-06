@@ -136,6 +136,7 @@ class Gatekeeper:
         ledger: Ledger,
         prompter: Prompter | None = None,
         context_bus: ContextBus | None = None,
+        review_score_threshold: float | None = None,
     ) -> None:
         if prompter is None and (gate in _PLAN_GATES or gate in _DELIVERY_GATES):
             raise ValueError(
@@ -150,6 +151,7 @@ class Gatekeeper:
         self._ledger = ledger
         self._prompter = prompter
         self._context_bus = context_bus
+        self._review_score_threshold = review_score_threshold
 
     # ---- 自动门禁 ----
 
@@ -173,6 +175,31 @@ class Gatekeeper:
 
         primary = records[-1]
         fix_hints = _dedup(hint for record in records for hint in record.fix_hints)
+
+        # P0-1: score 阈值旁路 —— LLM 评审 reject 但分数够高时改为放行。
+        # 仅对 LLM 层生效（score 仅该层有值）；G1 静态校验的 score 恒为 None，
+        # 不会被误旁路。旁路后记一条补充 gate_result：verdict 标 approve、issues
+        # 原样保留（审计可见被绕过的驳回理由）、reviewer 追加 :score-bypass。
+        if (self._review_score_threshold is not None
+                and primary.verdict == "reject"
+                and primary.score is not None
+                and primary.score >= self._review_score_threshold):
+            bypassed_reviewer = f"{primary.reviewer}:score-bypass"
+            self._ledger.emit(
+                "gate_result",
+                task_id=primary.task_id,
+                round=primary.round,
+                layer=primary.layer,
+                verdict="approve",
+                score=primary.score,
+                issues=primary.issues,
+                reviewer=bypassed_reviewer,
+            )
+            primary = primary.model_copy(update={
+                "verdict": "approve",
+                "reviewer": bypassed_reviewer,
+            })
+
         if primary.verdict == "approve":
             next_status = self._to_succeeded(task_id)
         else:
