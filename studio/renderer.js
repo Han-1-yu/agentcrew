@@ -646,7 +646,7 @@ function renderEvents() {
       h('span',{class:'fdot'}), m.label));
   }
   list.innerHTML='';
-  const evs=[...S.dash.events].reverse().filter(e=>S.eventFilter.has(e.event));
+  const evs=[...S.dash.events].reverse().filter(e=>S.eventFilter.has(e.event)).slice(0,50);
   for(const e of evs){
     const m=EVENT_META[e.event]||{color:'#8E8E93',label:e.event};
     const key=e.ts+e.event; const expanded=S.eventExpanded.has(key);
@@ -1159,7 +1159,12 @@ function renderEventsList() {
     listEl.appendChild(h('div', { class: 'ph-empty' }, '无匹配事件'));
     return;
   }
-  for (const e of evs) {
+  const PAGE_SIZE = 100;
+  const totalPages = Math.ceil(evs.length / PAGE_SIZE);
+  if (!S.evPage || S.evPage > totalPages) S.evPage = 1;
+  const start = (S.evPage - 1) * PAGE_SIZE;
+  const pageEvs = evs.slice(start, start + PAGE_SIZE);
+  for (const e of pageEvs) {
     const item = h('div', { class: 'ev-full-item' },
       h('div', { class: 'ev-full-main', onclick: () => item.classList.toggle('expanded') },
         h('span', { class: 'ev-full-ts' }, fmtClock(e.ts)),
@@ -1170,6 +1175,14 @@ function renderEventsList() {
     const detail = h('pre', { class: 'ev-full-detail' }, JSON.stringify(e, null, 2));
     item.appendChild(detail);
     listEl.appendChild(item);
+  }
+  // 分页控件
+  if (totalPages > 1) {
+    const pager = h('div', { class: 'ev-pager' },
+      h('button', { class: 'btn btn-sm', disabled: S.evPage <= 1, onclick: () => { S.evPage--; renderEventsList(); } }, '上一页'),
+      h('span', { class: 'ev-pager-info' }, `第 ${S.evPage} / ${totalPages} 页 · 共 ${evs.length} 条`),
+      h('button', { class: 'btn btn-sm', disabled: S.evPage >= totalPages, onclick: () => { S.evPage++; renderEventsList(); } }, '下一页'));
+    listEl.appendChild(pager);
   }
 }
 
