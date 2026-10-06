@@ -39,14 +39,14 @@ G2 驳回 M），重复一条就是报告里的错数。状态跃迁的 ``reason
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.config import GateMode
 from agentcrew.context.context_bus import ContextBus
-from agentcrew.gate.reviewer import Reviewer
+from agentcrew.gate.reviewer import Reviewer, normalize_issue_text
 from agentcrew.gate.static_checks import run_static
 from agentcrew.runtime.checkpoint import RunRecord
 from agentcrew.runtime.ledger import Ledger
@@ -79,12 +79,16 @@ class PlanDecision(BaseModel):
     """计划卡点的人工裁决（spec §10.3 卡点一）。
 
     ``edit`` 携带编辑后的任务列表；``save_exit`` / ``cancel`` 时 ``tasks`` 无意义。
+    ``incremental_edits``（P2-7）记录增量编辑子菜单里发生的每一次 add/remove/
+    modify（全量编辑器为空列表），Crew 据此落 ``plan_incremental_edit`` 审计事件；
+    新字段有默认值，老的裁决构造方式不受影响。
     """
 
     model_config = ConfigDict(extra="forbid")
 
     action: Literal["approve", "edit", "save_exit", "cancel"]
     tasks: list[Task] | None = None
+    incremental_edits: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class DeliveryDecision(BaseModel):
@@ -137,6 +141,7 @@ class Gatekeeper:
         prompter: Prompter | None = None,
         context_bus: ContextBus | None = None,
         review_score_threshold: float | None = None,
+        convergence_threshold: int | None = 2,
     ) -> None:
         if prompter is None and (gate in _PLAN_GATES or gate in _DELIVERY_GATES):
             raise ValueError(
@@ -152,6 +157,10 @@ class Gatekeeper:
         self._prompter = prompter
         self._context_bus = context_bus
         self._review_score_threshold = review_score_threshold
+        # P2-3：连续 N 轮意见不变判收敛；0 / None 关闭（向后兼容旧行为）。
+        self._convergence_threshold = convergence_threshold
+        # task_id → 历次 LLM 驳回的规范化 issue 集合指纹（跨返工轮次的内存追踪）。
+        self._convergence_history: dict[str, list[frozenset[str]]] = {}
 
     # ---- 自动门禁 ----
 
@@ -200,6 +209,36 @@ class Gatekeeper:
                 "reviewer": bypassed_reviewer,
             })
 
+        # P2-3: 收敛旁路 —— 与 score 阈值旁路同构，只对 LLM 层生效。连续
+        # ``convergence_threshold`` 轮驳回意见完全相同，说明返工再多次也只会撞
+        # 同一堵墙（产物已无法朝评审意见改进），改为放行。G1 静态校验的结构性
+        # 损坏（缺文件 / 语法错）不会「收敛」，不参与此判定。
+        if primary.verdict == "reject" and primary.layer == "llm":
+            converged, rounds = self._track_convergence(task_id, primary.issues)
+            if converged:
+                self._ledger.emit(
+                    "review_converged",
+                    task_id=task_id,
+                    round=primary.round,
+                    rounds=rounds,
+                    issues=primary.issues,
+                )
+                converged_reviewer = f"{primary.reviewer}:converged"
+                self._ledger.emit(
+                    "gate_result",
+                    task_id=primary.task_id,
+                    round=primary.round,
+                    layer=primary.layer,
+                    verdict="approve",
+                    score=primary.score,
+                    issues=primary.issues,
+                    reviewer=converged_reviewer,
+                )
+                primary = primary.model_copy(update={
+                    "verdict": "approve",
+                    "reviewer": converged_reviewer,
+                })
+
         if primary.verdict == "approve":
             next_status = self._to_succeeded(task_id)
         else:
@@ -210,6 +249,36 @@ class Gatekeeper:
             next_status=next_status,
             fix_hints=fix_hints,
         )
+
+    # ---- 收敛检测（P2-3）----
+
+    def check_convergence(self, task_id: str, issues: list[str]) -> bool:
+        """记录本轮 LLM 驳回意见并检测是否连续 N 轮不变（P2-3）。
+
+        把规范化后的 issue 集合指纹追加进 ``task_id`` 的历史；末尾连续
+        ``convergence_threshold`` 轮指纹完全相同时判收敛。``threshold`` 为
+        0 / None 时不启用（直接返回 ``False``，也不留痕）。
+        """
+        converged, _ = self._track_convergence(task_id, issues)
+        return converged
+
+    def _track_convergence(
+        self, task_id: str, issues: list[str]
+    ) -> tuple[bool, int]:
+        """``check_convergence`` 的记账版：返回 ``(是否收敛, 连续相同轮数)``。"""
+        threshold = self._convergence_threshold
+        if not threshold or threshold <= 0:
+            return False, 0
+        fingerprint = _issue_fingerprint(issues)
+        history = self._convergence_history.setdefault(task_id, [])
+        history.append(fingerprint)
+        consecutive = 1
+        for prev in reversed(history[:-1]):
+            if prev == fingerprint:
+                consecutive += 1
+            else:
+                break
+        return consecutive >= threshold, consecutive
 
     # ---- 人工闸门（G3）----
 
@@ -290,3 +359,16 @@ def _reason(to: TaskStatus) -> str:
 def _dedup(items: Iterable[str]) -> list[str]:
     """去重保序：跨层 ``fix_hints`` 的并集语义，与 ``Reviewer._dedup`` 同义。"""
     return list(dict.fromkeys(items))
+
+
+def _issue_fingerprint(issues: list[str]) -> frozenset[str]:
+    """一轮驳回意见的收敛指纹：规范化后的 issue 集合（顺序无关、空意见剔除）。
+
+    与 :func:`agentcrew.gate.reviewer.normalize_issue_text` 共用同一规范化，
+    保证「同一批意见」在不同轮次给出同一指纹。空 issue（approve）不进历史。
+    """
+    return frozenset(
+        normalized
+        for issue in issues
+        if (normalized := normalize_issue_text(issue))
+    )

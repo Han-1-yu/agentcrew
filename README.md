@@ -481,6 +481,23 @@ agent = GenericAgent(spec, models=..., store=..., ledger=...,
 - CLI 计划/交付卡点菜单新增 `[m] 切换模型`（注入 `crew` 才显示，向后兼容）
 - Dashboard 顶部新增模型选择器，选别名+可选角色即调 `PUT` 接口
 
+### P2-3. 评审意见去重与收敛检测
+
+G2 评审意见此前不做跨评审人 / 跨轮次的语义去重，且「评审员每轮都能再挑出
+毛病」会让返工永不收敛。本项做两件事（均向后兼容，未配置时不改变既有行为）：
+
+- **意见去重**：`Reviewer.deduplicate_issues()` 在 `review()` 返回前对 issues 做
+  两级合并——先规范化（小写 / 去标点 / 压缩空白）后精确比较，再按 token 集合
+  Jaccard 相似度 > 0.8 合并近重复意见。去重时记 `review_dedup` ledger 事件
+  （`original_count` / `deduped_count` / `removed_issues`）。
+- **收敛检测放行**：`Gatekeeper(convergence_threshold=N=2)` 跟踪每个任务历次
+  LLM 驳回的规范化 issue 集合指纹；连续 N 轮意见完全不变即判收敛——说明返工
+  再多次也只会撞同一堵墙。收敛后若 verdict 仍是 `reject`，改为放行
+  （SUCCEEDED），记 `review_converged` 事件（`task_id` / `rounds` / `issues`），
+  并补一条 `gate_result`：verdict 标 `approve`、issues 保留、reviewer 追加
+  `:converged`。仅对 LLM 层生效（G1 结构性损坏不参与），且不消耗返工额度。
+- **向后兼容**：`convergence_threshold=0` 或 `None` 关闭收敛检测；默认 2。
+
 ### P2-1. 运行时动态子任务
 
 规划阶段任务固定，执行阶段 Agent 可以**在执行中**请求拆出独立子任务，子任务

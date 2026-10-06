@@ -33,6 +33,7 @@ G1（:mod:`agentcrew.gate.static_checks`）零 token 拦下机器可判的问题
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
@@ -192,12 +193,25 @@ class Reviewer:
         ]
         keys = [key for key, _ in opinions]
         overall: Literal["approve", "reject"] = "approve" if approved else "reject"
+        # P2-3：issues 在跨评审人取并集后再做模糊去重（规范化 + Jaccard 合并）；
+        # fix_hints 仍走精确去重（它是逐条 evidence，措辞差异不该被并成一条）。
+        raw_issues = [
+            issue for _, opinion in opinions for issue in opinion.issues]
+        issues, removed = _deduplicate_tracked(raw_issues)
+        if removed:
+            self._ledger.emit(
+                "review_dedup",
+                task_id=task.id,
+                round=round_no,
+                original_count=len(raw_issues),
+                deduped_count=len(issues),
+                removed_issues=removed,
+            )
         return self._finish(
             task, round_no,
             verdict=overall,
             score=min(scores) if scores else None,
-            issues=_dedup(
-                issue for _, opinion in opinions for issue in opinion.issues),
+            issues=issues,
             fix_hints=_dedup(
                 hint for _, opinion in opinions for hint in opinion.fix_hints),
             suggestions=_dedup(
@@ -436,6 +450,66 @@ def _is_malformed(verdict: ReviewVerdict, task: Task) -> bool:
 def _dedup(items: Iterable[str]) -> list[str]:
     """去重并保持首次出现顺序（并集语义 + 确定性输出，跨评审人重复项只留一份）。"""
     return list(dict.fromkeys(items))
+
+
+#: 评审意见相似度阈值（P2-3）：token 集合 Jaccard 相似度超过此值视为重复。
+_ISSUE_SIMILARITY_THRESHOLD = 0.8
+
+
+def normalize_issue_text(text: str) -> str:
+    """规范化一条评审意见：小写、去标点、压缩空白（P2-3 去重与收敛指纹共用）。
+
+    去标点只留单词字符与空白：CJK 字符在 ``re`` 的 str 默认（``re.UNICODE``）下
+    属于 ``\\w``，不会被抹掉；中英文标点一律剔除。
+    """
+    stripped = re.sub(r"[^\w\s]", "", text.lower())
+    return " ".join(stripped.split())
+
+
+def _issue_tokens(normalized: str) -> set[str]:
+    """规范化意见切出的 token 集合（空白分词）。"""
+    return {token for token in normalized.split() if token}
+
+
+def _is_similar_issue(a: str, b: str) -> bool:
+    """两条**已规范化**意见是否重复：完全相等，或 token 集合 Jaccard > 阈值。"""
+    if a == b:
+        return True
+    tokens_a, tokens_b = _issue_tokens(a), _issue_tokens(b)
+    if not tokens_a or not tokens_b:
+        return False
+    return len(tokens_a & tokens_b) / len(tokens_a | tokens_b) > _ISSUE_SIMILARITY_THRESHOLD
+
+
+def deduplicate_issues(issues: list[str]) -> list[str]:
+    """对评审意见去重并保持首次出现顺序（P2-3）。
+
+    两级去重：先规范化（小写 / 去标点 / 压缩空白）后精确比较；规范化仍不同的，
+    再按 token 集合 Jaccard 相似度 > 0.8 合并相似意见。以已保留者为基准，新意见
+    与任一保留意见重复即丢弃（保序、确定性）。
+    """
+    kept: list[str] = []
+    for issue in issues:
+        normalized = normalize_issue_text(issue)
+        if any(_is_similar_issue(normalize_issue_text(existing), normalized)
+               for existing in kept):
+            continue
+        kept.append(issue)
+    return kept
+
+
+def _deduplicate_tracked(issues: list[str]) -> tuple[list[str], list[str]]:
+    """:func:`deduplicate_issues` 的记账版：额外返回被丢弃的意见（ledger 留痕）。"""
+    kept: list[str] = []
+    removed: list[str] = []
+    for issue in issues:
+        normalized = normalize_issue_text(issue)
+        if any(_is_similar_issue(normalize_issue_text(existing), normalized)
+               for existing in kept):
+            removed.append(issue)
+        else:
+            kept.append(issue)
+    return kept, removed
 
 
 def _build_messages(spec: RoleSpec, material: str) -> list[Message]:
