@@ -661,9 +661,25 @@ function renderGates() {
   }
 }
 function gateStatusLabel(st){ return {pending:'未开始',running:'进行中',passed:'通过',failed:'失败',review:'等待人工确认'}[st]||st; }
-function acceptGate(g){ g.status='passed'; g.checks={...g.checks,failed:0}; pushEvent('gate_result',{layer:g.layer,verdict:'approve',gate:g.id}); toast('success','门禁通过',g.name+' 已接受'); renderDashboard(); }
+function acceptGate(g){
+  if (S.realMode && S.dash.run?.dir) {
+    window.studio.gateAction(S.dash.run.dir, g.layer, 'approve')
+      .then(() => { g.status='passed'; g.checks={...g.checks,failed:0}; pushEvent('gate_result',{layer:g.layer,verdict:'approve',gate:g.id}); toast('success','门禁通过',g.name+' 已接受'); renderDashboard(); })
+      .catch(e => toast('error','批准失败',String(e.message||e)));
+  } else {
+    g.status='passed'; g.checks={...g.checks,failed:0}; pushEvent('gate_result',{layer:g.layer,verdict:'approve',gate:g.id}); toast('success','门禁通过',g.name+' 已接受'); renderDashboard();
+  }
+}
 function rejectGate(g){ confirmAction('驳回并返工',`将 ${g.name} 打回返工，预计增加约 $0.05 模型成本。`,
-  ()=>{ g.status='failed'; pushEvent('gate_result',{layer:g.layer,verdict:'reject',gate:g.id}); toast('warning','已驳回',g.name+' 已退回相关任务'); renderDashboard(); }); }
+  ()=>{
+    if (S.realMode && S.dash.run?.dir) {
+      window.studio.gateAction(S.dash.run.dir, g.layer, 'reject')
+        .then(() => { g.status='failed'; pushEvent('gate_result',{layer:g.layer,verdict:'reject',gate:g.id}); toast('warning','已驳回',g.name+' 已退回相关任务'); renderDashboard(); })
+        .catch(e => toast('error','驳回失败',String(e.message||e)));
+    } else {
+      g.status='failed'; pushEvent('gate_result',{layer:g.layer,verdict:'reject',gate:g.id}); toast('warning','已驳回',g.name+' 已退回相关任务'); renderDashboard();
+    }
+  }); }
 
 function renderEvents() {
   const list=$('#events-list'), filter=$('#events-filter'); if(!list)return;
@@ -782,9 +798,21 @@ function openTaskDetail(taskId){
       S.realMode
         ? h('div',{class:'dp-text dim',style:'font-size:11px'},'任务级操作需通过 CLI 或 API 执行')
         : h('div',{style:'display:flex;gap:6px;flex-wrap:wrap'},
-            h('button',{class:'btn btn-sm',onclick:()=>toast('info','重试任务',t.id)},'重试任务'),
-            h('button',{class:'btn btn-sm',onclick:()=>{t.status='skipped';toast('info','已跳过',t.id);renderDashboard();}},'跳过任务'),
-            h('button',{class:'btn btn-sm',onclick:()=>{t.status='review';toast('info','人工处理',t.id+' 标记为人工处理');renderDashboard();}},'人工处理'),
+            h('button',{class:'btn btn-sm',onclick:async()=>{
+              if (S.realMode && S.dash.run?.dir) { try { await window.studio.taskAction(S.dash.run.dir, t.id, 'retry'); toast('success','已重试',t.id); } catch(e){ toast('error','重试失败',String(e.message||e)); } }
+              else { t.status='ready'; t.attempts=(t.attempts||0)+1; toast('info','重试任务',t.id); }
+              renderDashboard();
+            }},'重试任务'),
+            h('button',{class:'btn btn-sm',onclick:async()=>{
+              if (S.realMode && S.dash.run?.dir) { try { await window.studio.taskAction(S.dash.run.dir, t.id, 'skip'); toast('success','已跳过',t.id); } catch(e){ toast('error','跳过失败',String(e.message||e)); } }
+              else { t.status='skipped'; toast('info','已跳过',t.id); }
+              renderDashboard();
+            }},'跳过任务'),
+            h('button',{class:'btn btn-sm',onclick:async()=>{
+              if (S.realMode && S.dash.run?.dir) { try { await window.studio.taskAction(S.dash.run.dir, t.id, 'manual'); toast('success','已标记',t.id+' 人工处理'); } catch(e){ toast('error','标记失败',String(e.message||e)); } }
+              else { t.status='review'; toast('info','人工处理',t.id+' 标记为人工处理'); }
+              renderDashboard();
+            }},'人工处理'),
             h('button',{class:'btn btn-sm btn-primary',onclick:()=>toast('info','恢复运行','从 '+t.id+' 恢复')},'从此恢复')))));
   renderAgents();
 }
@@ -1430,12 +1458,25 @@ function openModelSwitcher() {
     h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: closeModal }, '取消'))));
 }
 
-function applyModel(alias) {
-  S.dash.run.model = alias;
-  if (S.settings) { S.settings.defaultModel = alias; window.studio.setSettings(S.settings).catch(() => {}); }
-  pushEvent('llm_model_switched', { from: S.dash.run.model, to: alias });
-  renderChrome(); renderDashboard();
-  toast('success', '模型已切换', alias);
+async function applyModel(alias) {
+  if (S.realMode && S.dash.run && S.dash.run.dir) {
+    try {
+      await window.studio.switchModel(S.dash.run.dir, alias);
+      S.dash.run.model = alias;
+      if (S.settings) { S.settings.defaultModel = alias; window.studio.setSettings(S.settings).catch(() => {}); }
+      pushEvent('llm_model_switched', { from: S.dash.run.model, to: alias });
+      renderChrome(); renderDashboard();
+      toast('success', '模型已切换', alias);
+    } catch (e) {
+      toast('error', '切换失败', String(e.message || e));
+    }
+  } else {
+    S.dash.run.model = alias;
+    if (S.settings) { S.settings.defaultModel = alias; window.studio.setSettings(S.settings).catch(() => {}); }
+    pushEvent('llm_model_switched', { from: S.dash.run.model, to: alias });
+    renderChrome(); renderDashboard();
+    toast('success', '模型已切换', alias);
+  }
 }
 
 /* ============================================================

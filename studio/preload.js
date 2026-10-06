@@ -30,6 +30,10 @@ contextBridge.exposeInMainWorld('studio', {
   // 系统
   revealFile: (fullPath) => invoke('shell:showItemInFolder', { fullPath }),
   openPath: (fullPath) => invoke('shell:openPath', { fullPath }),
+  // 真实模式操作
+  switchModel: (runDir, alias) => invoke('model:switch', { runDir, alias }),
+  taskAction: (runDir, taskId, action) => invoke('task:action', { runDir, taskId, action }),
+  gateAction: (runDir, layer, action) => invoke('gate:action', { runDir, layer, action }),
   // 主进程推送
   on: (channel, cb) => {
     const wrapped = (_e, payload) => { try { cb(payload); } catch (err) { console.error('回调异常', channel, err); } };

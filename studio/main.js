@@ -590,6 +590,75 @@ function registerIpc() {
   ipcMain.handle('shell:showItemInFolder', (_e, p) => { shell.showItemInFolder(String(p.fullPath)); return { ok: true }; });
   ipcMain.handle('shell:openPath', (_e, p) => shell.openPath(String(p.fullPath)));
   ipcMain.handle('app:relaunch', () => { app.relaunch(); app.quit(); });
+
+  // ---------- 真实模式操作：模型切换 / 任务操作 / 门禁审批 ----------
+  // 直接修改 run.json / tasks.json，适用于非 running 状态的 run；running 状态拒绝。
+
+  function writeJsonAtomic(file, data) {
+    const tmp = file + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8');
+    fs.renameSync(tmp, file);
+  }
+
+  ipcMain.handle('model:switch', (_e, p) => {
+    const runDir = String(p.runDir);
+    const alias = String(p.alias || '');
+    if (!alias) throw new Error('alias 不能为空');
+    const runFile = path.join(runDir, 'run.json');
+    const r = readJsonTolerant(runFile);
+    if (!r.ok) throw new Error('run.json 读取失败：' + r.error);
+    if (r.data.status === 'running') throw new Error('运行中无法切换模型，请先暂停');
+    if (!r.data.config_snapshot) r.data.config_snapshot = {};
+    r.data.config_snapshot.default_model = alias;
+    r.data.model = alias;
+    r.data.updated_at = new Date().toISOString();
+    writeJsonAtomic(runFile, r.data);
+    return { ok: true, alias };
+  });
+
+  ipcMain.handle('task:action', (_e, p) => {
+    const runDir = String(p.runDir);
+    const taskId = String(p.taskId);
+    const action = String(p.action); // retry | skip | manual
+    if (!['retry', 'skip', 'manual'].includes(action)) throw new Error('未知操作：' + action);
+    const tasksFile = path.join(runDir, 'tasks.json');
+    const t = readJsonTolerant(tasksFile);
+    if (!t.ok) throw new Error('tasks.json 读取失败：' + t.error);
+    const tasks = (t.data && t.data.tasks) || [];
+    const task = tasks.find(x => x.id === taskId);
+    if (!task) throw new Error('任务不存在：' + taskId);
+    if (action === 'retry') {
+      task.status = 'ready';
+      task.attempts = (task.attempts || 0) + 1;
+      task.error = null;
+    } else if (action === 'skip') {
+      task.status = 'skipped';
+    } else if (action === 'manual') {
+      task.status = 'manual';
+    }
+    writeJsonAtomic(tasksFile, t.data);
+    return { ok: true, taskId, action, status: task.status };
+  });
+
+  ipcMain.handle('gate:action', (_e, p) => {
+    const runDir = String(p.runDir);
+    const layer = String(p.layer); // G1 | G2 | G3
+    const action = String(p.action); // approve | reject
+    if (!['approve', 'reject'].includes(action)) throw new Error('未知操作：' + action);
+    const runFile = path.join(runDir, 'run.json');
+    const r = readJsonTolerant(runFile);
+    if (!r.ok) throw new Error('run.json 读取失败：' + r.error);
+    if (r.data.status === 'running') throw new Error('运行中无法直接操作门禁，请通过 CLI');
+    if (!r.data.gate_results) r.data.gate_results = {};
+    r.data.gate_results[layer] = {
+      verdict: action === 'approve' ? 'approve' : 'reject',
+      manually: true,
+      at: new Date().toISOString(),
+    };
+    r.data.updated_at = new Date().toISOString();
+    writeJsonAtomic(runFile, r.data);
+    return { ok: true, layer, action };
+  });
 }
 
 // ---------- 窗口 ----------
