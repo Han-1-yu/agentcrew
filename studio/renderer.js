@@ -843,18 +843,161 @@ const PLACEHOLDERS={
   events:{title:'事件日志',desc:'完整 ledger 搜索与过滤正在开发中。当前请使用上方的最近事件时间线。'},
   settings:{title:'设置',desc:'连接设置、预算策略与主题配置正在开发中。'},
 };
+/* ============================================================
+   产物页
+   ============================================================ */
+const ARTIFACT_ICONS = {
+  code: '📄', doc: '📄', test: '🧪', report: '📊', config: '⚙️', other: '📦',
+};
+
+async function renderArtifactsPage(container) {
+  container.appendChild(h('div', { class: 'page-head' },
+    h('h2', {}, '产物'),
+    h('div', { style: 'display:flex;gap:8px' },
+      h('button', { class: 'btn', onclick: async () => {
+        if (!S.dash.run || !S.dash.run.dir) return;
+        try { await window.studio.exportArtifacts(S.dash.run.dir); toast('success', '已导出', '产物已打包为 ZIP'); }
+        catch (e) { toast('error', '导出失败', String(e.message || e)); }
+      } }, '导出 ZIP'),
+      h('button', { class: 'btn', onclick: () => switchNav('dashboard') }, '返回'))));
+
+  const body = h('div', { class: 'art-body' });
+  container.appendChild(body);
+
+  if (!S.dash.run || !S.dash.run.dir) {
+    body.appendChild(h('div', { class: 'ph-empty' }, '未选择运行'));
+    return;
+  }
+
+  // 左侧文件树
+  const tree = h('div', { class: 'art-tree' });
+  const preview = h('div', { class: 'art-preview' });
+  body.appendChild(tree); body.appendChild(preview);
+
+  tree.appendChild(h('div', { class: 'art-tree-head' }, '文件列表'));
+  const listEl = h('div', { class: 'art-tree-list' });
+  tree.appendChild(listEl);
+
+  let entries = [];
+  try {
+    entries = await window.studio.listArtifacts(S.dash.run.dir);
+  } catch (e) {
+    listEl.appendChild(h('div', { class: 'ph-empty' }, '加载失败：' + String(e.message || e)));
+    return;
+  }
+
+  if (!entries || !entries.length) {
+    listEl.appendChild(h('div', { class: 'ph-empty' }, '该运行暂无产物'));
+    preview.appendChild(h('div', { class: 'ph-empty' }, '选择左侧文件查看内容'));
+    return;
+  }
+
+  // 按目录分组
+  const groups = {};
+  for (const e of entries) {
+    const dir = (e.path || '').split('/')[0] || '根目录';
+    if (!groups[dir]) groups[dir] = [];
+    groups[dir].push(e);
+  }
+
+  for (const [dir, files] of Object.entries(groups)) {
+    listEl.appendChild(h('div', { class: 'art-dir' }, dir));
+    for (const f of files) {
+      const icon = ARTIFACT_ICONS[f.kind] || '📄';
+      const item = h('div', { class: 'art-file', onclick: async () => {
+        $$('.art-file').forEach(x => x.classList.remove('active'));
+        item.classList.add('active');
+        await previewArtifact(preview, f);
+      }},
+        h('span', { class: 'art-file-icon' }, icon),
+        h('span', { class: 'art-file-name', title: f.path }, (f.path || '').split('/').pop()),
+        h('span', { class: 'art-file-size' }, fmtBytes(f.sizeBytes)));
+      listEl.appendChild(item);
+    }
+  }
+  preview.appendChild(h('div', { class: 'ph-empty' }, '选择左侧文件查看内容'));
+}
+
+async function previewArtifact(preview, f) {
+  preview.innerHTML = '';
+  preview.appendChild(h('div', { class: 'art-preview-head' },
+    h('span', { class: 'art-preview-path' }, f.path || ''),
+    h('span', { class: 'art-preview-meta' },
+      `${fmtBytes(f.sizeBytes)} · ${f.role || '—'} · ${f.task || '—'}`)));
+  const content = h('pre', { class: 'art-preview-content' });
+  preview.appendChild(content);
+  try {
+    const r = await window.studio.readArtifact(S.dash.run.dir, f.path);
+    const text = r && r.content != null ? String(r.content) : (r && typeof r === 'string' ? r : '');
+    if (!text) { content.textContent = '（空文件或二进制）'; return; }
+    if (text.length > 100000) { content.textContent = text.slice(0, 100000) + '\n…（已截断，共 ' + text.length + ' 字符）'; }
+    else { content.textContent = text; }
+  } catch (e) {
+    content.textContent = '读取失败：' + String(e.message || e);
+  }
+}
+
+function fmtBytes(n) {
+  if (n == null) return '—';
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / 1024 / 1024).toFixed(1) + ' MB';
+}
+
+/* ============================================================
+   设置页
+   ============================================================ */
+async function renderSettingsPage(container) {
+  container.appendChild(h('div', { class: 'page-head' },
+    h('h2', {}, '设置'),
+    h('button', { class: 'btn btn-primary', onclick: async () => {
+      const next = {
+        pythonCmd: $('#set-python').value.trim() || 'python',
+        outputDir: $('#set-output').value.trim(),
+        defaultModel: $('#set-model').value.trim(),
+        maxCostUsd: parseFloat($('#set-maxcost').value) || 0,
+      };
+      try {
+        await window.studio.setSettings(next);
+        S.settings = Object.assign({}, S.settings, next);
+        toast('success', '已保存', '设置已更新');
+      } catch (e) { toast('error', '保存失败', String(e.message || e)); }
+    }}, '保存')));
+
+  const cfg = S.settings || {};
+  const form = h('div', { class: 'settings-form' });
+  container.appendChild(form);
+
+  const field = (label, id, value, placeholder, type = 'text') =>
+    h('div', { class: 'settings-field' },
+      h('label', { for: id }, label),
+      h('input', { id, type, value: value || '', placeholder: placeholder || '' }));
+
+  form.appendChild(field('Python 命令', 'set-python', cfg.pythonCmd, 'python / python3 / 完整路径'));
+  form.appendChild(field('输出目录', 'set-output', cfg.outputDir, 'E:\\agentcrew\\output'));
+  form.appendChild(field('默认模型', 'set-model', cfg.defaultModel, 'gpt-4o / deepseek / …'));
+  form.appendChild(field('预算上限 (USD)', 'set-maxcost', cfg.maxCostUsd || '', '0 = 不限制', 'number'));
+
+  form.appendChild(h('div', { class: 'settings-field' },
+    h('label', {}, '关于'),
+    h('div', { class: 'settings-about' },
+      'AgentCrew Studio · 多 Agent 协作开发控制台',
+      h('br'), '8 角色协作 · 三层门禁 · DAG 编排 · 实时可观测')));
+}
+
 function switchNav(key){
   S.nav=key;
   $$('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.nav===key));
   const dash=$('#dashboard-view'), ph=$('#placeholder-view');
-  if(key==='dashboard'){ ph.classList.add('hidden'); dash.classList.remove('hidden'); }
-  else{ dash.classList.add('hidden'); ph.classList.remove('hidden');
-    const p=PLACEHOLDERS[key]||{title:key,desc:'该页面开发中。'};
-    ph.innerHTML='';
-    ph.appendChild(h('div',{class:'ph-icon'},h('svg',{width:30,height:30,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor','stroke-width':1.6,'stroke-linecap':'round','stroke-linejoin':'round'},h('rect',{x:'3',y:'3',width:'18',height:'18',rx:'3'}),h('path',{d:'M8 12h8'}))));
-    ph.appendChild(h('h2',{},p.title)); ph.appendChild(h('p',{},p.desc));
-    ph.appendChild(h('button',{class:'btn btn-primary',onclick:()=>switchNav('dashboard')},'返回运行总览'));
-  }
+  if(key==='dashboard'){ ph.classList.add('hidden'); dash.classList.remove('hidden'); return; }
+  dash.classList.add('hidden'); ph.classList.remove('hidden');
+  ph.innerHTML='';
+  if(key==='artifacts'){ renderArtifactsPage(ph); return; }
+  if(key==='settings'){ renderSettingsPage(ph); return; }
+  const p=PLACEHOLDERS[key]||{title:key,desc:'该页面开发中。'};
+  ph.appendChild(h('div',{class:'ph-icon'},h('svg',{width:30,height:30,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor','stroke-width':1.6,'stroke-linecap':'round','stroke-linejoin':'round'},h('rect',{x:'3',y:'3',width:'18',height:'18',rx:'3'}),h('path',{d:'M8 12h8'}))));
+  ph.appendChild(h('h2',{},p.title)); ph.appendChild(h('p',{},p.desc));
+  ph.appendChild(h('button',{class:'btn btn-primary',onclick:()=>switchNav('dashboard')},'返回运行总览'));
 }
 
 /* ============================================================
