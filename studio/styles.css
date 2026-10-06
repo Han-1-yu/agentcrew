@@ -605,6 +605,12 @@ h1,h2,h3,h4 { margin: 0; font-weight: 600; letter-spacing: -0.1px; }
   .tb-budget { display: none; }
   .agents-grid { grid-template-columns: 1fr; }
   #dashboard-view { padding: 12px; }
+  .art-layout { flex-direction: column; }
+  .art-tree { width: 100%; max-height: 200px; border-right: none; border-bottom: 1px solid var(--border); }
+  .gate-cards { grid-template-columns: 1fr; }
+  .run-stats { grid-template-columns: repeat(3, 1fr); }
+  .run-actions { flex-wrap: wrap; }
+  .section-head h3 { font-size: 14px; }
 }
 /* 390px 手机：基础适配 */
 @media (max-width: 480px) {
@@ -612,8 +618,25 @@ h1,h2,h3,h4 { margin: 0; font-weight: 600; letter-spacing: -0.1px; }
   .brand-name em { display: none; }
   .tb-run-status span:last-child { display: none; }
   #detail-panel { width: 100vw; }
+  .run-stats { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .stat-cell { padding: 8px 10px; }
+  .stat-val { font-size: 15px; }
+  .stat-label { font-size: 10px; }
+  .run-status-bar { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .run-meta { flex-wrap: wrap; gap: 6px 14px; }
+  .events-list { max-height: 300px; }
+  .event-item { padding: 6px 8px; font-size: 11px; }
+  .page-head h2 { font-size: 17px; }
+  .dag-task-row { flex-wrap: wrap; gap: 4px; }
+  .dag-task-title { flex: 1 1 100%; }
 }
 
 /* 动效：状态变化轻量反馈，仅响应用户操作 */
 @keyframes pulseIn { 0% { transform: scale(0.98); opacity: 0.6; } 100% { transform: scale(1); opacity: 1; } }
 .flash-update { animation: pulseIn .25s ease; }
+
+/* 全局防溢出 */
+#main-content { overflow-x: hidden; }
+.art-preview-content, .dp-log, pre { max-width: 100%; overflow-x: auto; }
+table { max-width: 100%; }
+* { box-sizing: border-box; }
