@@ -7,16 +7,24 @@ SSE 是标准 HTTP 长连接，单向推送足够覆盖「运行状态实时更�
 
 端点：
 - ``GET /health`` → 健康检查
+- ``POST /runs`` → 创建并后台启动一个 run（body: ``{"goal": ..., "options": {...}}``）
+- ``GET /runs`` → 列出全部 run（盘上记录 + 内存中运行中的实时状态）
+- ``POST /runs/{run_id}/cancel`` → 软取消运行中的 run（202）
+- ``POST /runs/{run_id}/resume`` → 从 checkpoint 恢复 run 并后台执行（202）
 - ``GET /runs/{run_id}/status`` → 运行状态（任务统计）
 - ``GET /runs/{run_id}/events`` → SSE 事件流
 - ``POST /runs/{run_id}/events`` → 注入测试事件（仅测试/调试用）
+
+P1-5 的 run 生命周期：``POST /runs`` 经 ``crew_factory`` 建 Crew、挂 ``on_event``
+后用 ``asyncio.create_task`` 后台跑；``run_started`` 事件一到就把 ``run_id`` 回给
+HTTP 响应并登记进 :attr:`ApiServer.active_crews`，任务结束时摘除。
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -73,13 +81,28 @@ class ApiServer:
         port: int = 8765,
         event_bus: EventBus | None = None,
         output_dir: Path | None = None,
+        settings: Any | None = None,
+        crew_factory: Callable[[str, Mapping[str, Any]], Any] | None = None,
     ) -> None:
+        """``settings`` / ``crew_factory`` 只服务于 P1-5 的创建/恢复端点。
+
+        ``crew_factory(goal, options) -> crew`` 负责构造一个带 ``on_event`` 回调的
+        run 驱动对象（真实是 :class:`~agentcrew.crew.crew.Crew`，测试注入 mock）；
+        缺省时用 ``settings`` 现场构造一个 ``gate="none"`` 的 Crew。``settings``
+        为 ``None`` 且未给工厂时，创建/恢复端点返回 503。
+        """
         self.host = host
         self.port = port
         self.bus = event_bus or EventBus()
         self.runs: dict[str, RunState] = {}
         self._server: asyncio.AbstractServer | None = None
         self._output_dir = output_dir
+        self._settings = settings
+        self._crew_factory = crew_factory
+        #: 运行中的 Crew 注册表（run_id → crew 实例）；任务结束由 runner 摘除。
+        self.active_crews: dict[str, Any] = {}
+        #: 后台任务句柄（run_id → asyncio.Task），便于优雅收尾。
+        self._run_tasks: dict[str, asyncio.Task[None]] = {}
 
     async def start(self) -> None:
         self._server = await asyncio.start_server(
@@ -112,10 +135,25 @@ class ApiServer:
                     "status": data.get("to_status", ""),
                     "role": data.get("role", ""),
                 }
+        elif event == "run_started":
+            self.runs[run_id].status = "running"
+            goal = data.get("goal")
+            if isinstance(goal, str) and goal:
+                self.runs[run_id].goal = goal
         elif event == "run_completed":
             self.runs[run_id].status = "completed"
         elif event == "run_failed":
             self.runs[run_id].status = "failed"
+        elif event == "run_finished":
+            # P1-5：Crew 封版统一发这一个事件（含 completed / cancelled /
+            # interrupted / failed），按状态落到徽章。
+            status = data.get("status", "")
+            if status == "completed":
+                self.runs[run_id].status = "completed"
+            elif status in ("cancelled", "interrupted"):
+                self.runs[run_id].status = status
+            else:
+                self.runs[run_id].status = "failed"
 
     # ── HTTP 处理 ────────────────────────────────────────────────────────
 
@@ -127,16 +165,27 @@ class ApiServer:
             if not request_line:
                 return
             method, path, _ = request_line.decode("utf-8", errors="replace").split(" ", 2)
-            # 读取并丢弃请求头
+            # 读请求头，顺带记住 Content-Length（无 body 的 POST 不能再 read() 阻塞
+            # 等客户端 —— 连接还开着等响应，会和服务端互相死等）。
+            content_length = 0
             while True:
                 line = await reader.readline()
                 if line in (b"\r\n", b"\n", b""):
                     break
+                if line.lower().startswith(b"content-length:"):
+                    try:
+                        content_length = max(
+                            0, int(line.split(b":", 1)[1].strip()))
+                    except ValueError:
+                        content_length = 0
             if method == "GET":
                 await self._handle_get(path, writer)
             elif method == "POST":
-                # POST 只用于测试注入，body 可选（最多读 64KB）
-                body = await reader.read(65536)
+                # 按声明长度读，但不苛求凑满：客户端少发（含调试用的坏 JSON）
+                # 都在 JSON 解析处收成 400，而不是在这里死等字节。
+                body = (
+                    await reader.read(content_length)
+                    if content_length > 0 else b"")
                 await self._handle_post(path, body, writer)
             elif method == "DELETE":
                 await self._handle_delete(path, writer)
@@ -163,6 +212,9 @@ class ApiServer:
         if path == "/health":
             await self._send_json(writer, 200, {"status": "ok"})
             return
+        if path == "/runs":
+            await self._list_runs(writer)
+            return
         if path.startswith("/runs/") and path.endswith("/events"):
             run_id = path.split("/")[2]
             await self._handle_sse(run_id, writer)
@@ -186,19 +238,237 @@ class ApiServer:
     async def _handle_post(
         self, path: str, body: bytes, writer: asyncio.StreamWriter,
     ) -> None:
-        if path.startswith("/runs/") and path.endswith("/events"):
-            run_id = path.split("/")[2]
-            try:
-                data = json.loads(body.decode("utf-8")) if body else {}
-            except json.JSONDecodeError:
-                await self._send_json(writer, 400, {"error": "invalid JSON"})
-                return
-            event = data.pop("_event", "custom")
-            data.setdefault("run_id", run_id)
-            self.on_event(event, data)
-            await self._send_json(writer, 202, {"accepted": True})
+        if path == "/runs":
+            await self._create_run(body, writer)
             return
+        parsed = urlsplit(path)
+        segments = [unquote(s) for s in parsed.path.split("/") if s]
+        if len(segments) == 3 and segments[0] == "runs":
+            run_id, action = segments[1], segments[2]
+            if action == "cancel":
+                await self._cancel_run(run_id, writer)
+                return
+            if action == "resume":
+                await self._resume_run(run_id, writer)
+                return
+            if action == "events":
+                try:
+                    data = json.loads(body.decode("utf-8")) if body else {}
+                except json.JSONDecodeError:
+                    await self._send_json(writer, 400, {"error": "invalid JSON"})
+                    return
+                event = data.pop("_event", "custom")
+                data.setdefault("run_id", run_id)
+                self.on_event(event, data)
+                await self._send_json(writer, 202, {"accepted": True})
+                return
         await self._send_json(writer, 404, {"error": "Not Found"})
+
+    # ── P1-5：run 生命周期 ────────────────────────────────────────────────
+
+    async def _create_run(self, body: bytes, writer: asyncio.StreamWriter) -> None:
+        """``POST /runs``：校验 body → 建 Crew → 后台跑 → 回 run_id。"""
+        try:
+            data = json.loads(body.decode("utf-8")) if body else {}
+        except json.JSONDecodeError:
+            await self._send_json(writer, 400, {"error": "invalid JSON"})
+            return
+        if not isinstance(data, dict):
+            await self._send_json(writer, 400, {"error": "body 必须是 JSON 对象"})
+            return
+        goal = data.get("goal")
+        if not isinstance(goal, str) or not goal.strip():
+            await self._send_json(writer, 400, {"error": "goal 不能为空"})
+            return
+        options = data.get("options") or {}
+        if not isinstance(options, Mapping):
+            await self._send_json(writer, 400, {"error": "options 必须是对象"})
+            return
+        crew = self._build_crew(goal, options)
+        if crew is None:
+            await self._send_json(
+                writer, 503,
+                {"error": "server 未配置 crew_factory/settings，无法创建 run"},
+            )
+            return
+        started: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        task = asyncio.create_task(
+            self._run_crew(crew, lambda: crew.run(goal), started))
+        try:
+            run_id = await asyncio.wait_for(started, timeout=30)
+        except asyncio.TimeoutError:
+            task.cancel()
+            await self._send_json(
+                writer, 504, {"error": "run 启动超时（未收到 run_started）"})
+            return
+        except Exception as exc:  # crew.run 在首个事件前就炸了
+            task.cancel()
+            await self._send_json(
+                writer, 500, {"error": f"run 启动失败：{type(exc).__name__}: {exc}"})
+            return
+        self.active_crews[run_id] = crew
+        self._run_tasks[run_id] = task
+        await self._send_json(
+            writer, 202, {"run_id": run_id, "status": "running"})
+
+    def _build_crew(
+        self, goal: str, options: Mapping[str, Any]
+    ) -> Any | None:
+        """经 ``crew_factory`` 建 Crew；缺省用 ``settings`` 现场造一个无人值守实例。"""
+        if self._crew_factory is not None:
+            return self._crew_factory(goal, options)
+        if self._settings is None:
+            return None
+        from agentcrew.crew.crew import Crew
+
+        try:
+            settings = (
+                self._settings.model_copy(update=dict(options))
+                if options else self._settings)
+        except Exception:
+            settings = self._settings
+        # API 服务器无人值守：人工卡点会在 await prompter 上永久挂起。
+        settings = settings.model_copy(update={"gate": "none"})
+        return Crew(settings, on_event=self.on_event)
+
+    async def _run_crew(
+        self,
+        crew: Any,
+        coro_factory: Callable[[], Any],
+        started: asyncio.Future[str],
+    ) -> None:
+        """后台跑一个 crew：拦截 ``run_started`` 回传 run_id，结束时摘除注册表。
+
+        ``run_started`` 之前就抛错（如配置错误、规划即崩）时把异常挂进
+        ``started``，创建端点立刻收到失败而不是等满 30s 超时；``run_started``
+        之后的失败由 crew 自己的 ``run_finished(failed)`` 事件推给 SSE，这里
+        不再重抛（后台任务异常无人消费只会刷 warning）。
+        """
+        self._wire_events(crew, started)
+        try:
+            await coro_factory()
+        except asyncio.CancelledError:
+            if not started.done():
+                started.cancel()
+            raise
+        except Exception as exc:
+            if not started.done():
+                try:
+                    started.set_exception(exc)
+                except Exception:
+                    pass
+        finally:
+            if started.done() and started.exception() is None:
+                run_id = started.result()
+                self.active_crews.pop(run_id, None)
+                self._run_tasks.pop(run_id, None)
+
+    def _wire_events(
+        self, crew: Any, started: asyncio.Future[str]
+    ) -> None:
+        """把 crew 的 ``on_event`` 包一层：``run_started`` 到来时解出 run_id。
+
+        crew 的真实 on_event（本服务器的 ``self.on_event``）照常透传；mock crew
+        没有该属性时静默跳过 —— 工厂本应把 on_event 接上。
+        """
+        original = getattr(crew, "_on_event", None)
+
+        def forward(event: str, payload: dict[str, Any]) -> None:
+            if event == "run_started" and not started.done():
+                run_id = payload.get("run_id")
+                if isinstance(run_id, str) and run_id:
+                    started.set_result(run_id)
+            if original is not None:
+                original(event, payload)
+
+        try:
+            setattr(crew, "_on_event", forward)
+        except Exception:
+            pass
+
+    async def _cancel_run(self, run_id: str, writer: asyncio.StreamWriter) -> None:
+        """``POST /runs/{id}/cancel``：软取消运行中的 run（202）。"""
+        crew = self.active_crews.get(run_id)
+        if crew is None:
+            await self._send_json(
+                writer, 404,
+                {"error": f"run {run_id!r} 不在运行中（可先用 POST /runs/{run_id}/resume 恢复）"},
+            )
+            return
+        cancel = getattr(crew, "cancel", None)
+        if cancel is None:
+            await self._send_json(
+                writer, 409, {"error": "该 run 驱动对象不支持取消"})
+            return
+        cancel()
+        await self._send_json(
+            writer, 202, {"run_id": run_id, "cancelled": True})
+
+    async def _resume_run(self, run_id: str, writer: asyncio.StreamWriter) -> None:
+        """``POST /runs/{id}/resume``：从 checkpoint 恢复 run 并后台执行（202）。"""
+        if run_id in self.active_crews:
+            await self._send_json(
+                writer, 409, {"error": "run 已在运行中"})
+            return
+        if self._settings is None:
+            await self._send_json(
+                writer, 503, {"error": "server 未配置 settings，无法 resume"})
+            return
+        from agentcrew.crew.crew import Crew
+
+        try:
+            crew = Crew.resume_from(self._settings, run_id, on_event=self.on_event)
+        except (OSError, ValueError) as exc:
+            await self._send_json(
+                writer, 404, {"error": f"无法恢复 run {run_id!r}：{exc}"})
+            return
+        started: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        task = asyncio.create_task(
+            self._run_crew(crew, crew.resume, started))
+        try:
+            resumed_id = await asyncio.wait_for(started, timeout=30)
+        except Exception as exc:
+            task.cancel()
+            await self._send_json(
+                writer, 500, {"error": f"resume 启动失败：{type(exc).__name__}: {exc}"})
+            return
+        self.active_crews[resumed_id] = crew
+        self._run_tasks[resumed_id] = task
+        await self._send_json(
+            writer, 202, {"run_id": resumed_id, "status": "running"})
+
+    async def _list_runs(self, writer: asyncio.StreamWriter) -> None:
+        """``GET /runs``：盘上 run.json 列表 + 内存中运行中状态叠加。"""
+        from agentcrew.runtime.checkpoint import CheckpointStore
+
+        runs: list[dict[str, Any]] = []
+        if self._output_dir is not None and self._output_dir.is_dir():
+            for rid in CheckpointStore.list_runs(self._output_dir):
+                try:
+                    record = CheckpointStore(
+                        self._output_dir / rid).load_record()
+                except (OSError, ValueError):
+                    continue
+                runs.append({
+                    "run_id": rid,
+                    "goal": record.project_goal,
+                    "status": record.status.value,
+                    "created_at": record.created_at.isoformat(),
+                    "updated_at": record.updated_at.isoformat(),
+                })
+        # 运行中的 crew 以实时状态覆盖盘上记录（run 可能已被取消/收尾）。
+        for rid in self.active_crews:
+            existing = next((r for r in runs if r["run_id"] == rid), None)
+            if existing is not None:
+                existing["status"] = "running"
+                existing["active"] = True
+            else:
+                runs.append({
+                    "run_id": rid, "goal": "", "status": "running",
+                    "created_at": "", "active": True,
+                })
+        runs.sort(key=lambda r: r.get("created_at", ""), reverse=True)
+        await self._send_json(writer, 200, {"runs": runs})
 
     async def _handle_delete(self, path: str, writer: asyncio.StreamWriter) -> None:
         """``DELETE /runs/{run_id}?confirm=1``：删除单个 run（P0-4）。

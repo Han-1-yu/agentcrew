@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
 from agentcrew.api.server import ApiServer, EventBus, RunState
+from agentcrew.runtime.checkpoint import CheckpointStore
 
 
 class TestEventBus:
@@ -171,3 +173,178 @@ class TestApiServer:
             assert "AgentCrew" in text
         finally:
             await server.stop()
+
+
+# ── P1-5：创建 / 取消 / 恢复 / 列出 run ─────────────────────────────────────
+
+
+class _FakeCrew:
+    """测试用 crew 替身：duck-type ``run()`` / ``cancel()``，事件经 ``_on_event``。"""
+
+    def __init__(self, run_id: str = "fake-run-1", hold: bool = False) -> None:
+        self.run_id = run_id
+        self.hold = hold
+        self.cancelled = False
+        self._on_event = None
+        self.goal: str | None = None
+
+    async def run(self, goal: str) -> None:
+        self.goal = goal
+        if self._on_event is not None:
+            self._on_event("run_started", {"run_id": self.run_id, "goal": goal})
+        await asyncio.sleep(0)  # 让 POST 响应先登记 active_crews
+        if self.hold:
+            for _ in range(300):
+                if self.cancelled:
+                    break
+                await asyncio.sleep(0.01)
+        if self._on_event is not None:
+            status = "cancelled" if self.cancelled else "completed"
+            self._on_event("run_finished", {
+                "run_id": self.run_id, "status": status})
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+
+async def _request(
+    port: int, method: str, path: str, body: dict | None = None
+) -> tuple[int, dict]:
+    """发一个裸 HTTP 请求，返回 ``(状态码, 解析后的 JSON body)``。"""
+    payload = json.dumps(body).encode() if body is not None else b""
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    request = f"{method} {path} HTTP/1.1\r\nHost: localhost\r\n"
+    if body is not None:
+        request += f"Content-Length: {len(payload)}\r\n"
+    request += "\r\n"
+    writer.write(request.encode() + payload)
+    await writer.drain()
+    raw = await reader.read(65536)
+    writer.close()
+    await writer.wait_closed()
+    text = raw.decode("utf-8", errors="replace")
+    head, _, body_text = text.partition("\r\n\r\n")
+    status = int(head.split("\r\n")[0].split(" ")[1])
+    try:
+        return status, json.loads(body_text)
+    except json.JSONDecodeError:
+        return status, {}
+
+
+class TestRunLifecycle:
+    @pytest.fixture
+    async def server(self, tmp_path: Path):
+        srv = ApiServer(port=0, output_dir=tmp_path)
+        await srv.start()
+        try:
+            yield srv
+        finally:
+            for task in list(srv._run_tasks.values()):
+                task.cancel()
+            await srv.stop()
+
+    @pytest.mark.asyncio
+    async def test_post_runs_creates_run(self, server: ApiServer):
+        crew = _FakeCrew(hold=True)
+        server._crew_factory = lambda goal, options: crew
+        port = server._server.sockets[0].getsockname()[1]
+        status, data = await _request(
+            port, "POST", "/runs", {"goal": "做个 Todo 应用"})
+        assert status == 202
+        assert data["run_id"] == "fake-run-1"
+        assert data["status"] == "running"
+        assert crew.goal == "做个 Todo 应用"
+        assert server.active_crews["fake-run-1"] is crew
+        # 取消后后台任务收尾、注册表摘除
+        crew.cancel()
+        await asyncio.wait_for(server._run_tasks["fake-run-1"], timeout=3)
+        assert "fake-run-1" not in server.active_crews
+
+    @pytest.mark.asyncio
+    async def test_post_runs_missing_goal(self, server: ApiServer):
+        port = server._server.sockets[0].getsockname()[1]
+        status, data = await _request(
+            port, "POST", "/runs", {"options": {}})
+        assert status == 400
+        assert "goal" in data["error"]
+
+    @pytest.mark.asyncio
+    async def test_post_runs_invalid_json(self, server: ApiServer):
+        port = server._server.sockets[0].getsockname()[1]
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(b"POST /runs HTTP/1.1\r\nHost: localhost\r\n"
+                     b"Content-Length: 5\r\n\r\n{bad")
+        await writer.drain()
+        raw = await reader.read(4096)
+        writer.close()
+        await writer.wait_closed()
+        assert "400" in raw.decode()
+
+    @pytest.mark.asyncio
+    async def test_post_cancel_unknown_run(self, server: ApiServer):
+        port = server._server.sockets[0].getsockname()[1]
+        status, data = await _request(
+            port, "POST", "/runs/nope/cancel")
+        assert status == 404
+
+    @pytest.mark.asyncio
+    async def test_post_cancel_running_run(self, server: ApiServer):
+        crew = _FakeCrew(hold=True)
+        server._crew_factory = lambda goal, options: crew
+        port = server._server.sockets[0].getsockname()[1]
+        await _request(port, "POST", "/runs", {"goal": "g"})
+        assert crew.cancelled is False
+        status, data = await _request(
+            port, "POST", "/runs/fake-run-1/cancel")
+        assert status == 202
+        assert data["cancelled"] is True
+        assert crew.cancelled is True
+        await asyncio.wait_for(server._run_tasks["fake-run-1"], timeout=3)
+
+    @pytest.mark.asyncio
+    async def test_post_resume_active_run_conflicts(self, server: ApiServer):
+        crew = _FakeCrew(hold=True)
+        server._crew_factory = lambda goal, options: crew
+        port = server._server.sockets[0].getsockname()[1]
+        await _request(port, "POST", "/runs", {"goal": "g"})
+        status, _ = await _request(
+            port, "POST", "/runs/fake-run-1/resume")
+        assert status == 409
+
+    @pytest.mark.asyncio
+    async def test_post_resume_without_settings_503(self, server: ApiServer):
+        port = server._server.sockets[0].getsockname()[1]
+        status, _ = await _request(
+            port, "POST", "/runs/whatever/resume")
+        assert status == 503
+
+    @pytest.mark.asyncio
+    async def test_get_runs_lists_disk_runs(self, server: ApiServer, tmp_path: Path):
+        CheckpointStore.create(
+            tmp_path, project_goal="第一个", config_snapshot={})
+        CheckpointStore.create(
+            tmp_path, project_goal="第二个", config_snapshot={})
+        port = server._server.sockets[0].getsockname()[1]
+        status, data = await _request(port, "GET", "/runs")
+        assert status == 200
+        runs = data["runs"]
+        assert len(runs) == 2
+        goals = {r["goal"] for r in runs}
+        assert goals == {"第一个", "第二个"}
+        # 按创建时间倒序返回（created_at 唯一可区分）
+        created = [r["created_at"] for r in runs]
+        assert created == sorted(created, reverse=True)
+
+    @pytest.mark.asyncio
+    async def test_get_runs_overlays_active(self, server: ApiServer):
+        crew = _FakeCrew(hold=True)
+        server._crew_factory = lambda goal, options: crew
+        port = server._server.sockets[0].getsockname()[1]
+        await _request(port, "POST", "/runs", {"goal": "g"})
+        status, data = await _request(port, "GET", "/runs")
+        assert status == 200
+        mine = next(r for r in data["runs"] if r["run_id"] == "fake-run-1")
+        assert mine["status"] == "running"
+        assert mine["active"] is True
+        crew.cancel()
+        await asyncio.wait_for(server._run_tasks["fake-run-1"], timeout=3)

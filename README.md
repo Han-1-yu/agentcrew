@@ -266,9 +266,18 @@ Task 新增 `parent_id` 字段，支持父子层级的任务树。父任务自�
 | 端点 | 方法 | 用途 |
 |---|---|---|
 | `/health` | GET | 健康检查 |
+| `/runs` | GET | 列出全部 run（盘上记录 + 运行中实时状态，按创建时间倒序） |
+| `/runs` | POST | 创建并后台启动 run（body: `{"goal": "...", "options": {...}}`，202 返回 run_id） |
+| `/runs/{id}/cancel` | POST | 软取消运行中的 run（202；在跑任务收尾后以 cancelled 收尾，退出码 130） |
+| `/runs/{id}/resume` | POST | 从 checkpoint 恢复 run 并后台执行（202） |
 | `/runs/{id}/status` | GET | 运行状态与任务看板 |
 | `/runs/{id}/events` | GET | SSE 事件流（实时推送） |
 | `/runs/{id}/events` | POST | 注入事件（调试用） |
+
+P1-5 起 `POST /runs` 经 `crew_factory` 装配 Crew、挂上 `on_event` 后用
+`asyncio.create_task` 后台执行；`run_started` 事件一到就把 `run_id` 回给 HTTP
+响应并登记进内存注册表，任务结束自动摘除。取消为软取消：不再派发新任务，
+等在跑任务收尾后以 `cancelled` 封版。
 
 ### 6. MCP 协议互操作
 

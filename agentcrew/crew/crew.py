@@ -216,6 +216,11 @@ class Crew:
         self._stalled = False
         self._active = False
         self._finalized = False
+        #: 外部取消请求（API ``POST /runs/{id}/cancel``）：软取消 —— 不再派发新任务，
+        #: 等在跑任务收尾后以 CANCELLED 收尾（退出码 130）。
+        self._cancel_event = asyncio.Event()
+        #: 当前装配的调度器（每轮交付卡点循环重建）；取消时转发给它停止派发。
+        self._current_scheduler: Scheduler | None = None
 
     # ── 只读视图 ──────────────────────────────────────────────────────────
 
@@ -235,6 +240,21 @@ class Crew:
     def stalled(self) -> bool:
         """最近一次 run 是否以停滞（死锁）告终；CLI 据此映射退出码 4。"""
         return self._stalled
+
+    # ── 取消（P1-5：API 软取消）────────────────────────────────────────────
+
+    def cancel(self) -> None:
+        """请求取消本次 run（``POST /runs/{id}/cancel``）。
+
+        软取消：置本实例的取消标志，并转发给当前调度器停止派发新任务；在跑的任务
+        自然收尾后，``_execute`` 以 ``RunStatus.CANCELLED`` 封版（退出码 130）。
+        可重复调用；run 尚未进入执行段（规划中）时也安全 —— 执行段装配调度器时会
+        立刻看到已置位的标志。
+        """
+        self._cancel_event.set()
+        scheduler = self._current_scheduler
+        if scheduler is not None:
+            scheduler.cancel(hard=False)
 
     # ── 角色注册（spec §8.3）──────────────────────────────────────────────
 
@@ -345,6 +365,13 @@ class Crew:
             # carry-forward：进程重启后盘上有文件、内存里没有记录。不重建记录，
             # §9.2 的跨任务冲突检测与返工前的 discard_task 都会失明。
             store.load_manifest(checkpoint.artifacts_dir / "MANIFEST.json")
+        # P1-5：把 run 开始（含 run_id）推给 ``on_event`` 观察者 —— API 服务器据此
+        # 把后台任务与 HTTP 响应里的 ``run_id`` 对上；终端看板同理提前开版。
+        if self._on_event is not None:
+            self._on_event("run_started", {
+                "run_id": record.run_id,
+                "goal": run.goal,
+            })
         ledger.emit("run_started", goal=run.goal)
         try:
             self._validate_config(run)
@@ -355,6 +382,10 @@ class Crew:
             record.status = RunStatus.RUNNING
             record.updated_at = datetime.now()
             checkpoint.save_record(record)
+            # 规划开始前已收到取消（API 软取消在 run 落盘后到达）：直接以 CANCELLED
+            # 收尾，不烧一轮规划 token。
+            if self._cancel_event.is_set():
+                return self._finalize(run, RunStatus.CANCELLED)
             if resume_board is None:
                 board = await self._plan_phase(run)
             else:
@@ -506,7 +537,18 @@ class Crew:
                 on_event=self._on_event,
                 on_checkpoint=lambda: self._persist_record(run),
             )
-            await scheduler.run()
+            # P1-5：持有当前调度器供外部 ``cancel()`` 转发；若取消请求已在路上
+            # （规划阶段到达），新装配的调度器立刻停止派发。
+            self._current_scheduler = scheduler
+            if self._cancel_event.is_set():
+                scheduler.cancel(hard=False)
+            try:
+                await scheduler.run()
+            finally:
+                self._current_scheduler = None
+            if self._cancel_event.is_set():
+                # 软取消收尾：在跑任务已自然结束，不再开交付卡点，直接 CANCELLED。
+                return self._finalize(run, RunStatus.CANCELLED)
             if scheduler.deadlock_report is not None and _is_stalled(board):
                 self._stalled = True
                 self._write_stall_report(run, scheduler.deadlock_report)
@@ -759,6 +801,14 @@ class Crew:
             exit_code=code,
             duration_ms=int((datetime.now() - started).total_seconds() * 1000),
         )
+        # P1-5：同一事件同步推给 ``on_event`` 观察者（API SSE / 终端看板），
+        # 与 ledger 里的字段同形 —— 实时流不用等落盘就能看到 run 结局。
+        if self._on_event is not None:
+            self._on_event("run_finished", {
+                "run_id": record.run_id,
+                "status": status.value,
+                "exit_code": code,
+            })
         run.ledger.close()
         self._finalized = True
         return record
