@@ -496,7 +496,9 @@ G2 评审意见此前不做跨评审人 / 跨轮次的语义去重，且「评�
   （SUCCEEDED），记 `review_converged` 事件（`task_id` / `rounds` / `issues`），
   并补一条 `gate_result`：verdict 标 `approve`、issues 保留、reviewer 追加
   `:converged`。仅对 LLM 层生效（G1 结构性损坏不参与），且不消耗返工额度。
-- **向后兼容**：`convergence_threshold=0` 或 `None` 关闭收敛检测；默认 2。
+- **向后兼容**：默认 `None`（关闭）——生产路径不传 gate_config 时，驳回循环仍走
+  旧的 FAILED 结局；传 `N`（或 `gate_config.convergence_threshold=N`）启用，`0`
+  也关闭。
 
 ### P2-4. G1 扩展代码可执行性校验
 

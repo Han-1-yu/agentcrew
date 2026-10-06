@@ -346,7 +346,8 @@ class Settings(BaseModel):
     - ``g3_enabled`` (bool=True)：G3 人工卡点（与 gate 模式配合，``gate="none"`` 时
       全部关闭）；
     - ``g2_reviewers`` (int=1)：并行评审人数（P1-2），取目录前 N 个评审人；
-    - ``convergence_threshold`` (int=2)：P2-3 收敛阈值，0/None 关闭；
+    - ``convergence_threshold`` (int|None=None)：P2-3 收敛阈值，0/None 关闭
+      （默认关闭以保持旧行为）；
     - ``review_score_threshold`` (float|None=None)：P0-1 score 阈值；
     - ``max_review_attempts`` (int=3)：最大评审轮次。
 

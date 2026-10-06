@@ -146,7 +146,7 @@ class Gatekeeper:
         prompter: Prompter | None = None,
         context_bus: ContextBus | None = None,
         review_score_threshold: float | None = None,
-        convergence_threshold: int | None = 2,
+        convergence_threshold: int | None = None,
         gate_config: dict[str, Any] | None = None,
     ) -> None:
         if prompter is None and (gate in _PLAN_GATES or gate in _DELIVERY_GATES):
