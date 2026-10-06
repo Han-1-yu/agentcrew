@@ -10,6 +10,7 @@ const { spawn, spawnSync } = require('child_process');
 const { buildZipFromDir } = require('./zip');
 
 const IS_SELFTEST = process.argv.includes('--selftest');
+const IS_E2E = process.argv.includes('--e2e');
 
 // 后端 CLI 的退出码语义（main.py EXIT_CODES）
 const EXIT_MEANINGS = {
@@ -757,6 +758,10 @@ if (!gotLock) {
     if (IS_SELFTEST) {
       try { require('./selftest').run(win); }
       catch (e) { console.error('selftest 启动失败:', e); app.exit(1); }
+    }
+    if (IS_E2E) {
+      try { require('./e2e').run(win); }
+      catch (e) { console.error('e2e 启动失败:', e); app.exit(1); }
     }
   });
   app.on('window-all-closed', () => {

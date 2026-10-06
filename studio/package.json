@@ -1,0 +1,16 @@
+{
+  "name": "agentcrew-studio",
+  "productName": "AgentCrew Studio",
+  "version": "1.0.0",
+  "description": "AgentCrew 多智能体协作平台桌面 GUI（Electron + 原生 HTML/CSS/JS，零框架）",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "selftest": "electron . --selftest",
+    "e2e": "electron . --e2e"
+  },
+  "devDependencies": {
+    "electron": "^39.2.0"
+  }
+}
