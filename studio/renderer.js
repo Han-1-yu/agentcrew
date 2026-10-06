@@ -220,7 +220,11 @@ async function boot() {
     S.settings = { theme: 'dark' };
     toast('error', '读取设置失败', String(e));
   }
-  applyTheme(S.settings.theme || 'dark', S.settings.accent || 'orange');
+  setupAutoTheme();
+  const initTheme = S.settings.theme === 'auto'
+    ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+    : (S.settings.theme || 'dark');
+  applyTheme(initTheme, S.settings.accent || 'orange');
   refreshPythonFoot();
   await refreshRuns(false);
   // 启动时显示运行列表视图
@@ -246,7 +250,70 @@ const ACCENT_THEMES = [
 
 function applyTheme(theme, accent) {
   document.documentElement.dataset.theme = theme;
-  document.documentElement.dataset.accent = accent || 'orange';
+  if (accent && accent.startsWith('#')) {
+    // 自定义颜色：直接设置 CSS 变量
+    document.documentElement.style.setProperty('--accent', accent);
+    document.documentElement.style.setProperty('--accent-hover', lightenColor(accent, 12));
+    document.documentElement.style.setProperty('--accent-soft', hexToRgba(accent, 0.12));
+    document.documentElement.style.setProperty('--accent-border', hexToRgba(accent, 0.35));
+    delete document.documentElement.dataset.accent;
+  } else {
+    // 预设配色：清除内联样式，用 data-accent 属性
+    document.documentElement.style.removeProperty('--accent');
+    document.documentElement.style.removeProperty('--accent-hover');
+    document.documentElement.style.removeProperty('--accent-soft');
+    document.documentElement.style.removeProperty('--accent-border');
+    document.documentElement.dataset.accent = accent || 'orange';
+  }
+}
+
+/* 颜色工具函数 */
+function hexToRgba(hex, alpha) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+function lightenColor(hex, percent) {
+  const r = Math.min(255, parseInt(hex.slice(1, 3), 16) + Math.round(255 * percent / 100));
+  const g = Math.min(255, parseInt(hex.slice(3, 5), 16) + Math.round(255 * percent / 100));
+  const b = Math.min(255, parseInt(hex.slice(5, 7), 16) + Math.round(255 * percent / 100));
+  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+}
+
+/* 状态 → 强调色映射（运行详情视图自动切换） */
+const STATUS_ACCENT = {
+  running: '#f59e0b',
+  completed: '#22c55e',
+  failed: '#ef4444',
+  interrupted: '#f97316',
+  cancelled: null, // 保持用户配色
+};
+function applyStateAccent(status) {
+  const color = STATUS_ACCENT[status];
+  if (color) applyTheme(document.documentElement.dataset.theme, color);
+  else applyTheme(document.documentElement.dataset.theme, S.settings.accent || 'orange');
+}
+
+/* 获取设置中选择的主题（auto → 解析为实际 dark/light） */
+function getSettingsTheme() {
+  const v = ($('input[name="set-theme"]:checked') || {}).value || 'dark';
+  if (v === 'auto') return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  return v;
+}
+
+/* 自动主题：监听系统配色变化 */
+let _autoThemeMQ = null;
+function setupAutoTheme() {
+  if (_autoThemeMQ) _autoThemeMQ.removeEventListener('change', _onAutoThemeChange);
+  _autoThemeMQ = window.matchMedia('(prefers-color-scheme: dark)');
+  _autoThemeMQ.addEventListener('change', _onAutoThemeChange);
+}
+function _onAutoThemeChange() {
+  if (S.settings && S.settings.theme === 'auto') {
+    const resolved = _autoThemeMQ.matches ? 'dark' : 'light';
+    applyTheme(resolved, S.settings.accent || 'orange');
+  }
 }
 
 function wireTopbar() {
@@ -264,10 +331,16 @@ function wireTopbar() {
     });
   });
   $('#btn-theme').addEventListener('click', async () => {
-    const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
-    applyTheme(next, S.settings.accent || 'orange');
+    const cur = S.settings.theme || 'dark';
+    const order = ['auto', 'dark', 'light'];
+    const next = order[(order.indexOf(cur) + 1) % order.length];
+    const resolved = next === 'auto'
+      ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+      : next;
+    applyTheme(resolved, S.settings.accent || 'orange');
     S.settings.theme = next;
     try { await window.studio.setSettings({ theme: next }); } catch { /* 保存失败不阻塞切主题 */ }
+    toast('info', '主题', next === 'auto' ? '自动（跟随系统）' : next === 'dark' ? '深色' : '浅色');
   });
 }
 
@@ -436,6 +509,8 @@ async function selectRun(dir) {
   try {
     const snap = await callIpc(window.studio.loadRun, dir);
     S.run = snap.run; S.tasks = snap.tasks || []; S.loadErrors = snap.errors;
+    // 智能配色：运行详情视图强调色跟随运行状态
+    if (S.run && S.run.status) applyStateAccent(S.run.status);
   } catch { S.loadErrors = { run: '读取运行数据失败' }; }
   $('#runs-view').classList.add('hidden');
   $('#empty-view').classList.add('hidden');
@@ -450,6 +525,8 @@ function goBackToList() {
   }
   S.selectedDir = null;
   S.run = null; S.tasks = []; S.events = [];
+  // 恢复用户选择的配色
+  applyTheme(document.documentElement.dataset.theme, S.settings.accent || 'orange');
   $('#run-view').classList.add('hidden');
   $('#empty-view').classList.add('hidden');
   $('#runs-view').classList.remove('hidden');
@@ -475,6 +552,8 @@ function wireWatchPush() {
     if (p.run) S.run = p.run;
     if (p.tasks) S.tasks = p.tasks;
     if (p.errors) S.loadErrors = p.errors;
+    // 状态变化时更新智能配色
+    if (p.run && p.run.status && prevStatus !== p.run.status) applyStateAccent(p.run.status);
     renderRunView();
     const now = p.run && p.run.status;
     if (prevStatus && prevStatus !== now && FINISHED_STATUSES.has(now) && !FINISHED_STATUSES.has(prevStatus)) {
@@ -1318,12 +1397,13 @@ function openSettingsModal() {
     h('div', { class: 'form-row' },
       h('label', {}, '主题'),
       h('div', { class: 'form-checks' },
+        h('label', { class: 'form-check' }, h('input', { type: 'radio', name: 'set-theme', value: 'auto', checked: (s.theme || 'dark') === 'auto' }), '自动'),
         h('label', { class: 'form-check' }, h('input', { type: 'radio', name: 'set-theme', value: 'dark', checked: (s.theme || 'dark') === 'dark' }), '深色'),
         h('label', { class: 'form-check' }, h('input', { type: 'radio', name: 'set-theme', value: 'light', checked: s.theme === 'light' }), '浅色'))),
     h('div', { class: 'form-row' },
       h('label', {}, '强调色'),
       h('div', { class: 'accent-picker', id: 'accent-picker' },
-        ACCENT_THEMES.map((a) => h('button', {
+        ...ACCENT_THEMES.map((a) => h('button', {
           type: 'button',
           class: `accent-swatch${(s.accent || 'orange') === a.id ? ' active' : ''}`,
           'data-accent': a.id,
@@ -1331,9 +1411,23 @@ function openSettingsModal() {
           title: a.label,
           onclick: () => {
             document.querySelectorAll('.accent-swatch').forEach((b) => b.classList.toggle('active', b.dataset.accent === a.id));
-            applyTheme(($('input[name="set-theme"]:checked') || {}).value || 'dark', a.id);
+            document.getElementById('accent-custom').value = a.color;
+            applyTheme(getSettingsTheme(), a.id);
           },
-        })))),
+        })),
+        h('label', { class: 'accent-custom-wrap', title: '自定义颜色' },
+          h('input', {
+            type: 'color', id: 'accent-custom',
+            value: (s.accent && s.accent.startsWith('#')) ? s.accent : '#e07a5f',
+            class: 'accent-custom-input',
+            oninput: () => {
+              const c = document.getElementById('accent-custom').value;
+              document.querySelectorAll('.accent-swatch').forEach((b) => b.classList.remove('active'));
+              applyTheme(getSettingsTheme(), c);
+            },
+          }),
+          h('span', { class: 'accent-custom-label' }, '自定义')),
+      )),
     h('div', { class: 'modal-actions' },
       h('button', { class: 'btn', onclick: closeModal }, '取消'),
       h('button', { class: 'btn btn-primary', id: 'set-save' }, '保存')),
@@ -1352,6 +1446,8 @@ function openSettingsModal() {
   });
 
   $('#set-save').addEventListener('click', async () => {
+    const activeSwatch = document.querySelector('.accent-swatch.active');
+    const accentVal = activeSwatch ? activeSwatch.dataset.accent : ($('#accent-custom') || {}).value || 'orange';
     const next = {
       pythonCmd: $('#set-python').value.trim(),
       repoRoot: $('#set-repo').value.trim(),
@@ -1359,7 +1455,7 @@ function openSettingsModal() {
       defaultMock: $('#set-mock').checked,
       defaultAuto: $('#set-auto').checked,
       theme: ($('input[name="set-theme"]:checked') || {}).value || 'dark',
-      accent: (document.querySelector('.accent-swatch.active') || {}).dataset.accent || 'orange',
+      accent: accentVal,
     };
     try {
       const saved = await callIpc(window.studio.setSettings, next);
