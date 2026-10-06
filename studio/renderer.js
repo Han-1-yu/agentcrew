@@ -563,6 +563,7 @@ function renderRunStatusBar() {
   }
   if (isReal) {
     actions.push(h('button',{class:'btn',onclick:()=>{ openNewRunModal(); $('#nr-goal').value = run.project_goal || ''; }},'重新运行'));
+    actions.push(h('button',{class:'btn',onclick:openModelSwitcher},'切换模型'));
     actions.push(h('button',{class:'btn',onclick:()=>window.studio.openPath(run.dir)},'打开目录'));
     actions.push(h('button',{class:'btn',onclick:exportRun},'导出运行'));
   } else {
@@ -1109,7 +1110,7 @@ async function renderSettingsPage(container) {
       const next = {
         pythonCmd: $('#set-python').value.trim() || 'python',
         outputDir: $('#set-output').value.trim(),
-        defaultModel: $('#set-model').value.trim(),
+        defaultModel: $('#set-model-custom').value.trim() || $('#set-model').value.trim(),
         maxCostUsd: parseFloat($('#set-maxcost').value) || 0,
       };
       try {
@@ -1130,7 +1131,14 @@ async function renderSettingsPage(container) {
 
   form.appendChild(field('Python 命令', 'set-python', cfg.pythonCmd, 'python / python3 / 完整路径'));
   form.appendChild(field('输出目录', 'set-output', cfg.outputDir, 'E:\\agentcrew\\output'));
-  form.appendChild(field('默认模型', 'set-model', cfg.defaultModel, 'gpt-4o / deepseek / …'));
+  form.appendChild(h('div', { class: 'settings-field' },
+    h('label', { for: 'set-model' }, '默认模型'),
+    h('div', { style: 'display:flex;gap:6px' },
+      h('select', { id: 'set-model', style: 'flex:1;padding:6px 8px;border:1px solid rgba(60,60,67,.18);border-radius:6px;font-size:12px;font-family:inherit;background:#fff' },
+        h('option', { value: '', selected: !cfg.defaultModel }, '选择模型…'),
+        ...COMMON_MODELS.map(m => h('option', { value: m, selected: cfg.defaultModel === m }, m))),
+      h('input', { id: 'set-model-custom', type: 'text', placeholder: '自定义',
+        style: 'width:120px;padding:6px 8px;border:1px solid rgba(60,60,67,.18);border-radius:6px;font-size:12px;font-family:inherit' }))));
   form.appendChild(field('预算上限 (USD)', 'set-maxcost', cfg.maxCostUsd || '', '0 = 不限制', 'number'));
 
   form.appendChild(h('div', { class: 'settings-field' },
@@ -1386,6 +1394,36 @@ function renderPlanPage(container) {
 }
 
 const ROLE_ORDER = ['project_manager','product_manager','architect','backend_dev','frontend_dev','qa_engineer','devops_engineer','technical_writer'];
+
+/* 常用模型别名 */
+const COMMON_MODELS = ['gpt-4o','gpt-4o-mini','gpt-4-turbo','claude-3-5-sonnet','claude-3-opus','deepseek-chat','deepseek-coder','qwen-max','qwen-plus','glm-4','gemini-pro','mock'];
+
+/* 模型切换弹窗 */
+function openModelSwitcher() {
+  const current = S.dash.run.model || (S.settings && S.settings.defaultModel) || 'gpt-4o';
+  showModal(h('div', {},
+    h('h3', { class: 'modal-title' }, '切换模型'),
+    h('div', { class: 'confirm-text', style: 'color:#6E6E73;margin-bottom:12px' }, `当前模型：${current}`),
+    h('div', { style: 'display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:14px' },
+      ...COMMON_MODELS.map(m => h('button', {
+        class: 'btn' + (m === current ? ' btn-primary' : ''),
+        style: 'font-size:11px;padding:6px 4px',
+        onclick: () => { applyModel(m); closeModal(); }
+      }, m))),
+    h('div', { style: 'display:flex;gap:8px;align-items:center;margin-bottom:14px' },
+      h('input', { id: 'model-custom', type: 'text', placeholder: '自定义别名…',
+        style: 'flex:1;padding:6px 10px;border:1px solid rgba(60,60,67,.18);border-radius:6px;font-size:12px;font-family:inherit' }),
+      h('button', { class: 'btn btn-primary', onclick: () => { const v = $('#model-custom').value.trim(); if (v) { applyModel(v); closeModal(); } } }, '应用')),
+    h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: closeModal }, '取消'))));
+}
+
+function applyModel(alias) {
+  S.dash.run.model = alias;
+  if (S.settings) { S.settings.defaultModel = alias; window.studio.setSettings(S.settings).catch(() => {}); }
+  pushEvent('llm_model_switched', { from: S.dash.run.model, to: alias });
+  renderChrome(); renderDashboard();
+  toast('success', '模型已切换', alias);
+}
 
 /* ============================================================
    任务图全屏页（分层列表视图）
