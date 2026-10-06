@@ -286,7 +286,7 @@ class Settings(BaseModel):
     roles_dir: Path | None = None
     provider_overrides: dict[str, dict] = Field(default_factory=dict)
     model_tiers: dict[str, str] = Field(default_factory=dict)
-    model_failover: dict[str, list[str]] = Field(default_factory=dict)
+    model_failover: dict[str, list[str | dict[str, Any]]] = Field(default_factory=dict)
     mcp_servers: dict[str, dict[str, Any]] = Field(default_factory=dict)
     """外部 MCP 服务器配置（P1-1）：服务器名 → 启动参数映射。
 

@@ -271,6 +271,8 @@ Task 新增 `parent_id` 字段，支持父子层级的任务树。父任务自�
 | `/runs/{id}/cancel` | POST | 软取消运行中的 run（202；在跑任务收尾后以 cancelled 收尾，退出码 130） |
 | `/runs/{id}/resume` | POST | 从 checkpoint 恢复 run 并后台执行（202） |
 | `/runs/{id}/status` | GET | 运行状态与任务看板 |
+| `/runs/{id}/ledger` | GET | Ledger 事件分页查询（`?event=&limit=&offset=`，P2-9） |
+| `/runs/{id}/stats` | GET | 事件分布 / LLM 用量 / 任务成功率与平均时长 / 工具调用（P2-9） |
 | `/runs/{id}/model` | GET | 当前模型绑定（仅运行中的 run） |
 | `/runs/{id}/model` | PUT | 切换模型（body `{"alias": ..., "role": ...}`） |
 | `/runs/{id}/events` | GET | SSE 事件流（实时推送） |
@@ -479,6 +481,41 @@ agent = GenericAgent(spec, models=..., store=..., ledger=...,
 - CLI 计划/交付卡点菜单新增 `[m] 切换模型`（注入 `crew` 才显示，向后兼容）
 - Dashboard 顶部新增模型选择器，选别名+可选角色即调 `PUT` 接口
 
+### P2-1. 运行时动态子任务
+
+规划阶段任务固定，执行阶段 Agent 可以**在执行中**请求拆出独立子任务，子任务
+立即入板并由调度器在下一轮派发，无需等规划重来。
+
+- **触发方式**：Agent 在回复里用一对 `<subtask>` 围栏发出一个 JSON 对象
+  `{"title": ..., "description": ..., "role": ..., "deliverables": [...]}`；
+  `BaseAgent.execute()` 检测到后经回调交给调度器构造新任务。
+- **入板即就绪**：新任务直接以 `READY` 入板（`TaskBoard.add_task()`），无依赖、
+  独立调度；父任务继续执行自己的交付物，不等待子任务。
+- **字段**：`Task.dynamic=True` 标记运行时创建（vs 规划阶段静态），`parent_id`
+  指向请求它的父任务；`TaskBoard.children_of(parent_id)` 查询某任务的全部子任务。
+- **诚实留痕**：每次创建记 ledger `subtask_created`（含 parent_id / child_id /
+  title）；坏 JSON 的子任务请求记 `subtask_malformed` 后跳过，不拖垮本任务。
+- **向后兼容**：Agent 未注入 `subtask_creator` 时完全不检测、系统提示词也不提
+  子任务能力，行为与之前一致。
+
+### P2-9. Ledger 查询与分析 API
+
+Ledger 此前只被终端看板 / 状态命令消费，现在 REST 也能直接读：
+
+- `GET /runs/{id}/ledger?event=&limit=&offset=` — 分页查询 `output/<run_id>/ledger.jsonl`
+  中的事件，返回 `{"events": [...], "total": <过滤后总数>}`；`event` 按事件名过滤，
+  `limit`（默认 100）/ `offset` 分页
+- `GET /runs/{id}/stats` — 统计分析：`event_counts` 各事件类型计数；`llm` 从
+  `llm_call` 事件聚合调用数 / prompt / completion / 总 token / 估算成本（USD）；
+  `tasks` 为 `task_finished / task_started` 成功率（无 `task_started` 时为 `null`，
+  不拿 0/0 冒充 100%）与 `task_finished.duration_ms` 的平均时长；`tools` 为
+  `tool_call` 事件的总数 / 成功 / 失败
+- 读取侧完全复用 `Ledger.events()` 的宽容规则：文件不存在 / 坏行 / 空行都不炸；
+  run 目录不存在返回 404，run 存在但从未 emit 返回 200 空列表——查询路径只读不写，
+  绝不改动审计日志
+- 实现：`agentcrew/runtime/ledger.py::LedgerReader`（只读查询器，run_id 路径越界
+  一律拒绝），`agentcrew/api/server.py::_get_ledger` / `_get_stats`
+
 ### P2-6. 计划质量评分
 
 PM 拆解通过 §7.2 二元校验后，再由 `score_plan()` 做一次**多维度质量评分**，
@@ -521,6 +558,35 @@ AGENTCREW_HEALTH_CHECK_INTERVAL=30
 
 默认启用（`true`），间隔 30 秒。设 `AGENTCREW_HEALTH_CHECK_ENABLED=false` 关闭，
 行为与改动前完全一致。
+
+### P3-10. 权重优先级路由
+
+`model_failover` 支持权重配置：按权重随机选择 Provider（而非固定顺序），失败时
+按剩余权重重选，并结合健康状态自动调整权重。
+
+- **两种格式**（向后兼容）：
+  - 旧格式（纯字符串列表）：按顺序故障转移（P0-2 行为不变）
+  - 新格式（权重列表）：按权重随机选择
+- **权重调整**（结合 P2-11 健康状态）：`unavailable` 的别名权重置 0（不被选中）；
+  `degraded` 的别名权重减半；所有权重为 0 时回退到第一个别名
+- **失败重选**：某个别名失败后从可用池中按剩余权重重选，全部失败时抛
+  `ProviderUnavailableError`
+- **诚实留痕**：每次路由选择记 `llm_routed` ledger 事件（含 selected_alias /
+  reason / candidates / weights）；reason 为 `weighted` / `health_adjusted` /
+  `fallback_first`
+
+```yaml
+# agentcrew.yaml
+model_failover:
+  openai:gpt-4o:
+    - alias: deepseek:v3
+      weight: 0.6
+    - alias: anthropic:claude
+      weight: 0.4
+```
+
+旧格式（纯字符串列表）行为完全不变；权重格式通过 YAML 配置，环境变量
+`AGENTCREW_FAILOVER_*` 仍只产生旧格式。
 
 ---
 

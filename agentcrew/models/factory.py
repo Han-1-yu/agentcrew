@@ -30,6 +30,7 @@ spec §7.3 的两级并发限额里，任务槽位由 Scheduler 持有，本模�
 """
 
 import asyncio
+import random
 import time
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
@@ -164,6 +165,19 @@ class HealthRecord(BaseModel):
     last_check: datetime
     error: str | None = None
     consecutive_failures: int = 0
+
+
+class WeightedAlias(BaseModel):
+    """带权重的别名（P3-10 权重优先级路由）。
+
+    ``weight`` 是相对权重（无需归一化）；``_select_weighted`` 内部归一化后用
+    ``random.choices`` 按权重采样。字符串形式的 failover 项等价于 weight=1.0。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    alias: str
+    weight: float = 1.0
 
 
 class ModelFactory:
@@ -513,7 +527,19 @@ class ModelFactory:
         P0-2：Provider 不可用（503/429/超时/连接错误，重试耗尽后）时按
         ``model_failover`` 列表依次尝试备用别名，每次切换记 ``llm_failover`` 事件。
         故障转移不消耗任务 attempts（那是执行失败，不是模型不可用）。
+
+        P3-10：如果 failover 配置使用权重格式（含 dict 项），按权重随机选择别名，
+        失败时从剩余别名按剩余权重重选。
         """
+        # P3-10：权重路由路径
+        pool = self._build_weighted_pool(alias)
+        if pool is not None:
+            return await self._call_weighted(alias, pool, messages,
+                                             temperature=temperature,
+                                             max_tokens=max_tokens,
+                                             purpose=purpose, role=role,
+                                             response_format=response_format)
+
         aliases = self._failover_aliases(alias)
         last_error: Exception | None = None
         for idx, current_alias in enumerate(aliases):
@@ -543,6 +569,47 @@ class ModelFactory:
         if last_error is not None:
             raise last_error
         raise RuntimeError(f"call({alias!r}) 未产生结果也未抛出异常")
+
+    async def _call_weighted(
+        self,
+        primary: str,
+        pool: list[WeightedAlias],
+        messages: Sequence[Message],
+        *,
+        temperature: float,
+        max_tokens: int,
+        purpose: str,
+        role: str,
+        response_format: ResponseFormat | None = None,
+    ) -> CompletionResult:
+        """P3-10：权重路由的 ``call()`` 实现 —— 按权重选择，失败后从剩余权重重选。"""
+        available = list(pool)
+        last_error: Exception | None = None
+        while available:
+            chosen, reason = self._select_weighted(available)
+            self._emit_routed(chosen, available, reason)
+            try:
+                provider = self.get(chosen)
+                async with self._llm_semaphore:
+                    result = await provider.complete(
+                        messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        response_format=response_format)
+                self._account(result, purpose=purpose, role=role)
+                return result
+            except _PROVIDER_UNAVAILABLE_TYPES as exc:
+                last_error = exc
+                available = [wa for wa in available if wa.alias != chosen]
+                if available:
+                    self._emit_failover(chosen, available[0].alias, exc)
+                    continue
+                raise ProviderUnavailableError(
+                    f"全部权重路由别名均不可用（primary={primary!r}，"
+                    f"尝试了 {len(pool)} 个）：{exc}") from exc
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError(f"_call_weighted({primary!r}) 未产生结果也未抛出异常")
 
     async def complete_structured(
         self,
@@ -577,7 +644,18 @@ class ModelFactory:
 
         P0-2：Provider 不可用时按 ``model_failover`` 依次尝试备用别名；每次切换
         记 ``llm_failover`` 事件。失败别名已消耗的 token 仍记账（真实 LLM 调用）。
+
+        P3-10：权重格式 failover 时按权重随机选择，失败后从剩余权重重选。
         """
+        # P3-10：权重路由路径
+        pool = self._build_weighted_pool(alias)
+        if pool is not None:
+            return await self._complete_structured_weighted(
+                alias, pool, messages, schema,
+                temperature=temperature, max_tokens=max_tokens,
+                purpose=purpose, role=role,
+                repair_attempts=repair_attempts, on_degrade=on_degrade)
+
         aliases = self._failover_aliases(alias)
         last_error: Exception | None = None
         for idx, current_alias in enumerate(aliases):
@@ -615,7 +693,143 @@ class ModelFactory:
             raise last_error
         raise RuntimeError(f"complete_structured({alias!r}) 未产生结果也未抛出异常")
 
+    async def _complete_structured_weighted(
+        self,
+        primary: str,
+        pool: list[WeightedAlias],
+        messages: Sequence[Message],
+        schema: type[BaseModel],
+        *,
+        temperature: float,
+        max_tokens: int,
+        purpose: str,
+        role: str,
+        repair_attempts: int = 2,
+        on_degrade: Callable[[DegradeEvent], None] | None = None,
+    ) -> BaseModel:
+        """P3-10：权重路由的 ``complete_structured()`` 实现。"""
+        available = list(pool)
+        last_error: Exception | None = None
+        while available:
+            chosen, reason = self._select_weighted(available)
+            self._emit_routed(chosen, available, reason)
+            provider = self.get(chosen)
+            collecting = _CollectingProvider(provider)
+            degrade_cb = on_degrade if on_degrade is not None else self._emit_degrade
+            try:
+                async with self._llm_semaphore:
+                    return await structured.complete_structured(
+                        collecting,
+                        messages,
+                        schema,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        repair_attempts=repair_attempts,
+                        on_degrade=degrade_cb)
+            except _PROVIDER_UNAVAILABLE_TYPES as exc:
+                last_error = exc
+                available = [wa for wa in available if wa.alias != chosen]
+                if available:
+                    self._emit_failover(chosen, available[0].alias, exc)
+                    continue
+                raise ProviderUnavailableError(
+                    f"全部权重路由别名均不可用（primary={primary!r}，"
+                    f"尝试了 {len(pool)} 个）：{exc}") from exc
+            finally:
+                for result in collecting.results:
+                    self._account(result, purpose=purpose, role=role)
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError(
+            f"_complete_structured_weighted({primary!r}) 未产生结果也未抛出异常")
+
     # ── 内部 ──────────────────────────────────────────────────────────────
+
+    # ── P3-10：权重路由 ───────────────────────────────────────────────────
+
+    @staticmethod
+    def _parse_failover_entry(entry: str | dict[str, Any]) -> WeightedAlias:
+        """解析 failover 列表项为 :class:`WeightedAlias`。
+
+        字符串项 → weight=1.0；dict 项 → 读取 ``alias`` 与 ``weight``。
+        """
+        if isinstance(entry, str):
+            return WeightedAlias(alias=entry, weight=1.0)
+        return WeightedAlias(
+            alias=str(entry["alias"]),
+            weight=float(entry.get("weight", 1.0)),
+        )
+
+    def _build_weighted_pool(self, alias: str) -> list[WeightedAlias] | None:
+        """构建权重路由池；纯字符串列表（旧格式）返回 ``None``。
+
+        池包含 primary（weight=1.0）+ 解析后的 backups。去重保序。
+        """
+        backups = self._settings.model_failover.get(alias, [])
+        if not backups:
+            return None
+        # 纯字符串列表 → 旧格式，返回 None 走有序故障转移。
+        if not any(isinstance(b, dict) for b in backups):
+            return None
+        pool: list[WeightedAlias] = [WeightedAlias(alias=alias, weight=1.0)]
+        seen: set[str] = {alias}
+        for entry in backups:
+            wa = self._parse_failover_entry(entry)
+            if wa.alias not in seen:
+                seen.add(wa.alias)
+                pool.append(wa)
+        return pool
+
+    def _select_weighted(
+        self,
+        pool: list[WeightedAlias],
+        rng: random.Random | None = None,
+    ) -> tuple[str, str]:
+        """按权重随机选择一个别名，返回 ``(alias, reason)``。
+
+        结合健康状态（P2-11）：``unavailable`` 的权重置 0；``degraded`` 的权重
+        减半。所有权重为 0 时回退到第一个别名。
+        reason 为 ``"weighted"``（纯权重）、``"health_adjusted"``（健康调整过权重）
+        或 ``"fallback_first"``（全部权重为 0 的兜底）。
+        """
+        actual_rng = rng if rng is not None else random.Random()
+        weights: list[float] = []
+        health_adjusted = False
+        for wa in pool:
+            w = wa.weight
+            rec = self._health.get(wa.alias)
+            if rec is not None:
+                if rec.status == "unavailable":
+                    w = 0.0
+                    health_adjusted = True
+                elif rec.status == "degraded":
+                    w = w * 0.5
+                    health_adjusted = True
+            weights.append(w)
+        if sum(weights) <= 0:
+            return pool[0].alias, "fallback_first"
+        chosen = actual_rng.choices(pool, weights=weights, k=1)[0]
+        reason = "health_adjusted" if health_adjusted else "weighted"
+        return chosen.alias, reason
+
+    def _emit_routed(
+        self,
+        selected_alias: str,
+        pool: list[WeightedAlias],
+        reason: str,
+    ) -> None:
+        """记一条 ``llm_routed`` 事件（P3-10：诚实留痕）。"""
+        if self._ledger is None:
+            return
+        self._ledger.emit(
+            "llm_routed",
+            selected_alias=selected_alias,
+            reason=reason,
+            candidates=[wa.alias for wa in pool],
+            weights={wa.alias: wa.weight for wa in pool},
+        )
+
+    # ── P0-2：有序故障转移 ────────────────────────────────────────────────
 
     def _failover_aliases(self, alias: str) -> list[str]:
         """返回 ``[primary] + 备用别名`` 的尝试列表（P0-2 故障转移）。
