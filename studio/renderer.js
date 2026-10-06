@@ -1242,7 +1242,9 @@ function renderChrome(){
   $('#sb-provider').textContent=run.provider; $('#sb-model').textContent=run.model;
   $('#sb-budget-pct').textContent=Math.round(pct)+'%'; $('#sb-budget-fill').style.width=pct+'%';
   const sbf=document.querySelector('.sb-progress'); sbf.classList.toggle('warn',pct>=90&&pct<100); sbf.classList.toggle('err',pct>=100);
-  $('#sb-conn-dot').className='dot running'; $('#sb-conn-label').textContent='已连接';
+  $('#sb-conn-dot').className='dot ' + (S.realMode ? 'running' : 'idle');
+  $('#sb-conn-label').textContent = S.realMode ? '已连接' : '演示模式';
+  const ds = $('#sb-datasource'); if (ds) { ds.textContent = S.realMode ? '真实' : '演示'; ds.style.color = S.realMode ? '#34C759' : '#FF9F0A'; }
 }
 
 /* ============================================================
@@ -1498,12 +1500,21 @@ async function switchRun(dir) {
   if (S.watchDir) {
     try { await window.studio.unwatchRun(S.watchDir); } catch {}
   }
-  const ok = await loadRealRun(dir);
-  if (ok) {
-    renderDashboard();
-    toast('info', '已切换', simplifyGoal(S.dash.run.project_goal));
-  } else {
-    toast('error', '切换失败', '无法加载该运行数据');
+  // 显示加载态
+  const overlay = h('div', { class: 'loading-overlay', id: 'loading-overlay' },
+    h('div', { class: 'loading-spinner' }),
+    h('div', { class: 'loading-text' }, '加载运行数据…'));
+  document.body.appendChild(overlay);
+  try {
+    const ok = await loadRealRun(dir);
+    if (ok) {
+      renderDashboard();
+      toast('info', '已切换', simplifyGoal(S.dash.run.project_goal));
+    } else {
+      toast('error', '切换失败', '无法加载该运行数据');
+    }
+  } finally {
+    overlay.remove();
   }
 }
 
