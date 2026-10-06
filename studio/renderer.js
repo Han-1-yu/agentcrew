@@ -329,8 +329,31 @@ function computeLayers(tasks) {
 const NW=208, NH=86, COL_GAP=72, ROW_GAP=48;
 function layoutDAG(tasks) {
   const { byId, layerOf, layers } = computeLayers(tasks);
+  // 重心启发式排序：减少层间连线交叉
+  for (let pass = 0; pass < 3; pass++) {
+    // 前向：根据上游位置排序
+    for (let li = 1; li < layers.length; li++) {
+      layers[li].sort((a, b) => {
+        const aDeps = (byId.get(a).dependencies || []).map(d => layers[li-1].indexOf(d)).filter(i => i >= 0);
+        const bDeps = (byId.get(b).dependencies || []).map(d => layers[li-1].indexOf(d)).filter(i => i >= 0);
+        const aCenter = aDeps.length ? aDeps.reduce((s,v)=>s+v,0)/aDeps.length : layers[li-1].length/2;
+        const bCenter = bDeps.length ? bDeps.reduce((s,v)=>s+v,0)/bDeps.length : layers[li-1].length/2;
+        return aCenter - bCenter || a.localeCompare(b);
+      });
+    }
+    // 后向：根据下游位置排序
+    for (let li = layers.length - 2; li >= 0; li--) {
+      layers[li].sort((a, b) => {
+        const aDown = layers[li+1].filter(id => (byId.get(id).dependencies || []).includes(a)).map(id => layers[li+1].indexOf(id));
+        const bDown = layers[li+1].filter(id => (byId.get(id).dependencies || []).includes(b)).map(id => layers[li+1].indexOf(id));
+        const aCenter = aDown.length ? aDown.reduce((s,v)=>s+v,0)/aDown.length : layers[li+1].length/2;
+        const bCenter = bDown.length ? bDown.reduce((s,v)=>s+v,0)/bDown.length : layers[li+1].length/2;
+        return aCenter - bCenter || a.localeCompare(b);
+      });
+    }
+  }
   const pos = new Map();
-  layers.forEach((ids,li)=>{ ids.sort((a,b)=>a.localeCompare(b)); ids.forEach((id,ri)=>pos.set(id,{x:li*(NW+COL_GAP), y:ri*(NH+ROW_GAP)})); });
+  layers.forEach((ids,li)=>{ ids.forEach((id,ri)=>pos.set(id,{x:li*(NW+COL_GAP), y:ri*(NH+ROW_GAP)})); });
   const maxLayer=layers.length-1, maxRows=Math.max(...layers.map(l=>l.length));
   return { byId, layers, pos, width:(maxLayer+1)*(NW+COL_GAP), height:maxRows*(NH+ROW_GAP) };
 }
@@ -347,11 +370,11 @@ function renderDAG() {
 
   // SVG defs: 箭头 marker
   const defs=s('defs',{});
-  defs.appendChild(s('marker',{id:'arrow-hot',viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:6,markerHeight:6,orient:'auto-start-reverse'},
+  defs.appendChild(s('marker',{id:'arrow-hot',viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:6,markerHeight:6,orient:'auto'},
     s('path',{d:'M 0 0 L 10 5 L 0 10 z',fill:'#007AFF'})));
-  defs.appendChild(s('marker',{id:'arrow-done',viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:6,markerHeight:6,orient:'auto-start-reverse'},
+  defs.appendChild(s('marker',{id:'arrow-done',viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:6,markerHeight:6,orient:'auto'},
     s('path',{d:'M 0 0 L 10 5 L 0 10 z',fill:'#34C759'})));
-  defs.appendChild(s('marker',{id:'arrow-pending',viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:5,markerHeight:5,orient:'auto-start-reverse'},
+  defs.appendChild(s('marker',{id:'arrow-pending',viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:5,markerHeight:5,orient:'auto'},
     s('path',{d:'M 0 0 L 10 5 L 0 10 z',fill:'rgba(60,60,67,0.3)'})));
   svg.appendChild(defs);
 
@@ -364,12 +387,14 @@ function renderDAG() {
       const t=L.byId.get(cur); if(!t)continue;
       for(const dep of (t.dependencies||[])){ hotEdges.add(dep+'->'+cur); q.push(dep); } } }
 
-  // 连线：箭头 + 状态色
+  // 连线：正交折线（右侧→左侧），箭头 + 状态色
   for (const t of tasks){
     const to=L.pos.get(t.id); if(!to) continue;
     for(const dep of (t.dependencies||[])){
       const from=L.pos.get(dep); if(!from)continue;
-      const x1=from.x+NW/2, y1=from.y+NH, x2=to.x+NW/2, y2=to.y;
+      // 从源节点右侧中心 → 目标节点左侧中心
+      const x1=from.x+NW, y1=from.y+NH/2, x2=to.x, y2=to.y+NH/2;
+      const midX=(x1+x2)/2;
       const hot=hotEdges.has(dep+'->'+t.id);
       const up=L.byId.get(dep);
       const upDone=up&&up.status==='succeeded';
@@ -379,7 +404,8 @@ function renderDAG() {
       else if(upDone){ stroke='#34C759'; sw=1.6; marker='url(#arrow-done)'; }
       else if(upFailed){ stroke='#FF9F0A'; sw=1.4; marker='url(#arrow-pending)'; dash='4 3'; }
       else { stroke='rgba(60,60,67,0.25)'; sw=1.2; marker='url(#arrow-pending)'; }
-      vp.appendChild(s('path',{ d:`M ${x1} ${y1+2} C ${x1} ${y1+26}, ${x2} ${y2-26}, ${x2} ${y2-2}`,
+      // 正交折线：右出 → 水平 → 垂直 → 水平 → 左入
+      vp.appendChild(s('path',{ d:`M ${x1} ${y1} H ${midX} V ${y2} H ${x2-2}`,
         fill:'none', stroke, 'stroke-width':sw, 'stroke-dasharray':dash, 'marker-end':marker, opacity: hot?1:0.8 }));
     }
   }
