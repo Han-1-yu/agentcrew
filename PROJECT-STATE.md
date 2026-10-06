@@ -33,6 +33,7 @@ python -m pytest -q
 ### 阶段二 P1（近期做）
 - [x] **P1-2** 并行 G2 评审 — `gate/reviewer.py`，多评审人 asyncio.gather 并行，单评审人保持串行
 - [x] **P1-3** 优先级调度 — `task/task_board.py` take_ready() 按 (priority, id) 排序，T-FINAL priority=9 最后执行
+- [x] **P1-4** 任务级超时 — `task/task.py` + `task/planner.py` + `crew/scheduler.py`，timeout_seconds=300，asyncio.wait_for 超时走 attempts 重试
 - [ ] P1-1 MCP 工具集成到 Agent 执行链路
 - [ ] P1-2 并行 G2 评审
 - [ ] P1-3 优先级调度

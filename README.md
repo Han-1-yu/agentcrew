@@ -396,6 +396,16 @@ DELETE /runs/{run_id}?confirm=1
 - 无依赖的高优先级任务先于低优先级任务派发，即使后者 id 更小
 - REWORK 任务与 READY 任务共用同一优先级排序通道
 
+### P1-4. 任务级超时
+
+`Task.timeout_seconds`（默认 300 秒）控制单次 Agent 执行的最大时长。调度器的
+`_execute_one()` 外包 `asyncio.wait_for()`，LLM 调用僵死不会永久占槽位。
+
+- 超时转为 `AgentExecutionError`，走正常 `attempts` 重试通道（不单独计数）
+- PM 可在 `TaskDraft` 中按任务指定 `timeout_seconds`（默认 300）
+- 与 P2-2 停滞检测互补：任务超时是单次执行，停滞检测是调度器级别的兜底
+- 正常快速完成的任务不受影响（默认 300s 远大于常规执行时间）
+
 ---
 
 ## 自定义角色 / 团队开发指南

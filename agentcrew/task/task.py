@@ -91,6 +91,7 @@ class Task(BaseModel):
     parent_id: str | None = None  # V2：树状拆解的父任务 id（None = 根任务）
     priority: int = Field(5, ge=1, le=9)  # 数字小者优先
     brief: str = ""  # PM 写给下游的一句话摘要（供上下文压缩）
+    timeout_seconds: int = 300  # P1-4：单次执行超时（秒），超时走 attempts 重试通道
 
     # 运行时字段
     status: TaskStatus = TaskStatus.PENDING

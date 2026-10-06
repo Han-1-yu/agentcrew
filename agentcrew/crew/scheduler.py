@@ -290,11 +290,25 @@ class Scheduler:
         """
         fix_hints = self._fix_hints(task)
         try:
-            # V2: 预取上游摘要的 LLM 压缩（未配置摘要模型时为 no-op 截断）。
-            await self._context_bus.prefetch_summaries(task)
-            pack = self._context_bus.build(task, fix_hints=fix_hints)
-            result = await self._agents.get(task.role).execute(
-                task, pack, fix_hints=fix_hints
+            # P1-4：任务级超时 —— 外包 asyncio.wait_for，LLM 调用僵死不会永久占槽位。
+            # 超时转为 AgentExecutionError，走正常 attempts 重试通道（不单独计数）。
+            async def _run_with_timeout() -> TaskResult:
+                # V2: 预取上游摘要的 LLM 压缩（未配置摘要模型时为 no-op 截断）。
+                await self._context_bus.prefetch_summaries(task)
+                pack = self._context_bus.build(task, fix_hints=fix_hints)
+                return await self._agents.get(task.role).execute(
+                    task, pack, fix_hints=fix_hints
+                )
+            result = await asyncio.wait_for(
+                _run_with_timeout(), timeout=task.timeout_seconds
+            )
+        except asyncio.TimeoutError:
+            return _error_outcome(
+                task.id,
+                AgentExecutionError(
+                    f"任务超时（{task.timeout_seconds}s）：{task.id}",
+                    task_id=task.id, role=task.role,
+                ),
             )
         except AgentExecutionError as exc:
             return _error_outcome(task.id, exc)

@@ -482,3 +482,52 @@ def test_retry_transition_carries_the_error_and_next_dispatch_sees_it(env):
 
     hints = sch._fix_hints(t)
     assert hints and "截断" in hints[0]
+
+
+# ── P1-4：任务级超时 ──────────────────────────────────────────────────────
+
+
+async def test_task_timeout_retries_then_fails(env):
+    """P1-4：Agent.execute 挂起时 asyncio.wait_for 超时，走正常 attempts 重试通道。
+
+    挂起的 agent 永远不返回；timeout_seconds=0.1 让每次尝试快速超时；max_attempts=2
+    （首次 + 1 次重试）后任务 FAILED。验证：attempts 递增、最终状态 FAILED、
+    超时错误信息包含「超时」。
+    """
+    write_fixture(env["fx"], "A")
+    task = mk("A")
+    task.timeout_seconds = 0.1
+    task.max_attempts = 2
+    board, sch = build(env, [task])
+
+    # 把 backend_dev agent 的 execute 替换为永久挂起
+    agent = env["agents"].get("backend_dev")
+    hang_event = asyncio.Event()  # 永远不 set
+
+    async def _hang(*args, **kwargs):
+        await hang_event.wait()  # 永久等待
+
+    original_execute = agent.execute
+    agent.execute = _hang
+    try:
+        await sch.run()
+    finally:
+        agent.execute = original_execute
+
+    t = board.get("A")
+    assert t.status is S.FAILED
+    assert t.attempts == 2  # 首次 + 1 次重试 = max_attempts
+    # 最后一次状态跃迁的 reason 包含超时信息
+    reasons = [h.reason for h in t.status_history if h.reason]
+    assert any("超时" in r for r in reasons), f"reasons={reasons}"
+
+
+async def test_task_timeout_does_not_affect_quick_tasks(env):
+    """P1-4：正常快速完成的任务不受超时影响（timeout_seconds=300 默认值）。"""
+    write_fixture(env["fx"], "A")
+    task = mk("A")
+    # 默认 timeout_seconds=300，远大于 mock 执行时间
+    assert task.timeout_seconds == 300
+    board, sch = build(env, [task])
+    await sch.run()
+    assert board.get("A").status is S.SUCCEEDED

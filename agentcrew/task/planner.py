@@ -74,6 +74,7 @@ class TaskDraft(BaseModel):
     dependencies: list[str] = Field(default_factory=list)
     priority: int = Field(5, ge=1, le=9)
     brief: str = ""
+    timeout_seconds: int = 300  # P1-4：PM 可指定单次执行超时（秒），默认 300
 
 
 class PlanOutput(BaseModel):
@@ -108,6 +109,7 @@ def to_tasks(plan: PlanOutput) -> list[Task]:
             dependencies=list(draft.dependencies),
             priority=draft.priority,
             brief=draft.brief,
+            timeout_seconds=draft.timeout_seconds,
         )
         for draft in plan.tasks
     ]
