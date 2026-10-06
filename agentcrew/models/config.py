@@ -9,7 +9,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 #: provider 的实现方式（决定 Task 21 的 ModelFactory 如何构造 Provider）。
-Implementation = Literal["openai_compat", "anthropic", "mock"]
+Implementation = Literal["openai_compat", "anthropic", "mock", "cli"]
 
 
 class UnknownProviderError(ValueError):
@@ -38,6 +38,9 @@ class ProviderPreset(BaseModel):
     base_url: str | None
     api_key_env: str
     capabilities: ProviderCapabilities
+    #: CLI 引擎的命令模板（仅 implementation="cli" 时使用）。
+    #: 支持占位符 {model} {prompt} {max_tokens} {temperature}。
+    command: str | None = None
 
 
 class ModelBinding(BaseModel):
@@ -51,6 +54,7 @@ class ModelBinding(BaseModel):
     base_url: str | None
     api_key_env: str
     capabilities: ProviderCapabilities
+    command: str | None = None
 
 
 #: 内置能力预设，逐行对应 spec §12.1 的能力表（8 行）。
@@ -123,6 +127,15 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         capabilities=ProviderCapabilities(
             supports_json_schema=True, supports_json_object=True),
     ),
+    "cli": ProviderPreset(
+        implementation="cli",
+        base_url=None,
+        api_key_env="",  # 本地 CLI：无需 API Key
+        capabilities=ProviderCapabilities(
+            supports_json_schema=False, supports_json_object=False),
+        # command 必须通过 provider_overrides 显式指定（不同 CLI 工具语法不同）
+        command=None,
+    ),
 }
 
 
@@ -164,4 +177,5 @@ def parse_alias(alias: str, *, overrides: dict[str, dict] | None = None) -> Mode
         base_url=preset.base_url,
         api_key_env=preset.api_key_env,
         capabilities=preset.capabilities,
+        command=preset.command,
     )

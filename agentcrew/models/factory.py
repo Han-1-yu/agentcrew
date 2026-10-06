@@ -48,6 +48,7 @@ from agentcrew.models.providers.base import (
     Message,
     ResponseFormat,
 )
+from agentcrew.models.providers.cli import CliProvider
 from agentcrew.models.providers.mock import MockProvider
 from agentcrew.models.providers.openai_compat import (
     RETRY_AFTER_CLAMPED_ATTR,
@@ -68,7 +69,7 @@ DEFAULT_FIXTURES_DIR: Path = (
 _OLLAMA_PLACEHOLDER = "ollama"
 
 #: 支持的 Provider 实现（与 ``config.Implementation`` 的 Literal 对齐）。
-_IMPLEMENTATIONS: tuple[str, ...] = ("openai_compat", "anthropic", "mock")
+_IMPLEMENTATIONS: tuple[str, ...] = ("openai_compat", "anthropic", "mock", "cli")
 
 #: 建议预算相对窗口上限预留的头部空间（spec §11.2 的建议值公式）。
 _SUGGESTED_BUDGET_HEADROOM = 1024
@@ -208,6 +209,8 @@ class ModelFactory:
                 on_fallback=(
                     self._on_mock_fallback if self._ledger is not None else None),
             )
+        if implementation == "cli":
+            return CliProvider(binding)
         api_key = self._require_api_key(binding)
         if implementation == "anthropic":
             return AnthropicProvider(

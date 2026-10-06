@@ -7,9 +7,9 @@ from agentcrew.models.config import (
 )
 
 
-def test_all_eight_providers_present():
+def test_all_providers_present():
     assert set(PROVIDER_PRESETS) == {
-        "openai", "anthropic", "deepseek", "doubao", "qwen", "ernie", "ollama", "mock"}
+        "openai", "anthropic", "deepseek", "doubao", "qwen", "ernie", "ollama", "mock", "cli"}
 
 
 def test_openai_supports_json_schema():
