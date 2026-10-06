@@ -53,7 +53,10 @@ _ROLE_MODEL_ENV_PREFIX = "AGENTCREW_MODEL_"
 _YAML_SCALAR_KEYS = ("max_concurrency", "context_budget_tokens", "gate", "roles_dir")
 
 #: 分层合并时按 key 覆盖而非整体替换的字段。
-_MAPPING_FIELDS = ("role_bindings", "provider_overrides")
+_MAPPING_FIELDS = ("role_bindings", "provider_overrides", "model_tiers")
+
+#: ``AGENTCREW_TIER_<LEVEL>`` → ``model_tiers[<level>]``（V2：按复杂度选模型）。
+_TIER_ENV_PREFIX = "AGENTCREW_TIER_"
 
 #: ``provider_overrides.<provider>`` 允许出现的键 = ``ProviderPreset`` 的字段。
 #: 引擎只读这些（``parse_alias._apply_override``）；别的键会被静默忽略，
@@ -214,6 +217,15 @@ def _env_values() -> dict[str, object]:
             role_bindings[role] = raw.strip()
     if role_bindings:
         values["role_bindings"] = role_bindings
+    # V2：按复杂度选模型 —— AGENTCREW_TIER_LOW/MEDIUM/HIGH
+    model_tiers: dict[str, str] = {}
+    for env_name, raw in os.environ.items():
+        if env_name.startswith(_TIER_ENV_PREFIX) and raw.strip():
+            level = env_name[len(_TIER_ENV_PREFIX):].lower()
+            if level in ("low", "medium", "high"):
+                model_tiers[level] = raw.strip()
+    if model_tiers:
+        values["model_tiers"] = model_tiers
     return values
 
 
@@ -244,6 +256,7 @@ class Settings(BaseModel):
     role_bindings: dict[str, str] = Field(default_factory=dict)
     roles_dir: Path | None = None
     provider_overrides: dict[str, dict] = Field(default_factory=dict)
+    model_tiers: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("output_dir")
     @classmethod

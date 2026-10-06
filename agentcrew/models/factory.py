@@ -32,11 +32,13 @@ spec §7.3 的两级并发限额里，任务槽位由 Scheduler 持有，本模�
 import asyncio
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
 from agentcrew.config import Settings
 from agentcrew.models import structured
+from agentcrew.models.complexity import evaluate as evaluate_complexity
 from agentcrew.models.config import PROVIDER_PRESETS, ModelBinding, parse_alias
 from agentcrew.models.pricing import estimate_cost
 from agentcrew.models.providers.anthropic import AnthropicProvider
@@ -53,6 +55,9 @@ from agentcrew.models.providers.openai_compat import (
 )
 from agentcrew.models.structured import DegradeEvent
 from agentcrew.runtime.ledger import Ledger
+
+if TYPE_CHECKING:
+    from agentcrew.task.task import Task
 
 #: 默认 fixture 根目录（仓库根的 ``examples/fixtures``）。模块级常量是契约的
 #: 一部分：测试与 Task 34 的 Crew 都靠 monkeypatch 它注入临时 fixtures。
@@ -162,6 +167,27 @@ class ModelFactory:
             provider = self._resolve(alias)
             self._cache[alias] = provider
         return provider
+
+    def alias_for_task(self, task: "Task") -> str:
+        """按任务复杂度选模型别名（V2：按认知复杂度自动选模型）。
+
+        优先级（高者胜）：
+        1. 角色级 ``RoleSpec.model``（由调用方在 BaseAgent 里判断，本方法不感知）
+        2. ``settings.role_bindings[role]``
+        3. ``settings.model_tiers[<复杂度>]``（V2 新增，未配置则跳过）
+        4. ``settings.default_model``
+
+        本方法只负责 2–4 级；第 1 级由 BaseAgent 在调用前判断。
+        mock 模式下仍返回有效别名（``_resolve`` 内部会统一替换为 MockProvider）。
+        """
+        role_binding = self._settings.role_bindings.get(task.role)
+        if role_binding:
+            return role_binding
+        level = evaluate_complexity(task)
+        tier = self._settings.model_tiers.get(level.value)
+        if tier:
+            return tier
+        return self._settings.default_model
 
     def _resolve(self, alias: str) -> BaseProvider:
         """解析别名并构造 Provider（**不加缓存**；单独抽出便于测试 monkeypatch）。

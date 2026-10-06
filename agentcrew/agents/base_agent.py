@@ -181,7 +181,7 @@ class BaseAgent(ABC):
         )
 
         messages = self.build_messages(task, pack, fix_hints)
-        alias = self._resolve_alias()
+        alias = self._resolve_alias(task)
         self._configure_replay(alias, task)
         completion = await self._models.call(
             alias,
@@ -308,14 +308,21 @@ class BaseAgent(ABC):
 
     # ── 内部 ─────────────────────────────────────────────────────────────
 
-    def _resolve_alias(self) -> str:
-        """spec §12.2 的三级优先级（高者胜）。
+    def _resolve_alias(self, task: Task | None = None) -> str:
+        """spec §12.2 的三级优先级 + V2 复杂度路由（高者胜）。
 
-        角色级 ``RoleSpec.model`` → ``settings.role_bindings[role]`` → 默认模型；
+        1. 角色级 ``RoleSpec.model`` →
+        2. ``settings.role_bindings[role]`` →
+        3. ``settings.model_tiers[<任务复杂度>]``（V2，未配置则跳过）→
+        4. 默认模型。
+
+        ``task`` 为 None 时（如结构化输出调用不感知任务），退化为前两级 + 默认模型。
         字面量 ``"default"`` 是「没指定」的哨兵，不是模型名。
         """
         if self.spec.model != _DEFAULT_ALIAS:
             return self.spec.model
+        if task is not None:
+            return self._models.alias_for_task(task)
         settings = self._models.settings
         return settings.role_bindings.get(self.spec.key) or settings.default_model
 
