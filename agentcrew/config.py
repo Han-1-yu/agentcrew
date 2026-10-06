@@ -294,7 +294,7 @@ class Settings(BaseModel):
         _merge(values, _yaml_values())
         _merge(values, _env_values())
         _merge(values, cli_overrides)
-        return cls(**values)
+        return cls.model_validate(values)
 
     def config_snapshot(self) -> dict[str, Any]:
         """``run.json`` 的 ``config_snapshot``：``provider_overrides`` 脱敏后落盘。
