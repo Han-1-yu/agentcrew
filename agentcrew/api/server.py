@@ -12,6 +12,8 @@ SSE 是标准 HTTP 长连接，单向推送足够覆盖「运行状态实时更�
 - ``POST /runs/{run_id}/cancel`` → 软取消运行中的 run（202）
 - ``POST /runs/{run_id}/resume`` → 从 checkpoint 恢复 run 并后台执行（202）
 - ``GET /runs/{run_id}/status`` → 运行状态（任务统计）
+- ``GET /runs/{run_id}/ledger?event=&limit=&offset=`` → Ledger 事件分页查询（P2-9）
+- ``GET /runs/{run_id}/stats`` → 事件分布 / LLM 用量 / 任务成功率（P2-9）
 - ``GET /runs/{run_id}/events`` → SSE 事件流
 - ``POST /runs/{run_id}/events`` → 注入测试事件（仅测试/调试用）
 
@@ -69,6 +71,15 @@ class EventBus:
     @property
     def subscriber_count(self) -> int:
         return len(self._subscribers)
+
+
+def _clamp_int(raw: str, *, default: int, minimum: int) -> int:
+    """把查询参数里的整数读出来；非法 / 缺失用 ``default``，并压到 ``minimum`` 以上。"""
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, value)
 
 
 class ApiServer:
@@ -201,7 +212,13 @@ class ApiServer:
             await writer.wait_closed()
 
     async def _handle_get(self, path: str, writer: asyncio.StreamWriter) -> None:
-        if path == "/" or path == "/index.html":
+        # 先按 urlsplit 拆开路径与查询串：带 ``?event=...`` 的请求不能再用
+        # ``path.endswith("/status")`` 这类裸匹配（P2-9 的 ledger/stats 端点
+        # 自带查询参数）。无查询串时 ``parsed.path`` 与历史行为逐字节一致。
+        parsed = urlsplit(path)
+        p = parsed.path
+        query = parse_qs(parsed.query)
+        if p == "/" or p == "/index.html":
             from agentcrew.api.dashboard import DASHBOARD_HTML
             payload = DASHBOARD_HTML.encode("utf-8")
             writer.write(
@@ -212,34 +229,40 @@ class ApiServer:
             )
             await writer.drain()
             return
-        if path == "/health":
+        if p == "/health":
             await self._send_json(writer, 200, {"status": "ok"})
             return
-        if path == "/runs":
+        if p == "/runs":
             await self._list_runs(writer)
             return
-        if path.startswith("/runs/") and path.endswith("/events"):
-            run_id = path.split("/")[2]
-            await self._handle_sse(run_id, writer)
-            return
-        if path.startswith("/runs/") and path.endswith("/status"):
-            run_id = path.split("/")[2]
-            run = self.runs.get(run_id)
-            if run is None:
-                await self._send_json(writer, 404, {"error": "run not found"})
+        segments = [unquote(s) for s in p.split("/") if s]
+        if len(segments) == 3 and segments[0] == "runs":
+            run_id, action = segments[1], segments[2]
+            if action == "events":
+                await self._handle_sse(run_id, writer)
                 return
-            await self._send_json(writer, 200, {
-                "run_id": run.run_id,
-                "goal": run.goal,
-                "status": run.status,
-                "task_count": len(run.tasks),
-                "tasks": run.tasks,
-            })
-            return
-        if path.startswith("/runs/") and path.endswith("/model"):
-            run_id = path.split("/")[2]
-            await self._get_model(run_id, writer)
-            return
+            if action == "status":
+                run = self.runs.get(run_id)
+                if run is None:
+                    await self._send_json(writer, 404, {"error": "run not found"})
+                    return
+                await self._send_json(writer, 200, {
+                    "run_id": run.run_id,
+                    "goal": run.goal,
+                    "status": run.status,
+                    "task_count": len(run.tasks),
+                    "tasks": run.tasks,
+                })
+                return
+            if action == "model":
+                await self._get_model(run_id, writer)
+                return
+            if action == "ledger":
+                await self._get_ledger(run_id, query, writer)
+                return
+            if action == "stats":
+                await self._get_stats(run_id, writer)
+                return
         await self._send_json(writer, 404, {"error": "Not Found"})
 
     async def _handle_post(
@@ -476,6 +499,67 @@ class ApiServer:
                 })
         runs.sort(key=lambda r: r.get("created_at", ""), reverse=True)
         await self._send_json(writer, 200, {"runs": runs})
+
+    # ── P2-9：Ledger 查询与分析 ─────────────────────────────────────────────
+
+    async def _get_ledger(
+        self,
+        run_id: str,
+        query: dict[str, list[str]],
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        """``GET /runs/{id}/ledger?event=&limit=&offset=``：分页查询事件。
+
+        返回 ``{"events": [...], "total": <过滤后的事件总数>}``。run 目录不存在
+        返回 404；run 存在但从未 emit（空 ledger.jsonl）返回 200 空列表——
+        「没有事件」是诚实答案，不是错误。
+        """
+        if self._output_dir is None:
+            await self._send_json(writer, 500, {"error": "server 未配置 output_dir"})
+            return
+        from agentcrew.runtime.ledger import LedgerReader
+
+        reader = LedgerReader(self._output_dir)
+        try:
+            if not reader.run_exists(run_id):
+                await self._send_json(
+                    writer, 404, {"error": f"run {run_id!r} 不存在"})
+                return
+            event = query.get("event", [None])[0] or None
+            limit = _clamp_int(query.get("limit", ["100"])[0], default=100, minimum=1)
+            offset = _clamp_int(query.get("offset", ["0"])[0], default=0, minimum=0)
+            events = reader.query_events(
+                run_id, event=event, limit=limit, offset=offset)
+            total = reader.count_events(run_id, event=event)
+        except ValueError as exc:
+            await self._send_json(writer, 400, {"error": str(exc)})
+            return
+        await self._send_json(
+            writer, 200, {"events": events, "total": total})
+
+    async def _get_stats(
+        self, run_id: str, writer: asyncio.StreamWriter
+    ) -> None:
+        """``GET /runs/{id}/stats``：事件分布 / LLM 用量 / 任务成功率 / 工具调用。
+
+        空 ledger 返回各项为零的统计对象（200），只有 run 目录不存在才 404。
+        """
+        if self._output_dir is None:
+            await self._send_json(writer, 500, {"error": "server 未配置 output_dir"})
+            return
+        from agentcrew.runtime.ledger import LedgerReader
+
+        reader = LedgerReader(self._output_dir)
+        try:
+            if not reader.run_exists(run_id):
+                await self._send_json(
+                    writer, 404, {"error": f"run {run_id!r} 不存在"})
+                return
+            stats = reader.event_stats(run_id)
+        except ValueError as exc:
+            await self._send_json(writer, 400, {"error": str(exc)})
+            return
+        await self._send_json(writer, 200, {"run_id": run_id, **stats})
 
     # ── P1-6：运行时切换模型 ────────────────────────────────────────────────
 

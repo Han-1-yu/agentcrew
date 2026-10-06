@@ -195,3 +195,144 @@ class Ledger:
         读取不受影响：run 结束后正是靠 :meth:`events` / :meth:`count` 重建报告。
         """
         self._closed = True
+
+
+def _event_to_dict(event: LedgerEvent) -> dict[str, Any]:
+    """把一条事件转成可 JSON 序列化的 dict（``ts`` 转 ISO 字符串）。"""
+    return {
+        "ts": event.ts.isoformat(),
+        "run_id": event.run_id,
+        "event": event.event,
+        "data": event.data,
+    }
+
+
+def _as_number(value: Any) -> float:
+    """把 ledger data 里的数值字段安全转成 float；缺失 / 脏值一律按 0 计。"""
+    try:
+        if value is None:
+            return 0.0
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+class LedgerReader:
+    """只读查询器：从 ``output_dir/<run_id>/ledger.jsonl`` 检索与统计事件（P2-9）。
+
+    写入侧的宽容规则完全复用 :meth:`Ledger.events` —— 文件不存在视为零事件、
+    空行跳过、坏行记 warning 后跳过；本类只读不写，审计日志永远不会被查询路径
+    改动。run_id 会被直接拼进 ``output_dir`` 之下，故所有路径先 resolve 并校验
+    必须位于 ``output_dir`` 之内（拒绝 ``../x``、绝对路径等越界输入），越界 / 非法
+    run_id 一律抛 :class:`ValueError`。
+    """
+
+    def __init__(self, output_dir: Path) -> None:
+        self._output_dir = Path(output_dir)
+
+    def _resolve(self, run_id: str) -> Path:
+        """``output_dir/<run_id>`` 的安全绝对路径；越界抛 ``ValueError``。"""
+        root = self._output_dir.resolve()
+        candidate = (self._output_dir / run_id).resolve()
+        if candidate == root or not candidate.is_relative_to(root):
+            raise ValueError(f"非法 run_id: {run_id!r}")
+        return candidate
+
+    def _ledger(self, run_id: str) -> Ledger:
+        """绑定到该 run 的 ledger.jsonl 的只读 :class:`Ledger`（未 emit 过也能用）。"""
+        return Ledger(self._resolve(run_id) / "ledger.jsonl", run_id=run_id)
+
+    def run_exists(self, run_id: str) -> bool:
+        """run 目录是否存在；越界 run_id 视为不存在（不抛给调用方）。"""
+        try:
+            return self._resolve(run_id).is_dir()
+        except ValueError:
+            return False
+
+    def query_events(
+        self,
+        run_id: str,
+        *,
+        event: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """按 ``event``（可选）过滤并分页返回事件 dict 列表（按写盘顺序）。
+
+        ``offset`` 为负按 0 计；``limit`` 小于 1 时按 1 计。匹配事件的总数请用
+        :meth:`count_events`，避免调用方先取全量再 ``len()``。
+        """
+        offset = max(0, offset)
+        limit = max(1, limit)
+        all_events = list(self._ledger(run_id).events(event))
+        page = all_events[offset:offset + limit]
+        return [_event_to_dict(item) for item in page]
+
+    def count_events(self, run_id: str, *, event: str | None = None) -> int:
+        """与过滤条件匹配的事件总数（分页接口的 ``total``）。"""
+        return self._ledger(run_id).count(event)
+
+    def event_stats(self, run_id: str) -> dict[str, Any]:
+        """统计分析：事件分布、LLM 用量聚合、任务成功率与平均时长、工具调用。
+
+        - ``event_counts``：各事件类型计数（写什么事件都在内，未来新增事件名
+          无需改这里）。
+        - ``llm``：从 ``llm_call`` 事件聚合调用数 / prompt / completion / 总
+          token / 估算成本（USD）。
+        - ``tasks``：``task_finished / task_started`` 即任务成功率（没有
+          ``task_started`` 时为 ``None``，不拿 0/0 装作 100%）；平均任务时长取
+          ``task_finished.duration_ms`` 的均值（没有时为 ``None``）。
+        - ``tools``：``tool_call`` 事件的总数 / 成功 / 失败计数。
+        """
+        counts: dict[str, int] = {}
+        llm_calls = 0
+        prompt_tokens = 0.0
+        completion_tokens = 0.0
+        cost_usd = 0.0
+        started = 0
+        finished = 0
+        durations: list[float] = []
+        tool_calls = 0
+        tool_success = 0
+        for item in self._ledger(run_id).events():
+            counts[item.event] = counts.get(item.event, 0) + 1
+            data = item.data
+            if item.event == "llm_call":
+                llm_calls += 1
+                prompt_tokens += _as_number(data.get("prompt_tokens"))
+                completion_tokens += _as_number(data.get("completion_tokens"))
+                cost_usd += _as_number(data.get("estimated_cost_usd"))
+            elif item.event == "task_started":
+                started += 1
+            elif item.event == "task_finished":
+                finished += 1
+                durations.append(_as_number(data.get("duration_ms")))
+            elif item.event == "tool_call":
+                tool_calls += 1
+                if data.get("success"):
+                    tool_success += 1
+        success_rate = finished / started if started else None
+        avg_duration = sum(durations) / len(durations) if durations else None
+        return {
+            "event_counts": counts,
+            "llm": {
+                "calls": llm_calls,
+                "prompt_tokens": int(prompt_tokens),
+                "completion_tokens": int(completion_tokens),
+                "total_tokens": int(prompt_tokens + completion_tokens),
+                "cost_usd": round(cost_usd, 6),
+            },
+            "tasks": {
+                "started": started,
+                "finished": finished,
+                "success_rate": (
+                    round(success_rate, 4) if success_rate is not None else None),
+                "avg_duration_ms": (
+                    round(avg_duration, 2) if avg_duration is not None else None),
+            },
+            "tools": {
+                "calls": tool_calls,
+                "success": tool_success,
+                "failed": tool_calls - tool_success,
+            },
+        }
