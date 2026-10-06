@@ -51,6 +51,7 @@ from agentcrew.crew.scheduler import Scheduler
 from agentcrew.gate.gatekeeper import Gatekeeper, Prompter, Reviewer
 from agentcrew.knowledge.experience import Experience, ExperienceStore
 from agentcrew.models import factory as model_factory
+from agentcrew.models.cache import LLMCache
 from agentcrew.models.complexity import ComplexityCalibrator, set_calibrator
 from agentcrew.models.factory import BudgetExhaustedError, ModelFactory, ModelFactoryError
 from agentcrew.roles.builtin import BUILTIN_ROLES
@@ -404,8 +405,11 @@ class Crew:
                 checkpoint.artifacts_dir, run_id=record.run_id, ledger=ledger
             )
         goal = record.project_goal if goal is None else goal
+        # P3-2：按配置决定是否给工厂挂响应缓存（默认 None = 不缓存，向后兼容）。
+        resp_cache = LLMCache() if self._settings.llm_cache_enabled else None
         models = ModelFactory(
-            self._settings, ledger=ledger, fixtures_dir=_fixtures_dir()
+            self._settings, ledger=ledger, fixtures_dir=_fixtures_dir(),
+            cache=resp_cache,
         )
         run = _Run(
             goal=goal,
@@ -540,9 +544,15 @@ class Crew:
         attempts = max(1, self._settings.plan_max_attempts)
         for attempt in range(1, attempts + 1):
             try:
-                plan = await pm.decompose(
-                    run.goal, feedback=feedback, context_hint=context_hint
-                )
+                # context_hint 为空（未开启复用 / 经验库无命中）时走原签名调用，
+                # 与改造前逐字一致——连 kwargs 都不多传，兼容只接受 (goal, feedback)
+                # 的旧 spy / 子类。
+                if context_hint:
+                    plan = await pm.decompose(
+                        run.goal, feedback=feedback, context_hint=context_hint
+                    )
+                else:
+                    plan = await pm.decompose(run.goal, feedback=feedback)
                 tasks = with_final_task(to_tasks(plan))
                 validate_plan(tasks, self._catalog)
             except PlanValidationError as exc:
