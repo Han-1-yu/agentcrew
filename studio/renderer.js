@@ -1025,7 +1025,12 @@ async function renderSettingsPage(container) {
     h('label', {}, '关于'),
     h('div', { class: 'settings-about' },
       'AgentCrew Studio · 多 Agent 协作开发控制台',
-      h('br'), '8 角色协作 · 三层门禁 · DAG 编排 · 实时可观测')));
+      h('br'), '8 角色协作 · 三层门禁 · DAG 编排 · 实时可观测',
+      h('br'), h('br'),
+      h('span', { style: 'font-weight:600;color:#6E6E73' }, '快捷键'),
+      h('br'), 'Esc — 关闭面板 / 弹窗',
+      h('br'), 'Ctrl/⌘ + N — 新建运行',
+      h('br'), '1-7 — 切换页面（总览/任务图/Agents/门禁/产物/事件/设置）')));
 }
 
 /* ============================================================
@@ -1527,6 +1532,28 @@ async function boot(){
   $$('.nav-item').forEach(b=>b.addEventListener('click',()=>switchNav(b.dataset.nav)));
   window.addEventListener('error',(e)=>toast('error','界面错误',e.message));
   window.addEventListener('unhandledrejection',(e)=>toast('error','未处理异常',String(e.reason&&e.reason.message||e.reason)));
+
+  // 键盘快捷键
+  window.addEventListener('keydown',(e)=>{
+    // Escape：关闭面板/弹窗/下拉
+    if(e.key==='Escape'){
+      closeDetailPanel(); closeModal(); closeRunDropdown();
+      return;
+    }
+    // Cmd/Ctrl + N：新建运行
+    if((e.metaKey||e.ctrlKey)&&e.key==='n'){ e.preventDefault(); openNewRunModal(); return; }
+    // 数字键 1-7：切换导航
+    if(!e.metaKey&&!e.ctrlKey&&!e.altKey&&/^[1-7]$/.test(e.key)){
+      const pages=['dashboard','dag','agents','gates','artifacts','events','settings'];
+      const idx=parseInt(e.key)-1;
+      if(pages[idx]){ switchNav(pages[idx]); }
+    }
+    // 空格：暂停/恢复（仅在 dashboard 且运行中）
+    if(e.key===' '&&S.nav==='dashboard'&&S.dash.run){
+      const run=S.dash.run;
+      if(run.status==='running'){ e.preventDefault(); /* 暂停按钮逻辑 */ }
+    }
+  });
 
   try { const r=await window.studio.getSettings(); S.settings=r.settings; S.env=r.env; } catch { S.settings={}; }
   try { await window.studio.detectPython(); } catch {}
