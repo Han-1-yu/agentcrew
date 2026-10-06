@@ -34,6 +34,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from agentcrew.artifacts.spec import ArtifactRecord
 from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.context.budget import TokenBudget
+from agentcrew.context.summarizer import NullSummarizer, Summarizer
 from agentcrew.task.task import Task
 from agentcrew.task.task_board import TaskBoard
 from agentcrew.utils.files import tree
@@ -114,6 +115,7 @@ class ContextBus:
         budget_tokens: int = 24000,
         excerpt_max_ratio: float = 0.4,
         tree_max_entries: int = 300,
+        summarizer: Summarizer | None = None,
     ) -> None:
         self._goal = goal
         self._board = board
@@ -122,6 +124,9 @@ class ContextBus:
         self._excerpt_max_ratio = excerpt_max_ratio
         self._tree_max_entries = tree_max_entries
         self._decisions: list[DecisionRecord] = []
+        self._summarizer: Summarizer = summarizer or NullSummarizer()
+        #: task_id → 已压缩的 summary 文本（prefetch_summaries 写入，build 读取）。
+        self._summary_cache: dict[str, str] = {}
 
     @property
     def store(self) -> ArtifactStore:
@@ -219,6 +224,37 @@ class ContextBus:
         """返回固定的截断说明句（``pack.truncated`` 为真时由 ``BaseAgent`` 追加）。"""
         return TRUNCATION_NOTICE
 
+    # ---- LLM 摘要预取（V2）----
+
+    async def prefetch_summaries(self, task: Task) -> int:
+        """预取 ``task`` 的上游摘要中会超预算的部分，用 LLM 压缩后写入缓存。
+
+        返回实际执行的摘要次数。Agent 在调用 :meth:`build` 之前调用本方法；
+        未配置 LLM 摘要器（``NullSummarizer``）时只做截断、不产生 LLM 调用，
+        因此本方法在任何配置下都安全可调用。
+
+        只处理**直接上游**的 summary 字段：brief 优先完整保留（spec §11.2），
+        summary 是最容易膨胀的部分，也是压缩收益最大的部分。
+        """
+        tasks = self._board.map()
+        direct = [tasks[dep] for dep in dict.fromkeys(task.dependencies) if dep in tasks]
+        count = 0
+        for dep in direct:
+            if dep.id in self._summary_cache:
+                continue
+            summary = dep.result.summary if dep.result is not None else ""
+            if not summary:
+                continue
+            # brief 保留完整，summary 的可用额度 = 单条摘要上限 - brief 占用。
+            brief_tokens = estimate_tokens(dep.brief)
+            room = max(0, _DIGEST_MAX_TOKENS - brief_tokens - 1)
+            if estimate_tokens(summary) <= room:
+                continue  # 本来就装得下，不需要压缩
+            compressed = await self._summarizer.summarize(summary, room)
+            self._summary_cache[dep.id] = compressed
+            count += 1
+        return count
+
     # ---- 决策记录（spec §11.3）----
 
     def add_decision(self, record: DecisionRecord) -> None:
@@ -281,8 +317,14 @@ class ContextBus:
     # ---- 内部 ----
 
     def _digest(self, task: Task) -> UpstreamDigest:
-        """把一个上游任务压成摘要：brief + summary（截到 400 tok 内）+ 文件路径。"""
+        """把一个上游任务压成摘要：brief + summary（截到 400 tok 内）+ 文件路径。
+
+        若 ``prefetch_summaries`` 已为该任务写入 LLM 压缩后的 summary，
+        则直接使用缓存值，不再截断。
+        """
         summary = task.result.summary if task.result is not None else ""
+        if task.id in self._summary_cache:
+            summary = self._summary_cache[task.id]
         brief, summary = _fit_digest_fields(task.brief, summary)
         files = sorted(record.path for record in self._store.by_task(task.id))
         return UpstreamDigest(

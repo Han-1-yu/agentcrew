@@ -270,6 +270,8 @@ class Scheduler:
         """
         fix_hints = self._fix_hints(task)
         try:
+            # V2: 预取上游摘要的 LLM 压缩（未配置摘要模型时为 no-op 截断）。
+            await self._context_bus.prefetch_summaries(task)
             pack = self._context_bus.build(task, fix_hints=fix_hints)
             result = await self._agents.get(task.role).execute(
                 task, pack, fix_hints=fix_hints

@@ -45,6 +45,7 @@ from agentcrew.agents.registry import AGENT_CLASSES, AgentFactory
 from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.config import Settings
 from agentcrew.context.context_bus import ContextBus
+from agentcrew.context.summarizer import summarizer_from_factory
 from agentcrew.crew.scheduler import Scheduler
 from agentcrew.gate.gatekeeper import Gatekeeper, Prompter, Reviewer
 from agentcrew.models import factory as model_factory
@@ -470,6 +471,7 @@ class Crew:
         bus = ContextBus(
             run.goal, board, run.store,
             budget_tokens=self._settings.context_budget_tokens,
+            summarizer=summarizer_from_factory(run.models),
         )
         # 新 run 下该文件不存在（no-op）；resume 时载入既有决策供上下文包引用。
         bus.load_decisions(decisions_path)
@@ -594,6 +596,7 @@ class Crew:
         clone = ContextBus(
             run.goal, board, run.store,
             budget_tokens=self._settings.context_budget_tokens,
+            summarizer=summarizer_from_factory(run.models),
         )
         for record in bus.decisions():
             clone.add_decision(record)
