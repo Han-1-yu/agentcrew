@@ -32,7 +32,7 @@ spec §7.3 的两级并发限额里，任务槽位由 Scheduler 持有，本模�
 import asyncio
 import random
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -41,7 +41,10 @@ from pydantic import BaseModel, ConfigDict
 
 from agentcrew.config import Settings
 from agentcrew.models import structured
-from agentcrew.models.complexity import evaluate as evaluate_complexity
+from agentcrew.models.complexity import (
+    evaluate as evaluate_complexity,
+    get_calibrator,
+)
 from agentcrew.models.config import (
     PROVIDER_PRESETS,
     ModelBinding,
@@ -55,6 +58,7 @@ from agentcrew.models.providers.base import (
     CompletionResult,
     Message,
     ResponseFormat,
+    StreamChunk,
 )
 from agentcrew.models.providers.cli import CliProvider
 from agentcrew.models.providers.mock import MockProvider
@@ -65,9 +69,16 @@ from agentcrew.models.providers.openai_compat import (
 from agentcrew.models.structured import DegradeEvent
 from agentcrew.runtime.ledger import Ledger
 from agentcrew.utils.retry import TransientError
+from agentcrew.utils.tokens import estimate_tokens
 
 if TYPE_CHECKING:
     from agentcrew.task.task import Task
+    from agentcrew.models.complexity import ComplexityLevel
+
+
+def _level_rank(level: "ComplexityLevel") -> int:
+    """复杂度级别排序权重（P3-1：判断上调 / 下调）。LOW < MEDIUM < HIGH。"""
+    return {"low": 0, "medium": 1, "high": 2}[level.value]
 
 #: 默认 fixture 根目录（仓库根的 ``examples/fixtures``）。模块级常量是契约的
 #: 一部分：测试与 Task 34 的 Crew 都靠 monkeypatch 它注入临时 fixtures。
@@ -443,15 +454,48 @@ class ModelFactory:
 
         本方法只负责 2–4 级；第 1 级由 BaseAgent 在调用前判断。
         mock 模式下仍返回有效别名（``_resolve`` 内部会统一替换为 MockProvider）。
+
+        P3-1：若全局校准器已注入，第 3 级的复杂度用 ``calibrator.calibrate()``
+        替代静态评估；级别被上调/下调时记 ``complexity_calibrated`` 事件（含
+        task_id / original_level / calibrated_level / reason）。未注入时行为
+        与改动前完全一致（向后兼容）。
         """
         role_binding = self._settings.role_bindings.get(task.role)
         if role_binding:
             return role_binding
-        level = evaluate_complexity(task)
+        original_level = evaluate_complexity(task)
+        calibrator = get_calibrator()
+        if calibrator is not None:
+            level = calibrator.calibrate(task)
+            if level is not original_level:
+                reason = (
+                    "upgraded" if _level_rank(level) > _level_rank(original_level)
+                    else "downgraded")
+                self._emit_calibrated(task, original_level, level, reason)
+        else:
+            level = original_level
         tier = self._settings.model_tiers.get(level.value)
         if tier:
             return tier
         return self._settings.default_model
+
+    def _emit_calibrated(
+        self,
+        task: "Task",
+        original: "ComplexityLevel",
+        calibrated: "ComplexityLevel",
+        reason: str,
+    ) -> None:
+        """记一条 ``complexity_calibrated`` 事件（P3-1：诚实留痕）。"""
+        if self._ledger is None:
+            return
+        self._ledger.emit(
+            "complexity_calibrated",
+            task_id=task.id,
+            original_level=original.value,
+            calibrated_level=calibrated.value,
+            reason=reason,
+        )
 
     def _resolve(self, alias: str) -> BaseProvider:
         """解析别名并构造 Provider（**不加缓存**；单独抽出便于测试 monkeypatch）。
@@ -610,6 +654,60 @@ class ModelFactory:
         if last_error is not None:
             raise last_error
         raise RuntimeError(f"_call_weighted({primary!r}) 未产生结果也未抛出异常")
+
+    async def stream_call(
+        self,
+        alias: str,
+        messages: Sequence[Message],
+        *,
+        temperature: float,
+        max_tokens: int,
+        purpose: str,
+        role: str,
+        response_format: ResponseFormat | None = None,
+    ) -> AsyncIterator[StreamChunk]:
+        """流式调用入口（P3-3）：逐块 yield :class:`StreamChunk`，流结束后统一记账。
+
+        与 :meth:`call` 的差异：
+
+        - 走 ``provider.stream_complete``（默认实现退化为一次性 complete），边生成
+         边把增量块吐给调用方，长输出可实时看到进度；
+        - **不做故障转移**（简化）：流式过程中 Provider 不可用直接上抛，不像
+          :meth:`call` 那样切换备用别名 —— 流已吐出的块无法回滚，转移会产生两半
+          不同来源的文本；
+        - 记账在流**完整消费完**后进行：把全部 ``delta`` 拼成全文，按与 mock
+          ``complete()`` 相同的口径估算 prompt/completion token，复用 :meth:`_account`
+          落一条 ``llm_call`` 事件（token/成本/预算检查与非流式完全一致）。
+
+        信号量同样只包住 ``stream_complete`` 的逐块消费；流结束后才释放并记账。
+        """
+        provider = self.get(alias)
+        started = time.perf_counter()
+        parts: list[str] = []
+        finish_reason: str | None = None
+        async with self._llm_semaphore:
+            async for chunk in provider.stream_complete(
+                messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format=response_format,
+            ):
+                parts.append(chunk.delta)
+                if chunk.finish_reason is not None:
+                    finish_reason = chunk.finish_reason
+                yield chunk
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        text = "".join(parts)
+        result = CompletionResult(
+            text=text,
+            provider=provider.binding.provider,
+            model=provider.binding.model,
+            prompt_tokens=sum(estimate_tokens(m["content"]) for m in messages),
+            completion_tokens=estimate_tokens(text),
+            latency_ms=latency_ms,
+            finish_reason=finish_reason,
+        )
+        self._account(result, purpose=purpose, role=role)
 
     async def complete_structured(
         self,

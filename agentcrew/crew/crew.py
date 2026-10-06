@@ -195,6 +195,7 @@ class Crew:
         prompter: Prompter | None = None,
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
         capture_experiences: bool = True,
+        reuse_knowledge: bool = True,
     ) -> None:
         """``catalog`` / ``store`` 缺省由本类按需构造；``prompter`` **原样透传**。
 
@@ -213,6 +214,10 @@ class Crew:
         ``capture_experiences``（P3-5，默认开启）：run 以 COMPLETED 收尾后，把每个
         成功任务的「描述 → 解决方案 / 关键决策 / 产物」沉淀进全局经验库；置 False
         时本次 run 不写任何经验。
+
+        ``reuse_knowledge``（P3-7，默认开启）：规划阶段从全局经验库检索与项目目标
+        相关的历史成功经验，注入 PM 拆解上下文；置 False（或经验库为空）时不注入，
+        行为与改造前一致。
         """
         self._settings = settings
         self._catalog = catalog if catalog is not None else build_catalog(settings)
@@ -220,6 +225,7 @@ class Crew:
         self._on_event = on_event
         self._injected_store = store
         self._capture_experiences_enabled = capture_experiences
+        self._reuse_knowledge_enabled = reuse_knowledge
         self._run: _Run | None = None
         self._injected_checkpoint = checkpoint
         self._resume_board: TaskBoard | None = None
@@ -529,10 +535,14 @@ class Crew:
         pm = cast(ProjectManagerAgent, run.agents.get("project_manager"))
         feedback: tuple[str, ...] = ()
         errors: list[str] = []
+        # P3-7：整个规划循环共享同一份历史经验参考（与具体 attempt 无关）。
+        context_hint = self._prepare_knowledge_context(run)
         attempts = max(1, self._settings.plan_max_attempts)
         for attempt in range(1, attempts + 1):
             try:
-                plan = await pm.decompose(run.goal, feedback=feedback)
+                plan = await pm.decompose(
+                    run.goal, feedback=feedback, context_hint=context_hint
+                )
                 tasks = with_final_task(to_tasks(plan))
                 validate_plan(tasks, self._catalog)
             except PlanValidationError as exc:
@@ -872,6 +882,26 @@ class Crew:
         if status in (RunStatus.CANCELLED, RunStatus.INTERRUPTED):
             return EXIT_CODES["cancelled"]
         return EXIT_CODES["failed"]
+
+    def _prepare_knowledge_context(self, run: _Run) -> str:
+        """P3-7：规划前从全局经验库检索与目标相关的历史经验，渲染成 PM 上下文。
+
+        开关关闭（``reuse_knowledge=False``）或经验库无命中时返回空串——PM 收到
+        空 ``context_hint``，拆解提示词与改造前逐字一致（向后兼容）。有命中时记
+        一条 ``knowledge_reused`` 事件（含 goal 与命中条数），与经验沉淀对称留痕。
+        """
+        if not self._reuse_knowledge_enabled:
+            return ""
+        store = ExperienceStore(self._settings.output_dir)
+        matched = store.query(run.goal, limit=3)
+        if not matched:
+            return ""
+        run.ledger.emit(
+            "knowledge_reused",
+            goal=run.goal,
+            matched_experiences=len(matched),
+        )
+        return store.inject_context(run.goal, limit=3)
 
     def _capture_experiences(
         self, run: _Run, board: TaskBoard, bus: ContextBus

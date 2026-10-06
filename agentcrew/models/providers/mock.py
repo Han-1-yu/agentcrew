@@ -26,7 +26,7 @@ contextvar 在每个 asyncio 任务里各有一份，写入只影响当前任务
 import asyncio
 import json
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,12 +37,17 @@ from agentcrew.models.providers.base import (
     CompletionResult,
     Message,
     ResponseFormat,
+    StreamChunk,
 )
 from agentcrew.utils.tokens import estimate_tokens
 
 _PLAN = "plan"
 _REVIEW = "review"
 _EXECUTE = "execute"
+
+#: 模拟流式时每块的字符数（P3-3）：按固定长度切片，保证即使很短的夹具也能
+#: 切成多块，便于测试「逐块 yield」。
+_STREAM_CHUNK_SIZE = 16
 
 #: 形如 ``attempt-7.md`` 的夹具文件名。
 _ATTEMPT_RE = re.compile(r"attempt-(\d+)\.md\Z")
@@ -136,6 +141,33 @@ class MockProvider(BaseProvider):
             completion_tokens=estimate_tokens(text),
             latency_ms=self._latency_ms,
         )
+
+    async def stream_complete(
+        self,
+        messages: Sequence[Message],
+        *,
+        temperature: float,
+        max_tokens: int,
+        response_format: ResponseFormat | None = None,
+    ) -> AsyncIterator[StreamChunk]:
+        """模拟流式：与 :meth:`complete` 解析同一段夹具文本，按固定长度分块 yield。
+
+        拼接所有 ``delta`` 必然逐字节等于 :meth:`complete` 的 ``text`` —— 流式
+        与非流式在产物上必须不可区分（测试据此断言一致性）。同样**先取上下文、
+        再 await**（C1），回放延迟只付一次。``temperature`` / ``max_tokens`` /
+        ``response_format`` 对 mock 无意义，接受但忽略。
+        """
+        replay = self.current_replay()
+        if self._latency_ms > 0:
+            await asyncio.sleep(self._latency_ms / 1000)
+        text = self._resolve_text(replay)
+        for index in range(0, len(text), _STREAM_CHUNK_SIZE):
+            piece = text[index:index + _STREAM_CHUNK_SIZE]
+            is_last = index + _STREAM_CHUNK_SIZE >= len(text)
+            yield StreamChunk(
+                delta=piece,
+                finish_reason="stop" if is_last else None,
+            )
 
     # ── 查找顺序 ──────────────────────────────────────────────────────────
 

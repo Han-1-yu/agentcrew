@@ -710,6 +710,46 @@ model_failover:
 旧格式（纯字符串列表）行为完全不变；权重格式通过 YAML 配置，环境变量
 `AGENTCREW_FAILOVER_*` 仍只产生旧格式。
 
+### P3-1. 复杂度动态校准
+
+静态复杂度评估（V2 第 2 项）是纯启发式的，不知道「这类任务实际跑下来是不是被
+低估/高估」。P3-1 在静态评估之上加一层**运行时校准**：按任务特征（角色 +
+描述长度档 + 交付物数量）分桶累计实际成功率与平均尝试次数，据此把模型分级
+上调 / 下调一级，使模型选择更贴合真实难度。
+
+- **校准规则**（有历史样本才生效）：
+  - 同类任务成功率 < 50% **或** 平均尝试次数 > 1.5 → **上调**一级
+    （静态低估了难度，换更强模型）；
+  - 同类任务成功率 > 90% **且** 平均尝试次数恰为 1 → **下调**一级
+    （静态高估了难度，换更便宜模型）；
+  - 其余情况或无历史 → 原样使用静态评估结果。级别在 LOW/MEDIUM/HIGH 两端夹断。
+- **数据来源**：`Scheduler` 在任务走到终局（SUCCEEDED / FAILED）时把实际结局
+  喂给全局 `ComplexityCalibrator`；待重试 / 待返工的中间态不记录，避免一次
+  重试污染同类任务的统计。
+- **诚实留痕**：校准改变了级别时记 `complexity_calibrated` ledger 事件（含
+  task_id / original_level / calibrated_level / reason=upgraded|downgraded）。
+- **向后兼容**：全局校准器未注入时 `alias_for_task` 行为与改动前完全一致；
+  `ComplexityCalibrator.stats()` 可导出各桶统计用于调试。
+
+### P3-2. LLM 响应缓存
+
+对相同的 LLM 调用（相同 alias + messages + 采样参数）缓存响应，避免重复调用
+浪费 token。只有 **temperature == 0**（确定性输出）的调用才缓存；temperature > 0
+的调用结果非确定，一律不缓存。
+
+- **缓存键**：alias / messages / temperature / max_tokens 的 SHA-256 摘要；
+  `LLMCache` 内存缓存，容量上限默认 1000 条，超限时按 LRU 淘汰最旧条目。
+- **命中路径**：直接返回缓存结果（标记 `from_cache=True`），不消耗 token /
+  成本、不触发预算检查；记 `llm_cache_hit` 事件（含 alias、键摘要），并落一条
+  usage 为 0、`cached=True` 的 `llm_call` 便于审计。
+- **向后兼容**：`ModelFactory(cache=None)`（默认）时行为与改动前完全一致；
+  开关 `AGENTCREW_LLM_CACHE_ENABLED` 默认关闭，避免意外改变既有行为。
+
+```bash
+# .env（默认 false）
+AGENTCREW_LLM_CACHE_ENABLED=true
+```
+
 ### P3-3. LLM 流式输出
 
 长输出时不再等整段生成完才看到进度：Agent 可切到流式路径，按增量块（SSE/chunk）
@@ -761,6 +801,42 @@ store = ExperienceStore(settings.output_dir)
 for exp in store.all():
     print(exp.task_description, "→", exp.solution_summary)
 ```
+
+### P3-7. 跨 run 知识复用
+
+新 run 进入规划阶段时，引擎从全局经验库检索与项目目标相关的历史成功经验
+（朴素关键词匹配），渲染成「历史经验」参考块追加到 PM 的拆解 user 消息末尾。
+PM 因此在拆第一版计划时就知道「上次类似任务是怎么做成的」，而不是每次从零开始。
+
+- **注入点**：仅规划阶段（PM 拆解）。历史经验是**参考材料**而非新约束——PM 仍须
+  遵守全部拆解规则与输出契约。
+- **诚实留痕**：检索到至少一条经验时，ledger 记一条 `knowledge_reused` 事件
+  （含 `goal` 与 `matched_experiences` 条数）。
+- **向后兼容**：`reuse_knowledge=False`（默认开启）或经验库为空 / 零命中时不注入
+  任何内容，PM 提示词与改造前逐字一致。
+
+```python
+# 关掉复用（行为与引入本功能前完全一致）
+Crew(settings, reuse_knowledge=False)
+```
+
+---
+
+### P3-6. 产物正文智能摘要
+
+此前任务摘要只取 `notes` 前 400 字符，下游上下文包看到的要么是模型随口的说明、
+要么只是一串文件名。`BaseAgent.summarize()` 在产出了文件时，改为对**产物正文**
+做结构性摘要（`agentcrew/artifacts/summarizer.py`，纯函数、不调用 LLM）：
+
+- `markdown`：提取标题层级（`#`/`##`/`###`）与首段；
+- `python`：提取 `def`/`class` 定义行与模块 docstring；
+- `json`/`yaml`/`toml`：解析后提取顶层键与值类型；
+- `html`/`css`/`js`：提取 `<title>`/`<h1>`/id、顶层选择器、函数名；
+- 其他类型：前 N 行 + 总行数 / 字符数统计。
+
+输出形如 `[python 摘要] src/app.py: 定义：类App、函数run；说明：...`。产物摘要
+在前、`notes` 在后合并（整体上限 1500 字符）；**无产物时完全回落到旧的 notes
+截断逻辑**，向后兼容。批量摘要由 `summarize_records(records, store)` 拼接。
 
 ---
 

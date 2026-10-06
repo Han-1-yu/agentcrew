@@ -101,6 +101,32 @@ class ExperienceStore:
         scored.sort(key=lambda item: (-item[0], item[1].created_at))
         return [exp for _, exp in scored[: max(0, limit)]]
 
+    def inject_context(self, goal: str, *, limit: int = 3) -> str:
+        """检索与项目目标相关的历史经验，渲染成可直接拼进 PM 上下文的文本。
+
+        无相关经验（空库或零命中）时返回空串——调用方据此不注入任何内容，行为与
+        改造前逐字一致（向后兼容）。渲染格式固定：
+
+        ```
+        ## 历史经验（来自之前的成功 run）
+        ### 经验 1：<task_description>
+        - 角色：<role>
+        - 解决方案：<solution_summary>
+        - 关键决策：<key_decisions>
+        ```
+        """
+        exps = self.query(goal, limit=limit)
+        if not exps:
+            return ""
+        lines = ["## 历史经验（来自之前的成功 run）"]
+        for index, exp in enumerate(exps, start=1):
+            lines.append(f"### 经验 {index}：{exp.task_description}")
+            lines.append(f"- 角色：{exp.role}")
+            lines.append(f"- 解决方案：{exp.solution_summary}")
+            if exp.key_decisions:
+                lines.append("- 关键决策：" + "；".join(exp.key_decisions))
+        return "\n".join(lines)
+
     @staticmethod
     def _score(query: str, exp: Experience) -> int:
         """一条查询与一条经验的关键词命中数（查询 token 在经验文本中出现的个数）。"""

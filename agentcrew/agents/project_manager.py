@@ -93,12 +93,18 @@ class ProjectManagerAgent(BaseAgent):
     spec = ROLE
 
     async def decompose(
-        self, goal: str, *, feedback: Sequence[str] = ()
+        self,
+        goal: str,
+        *,
+        feedback: Sequence[str] = (),
+        context_hint: str = "",
     ) -> PlanOutput:
         """把项目目标拆解为 ``PlanOutput``（spec §7.0 的规划调用）。
 
         ``feedback`` 是上一轮 §7.2 校验的具体错误，非空时逐条追加到 user 消息
-        （「上次拆解被拒绝，原因」）。调用走 ``ModelFactory.complete_structured``
+        （「上次拆解被拒绝，原因」）。``context_hint``（P3-7）是从全局经验库检索到
+        的历史成功经验文本，非空时追加到 user 消息末尾——它是**参考材料**而非新
+        的约束，PM 仍按原规则输出结构化计划。调用走 ``ModelFactory.complete_structured``
         的受治理入口：全局调用信号量与 token/成本记账一项不少 —— 规划是整次
         run 最贵的一次调用，绕过工厂的裸阶梯不可接受。
         """
@@ -106,7 +112,9 @@ class ProjectManagerAgent(BaseAgent):
         self._set_plan_replay(alias)
         result = await self._models.complete_structured(
             alias,
-            _plan_messages(self.spec, goal, feedback, self._prompt_roles()),
+            _plan_messages(
+                self.spec, goal, feedback, self._prompt_roles(), context_hint
+            ),
             PlanOutput,
             temperature=self.spec.temperature,
             max_tokens=self.spec.max_output_tokens,
@@ -159,11 +167,12 @@ def _plan_messages(
     goal: str,
     feedback: Sequence[str],
     roles: Sequence[RoleSpec],
+    context_hint: str = "",
 ) -> list[Message]:
     """规划对话：system 钉死输出契约与硬约束，user 给目标与上轮错误。"""
     return [
         {"role": "system", "content": _plan_system_prompt(spec, roles)},
-        {"role": "user", "content": _plan_user_message(goal, feedback)},
+        {"role": "user", "content": _plan_user_message(goal, feedback, context_hint)},
     ]
 
 
@@ -195,11 +204,16 @@ def _role_menu(roles: Sequence[RoleSpec]) -> str:
     )
 
 
-def _plan_user_message(goal: str, feedback: Sequence[str]) -> str:
+def _plan_user_message(
+    goal: str, feedback: Sequence[str], context_hint: str = ""
+) -> str:
     """项目目标；``feedback`` 非空时追加「上次拆解被拒绝，原因」。
 
     空白项丢弃：Crew 只会传 ``PlanValidationError.errors``，但空串会渲染出
     没有信息量的空 bullet，让模型误以为有一条「未知错误」。
+
+    ``context_hint``（P3-7）非空时追加在末尾：它是历史成功 run 沉淀的经验参考，
+    不是硬约束——PM 可借鉴其解法，但仍须遵守全部拆解规则与输出契约。
     """
     sections = [f"## 项目目标\n{goal}"]
     errors = [error.strip() for error in feedback if error.strip()]
@@ -209,4 +223,6 @@ def _plan_user_message(goal: str, feedback: Sequence[str]) -> str:
             + "\n".join(f"- {error}" for error in errors)
             + "\n\n请逐条修正上述问题后，重新输出完整计划。"
         )
+    if context_hint.strip():
+        sections.append(context_hint)
     return "\n\n".join(sections)

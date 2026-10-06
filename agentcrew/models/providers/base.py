@@ -4,7 +4,7 @@
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from typing import Literal, TypedDict
 
 from pydantic import BaseModel, ConfigDict
@@ -52,6 +52,21 @@ class CompletionResult(BaseModel):
     finish_reason: str | None = None
 
 
+class StreamChunk(BaseModel):
+    """流式响应中的一个增量块（P3-3）。
+
+    ``delta`` 是本次新增的文本片段（不含历史内容，调用方自行拼接）；
+    ``finish_reason`` 只在最后一个块上携带（与 :attr:`CompletionResult.finish_reason`
+    同语义），中间块为 ``None``。刻意不带 usage：token 用量在流结束后由工厂
+    按拼接全文统一估算/汇总（与 ``complete()`` 同一条记账路径）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    delta: str
+    finish_reason: str | None = None
+
+
 class BaseProvider(ABC):
     """所有 Provider 的统一接口。
 
@@ -77,3 +92,28 @@ class BaseProvider(ABC):
     ) -> CompletionResult:
         """对 ``messages`` 生成一次补全。"""
         raise NotImplementedError
+
+    async def stream_complete(
+        self,
+        messages: Sequence[Message],
+        *,
+        temperature: float,
+        max_tokens: int,
+        response_format: ResponseFormat | None = None,
+    ) -> AsyncIterator[StreamChunk]:
+        """流式生成补全：逐块 yield :class:`StreamChunk`（P3-3）。
+
+        默认实现退化为一次性 :meth:`complete` 后 yield 一个完整块 —— 不支持真
+        流式的 Provider（或未覆写时）仍可工作，只是失去实时性。子类（真实 SSE
+        Provider、MockProvider）覆写本方法以分块产出。
+
+        这是异步生成器方法（含 ``yield``），调用方用 ``async for`` 消费；流结束
+        后由工厂层统一记账（token/成本/``llm_call`` 事件）。
+        """
+        result = await self.complete(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=response_format,
+        )
+        yield StreamChunk(delta=result.text, finish_reason=result.finish_reason)
