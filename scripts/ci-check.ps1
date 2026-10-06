@@ -1,0 +1,48 @@
+# ci-check.ps1 — 本地复现 CI 的检查步骤（ruff + mypy + pytest）
+# 用法： .\scripts\ci-check.ps1
+# 需要： Python 3.10+，首次运行会自动创建 .venv-ci 虚拟环境。
+
+$ErrorActionPreference = "Stop"
+$root = Split-Path -Parent $PSScriptRoot
+Set-Location $root
+
+$venvPython = Join-Path $root ".venv-ci\Scripts\python.exe"
+
+# 1. 准备 venv
+if (-not (Test-Path $venvPython)) {
+    Write-Host "==> 创建 .venv-ci ..." -ForegroundColor Cyan
+    python -m venv .venv-ci
+    & $venvPython -m pip install --upgrade pip --quiet
+}
+
+# 2. 安装依赖（幂等：已装则跳过）
+Write-Host "==> 安装依赖 ..." -ForegroundColor Cyan
+& $venvPython -m pip install -r requirements.txt --quiet
+& $venvPython -m pip install ruff mypy --quiet
+
+$failed = @()
+
+# 3. ruff
+Write-Host "`n==> ruff check" -ForegroundColor Cyan
+& $venvPython -m ruff check .
+if ($LASTEXITCODE -ne 0) { $failed += "ruff" }
+
+# 4. mypy
+Write-Host "`n==> mypy agentcrew/" -ForegroundColor Cyan
+& $venvPython -m mypy agentcrew/
+if ($LASTEXITCODE -ne 0) { $failed += "mypy" }
+
+# 5. pytest
+Write-Host "`n==> pytest -q" -ForegroundColor Cyan
+$env:AGENTCREW_MOCK = "true"
+& $venvPython -m pytest -q
+if ($LASTEXITCODE -ne 0) { $failed += "pytest" }
+
+# 6. 汇总
+Write-Host "`n========================================" -ForegroundColor Cyan
+if ($failed.Count -eq 0) {
+    Write-Host "ALL CHECKS PASSED" -ForegroundColor Green
+} else {
+    Write-Host "FAILED: $($failed -join ', ')" -ForegroundColor Red
+    exit 1
+}
