@@ -104,12 +104,17 @@ def summarizer_from_factory(
     """
     from agentcrew.models.providers.base import Message
 
+    # ``"default"`` 只是「未指定」的哨兵，不是可解析的别名：在这里就把它解析成
+    # 配置里的默认模型，否则会原样传进 ``models.call`` → ``parse_alias`` 报错
+    # 「模型别名缺少 ':'：'default'」。
+    resolved_alias = models.settings.default_model if alias == "default" else alias
+
     async def _fn(text: str, max_tokens: int) -> str:
         messages: list[Message] = [
             {"role": "user", "content": text},
         ]
         result = await models.call(
-            alias, messages,
+            resolved_alias, messages,
             temperature=0.3, max_tokens=max_tokens,
             purpose=purpose, role="context_summarizer",
         )

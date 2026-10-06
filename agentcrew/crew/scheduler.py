@@ -63,6 +63,7 @@ from agentcrew.artifacts.spec import ArtifactSpec
 from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.context.context_bus import ContextBus
 from agentcrew.gate.gatekeeper import GateDecision, Gatekeeper
+from agentcrew.models.complexity import get_calibrator
 from agentcrew.models.factory import BudgetExhaustedError
 from agentcrew.runtime.checkpoint import CheckpointStore
 from agentcrew.runtime.ledger import Ledger
@@ -430,6 +431,22 @@ class Scheduler:
             status=self._board.get(task_id).status.value,
             verdict=None if decision is None else decision.verdict,
         )
+        # P3-1：任务走到终局（SUCCEEDED / FAILED）时把实际结局喂给全局校准器。
+        # 仍在 READY（待重试）/ REWORK（待返工）的任务还没定局，不记录 ——
+        # 否则一次重试的中间失败就会污染同类任务的成功率。CANCELLED / BLOCKED
+        # 是外部结局，不反映模型选得对不对，同样不记。
+        self._record_calibration(task_id)
+
+    def _record_calibration(self, task_id: str) -> None:
+        """终局任务喂给复杂度校准器（P3-1）；校准器未注入时零开销跳过。"""
+        calibrator = get_calibrator()
+        if calibrator is None:
+            return
+        task = self._board.get(task_id)
+        if task.status is TaskStatus.SUCCEEDED:
+            calibrator.record(task, True, task.attempts)
+        elif task.status is TaskStatus.FAILED:
+            calibrator.record(task, False, task.attempts)
 
     def _handle_error(self, task_id: str, error: str) -> None:
         """执行/门禁错误的去向：按板上状态与 ``attempts`` 额度决定。
