@@ -71,6 +71,10 @@ class CliPrompter:
     ``edit_fn`` 缺省是 :func:`edit_tasks_in_editor`（开 ``$EDITOR``）。
     ``catalog`` 是本 run 的角色目录：缺省编辑路径用它校验，自定义角色因此
     不会被「角色未注册」误拒（不传则回落到内置八角色）。
+
+    ``crew``（P1-6）注入后，两个卡点菜单多一项 ``[m] 切换模型``：计划/交付卡点
+    上即可切默认模型或角色绑定。默认 ``None`` —— 老调用方（无 crew 上下文）
+    行为完全不变，也不显示该项。
     """
 
     def __init__(
@@ -80,6 +84,7 @@ class CliPrompter:
         edit_fn: EditFn | None = None,
         console: Console | None = None,
         catalog: RoleCatalog | None = None,
+        crew: Any | None = None,
     ) -> None:
         self._input = input_fn
         self._edit: EditFn = (
@@ -88,6 +93,7 @@ class CliPrompter:
             else edit_fn
         )
         self._console = Console() if console is None else console
+        self._crew = crew
 
     # ── 卡点一：计划 ─────────────────────────────────────────────────────
 
@@ -96,12 +102,13 @@ class CliPrompter:
 
         EOF（Ctrl-D / Ctrl-Z）等同 ``[q] 取消``：结束输入是普通操作，不该用 traceback
         结束整次 run —— 它走与选 ``q`` 完全相同的收尾路径。
+        注入了 ``crew`` 时菜单多 ``[m] 切换模型``（P1-6）。
         """
         planned = list(tasks)
         self._print_plan(planned)
         while True:
-            choice = self._choose(
-                _PLAN_MENU, _PLAN_CHOICES, default="a", eof_label="取消")
+            menu, choices = self._plan_menu()
+            choice = self._choose(menu, choices, default="a", eof_label="取消")
             if choice == "a":
                 return PlanDecision(action="approve", tasks=planned)
             if choice == "e":
@@ -111,9 +118,21 @@ class CliPrompter:
                     self._print_errors(exc.errors)
                     continue
                 return PlanDecision(action="edit", tasks=edited)
+            if choice == "m":
+                await self._switch_model()
+                continue
             if choice == "s":
                 return PlanDecision(action="save_exit")
             return PlanDecision(action="cancel")
+
+    def _plan_menu(self) -> tuple[str, str]:
+        """计划卡点菜单；注入了 crew 时多 ``[m] 切换模型``。"""
+        if self._crew is not None:
+            return (
+                "[a] 批准执行 / [e] 编辑后执行 / [m] 切换模型 / [s] 保存退出 / [q] 取消",
+                "a/e/m/s/q",
+            )
+        return (_PLAN_MENU, _PLAN_CHOICES)
 
     # ── 卡点二：交付 ─────────────────────────────────────────────────────
 
@@ -121,21 +140,72 @@ class CliPrompter:
         """展示交付并询问是否接受；``r`` 收集任务 id，空列表重新提示。
 
         EOF 在任一提示处都等同 ``[q] 放弃``（含任务 id 子提示）。
+        注入了 ``crew`` 时菜单多 ``[m] 切换模型``（P1-6）。
         """
         self._print_delivery(record)
         while True:
-            choice = self._choose(
-                _DELIVERY_MENU, _DELIVERY_CHOICES, default="a", eof_label="放弃")
+            menu, choices = self._delivery_menu()
+            choice = self._choose(menu, choices, default="a", eof_label="放弃")
             if choice == "a":
                 return DeliveryDecision(action="accept")
             if choice == "q":
                 return DeliveryDecision(action="abort")
+            if choice == "m":
+                await self._switch_model()
+                continue
             task_ids = self._ask_task_ids()
             if task_ids is None:
                 return DeliveryDecision(action="abort")
             if task_ids:
                 return DeliveryDecision(action="rework", task_ids=task_ids)
             self._console.print(Text("没有解析到任务 id，请重新选择。"), soft_wrap=True)
+
+    def _delivery_menu(self) -> tuple[str, str]:
+        """交付卡点菜单；注入了 crew 时多 ``[m] 切换模型``。"""
+        if self._crew is not None:
+            return (
+                "[a] 接受交付 / [r] 打回指定任务返工 / [m] 切换模型 / [q] 放弃",
+                "a/r/m/q",
+            )
+        return (_DELIVERY_MENU, _DELIVERY_CHOICES)
+
+    async def _switch_model(self) -> None:
+        """``[m] 切换模型``：展示当前绑定 → 问新别名（+可选角色）→ 调 crew。
+
+        任何一步 EOF / 空输入都安全退回菜单，不影响 run 主流程。
+        """
+        crew = self._crew
+        if crew is None:
+            return
+        try:
+            bindings = crew.current_model_bindings()
+        except RuntimeError as exc:
+            self._console.print(Text(f"当前还读不到模型绑定：{exc}"), soft_wrap=True)
+            return
+        self._console.print(
+            Text(f"当前默认模型：{bindings['default']}"), soft_wrap=True)
+        for role, alias in bindings.get("role_bindings", {}).items():
+            self._console.print(
+                Text(f"  角色 {role} → {alias}"), soft_wrap=True)
+        try:
+            alias = self._input("新模型别名（如 openai:gpt-4o-mini，留空取消）> ").strip()
+        except EOFError:
+            return
+        if not alias:
+            return
+        try:
+            role_raw = self._input("角色绑定（留空=切换默认模型）> ").strip()
+        except EOFError:
+            role_raw = ""
+        try:
+            result = crew.switch_model(alias, role=role_raw or None)
+        except Exception as exc:
+            self._console.print(Text(f"切换失败：{exc}"), soft_wrap=True)
+            return
+        self._console.print(
+            Text(f"已切换：默认 {result['default']}；"
+                 f"角色绑定 {result['role_bindings']}"),
+            soft_wrap=True)
 
     # ── 提示 ─────────────────────────────────────────────────────────────
 

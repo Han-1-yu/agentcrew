@@ -32,14 +32,19 @@ spec §7.3 的两级并发限额里，任务槽位由 Scheduler 持有，本模�
 import asyncio
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
 from agentcrew.config import Settings
 from agentcrew.models import structured
 from agentcrew.models.complexity import evaluate as evaluate_complexity
-from agentcrew.models.config import PROVIDER_PRESETS, ModelBinding, parse_alias
+from agentcrew.models.config import (
+    PROVIDER_PRESETS,
+    ModelBinding,
+    UnknownProviderError,
+    parse_alias,
+)
 from agentcrew.models.pricing import estimate_cost
 from agentcrew.models.providers.anthropic import AnthropicProvider
 from agentcrew.models.providers.base import (
@@ -159,7 +164,11 @@ class ModelFactory:
 
     @property
     def settings(self) -> Settings:
-        """生效配置（BaseAgent 解析角色级模型绑定的三级优先级要用）。"""
+        """生效配置（BaseAgent 解析角色级模型绑定的三级优先级要用）。
+
+        P1-6：``set_default_alias`` / ``set_role_binding`` 会就地替换它 ——
+        frozen Settings 经 ``model_copy`` 出新版，引用持有者经本属性看到新值。
+        """
         return self._settings
 
     @property
@@ -193,6 +202,69 @@ class ModelFactory:
         self._total_prompt_tokens = 0
         self._total_completion_tokens = 0
         self._total_cost_usd = 0.0
+
+    # ── P1-6：运行时切换模型绑定 ───────────────────────────────────────────
+
+    def set_default_alias(self, alias: str) -> None:
+        """运行时切换默认模型别名（``settings.default_model``）。
+
+        用 ``model_copy`` 出一份新 Settings 就地替换 ``self._settings``（frozen
+        对象不可变，只能换引用）；清空 provider 缓存 —— 旧实例绑定了旧配置
+        （api_key/base_url/capabilities），不清的话下次 ``get()`` 仍命中旧实例。
+        切换前后记一条 ``llm_model_switched`` 事件（含 from/to/scope="default"）。
+        别名本身过 ``parse_alias`` 校验，非法别名当场抛 ``ModelFactoryError``。
+        """
+        old = self._settings.default_model
+        if alias == old:
+            return
+        self._validate_alias(alias)
+        self._settings = self._settings.model_copy(update={"default_model": alias})
+        self._cache.clear()
+        self._emit_model_switched(old, alias, scope="default")
+
+    def set_role_binding(self, role: str, alias: str) -> None:
+        """运行时设置角色级模型绑定（``settings.role_bindings[role]``）。
+
+        与 :meth:`set_default_alias` 同形：合并进新 ``role_bindings``、清缓存、
+        记 ``llm_model_switched``（``scope=f"role:{role}"``）。
+        """
+        old_bindings = dict(self._settings.role_bindings)
+        old = old_bindings.get(role)
+        if old == alias:
+            return
+        self._validate_alias(alias)
+        old_bindings[role] = alias
+        self._settings = self._settings.model_copy(
+            update={"role_bindings": old_bindings})
+        self._cache.clear()
+        self._emit_model_switched(old, alias, scope=f"role:{role}")
+
+    def _validate_alias(self, alias: str) -> None:
+        """``parse_alias`` 校验 + 把解析异常统一收敛成 ``ModelFactoryError``。"""
+        try:
+            parse_alias(alias, overrides=self._settings.provider_overrides)
+        except (ValueError, UnknownProviderError) as exc:
+            raise ModelFactoryError(f"非法模型别名 {alias!r}: {exc}") from exc
+
+    def current_bindings(self) -> dict[str, Any]:
+        """当前生效的模型绑定（默认 + 角色级），API / CLI / Dashboard 共用。"""
+        return {
+            "default": self._settings.default_model,
+            "role_bindings": dict(self._settings.role_bindings),
+        }
+
+    def _emit_model_switched(
+        self, from_alias: str | None, to_alias: str, *, scope: str
+    ) -> None:
+        """记一条 ``llm_model_switched`` 事件（P1-6：诚实留痕）。"""
+        if self._ledger is None:
+            return
+        self._ledger.emit(
+            "llm_model_switched",
+            from_alias=from_alias,
+            to_alias=to_alias,
+            scope=scope,
+        )
 
     # ── 解析与缓存 ────────────────────────────────────────────────────────
 

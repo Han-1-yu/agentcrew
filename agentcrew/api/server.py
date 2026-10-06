@@ -180,13 +180,16 @@ class ApiServer:
                         content_length = 0
             if method == "GET":
                 await self._handle_get(path, writer)
-            elif method == "POST":
+            elif method in ("POST", "PUT"):
                 # 按声明长度读，但不苛求凑满：客户端少发（含调试用的坏 JSON）
                 # 都在 JSON 解析处收成 400，而不是在这里死等字节。
                 body = (
                     await reader.read(content_length)
                     if content_length > 0 else b"")
-                await self._handle_post(path, body, writer)
+                if method == "POST":
+                    await self._handle_post(path, body, writer)
+                else:
+                    await self._handle_put(path, body, writer)
             elif method == "DELETE":
                 await self._handle_delete(path, writer)
             else:
@@ -232,6 +235,10 @@ class ApiServer:
                 "task_count": len(run.tasks),
                 "tasks": run.tasks,
             })
+            return
+        if path.startswith("/runs/") and path.endswith("/model"):
+            run_id = path.split("/")[2]
+            await self._get_model(run_id, writer)
             return
         await self._send_json(writer, 404, {"error": "Not Found"})
 
@@ -469,6 +476,67 @@ class ApiServer:
                 })
         runs.sort(key=lambda r: r.get("created_at", ""), reverse=True)
         await self._send_json(writer, 200, {"runs": runs})
+
+    # ── P1-6：运行时切换模型 ────────────────────────────────────────────────
+
+    async def _handle_put(
+        self, path: str, body: bytes, writer: asyncio.StreamWriter,
+    ) -> None:
+        parsed = urlsplit(path)
+        segments = [unquote(s) for s in parsed.path.split("/") if s]
+        if len(segments) == 3 and segments[0] == "runs" and segments[2] == "model":
+            await self._put_model(segments[1], body, writer)
+            return
+        await self._send_json(writer, 404, {"error": "Not Found"})
+
+    async def _get_model(self, run_id: str, writer: asyncio.StreamWriter) -> None:
+        """``GET /runs/{id}/model``：当前模型绑定（仅运行中的 run 可读）。"""
+        crew = self.active_crews.get(run_id)
+        if crew is None:
+            await self._send_json(
+                writer, 404,
+                {"error": f"run {run_id!r} 不在运行中（只能切换运行中的 run）"})
+            return
+        try:
+            bindings = crew.current_model_bindings()
+        except RuntimeError as exc:
+            await self._send_json(writer, 409, {"error": str(exc)})
+            return
+        await self._send_json(writer, 200, bindings)
+
+    async def _put_model(
+        self, run_id: str, body: bytes, writer: asyncio.StreamWriter,
+    ) -> None:
+        """``PUT /runs/{id}/model``：body ``{"alias": ..., "role": ...}`` 切换模型。"""
+        try:
+            data = json.loads(body.decode("utf-8")) if body else {}
+        except json.JSONDecodeError:
+            await self._send_json(writer, 400, {"error": "invalid JSON"})
+            return
+        if not isinstance(data, dict):
+            await self._send_json(writer, 400, {"error": "body 必须是 JSON 对象"})
+            return
+        alias = data.get("alias")
+        if not isinstance(alias, str) or not alias.strip():
+            await self._send_json(writer, 400, {"error": "alias 不能为空"})
+            return
+        role = data.get("role")
+        if role is not None and not isinstance(role, str):
+            await self._send_json(writer, 400, {"error": "role 必须是字符串"})
+            return
+        crew = self.active_crews.get(run_id)
+        if crew is None:
+            await self._send_json(
+                writer, 409,
+                {"error": f"run {run_id!r} 不在运行中（只能切换运行中的 run）"})
+            return
+        try:
+            bindings = crew.switch_model(alias, role=role or None)
+        except Exception as exc:
+            await self._send_json(
+                writer, 400, {"error": f"模型切换失败：{exc}"})
+            return
+        await self._send_json(writer, 200, bindings)
 
     async def _handle_delete(self, path: str, writer: asyncio.StreamWriter) -> None:
         """``DELETE /runs/{run_id}?confirm=1``：删除单个 run（P0-4）。

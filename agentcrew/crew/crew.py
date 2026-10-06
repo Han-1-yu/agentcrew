@@ -256,6 +256,43 @@ class Crew:
         if scheduler is not None:
             scheduler.cancel(hard=False)
 
+    # ── P1-6：运行时切换模型 ───────────────────────────────────────────────
+
+    def current_model_bindings(self) -> dict[str, Any]:
+        """当前生效的模型绑定（默认 + 角色级）；run 未开始时抛 ``RuntimeError``。"""
+        if self._run is None:
+            raise RuntimeError("当前 run 尚未装配 ModelFactory，请在 run 开始后调用")
+        return self._run.models.current_bindings()
+
+    def switch_model(self, alias: str, *, role: str | None = None) -> dict[str, Any]:
+        """运行时切换模型绑定（API / CLI 菜单 / Dashboard 共用）。
+
+        ``role=None`` 切默认模型；指定 ``role`` 切角色级绑定。委托本次 run 的
+        :class:`ModelFactory` 改配置 + 清 provider 缓存，并把新配置快照回写
+        ``run.json``（resume 的配置差异行因此看到切换后的口径）。记 ``model_switched``
+        事件（含 from/to/role）。返回切换后的绑定。
+        """
+        if self._run is None:
+            raise RuntimeError("当前 run 尚未装配 ModelFactory，请在 run 开始后调用")
+        models = self._run.models
+        if role is None:
+            from_alias = models.settings.default_model
+            models.set_default_alias(alias)
+        else:
+            from_alias = models.settings.role_bindings.get(role)
+            models.set_role_binding(role, alias)
+        # 让 Crew 自己持有的 settings 与工厂同步（_validate_config / _gate_enabled
+        # 仍读 self._settings；Agent 经 factory.settings 读同一份新配置）。
+        self._settings = models.settings
+        record = self._run.record
+        record.config_snapshot = models.settings.config_snapshot()
+        self._run.checkpoint.save_record(record)
+        self._run.ledger.emit(
+            "model_switched",
+            from_alias=from_alias, to_alias=alias, role=role,
+        )
+        return models.current_bindings()
+
     # ── 角色注册（spec §8.3）──────────────────────────────────────────────
 
     def register_role(self, spec: RoleSpec, cls: type[BaseAgent] | None = None) -> None:

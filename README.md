@@ -271,6 +271,8 @@ Task 新增 `parent_id` 字段，支持父子层级的任务树。父任务自�
 | `/runs/{id}/cancel` | POST | 软取消运行中的 run（202；在跑任务收尾后以 cancelled 收尾，退出码 130） |
 | `/runs/{id}/resume` | POST | 从 checkpoint 恢复 run 并后台执行（202） |
 | `/runs/{id}/status` | GET | 运行状态与任务看板 |
+| `/runs/{id}/model` | GET | 当前模型绑定（仅运行中的 run） |
+| `/runs/{id}/model` | PUT | 切换模型（body `{"alias": ..., "role": ...}`） |
 | `/runs/{id}/events` | GET | SSE 事件流（实时推送） |
 | `/runs/{id}/events` | POST | 注入事件（调试用） |
 
@@ -448,6 +450,34 @@ agent = GenericAgent(spec, models=..., store=..., ledger=...,
 - PM 可在 `TaskDraft` 中按任务指定 `timeout_seconds`（默认 300）
 - 与 P2-2 停滞检测互补：任务超时是单次执行，停滞检测是调度器级别的兜底
 - 正常快速完成的任务不受影响（默认 300s 远大于常规执行时间）
+
+### P1-5. 创建 run 的 REST API（create / cancel / resume / list）
+
+`ApiServer` 不再只能查状态/推 SSE，可直接创建并后台跑 run：
+
+- `POST /runs`（body `{"goal": ..., "options": {...}}`）→ 202，返回 `run_id`；
+  经 `crew_factory` 装配 Crew、挂 `on_event` 后 `asyncio.create_task` 后台执行，
+  `run_started` 事件一到就把 `run_id` 回给 HTTP 响应
+- `POST /runs/{id}/cancel` → 202 软取消：不再派发新任务，在跑任务收尾后以
+  `cancelled` 封版（退出码 130，复用既有 `EXIT_CODES`）
+- `POST /runs/{id}/resume` → 202 从 checkpoint 恢复并后台执行
+- `GET /runs` → 盘上 `run.json` 列表 + 内存中运行中状态叠加，按创建时间倒序
+
+新参数（`settings` / `crew_factory`）均有默认值，老调用方行为不变。
+
+### P1-6. 运行时切换大模型选项
+
+跑起来后可切默认模型或角色绑定，不必重启 run：
+
+- `ModelFactory.set_default_alias()` / `set_role_binding()`：用 `model_copy` 换
+  frozen Settings、清空 provider 缓存（旧实例绑定了旧配置）、记 `llm_model_switched`
+  ledger 事件；`current_bindings()` 返回当前绑定
+- `Crew.switch_model(alias, role=None)`：委托工厂切换、把新 `config_snapshot`
+  回写 `run.json`、记 `model_switched` 事件
+- HTTP：`GET /runs/{id}/model` 读绑定；`PUT /runs/{id}/model`
+  （body `{"alias": ..., "role": ...}`）切换，仅对运行中 run 开放（非运行中 409）
+- CLI 计划/交付卡点菜单新增 `[m] 切换模型`（注入 `crew` 才显示，向后兼容）
+- Dashboard 顶部新增模型选择器，选别名+可选角色即调 `PUT` 接口
 
 ---
 

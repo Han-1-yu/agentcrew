@@ -54,6 +54,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <button id="btn-delete" class="btn-danger" onclick="deleteRun()" disabled>删除 Run</button>
   <span id="run-status" class="status-badge status-pending">pending</span>
 </div>
+<div class="controls">
+  <span style="opacity:.7">模型：</span>
+  <input id="model-alias" placeholder="别名 openai:gpt-4o-mini" style="width:200px">
+  <input id="model-role" placeholder="角色(可选)" style="width:130px">
+  <button onclick="switchModel()">切换模型</button>
+  <span id="model-current" class="status-badge status-pending">未连接</span>
+</div>
 <div class="board" id="board"></div>
 <div class="log" id="log"></div>
 
@@ -163,6 +170,8 @@ async function connect() {
     }
   } catch(e) {}
 
+  refreshModel();
+
   // SSE 实时更新
   eventSource = new EventSource(`/runs/${runId}/events`);
   eventSource.onopen = () => setConn(true);
@@ -193,6 +202,43 @@ async function connect() {
     setStatus("failed");
     logEvent("run_failed", JSON.parse(e.data));
   });
+}
+
+async function refreshModel() {
+  if (!currentRun) return;
+  try {
+    const resp = await fetch(`/runs/${currentRun}/model`);
+    if (!resp.ok) {
+      document.getElementById("model-current").textContent = "n/a";
+      return;
+    }
+    const data = await resp.json();
+    const roles = Object.entries(data.role_bindings || {})
+      .map(([r, a]) => `${r}→${a}`).join(" ");
+    document.getElementById("model-current").textContent =
+      `默认 ${data.default}` + (roles ? `（${roles}）` : "");
+  } catch(e) {}
+}
+
+async function switchModel() {
+  if (!currentRun) { alert("请先连接一个 Run"); return; }
+  const alias = document.getElementById("model-alias").value.trim();
+  if (!alias) { alert("请输入模型别名"); return; }
+  const role = document.getElementById("model-role").value.trim() || null;
+  try {
+    const resp = await fetch(`/runs/${currentRun}/model`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ alias, role })
+    });
+    const data = await resp.json();
+    if (resp.ok) {
+      alert(`已切换：默认 ${data.default}\n角色绑定：${JSON.stringify(data.role_bindings)}`);
+      refreshModel();
+    } else {
+      alert(`切换失败（${resp.status}）：${data.error || resp.statusText}`);
+    }
+  } catch(e) { alert(`请求失败：${e}`); }
 }
 
 initBoard();
