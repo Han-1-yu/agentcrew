@@ -326,7 +326,7 @@ function computeLayers(tasks) {
   for (const [id,l] of layerOf){ while(layers.length<=l) layers.push([]); layers[l].push(id); }
   return { byId, layerOf, layers };
 }
-const NW=200, NH=78, COL_GAP=78, ROW_GAP=46;
+const NW=208, NH=86, COL_GAP=72, ROW_GAP=48;
 function layoutDAG(tasks) {
   const { byId, layerOf, layers } = computeLayers(tasks);
   const pos = new Map();
@@ -342,8 +342,19 @@ function renderDAG() {
   const svg=$('#dag-svg'); if(!svg) return;
   const tasks=S.dash.tasks; const L=layoutDAG(tasks);
   svg.innerHTML='';
-  const pad=30, totalW=L.width+pad*2, totalH=L.height+pad*2;
+  const pad=32, totalW=L.width+pad*2, totalH=L.height+pad*2;
   svg.setAttribute('viewBox',`0 0 ${totalW} ${totalH}`);
+
+  // SVG defs: 箭头 marker
+  const defs=s('defs',{});
+  defs.appendChild(s('marker',{id:'arrow-hot',viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:6,markerHeight:6,orient:'auto-start-reverse'},
+    s('path',{d:'M 0 0 L 10 5 L 0 10 z',fill:'#007AFF'})));
+  defs.appendChild(s('marker',{id:'arrow-done',viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:6,markerHeight:6,orient:'auto-start-reverse'},
+    s('path',{d:'M 0 0 L 10 5 L 0 10 z',fill:'#34C759'})));
+  defs.appendChild(s('marker',{id:'arrow-pending',viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:5,markerHeight:5,orient:'auto-start-reverse'},
+    s('path',{d:'M 0 0 L 10 5 L 0 10 z',fill:'rgba(60,60,67,0.3)'})));
+  svg.appendChild(defs);
+
   const vp=s('g',{id:'dag-viewport', transform:`translate(${S.view.x} ${S.view.y}) scale(${S.view.zoom})`});
 
   const runningIds=new Set(tasks.filter(t=>['running','review','rework'].includes(t.status)).map(t=>t.id));
@@ -353,44 +364,84 @@ function renderDAG() {
       const t=L.byId.get(cur); if(!t)continue;
       for(const dep of (t.dependencies||[])){ hotEdges.add(dep+'->'+cur); q.push(dep); } } }
 
+  // 连线：箭头 + 状态色
   for (const t of tasks){
     const to=L.pos.get(t.id); if(!to) continue;
     for(const dep of (t.dependencies||[])){
       const from=L.pos.get(dep); if(!from)continue;
       const x1=from.x+NW/2, y1=from.y+NH, x2=to.x+NW/2, y2=to.y;
       const hot=hotEdges.has(dep+'->'+t.id);
-      const up=L.byId.get(dep); const upOk=up&&(up.status==='succeeded');
-      vp.appendChild(s('path',{ d:`M ${x1} ${y1} C ${x1} ${y1+28}, ${x2} ${y2-28}, ${x2} ${y2}`,
-        fill:'none', stroke:hot?C.blue:(upOk?'rgba(60,60,67,0.35)':'rgba(60,60,67,0.18)'),
-        'stroke-width':hot?2.4:1.4,
-        'stroke-dasharray':up&&up.status==='failed'?'4 3':'none' }));
+      const up=L.byId.get(dep);
+      const upDone=up&&up.status==='succeeded';
+      const upFailed=up&&up.status==='failed';
+      let stroke, sw, marker, dash='none';
+      if(hot){ stroke='#007AFF'; sw=2.2; marker='url(#arrow-hot)'; }
+      else if(upDone){ stroke='#34C759'; sw=1.6; marker='url(#arrow-done)'; }
+      else if(upFailed){ stroke='#FF9F0A'; sw=1.4; marker='url(#arrow-pending)'; dash='4 3'; }
+      else { stroke='rgba(60,60,67,0.25)'; sw=1.2; marker='url(#arrow-pending)'; }
+      vp.appendChild(s('path',{ d:`M ${x1} ${y1+2} C ${x1} ${y1+26}, ${x2} ${y2-26}, ${x2} ${y2-2}`,
+        fill:'none', stroke, 'stroke-width':sw, 'stroke-dasharray':dash, 'marker-end':marker, opacity: hot?1:0.8 }));
     }
   }
+
+  // 节点
   for (const t of tasks){
     const p=L.pos.get(t.id); if(!p)continue;
     const meta=STATUS_META[t.status]||STATUS_META.unknown;
     const rm=roleMeta(t.role);
-    // 重试中视觉：attempts>1 且运行/就绪
     const isRetry=(t.attempts||1)>1 && ['running','ready','rework'].includes(t.status);
-    const node=s('g',{class:'dag-node', transform:`translate(${p.x+pad} ${p.y+pad})`, 'data-task':t.id});
-    node.appendChild(s('rect',{class:'node-box', width:NW, height:NH, rx:6, fill:meta.fill, stroke:meta.color, 'stroke-width':t.status==='running'?2:1.4,
-      'stroke-dasharray':isRetry?'5 3':'none'}));
-    node.appendChild(s('rect',{x:0,y:0,width:4,height:NH,rx:2,fill:meta.color}));
-    node.appendChild(s('text',{x:12,y:20,'font-size':10,fill:'#8E8E93','font-family':'ui-monospace, Menlo, monospace'}, t.id));
-    node.appendChild(s('text',{x:12,y:38,'font-size':12,'font-weight':600,fill:'#1C1C1E'}, trunc(t.title,16)));
-    node.appendChild(s('circle',{cx:16,cy:56,r:4,fill:rm.color}));
-    node.appendChild(s('text',{x:24,y:60,'font-size':10,fill:'#6E6E73'}, rm.full));
-    node.appendChild(s('text',{x:NW-12,y:60,'font-size':10,fill:meta.color,'text-anchor':'end','font-weight':60}, isRetry?'重试中':meta.label));
+    const isRunning=t.status==='running';
+    const isDone=t.status==='succeeded';
+    const isFailed=t.status==='failed';
+
+    const node=s('g',{class:'dag-node'+(isRunning?' running':''), transform:`translate(${p.x+pad} ${p.y+pad})`, 'data-task':t.id});
+
+    // 背景
+    node.appendChild(s('rect',{class:'node-box', width:NW, height:NH, rx:6,
+      fill:meta.fill, stroke:meta.color,
+      'stroke-width':isRunning?2.4:(isDone?1.8:1.3),
+      'stroke-dasharray':isRetry?'5 3':'none' }));
+    // 左侧状态色条
+    node.appendChild(s('rect',{x:0,y:0,width:5,height:NH,rx:2.5,fill:meta.color}));
+
+    // 顶部：task_id + 耗时
+    node.appendChild(s('text',{x:14,y:18,'font-size':10,fill:'#8E8E93','font-family':'ui-monospace, Menlo, monospace'}, t.id));
     if (t.result && t.result.duration_ms!=null)
-      node.appendChild(s('text',{x:NW-12,y:20,'font-size':9,fill:'#8E8E93','text-anchor':'end'}, fmtDur(t.result.duration_ms)));
-    if ((t.rework_count||0)>0)
-      node.appendChild(s('text',{x:NW-12,y:32,'font-size':9,fill:C.warn,'text-anchor':'end'},`返工 ${t.rework_count}`));
-    if (t.status==='running'){
-      node.appendChild(s('rect',{x:12,y:NH-8,width:NW-24,height:3,rx:1.5,fill:'rgba(60,60,67,0.12)'}));
-      node.appendChild(s('rect',{x:12,y:NH-8,width:(NW-24)*(t.progress||0)/100,height:3,rx:1.5,fill:C.blue}));
+      node.appendChild(s('text',{x:NW-12,y:18,'font-size':9,fill:'#8E8E93','text-anchor':'end','font-family':'ui-monospace, Menlo, monospace'}, fmtDur(t.result.duration_ms)));
+
+    // 标题
+    node.appendChild(s('text',{x:14,y:40,'font-size':13,'font-weight':600,fill:'#1C1C1E'}, trunc(t.title,18)));
+
+    // 底部：角色头像 + 名称 + 状态
+    const avatarY=62;
+    // 角色圆形头像
+    node.appendChild(s('circle',{cx:21,cy:avatarY,r:9,fill:rm.color,opacity:0.9}));
+    node.appendChild(s('text',{x:21,y:avatarY+3.5,'font-size':9,'font-weight':700,fill:'#fff','text-anchor':'middle'}, rm.label.charAt(0)));
+    // 角色名
+    node.appendChild(s('text',{x:34,y:avatarY+3,'font-size':10,fill:'#6E6E73'}, rm.full));
+    // 状态标签（右侧，实心小 chip）
+    const chipW = isRetry?48:42;
+    node.appendChild(s('rect',{x:NW-chipW-10,y:avatarY-8,width:chipW,height:16,rx:3,fill:meta.color}));
+    node.appendChild(s('text',{x:NW-chipW/2-10,y:avatarY+3,'font-size':9,'font-weight':600,fill:'#fff','text-anchor':'middle'}, isRetry?'重试中':meta.label));
+
+    // 完成对勾（右上角）
+    if(isDone){
+      node.appendChild(s('circle',{cx:NW-16,cy:16,r:8,fill:'#34C759'}));
+      node.appendChild(s('path',{d:'M 11 16 L 14.5 19.5 L 20 13',stroke:'#fff','stroke-width':2,fill:'none','stroke-linecap':'round','stroke-linejoin':'round',transform:`translate(${NW-28},0)`}));
     }
-    if (t.status==='failed' && t.error)
-      node.appendChild(s('text',{x:12,y:NH-10,'font-size':9,fill:C.error}, trunc(t.error,24)));
+    // 返工次数
+    if ((t.rework_count||0)>0)
+      node.appendChild(s('text',{x:NW-14,y:40,'font-size':9,fill:'#FF9F0A','text-anchor':'end','font-weight':600},`↻${t.rework_count}`));
+
+    // running：底部进度条
+    if (isRunning){
+      node.appendChild(s('rect',{x:14,y:NH-10,width:NW-28,height:3,rx:1.5,fill:'rgba(60,60,67,0.1)'}));
+      node.appendChild(s('rect',{x:14,y:NH-10,width:(NW-28)*(t.progress||0)/100,height:3,rx:1.5,fill:'#007AFF'}));
+    }
+    // failed：错误摘要
+    if (isFailed && t.error)
+      node.appendChild(s('text',{x:14,y:NH-12,'font-size':9,fill:'#FF3B30'}, trunc(t.error,22)));
+
     node.addEventListener('click',()=>openTaskDetail(t.id));
     vp.appendChild(node);
   }
@@ -445,6 +496,7 @@ function renderDAGFallback() {
 function renderRunStatusBar() {
   const host=$('#run-status-bar'); if(!host)return;
   const run=S.dash.run; const meta=RUN_META[run.status]||RUN_META.idle;
+  host.className = ''; host.classList.add('status-'+(run.status||'idle'));
   const stats=run.stats||{};
   const elapsed=run.status==='running'&&stats.started_at ? (Date.now()-parseTs(stats.started_at).getTime()) : null;
   const cost=stats.estimated_cost_usd||0;
