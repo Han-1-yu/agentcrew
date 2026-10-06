@@ -1142,7 +1142,7 @@ async function renderSettingsPage(container) {
       h('span', { style: 'font-weight:600;color:#6E6E73' }, '快捷键'),
       h('br'), 'Esc — 关闭面板 / 弹窗',
       h('br'), 'Ctrl/⌘ + N — 新建运行',
-      h('br'), '1-7 — 切换页面（总览/任务图/Agents/门禁/产物/事件/设置）')));
+      h('br'), '1-8 — 切换页面（总览/计划/任务图/Agents/门禁/产物/事件/设置）')));
 }
 
 /* ============================================================
@@ -1266,6 +1266,126 @@ function summarizeEvent(e) {
   if (e.event === 'budget_exhausted') return `已用 $${d.used || 0} / 上限 $${d.limit || 0}`;
   return d.summary || Object.keys(d).join(', ');
 }
+
+/* ============================================================
+   计划审查页面（任务编辑 + 批准流程）
+   ============================================================ */
+function renderPlanPage(container) {
+  const run = S.dash.run;
+  const tasks = S.dash.tasks || [];
+  const isReal = !!S.realMode;
+  S.planDirty = S.planDirty || false;
+
+  const renderList = () => {
+    list.innerHTML = '';
+    const sorted = [...tasks].sort((a, b) => a.id.localeCompare(b.id));
+    for (const t of sorted) {
+      const meta = STATUS_META[t.status] || STATUS_META.unknown;
+      const rm = roleMeta(t.role);
+      const row = h('div', { class: 'plan-task-row' },
+        h('div', { class: 'plan-task-head' },
+          h('span', { class: 'plan-task-id' }, t.id),
+          h('span', { class: `status-chip status-${t.status}` }, meta.label),
+          h('span', { class: 'plan-task-role', style: `color:${rm.color}` }, rm.full),
+          h('div', { style: 'margin-left:auto;display:flex;gap:4px' },
+            !isReal ? h('button', { class: 'btn btn-sm btn-danger', onclick: () => {
+                if (tasks.some(x => (x.dependencies || []).includes(t.id))) { toast('error', '无法删除', `${t.id} 仍被其他任务依赖`); return; }
+                const idx = tasks.indexOf(t); tasks.splice(idx, 1); S.planDirty = true; renderList(); renderStats();
+              } }, '删除') : null)),
+        h('div', { class: 'plan-task-body' },
+          h('div', { class: 'plan-field' },
+            h('label', {}, '标题'),
+            h('input', { class: 'plan-input', value: t.title || '', disabled: isReal,
+              oninput: (e) => { t.title = e.target.value; S.planDirty = true; } })),
+          h('div', { class: 'plan-field' },
+            h('label', {}, '描述'),
+            h('textarea', { class: 'plan-textarea', rows: 2, disabled: isReal,
+              oninput: (e) => { t.description = e.target.value; S.planDirty = true; } }, t.description || t.brief || '')),
+          h('div', { class: 'plan-field-row' },
+            h('div', { class: 'plan-field' },
+              h('label', {}, '负责 Agent'),
+              h('select', { class: 'plan-select', disabled: isReal,
+                onchange: (e) => { t.role = e.target.value; S.planDirty = true; } },
+                ...ROLE_ORDER.map(r => h('option', { value: r, selected: t.role === r }, roleMeta(r).full)))),
+            h('div', { class: 'plan-field' },
+              h('label', {}, '优先级'),
+              h('select', { class: 'plan-select', disabled: isReal,
+                onchange: (e) => { t.priority = parseInt(e.target.value); S.planDirty = true; } },
+                ...[1, 3, 5, 7, 9].map(p => h('option', { value: p, selected: (t.priority || 5) === p }, `P${p}`)))),
+            h('div', { class: 'plan-field' },
+              h('label', {}, '超时 (秒)'),
+              h('input', { class: 'plan-input', type: 'number', value: t.timeout_seconds || 300, disabled: isReal,
+                oninput: (e) => { t.timeout_seconds = parseInt(e.target.value) || 300; S.planDirty = true; } })),
+            h('div', { class: 'plan-field' },
+              h('label', {}, '依赖'),
+              h('input', { class: 'plan-input', value: (t.dependencies || []).join(', '), disabled: isReal,
+                placeholder: 'T-001, T-002',
+                onchange: (e) => {
+                  const deps = e.target.value.split(',').map(s => s.trim()).filter(Boolean);
+                  const invalid = deps.filter(d => !tasks.some(x => x.id === d));
+                  if (invalid.length) { toast('error', '无效依赖', invalid.join(', ') + ' 不存在'); return; }
+                  if (deps.includes(t.id)) { toast('error', '循环依赖', '不能依赖自身'); return; }
+                  t.dependencies = deps; S.planDirty = true;
+                } })))));
+      list.appendChild(row);
+    }
+  };
+
+  const renderStats = () => {
+    const totalTasks = tasks.length;
+    const roles = new Set(tasks.map(t => t.role));
+    const estCost = tasks.reduce((s, t) => s + ((t.result && t.result.cost_usd) || 0.02), 0);
+    const estTime = tasks.reduce((s, t) => s + ((t.result && t.result.duration_ms) || 60000), 0);
+    stats.innerHTML = '';
+    stats.appendChild(h('div', { class: 'plan-stat' }, h('div', { class: 'plan-stat-val' }, String(totalTasks)), h('div', { class: 'plan-stat-label' }, '任务数')));
+    stats.appendChild(h('div', { class: 'plan-stat' }, h('div', { class: 'plan-stat-val' }, String(roles.size)), h('div', { class: 'plan-stat-label' }, '涉及角色')));
+    stats.appendChild(h('div', { class: 'plan-stat' }, h('div', { class: 'plan-stat-val' }, `$${estCost.toFixed(3)}`), h('div', { class: 'plan-stat-label' }, '估算费用')));
+    stats.appendChild(h('div', { class: 'plan-stat' }, h('div', { class: 'plan-stat-val' }, fmtDur(estTime)), h('div', { class: 'plan-stat-label' }, '估算耗时')));
+  };
+
+  // 页面头部
+  container.appendChild(h('div', { class: 'page-head' },
+    h('div', {},
+      h('h2', {}, '计划审查'),
+      h('div', { class: 'plan-goal', title: run.project_goal }, simplifyGoal(run.project_goal || '未命名项目'))),
+    h('div', { style: 'display:flex;gap:8px;align-items:center' },
+      !isReal ? h('button', { class: 'btn', onclick: () => {
+          const nextId = 'T-' + String(tasks.length + 1).padStart(3, '0');
+          tasks.push({ id: nextId, title: '新任务', description: '', role: 'backend_dev', status: 'pending', priority: 5, timeout_seconds: 300, dependencies: [] });
+          S.planDirty = true; renderList(); renderStats();
+        } }, '+ 添加任务') : null,
+      !isReal ? h('button', { class: 'btn', onclick: () => { S.planDirty = false; toast('success', '已保存', '计划已保存到内存'); } }, '保存计划') : null,
+      !isReal ? h('button', { class: 'btn btn-primary', onclick: () => {
+          if (!tasks.length) { toast('error', '无法批准', '任务 DAG 为空'); return; }
+          const noRole = tasks.filter(t => !t.role);
+          if (noRole.length) { toast('error', '无法批准', noRole.map(t => t.id).join(', ') + ' 缺少负责 Agent'); return; }
+          confirmAction('批准计划', `共 ${tasks.length} 个任务，涉及 ${new Set(tasks.map(t=>t.role)).size} 个角色。批准后将进入执行阶段。`, () => {
+            run.status = 'running'; run.phase = 'execution';
+            tasks.forEach(t => { if (t.status === 'pending') t.status = 'ready'; });
+            pushEvent('human_approved', { note: 'plan approved', task_count: tasks.length });
+            S.planDirty = false; renderDashboard(); toast('success', '计划已批准', '进入执行阶段'); switchNav('dashboard');
+          });
+        } }, '批准并执行') : null,
+      h('button', { class: 'btn', onclick: () => switchNav('dashboard') }, '返回'))));
+
+  // 只读提示
+  if (isReal) {
+    container.appendChild(h('div', { class: 'plan-readonly-banner' },
+      '真实模式下计划为只读。如需修改，请通过 CLI 或 API 编辑计划后重新加载。'));
+  }
+
+  // 统计栏
+  const stats = h('div', { class: 'plan-stats' });
+  container.appendChild(stats);
+  renderStats();
+
+  // 任务列表
+  const list = h('div', { class: 'plan-task-list' });
+  container.appendChild(list);
+  renderList();
+}
+
+const ROLE_ORDER = ['project_manager','product_manager','architect','backend_dev','frontend_dev','qa_engineer','devops_engineer','technical_writer'];
 
 /* ============================================================
    任务图全屏页（分层列表视图）
@@ -1419,6 +1539,7 @@ function switchNav(key){
   if(key==='settings'){ renderSettingsPage(ph); return; }
   if(key==='events'){ renderEventsPage(ph); return; }
   if(key==='dag'){ renderDagPage(ph); return; }
+  if(key==='tasks'){ renderPlanPage(ph); return; }
   if(key==='agents'){ renderAgentsPage(ph); return; }
   if(key==='gates'){ renderGatesPage(ph); return; }
   const p=PLACEHOLDERS[key]||{title:key,desc:'该页面开发中。'};
@@ -1752,8 +1873,8 @@ async function boot(){
     // Cmd/Ctrl + N：新建运行
     if((e.metaKey||e.ctrlKey)&&e.key==='n'){ e.preventDefault(); openNewRunModal(); return; }
     // 数字键 1-7：切换导航
-    if(!e.metaKey&&!e.ctrlKey&&!e.altKey&&/^[1-7]$/.test(e.key)){
-      const pages=['dashboard','dag','agents','gates','artifacts','events','settings'];
+    if(!e.metaKey&&!e.ctrlKey&&!e.altKey&&/^[1-8]$/.test(e.key)){
+      const pages=['dashboard','tasks','dag','agents','gates','artifacts','events','settings'];
       const idx=parseInt(e.key)-1;
       if(pages[idx]){ switchNav(pages[idx]); }
     }
