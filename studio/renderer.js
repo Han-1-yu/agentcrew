@@ -69,6 +69,7 @@ const STALE_MS = 90 * 1000;
 const S = {
   settings: null,
   env: null,
+  pythonInfo: null,
   runs: [],
   selectedDir: null,
   run: null,
@@ -221,58 +222,51 @@ async function boot() {
   }
   applyTheme(S.settings.theme || 'dark');
   refreshPythonFoot();
-  await refreshRuns(true);
+  await refreshRuns(false);
+  // 启动时显示运行列表视图
+  $('#runs-view').classList.remove('hidden');
+  $('#run-view').classList.add('hidden');
+  $('#empty-view').classList.add('hidden');
   setInterval(() => { refreshRuns(); refreshProcMap(); }, 2000);
   setInterval(tickElapsed, 1000);
 }
 
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
-  $('#btn-theme').textContent = theme === 'dark' ? '☾' : '☀';
 }
 
 function wireTopbar() {
   $('#btn-new-run').addEventListener('click', openNewRunModal);
   $('#btn-empty-new').addEventListener('click', openNewRunModal);
-  $('#btn-settings').addEventListener('click', openSettingsModal);
+  $('#btn-refresh-runs').addEventListener('click', () => refreshRuns());
+  $('#run-search').addEventListener('input', (e) => { S.search = e.target.value.trim().toLowerCase(); renderRunsView(); });
+  // 图标栏导航
+  document.querySelectorAll('.rail-item[data-view]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const view = btn.dataset.view;
+      document.querySelectorAll('.rail-item[data-view]').forEach((b) => b.classList.toggle('active', b === btn));
+      if (view === 'runs') goBackToList();
+      else if (view === 'settings') openSettingsModal();
+    });
+  });
   $('#btn-theme').addEventListener('click', async () => {
     const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
     applyTheme(next);
     S.settings.theme = next;
     try { await window.studio.setSettings({ theme: next }); } catch { /* 保存失败不阻塞切主题 */ }
   });
-  $('#btn-refresh-runs').addEventListener('click', () => refreshRuns());
-  $('#run-search').addEventListener('input', (e) => { S.search = e.target.value.trim().toLowerCase(); renderSidebar(); });
 }
 
 async function refreshPythonFoot() {
-  const row = $('#python-status');
-  row.textContent = '正在探测 Python…';
+  // Python 探测结果存入状态，供设置模态和运行列表底部显示
   try {
     const r = await window.studio.detectPython();
-    if (r) {
-      row.innerHTML = '';
-      row.appendChild(h('span', { class: 'foot-ok' }, '✓'));
-      row.appendChild(h('span', { class: 'foot-text', title: r.cmd }, `${r.cmd} · ${r.version.replace(r.cmd, '').trim() || r.version}`));
-      if (!S.settings.pythonCmd) {
-        S.settings.pythonCmd = r.cmd;
-        await window.studio.setSettings({ pythonCmd: r.cmd });
-      }
-    } else {
-      row.innerHTML = '';
-      row.appendChild(h('span', { class: 'foot-err' }, '✗'));
-      row.appendChild(h('span', { class: 'foot-text' }, '未检测到 Python，点击设置手动配置'));
-      row.style.cursor = 'pointer';
-      row.addEventListener('click', () => openSettingsModal(), { once: true });
+    S.pythonInfo = r || null;
+    if (r && !S.settings.pythonCmd) {
+      S.settings.pythonCmd = r.cmd;
+      await window.studio.setSettings({ pythonCmd: r.cmd });
     }
-  } catch (e) {
-    row.textContent = `Python 探测失败：${trunc(String(e), 60)}`;
-  }
-  const orow = $('#output-dir-row');
-  const dir = S.settings.outputDir || '';
-  orow.innerHTML = '';
-  orow.appendChild(h('span', { class: 'foot-text', title: dir, style: 'cursor:pointer' }, `输出 ${dir || '未配置'}`));
-  orow.addEventListener('click', () => dir && window.studio.revealFile(dir));
+  } catch { S.pythonInfo = null; }
 }
 
 /* ---------- 运行列表 ---------- */
@@ -282,13 +276,13 @@ async function refreshRuns(autoSelect) {
   try { runs = await callIpc(window.studio.listRuns); }
   catch { return; }
   S.runs = runs;
-  $('#run-count').textContent = runs.length ? `${runs.length}` : '';
-  renderSidebar();
+  $('#runs-count').textContent = runs.length ? `${runs.length}` : '';
+  renderRunsView();
   if (autoSelect && !S.selectedDir && runs.length) selectRun(runs[0].dir);
 }
 
-function renderSidebar() {
-  const list = $('#run-list');
+function renderRunsView() {
+  const list = $('#run-cards');
   list.innerHTML = '';
   const q = S.search;
   const filtered = S.runs.filter((r) => !q
@@ -296,39 +290,56 @@ function renderSidebar() {
     || r.runId.toLowerCase().includes(q)
     || (r.group || '').toLowerCase().includes(q));
   if (!filtered.length) {
-    list.appendChild(h('div', { class: 'board-col-empty', style: 'padding:18px 6px' },
-      S.runs.length ? '没有匹配的运行' : '输出目录下暂无运行'));
+    list.appendChild(h('div', { class: 'runs-empty' },
+      S.runs.length ? '没有匹配的运行' : '输出目录下暂无运行，点击右上角「新运行」开始'));
     return;
   }
   for (const r of filtered) {
     const live = r.status === 'running';
     const st = RUN_META[r.status] || RUN_META.unknown;
     const s = r.stats || {};
+    const total = s.total_tasks || 0;
+    const ok = s.succeeded || 0;
+    const fail = s.failed || 0;
+    const blk = s.blocked || 0;
     list.appendChild(h('div', {
-      class: `run-item${r.dir === S.selectedDir ? ' active' : ''}`,
+      class: `run-card${r.dir === S.selectedDir ? ' active' : ''}${live ? ' is-live' : ''}`,
       'data-dir': r.dir, role: 'option',
       onclick: () => selectRun(r.dir),
     },
-      h('div', { class: 'run-item-top' },
-        h('span', { class: `run-dot${live ? ' live' : ''}`, style: `background:${st.color}` }),
-        h('span', { class: 'run-id' }, r.runId),
-        live ? h('span', { class: 'mini-run', style: 'font-size:11px' }, '运行中') : null,
-        h('span', { class: 'flex-spacer' }),
+      // 左侧状态图标
+      h('div', { class: 'run-card-icon', style: `--ic:${st.color}` },
+        h('span', { class: 'run-card-dot' })),
+      // 中间内容
+      h('div', { class: 'run-card-body' },
+        h('div', { class: 'run-card-head' },
+          h('span', { class: 'run-card-name', title: r.goal }, r.goal || (r.error ? '（run.json 不可读）' : '（无目标）')),
+          h('span', { class: 'flex-spacer' }),
+          live ? h('span', { class: 'run-card-live' }, '运行中') : h('span', { class: 'run-card-status', style: `color:${st.color}` }, st.label)),
+        h('div', { class: 'run-card-sub' },
+          h('span', { class: 'run-card-id' }, r.runId),
+          h('span', { class: 'run-card-sep' }, '·'),
+          h('span', {}, fmtDateTime(r.createdAt || '')),
+          r.group ? h('span', { class: 'run-card-sep' }, '·') : null,
+          r.group ? h('span', { class: 'run-card-group', title: r.group }, r.group) : null),
+        total ? h('div', { class: 'run-card-progress' },
+          h('div', { class: 'run-card-bar' },
+            h('i', { style: `width:${total ? (ok / total * 100) : 0}%;background:var(--st-succeeded)` }),
+            fail ? h('i', { style: `width:${total ? (fail / total * 100) : 0}%;background:var(--st-failed)` }) : null),
+          h('span', { class: 'run-card-stats' },
+            h('span', { class: 'rc-ok' }, `${ok}✓`),
+            fail ? h('span', { class: 'rc-fail' }, `${fail}✗`) : null,
+            blk ? h('span', { class: 'rc-block' }, `${blk}⛔`) : null,
+            h('span', { class: 'rc-total' }, `/${total}`)),
+        ) : null),
+      // 右侧操作
+      h('div', { class: 'run-card-actions' },
         h('button', {
-          class: 'btn btn-icon btn-sm run-del-btn',
+          class: 'btn btn-icon btn-sm run-card-del',
           title: live ? '运行中无法删除，请先取消' : '删除此运行（不可恢复）',
           disabled: live,
           onclick: (e) => { e.stopPropagation(); confirmDeleteRun(r); },
         }, '✕')),
-      h('div', { class: 'run-goal', title: r.goal }, r.goal || (r.error ? '（run.json 不可读）' : '（无目标）')),
-      h('div', { class: 'run-meta' },
-        r.group ? h('span', { class: 'm-group', title: r.group }, r.group) : null,
-        h('span', {}, fmtDateTime(r.createdAt || '')),
-        (r.stats && r.stats.total_tasks) ? h('span', { class: 'run-mini' },
-          h('span', { class: 'mini-ok' }, `${s.succeeded || 0}✓`),
-          s.failed ? h('span', { class: 'mini-fail' }, `${s.failed}✗`) : null,
-          s.blocked ? h('span', { class: 'mini-block' }, `${s.blocked}⛔`) : null) : null,
-        r.error ? h('span', { class: 'mini-fail', title: r.error }, '数据异常') : null),
     ));
   }
 }
@@ -345,17 +356,32 @@ async function selectRun(dir) {
   S.events = []; S.eventsSkipped = 0; S.eventFilter = new Set(EVENT_TYPES); S.eventSearch = ''; S.autoScroll = true;
   S.artifacts = null; S.artifactSel = null;
   S.tab = 'board';
-  renderSidebar();
+  renderRunsView();
 
   // 先同步读一次快照，立刻有内容；再启动轮询（tail 模式带出历史事件）
   try {
     const snap = await callIpc(window.studio.loadRun, dir);
     S.run = snap.run; S.tasks = snap.tasks || []; S.loadErrors = snap.errors;
   } catch { S.loadErrors = { run: '读取运行数据失败' }; }
+  $('#runs-view').classList.add('hidden');
   $('#empty-view').classList.add('hidden');
   $('#run-view').classList.remove('hidden');
   renderRunView();
   try { await window.studio.watchRun(dir, true); } catch (e) { toast('error', '启动实时监视失败', String(e && e.message || e)); }
+}
+
+function goBackToList() {
+  if (S.selectedDir) {
+    try { window.studio.unwatchRun(S.selectedDir); } catch { /* 忽略 */ }
+  }
+  S.selectedDir = null;
+  S.run = null; S.tasks = []; S.events = [];
+  $('#run-view').classList.add('hidden');
+  $('#empty-view').classList.add('hidden');
+  $('#runs-view').classList.remove('hidden');
+  renderRunsView();
+  // 重置图标栏选中态
+  document.querySelectorAll('.rail-item[data-view]').forEach((b) => b.classList.toggle('active', b.dataset.view === 'runs'));
 }
 
 function wireWatchPush() {
@@ -458,7 +484,11 @@ function renderRunView() {
 
   root.appendChild(h('div', { class: 'run-header' },
     h('div', { class: 'run-header-main' },
-      h('div', {},
+      h('div', { class: 'run-header-top' },
+        h('button', { class: 'btn btn-icon btn-back', onclick: goBackToList, title: '返回运行列表', 'aria-label': '返回' },
+          h('svg', { width: '16', height: '16', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' },
+            h('path', { d: 'M19 12H5' }),
+            h('path', { d: 'M12 19l-7-7 7-7' }))),
         h('span', { class: `status-chip big${live ? ' live' : ''}`, style: `--chip-color:${st.color}` }, st.label),
         h('span', { class: 'run-sub', style: 'display:inline-flex;margin-left:10px;vertical-align:middle' },
           h('span', { class: 'run-id' }, run.run_id || '')),
@@ -1033,10 +1063,7 @@ async function confirmDeleteRun(r) {
     await callIpc(window.studio.deleteRun, r.dir);
     toast('success', '已删除', `run ${runId} 已删除`);
     if (S.selectedDir === r.dir) {
-      S.selectedDir = null;
-      S.run = null;
-      $('#run-view').classList.add('hidden');
-      $('#empty-view').classList.remove('hidden');
+      goBackToList();
     }
     refreshRuns();
   } catch (e) {
