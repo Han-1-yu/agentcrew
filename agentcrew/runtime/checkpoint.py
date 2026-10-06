@@ -29,7 +29,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from agentcrew.task.task import RunStats, TaskStatus
+from agentcrew.task.task import RunStats, Task, TaskStatus
 from agentcrew.task.task_board import TaskBoard
 from agentcrew.utils.files import (
     atomic_write_text,
@@ -45,6 +45,11 @@ SCHEMA_VERSION = 1
 #: ``context`` 供 ContextBus 的 decisions.jsonl，``review`` / ``diagnostics`` 供
 #: 评审材料与停滞报告；它们必须在任何写入者之前就位。
 _RUN_SUBDIRS = ("artifacts", "context", "review", "diagnostics")
+
+#: P3-8：增量 checkpoint 的自动合并（compaction）阈值。``tasks.delta.jsonl`` 每追加
+#: 这么多行就合并回 ``tasks.json`` 并清空 delta 文件——避免一个长 run 把 delta 无限
+#: 撑大，也让 resume 不必重放几百行增量。
+DELTA_COMPACTION_THRESHOLD = 50
 
 #: 显式传入的 run_id 的允许字符集：与 ``slugify_run_id`` 的输出同族，不含任何分隔符。
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -169,6 +174,11 @@ class CheckpointStore:
     def _tasks_path(self) -> Path:
         return self._run_dir / "tasks.json"
 
+    @property
+    def _delta_path(self) -> Path:
+        """P3-8：增量任务变更日志（JSONL），与 ``tasks.json`` 同目录。"""
+        return self._run_dir / "tasks.delta.jsonl"
+
     # ---- 创建与查找 ----
 
     @classmethod
@@ -286,11 +296,122 @@ class CheckpointStore:
         return record
 
     def load_board(self) -> TaskBoard:
-        """读 ``tasks.json`` 重建 ``TaskBoard``（含 reviews / status_history）。"""
-        data = json.loads(read_text(self._tasks_path))
-        board = TaskBoard.from_snapshot(data["tasks"])
+        """读 ``tasks.json`` 重建 ``TaskBoard``（含 reviews / status_history）。
+
+        P3-8：若 ``tasks.delta.jsonl`` 存在（有未落盘合并的增量），先把它应用到
+        内存快照上再建面板——resume 自动拿到最新状态，无需调用方区分。没有 delta
+        文件时行为与改造前逐字一致（向后兼容）。
+        """
+        tasks = self._read_base_tasks()
+        tasks = self._apply_deltas(tasks)
+        board = TaskBoard.from_snapshot(tasks)
         self._board = board
         return board
+
+    # ---- P3-8：增量 checkpoint ----
+
+    def save_task_delta(self, task: Task) -> None:
+        """增量保存单个任务的最新状态（追加到 ``tasks.delta.jsonl``）。
+
+        替代「每次任务变化都全量重写 tasks.json」：一行 JSONL = 一个任务的快照，
+        远小于整板。达到 :data:`DELTA_COMPACTION_THRESHOLD` 行时自动合并回
+        ``tasks.json``（compaction）。写格式::
+
+            {"op": "update", "task_id": "T-1", "changes": {<任务完整 dict>}}
+
+        （``changes`` 存任务完整 dict，apply 即整体替换——不做字段级 diff，足够简单
+        且不会漏状态。）
+        """
+        record = {
+            "op": "update",
+            "task_id": task.id,
+            "changes": task.model_dump(mode="json"),
+        }
+        self._run_dir.mkdir(parents=True, exist_ok=True)
+        with open(self._delta_path, "a", encoding="utf-8") as handle:
+            handle.write(
+                json.dumps(record, ensure_ascii=False, default=str) + "\n"
+            )
+        if self._delta_line_count() >= DELTA_COMPACTION_THRESHOLD:
+            self.apply_deltas()
+
+    def apply_deltas(self) -> int:
+        """把 ``tasks.delta.jsonl`` 合并进 ``tasks.json``（compaction）。
+
+        合并后清空 delta 文件，并同步内存里的 board。无 delta 文件时是 no-op，
+        返回 0。返回实际应用的增量条数。
+        """
+        if not self._delta_path.exists():
+            return 0
+        tasks = self._apply_deltas(self._read_base_tasks())
+        atomic_write_text(self._tasks_path, _dump_json({"tasks": tasks}))
+        applied = self._delta_line_count()
+        self._delta_path.unlink()
+        board = TaskBoard.from_snapshot(tasks)
+        self._board = board
+        return applied
+
+    def load_with_deltas(self) -> dict[str, Task]:
+        """读 ``tasks.json`` + 应用全部未合并 delta，返回 ``{task_id: Task}``。
+
+        不回写盘（纯读合并）——需要落盘合并时调 :meth:`apply_deltas`。无 delta
+        文件时等价于读全量 ``tasks.json``。
+        """
+        tasks = self._apply_deltas(self._read_base_tasks())
+        return {data["id"]: Task.model_validate(data) for data in tasks}
+
+    def _read_base_tasks(self) -> list[dict]:
+        """读全量 ``tasks.json`` 的任务列表（不存在视为空板）。"""
+        if not self._tasks_path.exists():
+            return []
+        data = json.loads(read_text(self._tasks_path))
+        return data.get("tasks", [])
+
+    def _apply_deltas(self, base_tasks: list[dict]) -> list[dict]:
+        """把 ``tasks.delta.jsonl`` 的每一行增量叠到 ``base_tasks`` 上。
+
+        读宽容：坏行跳过。``update`` 整体替换该任务；``add`` 插入新任务。保留
+        任务首次出现的顺序（base 顺序在前，新增追加在后），让合并后的 tasks.json
+        稳定可读。
+        """
+        by_id: dict[str, dict] = {}
+        order: list[str] = []
+        for task in base_tasks:
+            if task["id"] not in by_id:
+                order.append(task["id"])
+            by_id[task["id"]] = task
+        if not self._delta_path.exists():
+            return [by_id[k] for k in order]
+        with open(self._delta_path, encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                op = record.get("op")
+                if op == "update":
+                    task_id = record["task_id"]
+                    by_id[task_id] = record["changes"]
+                    if task_id not in order:
+                        order.append(task_id)
+                elif op == "add":
+                    task = record["task"]
+                    by_id[task["id"]] = task
+                    order.append(task["id"])
+        return [by_id[k] for k in order]
+
+    def _delta_line_count(self) -> int:
+        """``tasks.delta.jsonl`` 的非空行数（无文件返回 0）。"""
+        if not self._delta_path.exists():
+            return 0
+        return sum(
+            1
+            for line in read_text(self._delta_path).splitlines()
+            if line.strip()
+        )
 
 
 def repair_statuses(board: TaskBoard) -> int:

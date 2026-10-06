@@ -820,6 +820,27 @@ PM 因此在拆第一版计划时就知道「上次类似任务是怎么做成�
 Crew(settings, reuse_knowledge=False)
 ```
 
+### P3-8. 增量 Checkpoint
+
+此前每次任务状态变化都全量重写 `tasks.json`——大 run（几十上百任务）时一次写盘
+要序列化整板，既慢又磨损磁盘。P3-8 增加增量保存：任务变化只把**这一个任务**的
+最新状态追加到 `tasks.delta.jsonl`（一行 JSONL），远小于整板。
+
+- **增量格式**：每行 `{"op": "update", "task_id": "T-1", "changes": {…任务完整 dict…}}`；
+  也兼容 `{"op": "add", "task": {…}}`。`changes` 存任务完整快照，apply 即整体替换，
+  不做字段级 diff。
+- **自动合并（compaction）**：delta 累计到 `DELTA_COMPACTION_THRESHOLD`（默认 50）
+  行时自动合并回 `tasks.json` 并清空 delta 文件；`apply_deltas()` 也可手动触发。
+- **resume 自动应用**：`load_board()` 检测到 delta 文件存在时，先叠加增量再建面板，
+  无需调用方区分；`load_with_deltas()` 额外返回 `{task_id: Task}` 供程序化读取。
+- **向后兼容**：原有全量 `save_tasks()` / `load_board()` 行为不变；没有 delta 文件
+  时一切与改造前逐字一致。增量是可选优化，调度器不接线时默认仍走全量保存。
+
+```python
+store.save_task_delta(task)   # 只追加一行增量
+store.apply_deltas()          # 手动合并回 tasks.json
+```
+
 ---
 
 ### P3-6. 产物正文智能摘要
