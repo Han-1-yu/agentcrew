@@ -37,10 +37,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from agentcrew.config import Settings
 from agentcrew.models import structured
+from agentcrew.models.cache import LLMCache
 from agentcrew.models.complexity import (
     evaluate as evaluate_complexity,
     get_calibrator,
@@ -200,9 +201,13 @@ class ModelFactory:
         *,
         ledger: Ledger | None = None,
         fixtures_dir: Path | None = None,
+        cache: "LLMCache | None" = None,
     ) -> None:
         self._settings = settings
         self._ledger = ledger
+        # P3-2：可选响应缓存。``None``（默认）时所有 LLM 调用都不缓存，行为与
+        # 改造前逐字节一致；只有 ``temperature == 0`` 的确定性调用才走缓存。
+        self._resp_cache = cache
         # 模块级常量在构造时读取（而不是绑成默认参数），monkeypatch 才有效。
         self._fixtures_dir = (
             Path(fixtures_dir) if fixtures_dir is not None else DEFAULT_FIXTURES_DIR)
@@ -588,6 +593,17 @@ class ModelFactory:
         last_error: Exception | None = None
         for idx, current_alias in enumerate(aliases):
             try:
+                # P3-2：确定性调用先查响应缓存 —— 命中直接返回，不占信号量、
+                # 不调 Provider、不计 token/成本。
+                cache_key = self._resp_cache_key(
+                    current_alias, messages, temperature, max_tokens)
+                if cache_key is not None:
+                    cached = self._resp_cache.get(cache_key)
+                    if cached is not None:
+                        self._emit_cache_hit(current_alias, cache_key)
+                        self._account_cached(
+                            cached, purpose=purpose, role=role)
+                        return cached.model_copy(update={"from_cache": True})
                 provider = self.get(current_alias)
                 async with self._llm_semaphore:
                     result = await provider.complete(
@@ -596,6 +612,8 @@ class ModelFactory:
                         max_tokens=max_tokens,
                         response_format=response_format)
                 self._account(result, purpose=purpose, role=role)
+                if cache_key is not None:
+                    self._resp_cache.set(cache_key, result)
                 return result
             except _PROVIDER_UNAVAILABLE_TYPES as exc:
                 last_error = exc
@@ -760,9 +778,25 @@ class ModelFactory:
             provider = self.get(current_alias)
             collecting = _CollectingProvider(provider)
             degrade_cb = on_degrade if on_degrade is not None else self._emit_degrade
+            # P3-2：结构化输出通常 temperature=0 → 可缓存。命中时直接把缓存的
+            # 文本按当前 schema 解析返回；若 schema 漂移导致解析失败，则视为
+            # 未命中，继续走正常阶梯。
+            cache_key = self._resp_cache_key(
+                current_alias, messages, temperature, max_tokens)
+            if cache_key is not None:
+                cached = self._resp_cache.get(cache_key)
+                if cached is not None:
+                    try:
+                        parsed = schema.model_validate_json(cached.text)
+                    except ValidationError:
+                        parsed = None
+                    if parsed is not None:
+                        self._emit_cache_hit(current_alias, cache_key)
+                        self._account_cached(cached, purpose=purpose, role=role)
+                        return parsed
             try:
                 async with self._llm_semaphore:
-                    return await structured.complete_structured(
+                    model = await structured.complete_structured(
                         collecting,
                         messages,
                         schema,
@@ -786,6 +820,10 @@ class ModelFactory:
                 # 的消耗也照记（真实 LLM 调用）。
                 for result in collecting.results:
                     self._account(result, purpose=purpose, role=role)
+            # 阶梯成功：把最后一次（产出合法 schema 的）结果文本写入响应缓存。
+            if cache_key is not None and collecting.results:
+                self._resp_cache.set(cache_key, collecting.results[-1])
+            return model
         # 理论不可达
         if last_error is not None:
             raise last_error
@@ -986,6 +1024,58 @@ class ModelFactory:
         if to_health is not None:
             data["to_status"] = to_health.status
         self._ledger.emit("llm_failover", **data)
+
+    def _resp_cache_key(
+        self,
+        alias: str,
+        messages: Sequence[Message],
+        temperature: float,
+        max_tokens: int,
+    ) -> str | None:
+        """P3-2：返回本次调用的响应缓存键；不适用缓存时返回 ``None``。
+
+        两条规则：(1) 工厂未注入 ``cache`` 时一律 ``None``（向后兼容）；
+        (2) 只有 ``temperature == 0`` 的确定性调用才缓存 —— 温度 > 0 的结果
+        本就非确定，缓存会掩盖采样随机性。
+        """
+        if self._resp_cache is None:
+            return None
+        if temperature != 0:
+            return None
+        return LLMCache._make_key(alias, messages, temperature, max_tokens)
+
+    def _emit_cache_hit(self, alias: str, key: str) -> None:
+        """记 ``llm_cache_hit`` 事件（含 alias 与键的前 12 位摘要）。"""
+        if self._ledger is None:
+            return
+        self._ledger.emit(
+            "llm_cache_hit",
+            alias=alias,
+            key=key[:12],
+        )
+
+    def _account_cached(
+        self, result: CompletionResult, *, purpose: str, role: str
+    ) -> None:
+        """P3-2：缓存命中的留痕 —— 落一条 usage=0、``cached=True`` 的 ``llm_call``。
+
+        命中**不**经过 :meth:`_account`：不递增 ``llm_calls``、不加 token / 成本、
+        不触发预算硬上限（缓存命中应当免费）。仅落审计事件，便于运行报告区分
+        「真调用」与「命中」。
+        """
+        if self._ledger is None:
+            return
+        self._ledger.emit(
+            "llm_call",
+            role=role,
+            model=result.model,
+            prompt_tokens=0,
+            completion_tokens=0,
+            estimated_cost_usd=0.0,
+            latency_ms=0,
+            purpose=purpose,
+            cached=True,
+        )
 
     def _account(self, result: CompletionResult, *, purpose: str, role: str) -> None:
         """累加用量、估算成本并发一条 ``llm_call`` —— **两条调用路径共用**。

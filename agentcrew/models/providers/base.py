@@ -50,6 +50,10 @@ class CompletionResult(BaseModel):
     #: 停在 8192，围栏因此未闭合，而平台把它当成「格式错误」，用同一个上限重试
     #: 三次，三次都必然失败。留下这个字段，上层才能区分「写砸了」和「没写完」。
     finish_reason: str | None = None
+    #: P3-2：本结果是否来自响应缓存命中。真实调用产出为 ``False``；从
+    #: :class:`~agentcrew.models.cache.LLMCache` 命中返回时由工厂包装成 ``True``，
+    #: 不消耗 token / 成本。默认 ``False`` 对既有结果逐字节兼容。
+    from_cache: bool = False
 
 
 class StreamChunk(BaseModel):

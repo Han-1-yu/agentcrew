@@ -729,16 +729,33 @@ function openTaskDetail(taskId){
         ? h('div',{},res.artifacts.map(a=>h('div',{class:'dp-text',style:'margin:2px 0'},`📄 ${a.path} · ${fmtBytes(a.size_bytes)}`)))
         : h('div',{class:'dp-text dim'},'待生成')),
       t.error?sec('最近错误',h('div',{class:'dp-text',style:'color:#FF3B30'},t.error)):null,
+      res&&(res.tokens_used||res.duration_ms)?sec('执行统计',h('div',{class:'dp-meta-grid'},
+        metaCell('Token',fmtTokens(res.tokens_used||0)),
+        metaCell('耗时',fmtDur(res.duration_ms||0)),
+        metaCell('费用',res.cost_usd?`$${res.cost_usd.toFixed(4)}`:'—'),
+        metaCell('模型',res.model||'—'))):null,
+      t.reviews&&t.reviews.length?sec('门禁评审',h('div',{class:'dp-reviews'},
+        t.reviews.map(r=>h('div',{class:'dp-review-item'},
+          h('span',{class:`dp-review-verdict ${r.verdict}`},r.verdict),
+          h('span',{class:'dp-review-layer'},r.layer||''),
+          h('span',{class:'dp-review-text'},trunc(r.summary||(r.issues&&r.issues.join('; '))||'',60)))))):null,
+      t.status_history&&t.status_history.length?sec('状态历史',h('div',{class:'dp-status-history'},
+        t.status_history.slice(-8).map(sh=>h('div',{class:'dp-sh-item'},
+          h('span',{class:'dp-sh-status'},sh.status||''),
+          h('span',{class:'dp-sh-time'},fmtClock(sh.at||sh.time||sh.timestamp||'')))))):null,
       sec('运行日志',h('div',{class:'dp-log'},
         h('div',{},`$ running ${t.id}`),
         h('div',{},`> role=${rm.full} model=${S.dash.run.model}`),
         res&&res.summary?h('div',{},`> ${trunc(res.summary,80)}`):h('div',{},'> loading context…'),
         t.status==='failed'?h('div',{class:'err'},`✗ ${t.error||'失败'}`):h('div',{},'> done')))),
     h('div',{class:'dp-actions'},
-      h('button',{class:'btn btn-sm',onclick:()=>toast('info','重试任务',t.id)},'重试任务'),
-      h('button',{class:'btn btn-sm',onclick:()=>{t.status='skipped';toast('info','已跳过',t.id);renderDashboard();}},'跳过任务'),
-      h('button',{class:'btn btn-sm',onclick:()=>{t.status='review';toast('info','人工处理',t.id+' 标记为人工处理');renderDashboard();}},'人工处理'),
-      h('button',{class:'btn btn-sm btn-primary',onclick:()=>toast('info','恢复运行','从 '+t.id+' 恢复')},'从此恢复'))));
+      S.realMode
+        ? h('div',{class:'dp-text dim',style:'font-size:11px'},'任务级操作需通过 CLI 或 API 执行')
+        : h('div',{style:'display:flex;gap:6px;flex-wrap:wrap'},
+            h('button',{class:'btn btn-sm',onclick:()=>toast('info','重试任务',t.id)},'重试任务'),
+            h('button',{class:'btn btn-sm',onclick:()=>{t.status='skipped';toast('info','已跳过',t.id);renderDashboard();}},'跳过任务'),
+            h('button',{class:'btn btn-sm',onclick:()=>{t.status='review';toast('info','人工处理',t.id+' 标记为人工处理');renderDashboard();}},'人工处理'),
+            h('button',{class:'btn btn-sm btn-primary',onclick:()=>toast('info','恢复运行','从 '+t.id+' 恢复')},'从此恢复'))));
   renderAgents();
 }
 function openAgentDetail(roleId){
@@ -1429,12 +1446,31 @@ async function loadRunList() {
     for (const r of runs.slice(0, 20)) {
       const color = RUN_STATUS_COLOR[r.status] || '#8E8E93';
       const isActive = S.dash.run && S.dash.run.dir === r.dir;
-      const item = h('div', { class: 'rd-item' + (isActive ? ' active' : ''),
-        onclick: () => { closeRunDropdown(); switchRun(r.dir); } },
-        h('span', { class: 'rd-dot', style: `background:${color}` }),
-        h('div', { class: 'rd-item-info' },
+      const canDelete = r.status !== 'running';
+      const item = h('div', { class: 'rd-item' + (isActive ? ' active' : '') },
+        h('span', { class: 'rd-dot', style: `background:${color}`, onclick: () => { closeRunDropdown(); switchRun(r.dir); } }),
+        h('div', { class: 'rd-item-info', onclick: () => { closeRunDropdown(); switchRun(r.dir); } },
           h('div', { class: 'rd-item-title', title: r.goal || r.runId }, simplifyGoal(r.goal || r.runId || '未命名')),
-          h('div', { class: 'rd-item-meta' }, `${r.runId || ''} · ${r.status || 'unknown'} · ${fmtDateTime(r.createdAt || r.updatedAt)}`)));
+          h('div', { class: 'rd-item-meta' }, `${r.runId || ''} · ${r.status || 'unknown'} · ${fmtDateTime(r.createdAt || r.updatedAt)}`)),
+        h('button', { class: 'rd-del', title: canDelete ? '删除运行' : '运行中无法删除',
+          disabled: !canDelete,
+          onclick: async (e) => {
+            e.stopPropagation();
+            if (!confirm(`确认删除运行「${simplifyGoal(r.goal || r.runId)}」？\n此操作不可恢复。`)) return;
+            try {
+              await window.studio.deleteRun(r.dir);
+              toast('success', '已删除', r.runId || '');
+              if (isActive) {
+                const remaining = await window.studio.listRuns();
+                if (remaining && remaining.length) await switchRun(remaining[0].dir);
+                else { S.realMode = false; initMockData(); renderDashboard(); }
+              }
+              loadRunList();
+            } catch (err) { toast('error', '删除失败', String(err.message || err)); }
+          } },
+          h('svg', { width: 13, height: 13, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' },
+            h('polyline', { points: '3 6 5 6 21 6' }),
+            h('path', { d: 'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2' })))));
       listEl.appendChild(item);
     }
   } catch (e) {
