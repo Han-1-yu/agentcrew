@@ -147,7 +147,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="AgentCrew：8 角色多 Agent 协作平台（规划 → 执行 → 三层门禁 → 交付）",
     )
     sub = parser.add_subparsers(
-        dest="command", metavar="{run,resume,status,roles,clean,cancel}")
+        dest="command", metavar="{run,resume,status,roles,clean,cancel,serve}")
 
     run = sub.add_parser("run", help="执行一次完整 run（规划 → 执行 → 交付）")
     run.add_argument("--goal", metavar="TEXT", help="项目目标（与 --demo 二选一）")
@@ -180,6 +180,11 @@ def build_parser() -> argparse.ArgumentParser:
         "cancel", help="给离线 run 打 cancelled 标记（下次 resume 直接收尾）")
     cancel.add_argument("run_id")
     cancel.add_argument("--output-dir", metavar="DIR")
+
+    serve = sub.add_parser(
+        "serve", help="启动 HTTP API + SSE 事件流服务器（V2）")
+    serve.add_argument("--host", default="127.0.0.1", metavar="HOST")
+    serve.add_argument("--port", type=int, default=8765, metavar="PORT")
 
     return parser
 
@@ -535,6 +540,32 @@ def _cmd_cancel(args: argparse.Namespace) -> int:
     return EXIT_CODES["ok"]
 
 
+def _cmd_serve(args: argparse.Namespace) -> int:
+    """启动 HTTP API + SSE 事件流服务器（V2 第 5 项）。"""
+    import asyncio
+
+    from agentcrew.api.server import ApiServer
+
+    async def _serve() -> None:
+        server = ApiServer(host=args.host, port=args.port)
+        await server.start()
+        print(f"AgentCrew API server listening on http://{args.host}:{args.port}")
+        print("  GET  /health              健康检查")
+        print("  GET  /runs/{id}/status    运行状态")
+        print("  GET  /runs/{id}/events    SSE 事件流")
+        print("  POST /runs/{id}/events    注入事件（调试）")
+        print("Ctrl-C 停止。")
+        try:
+            await asyncio.Event().wait()  # 永远等待
+        except KeyboardInterrupt:
+            pass
+        finally:
+            await server.stop()
+
+    asyncio.run(_serve())
+    return EXIT_CODES["ok"]
+
+
 #: 子命令 → 处理器（``build_parser`` 里注册的 dest 值）。
 _HANDLERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "run": _cmd_run,
@@ -543,6 +574,7 @@ _HANDLERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "roles": _cmd_roles,
     "clean": _cmd_clean,
     "cancel": _cmd_cancel,
+    "serve": _cmd_serve,
 }
 
 
