@@ -31,6 +31,9 @@ issue 说「哪里不对」，配对的 ``fix_hint`` 说「去做什么」。检
 """
 
 from datetime import datetime
+from pathlib import Path
+
+import ast
 
 from agentcrew.artifacts.contract import has_placeholder, parse_check
 from agentcrew.artifacts.spec import ArtifactRecord, ArtifactSpec
@@ -131,3 +134,96 @@ def _content_findings(spec: ArtifactSpec, content: str) -> list[_Finding]:
                 f"在 {spec.path} 中定义 {needle}",
             ))
     return findings
+
+
+# ── P2-4：扩展代码可执行性校验 ──────────────────────────────────────────────
+#
+# 与 ``run_static`` 的契约检查互补：本层在 G1 既有检查之后跑，对 ``kind=python``
+# 的产物额外做语法 / 危险导入 / 非空校验。结果分两级——
+#
+# - **error（阻断）**：语法错误、空文件 → 使 G1 不通过；
+# - **warning（不阻断）**：危险模块导入 → 只记 ``g1_extended_check`` ledger 事件，
+#   不挡放行（生成代码引用 ``os`` 不必然是错，交 G2 与人工把关）。
+#
+# 与 :func:`agentcrew.artifacts.contract.parse_check` 一样，这些检查**绝不抛异常**：
+# 畸形产物是数据，错误以中文消息回灌给返工方。
+
+#: 视为「危险」的标准库模块：生成代码引入它们往往意味着越过沙箱（os.system /
+# subprocess / 网络 / 动态加载）。只报 warning——G1 不在宿主上跑代码，无法判定
+# 用得对不对，只把它亮出来。
+_DANGEROUS_IMPORTS: frozenset[str] = frozenset({
+    "os", "sys", "subprocess", "shutil", "socket", "ctypes",
+    "multiprocessing", "pickle", "shelve",
+})
+
+
+class ExtendedCheckResult:
+    """``run_extended_checks`` 的结果：阻断项与仅留痕项分开。"""
+
+    __slots__ = ("errors", "warnings")
+
+    def __init__(self, errors: list[str] | None = None,
+                 warnings: list[str] | None = None) -> None:
+        self.errors: list[str] = list(errors or [])
+        self.warnings: list[str] = list(warnings or [])
+
+
+def check_python_syntax(path: Path | str, content: str) -> list[str]:
+    """用 ``ast.parse`` 检查 Python 语法；返回错误消息列表（空 = 通过）。"""
+    try:
+        ast.parse(content)
+    except SyntaxError as exc:
+        lineno = getattr(exc, "lineno", None)
+        where = f"line {lineno}" if lineno is not None else "语法错误"
+        return [f"{path} Python 语法错误：{where}: {exc.msg}"]
+    except (ValueError, RecursionError):
+        return [f"{path} Python 语法无法解析"]
+    return []
+
+
+def check_imports(content: str) -> list[str]:
+    """扫描可疑导入（危险模块）；返回 warning 列表（空 = 通过）。
+
+    用 ``ast`` 遍历 ``Import`` / ``ImportFrom`` 节点，比正则更准（不误报注释里
+    的 ``import os`` 字样）。命中危险模块只记 warning。
+    """
+    warnings: list[str] = []
+    try:
+        tree = ast.parse(content)
+    except (SyntaxError, ValueError, RecursionError):
+        return warnings  # 语法错误归 check_python_syntax，这里不重复报
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                root = alias.name.split(".")[0]
+                if root in _DANGEROUS_IMPORTS:
+                    warnings.append(f"导入了潜在危险模块：{alias.name}")
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            root = node.module.split(".")[0]
+            if root in _DANGEROUS_IMPORTS:
+                warnings.append(f"从 {node.module} 导入（潜在危险模块）")
+    return warnings
+
+
+def check_file_nonempty(path: Path | str, content: str) -> list[str]:
+    """检查文件非空；空文件返回一条阻断错误。"""
+    if not content.strip():
+        return [f"{path} 为空文件"]
+    return []
+
+
+def run_extended_checks(
+    artifacts: list[tuple[Path | str, str]], kind: str
+) -> ExtendedCheckResult:
+    """按产物 ``kind`` 跑扩展检查：python 做语法 + 危险导入，其余只做非空检查。
+
+    ``artifacts`` 是 ``[(路径, 内容)]``；同一 kind 的产物批量传入。语法错误与空
+    文件进 ``errors``（阻断），危险导入进 ``warnings``（仅留痕）。
+    """
+    result = ExtendedCheckResult()
+    for path, content in artifacts:
+        result.errors.extend(check_file_nonempty(path, content))
+        if kind == "python":
+            result.errors.extend(check_python_syntax(path, content))
+            result.warnings.extend(check_imports(content))
+    return result

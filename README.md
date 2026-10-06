@@ -498,6 +498,23 @@ G2 评审意见此前不做跨评审人 / 跨轮次的语义去重，且「评�
   `:converged`。仅对 LLM 层生效（G1 结构性损坏不参与），且不消耗返工额度。
 - **向后兼容**：`convergence_threshold=0` 或 `None` 关闭收敛检测；默认 2。
 
+### P2-4. G1 扩展代码可执行性校验
+
+G1 原本只做契约校验（缺产物 / 未声明 / 占位 / must_contain）。本项在 G1 既有检查
+之后追加一层**代码可执行性校验**，分 error / warning 两级：
+
+- **新增检查**（`static_checks.py`）：`check_python_syntax()` 用 `ast.parse` 查
+  Python 语法；`check_imports()` 遍历 AST 找危险模块导入（`os` / `sys` /
+  `subprocess` / `socket` / `ctypes` 等）；`check_file_nonempty()` 查空文件；
+  `run_extended_checks(artifacts, kind)` 按 kind 分流——只对 `kind="python"` 跑
+  语法 + 危险导入，其余 kind 只做非空检查。
+- **分级**：语法错误、空文件进 `errors`（**阻断**，并入 G1 issues 使 G1 不通过）；
+  危险模块导入进 `warnings`（**不阻断**，只留痕——G1 不在宿主上跑代码，用得对不
+  对交 G2 / 人工）。
+- **留痕**：Gatekeeper 在 G1 后记 `g1_extended_check` 事件（`errors` /
+  `warnings`）。全程不抛异常，畸形产物以中文消息回灌返工方。
+- **向后兼容**：默认启用，但只对 python 产物做语法检查，不影响非代码产物。
+
 ### P2-1. 运行时动态子任务
 
 规划阶段任务固定，执行阶段 Agent 可以**在执行中**请求拆出独立子任务，子任务
@@ -548,6 +565,24 @@ PM 拆解通过 §7.2 二元校验后，再由 `score_plan()` 做一次**多维�
 - 每次规划成功后落 ledger 事件 `plan_scored`（含 total 与四维分值）；
   `total < MIN_PLAN_SCORE`（默认 0.5）时再落一条 `plan_low_quality` 警告
 - 评分是观测信号、不抛异常：非法拆解早在 `validate_plan` 就被拦下
+
+### P2-7. 增量计划编辑
+
+计划卡点的 `[e] 编辑` 不再只能全量重写 JSON：进入编辑子菜单后可对**单个任务**做
+增量增 / 删 / 改，每次操作后立即重跑 §7.2 校验，失败则打印错误并丢弃本次操作。
+
+- 子菜单：`[a] 添加任务`（提示 id / 标题 / 描述 / 角色 / 验收标准 / 交付物路径，
+  插到 `T-FINAL` 之前）/ `[d] 删除任务`（按 id 删除并自动清理其他任务对它的依赖）
+  / `[m] 修改任务`（按 id 改 title / description / role / acceptance_criteria /
+  deliverables）/ `[e] 全量编辑器`（原有行为，不变）/ `[b] 完成提交` / `[q] 取消`
+- planner 层四个纯函数均返回**新列表**、不修改输入：`add_task_to_plan()` /
+  `remove_task_from_plan()` / `modify_task_in_plan()` / `validate_incremental_edit()`
+  （后者不抛异常，把结构错误收成列表返回）
+- 每次成功的增量操作都经 `PlanDecision.incremental_edits` 带回 Crew，逐条落
+  ledger 事件 `plan_incremental_edit`（含 action / task_id / changes）；
+  全量编辑器记一条 `action=full_editor`
+- **向后兼容**：未走子菜单（老的全量编辑器路径）行为完全不变；`incremental_edits`
+  有默认空列表，旧的 `PlanDecision` 构造方式不受影响
 
 ### P2-11. Provider 主动健康监控
 

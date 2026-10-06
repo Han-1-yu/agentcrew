@@ -47,7 +47,11 @@ from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.config import GateMode
 from agentcrew.context.context_bus import ContextBus
 from agentcrew.gate.reviewer import Reviewer, normalize_issue_text
-from agentcrew.gate.static_checks import run_static
+from agentcrew.gate.static_checks import (
+    ExtendedCheckResult,
+    run_extended_checks,
+    run_static,
+)
 from agentcrew.runtime.checkpoint import RunRecord
 from agentcrew.runtime.ledger import Ledger
 from agentcrew.task.task import ReviewRecord, Task, TaskStatus
@@ -173,6 +177,23 @@ class Gatekeeper:
         """
         task_id = task.id
         static = run_static(self._board.get(task_id), self._store, round_no=round_no)
+        # P2-4：扩展代码可执行性校验 —— 在既有契约检查之后跑，error 并入 G1 issues
+        # （阻断），warning 只记 ledger。未产出的路径不读（缺失已由 run_static 报）。
+        ext = self._run_extended_checks(self._board.get(task_id))
+        self._ledger.emit(
+            "g1_extended_check",
+            task_id=task_id,
+            round=round_no,
+            errors=list(ext.errors),
+            warnings=list(ext.warnings),
+        )
+        if ext.errors:
+            static = static.model_copy(update={
+                "verdict": "reject",
+                "issues": static.issues + list(ext.errors),
+                "fix_hints": static.fix_hints + [
+                    f"修正 {issue}" for issue in ext.errors],
+            })
         self._board.record_review(task_id, static)
         self._emit(static)          # G2 的 gate_result 由 Reviewer 自己发
         records = [static]
@@ -279,6 +300,26 @@ class Gatekeeper:
             else:
                 break
         return consecutive >= threshold, consecutive
+
+    def _run_extended_checks(self, task: Task) -> ExtendedCheckResult:
+        """对本任务已落盘产物跑 P2-4 扩展检查，按各自 kind 分组调用。
+
+        未产出的路径不读（缺失已由 ``run_static`` 报出）；只对 ``kind="python"``
+        做语法 / 危险导入检查，其余 kind 只做非空检查。
+        """
+        produced = {record.path for record in self._store.by_task(task.id)}
+        by_kind: dict[str, list[tuple[str, str]]] = {}
+        for spec in task.deliverables:
+            if spec.path not in produced:
+                continue
+            by_kind.setdefault(spec.kind, []).append(
+                (spec.path, self._store.read(spec.path)))
+        result = ExtendedCheckResult()
+        for kind, artifacts in by_kind.items():
+            partial = run_extended_checks(artifacts, kind)
+            result.errors.extend(partial.errors)
+            result.warnings.extend(partial.warnings)
+        return result
 
     # ---- 人工闸门（G3）----
 
