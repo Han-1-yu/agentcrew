@@ -2043,7 +2043,7 @@ function renderDagPage(container) {
   const filterBar = h('div', { class: 'ev-filter-bar', style: 'margin-bottom:12px' });
   statuses.forEach(st => {
     filterBar.appendChild(h('button', { class: 'ev-filter-btn' + (S.taskFilter.status === st ? ' active' : ''),
-      onclick: () => { S.taskFilter.status = st; $$('#placeholder-view .ev-filter-btn').forEach(b => b.classList.remove('active')); filterBar.querySelectorAll('.ev-filter-btn').forEach(b => b.classList.remove('active')); event.target.classList.add('active'); renderList(); } },
+      onclick: (ev) => { S.taskFilter.status = st; $$('#placeholder-view .ev-filter-btn').forEach(b => b.classList.remove('active')); filterBar.querySelectorAll('.ev-filter-btn').forEach(b => b.classList.remove('active')); ev.currentTarget.classList.add('active'); renderList(); } },
       statusLabels[st] || st));
   });
   container.appendChild(filterBar);
