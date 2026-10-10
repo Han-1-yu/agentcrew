@@ -140,6 +140,79 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         # command 必须通过 provider_overrides 显式指定（不同 CLI 工具语法不同）
         command=None,
     ),
+    # ── A2：新增主流平台预设（全部 OpenAI 兼容）─────────────────────────
+    "openrouter": ProviderPreset(
+        implementation="openai_compat",
+        base_url="https://openrouter.ai/api/v1",
+        api_key_env="OPENROUTER_API_KEY",
+        capabilities=ProviderCapabilities(
+            supports_json_schema=False, supports_json_object=True),
+        suggested_models=[
+            "openai/gpt-4o-mini",
+            "anthropic/claude-3.5-sonnet",
+            "meta-llama/llama-3.1-70b-instruct",
+        ],
+    ),
+    "siliconflow": ProviderPreset(
+        implementation="openai_compat",
+        base_url="https://api.siliconflow.cn/v1",
+        api_key_env="SILICONFLOW_API_KEY",
+        capabilities=ProviderCapabilities(
+            supports_json_schema=False, supports_json_object=True),
+        suggested_models=[
+            "Qwen/Qwen2.5-72B-Instruct",
+            "deepseek-ai/DeepSeek-V3",
+            "internlm/internlm2_5-7b-chat",
+        ],
+    ),
+    "moonshot": ProviderPreset(
+        implementation="openai_compat",
+        base_url="https://api.moonshot.cn/v1",
+        api_key_env="MOONSHOT_API_KEY",
+        capabilities=ProviderCapabilities(
+            supports_json_schema=False, supports_json_object=True),
+        suggested_models=[
+            "moonshot-v1-8k",
+            "moonshot-v1-32k",
+            "moonshot-v1-128k",
+        ],
+    ),
+    "zhipu": ProviderPreset(
+        implementation="openai_compat",
+        base_url="https://open.bigmodel.cn/api/paas/v4",
+        api_key_env="ZHIPU_API_KEY",
+        capabilities=ProviderCapabilities(
+            supports_json_schema=False, supports_json_object=True),
+        suggested_models=[
+            "glm-4-plus",
+            "glm-4-air",
+            "glm-4-flash",
+        ],
+    ),
+    "groq": ProviderPreset(
+        implementation="openai_compat",
+        base_url="https://api.groq.com/openai/v1",
+        api_key_env="GROQ_API_KEY",
+        capabilities=ProviderCapabilities(
+            supports_json_schema=False, supports_json_object=True),
+        suggested_models=[
+            "llama-3.1-70b-versatile",
+            "llama-3.1-8b-instant",
+            "mixtral-8x7b-32768",
+        ],
+    ),
+    "together": ProviderPreset(
+        implementation="openai_compat",
+        base_url="https://api.together.xyz/v1",
+        api_key_env="TOGETHER_API_KEY",
+        capabilities=ProviderCapabilities(
+            supports_json_schema=False, supports_json_object=True),
+        suggested_models=[
+            "meta-llama/Llama-3.1-70B-Instruct-Turbo",
+            "meta-llama/Llama-3.1-8B-Instruct-Turbo",
+            "Qwen/Qwen2.5-72B-Instruct-Turbo",
+        ],
+    ),
 }
 
 

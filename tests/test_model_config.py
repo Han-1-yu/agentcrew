@@ -11,7 +11,11 @@ from agentcrew.models.config import (
 
 def test_all_providers_present():
     assert set(PROVIDER_PRESETS) == {
-        "openai", "anthropic", "deepseek", "doubao", "qwen", "ernie", "ollama", "mock", "cli"}
+        "openai", "anthropic", "deepseek", "doubao", "qwen", "ernie",
+        "ollama", "mock", "cli",
+        # A2 新增
+        "openrouter", "siliconflow", "moonshot", "zhipu", "groq", "together",
+    }
 
 
 def test_openai_supports_json_schema():
@@ -127,3 +131,44 @@ def test_provider_preset_has_suggested_models_field():
     p = PROVIDER_PRESETS["openai"]
     assert hasattr(p, "suggested_models")
     assert isinstance(p.suggested_models, list)
+
+
+# ── A2：新增 6 个平台预设 ───────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("name,base_url,env_name", [
+    ("openrouter", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
+    ("siliconflow", "https://api.siliconflow.cn/v1", "SILICONFLOW_API_KEY"),
+    ("moonshot", "https://api.moonshot.cn/v1", "MOONSHOT_API_KEY"),
+    ("zhipu", "https://open.bigmodel.cn/api/paas/v4", "ZHIPU_API_KEY"),
+    ("groq", "https://api.groq.com/openai/v1", "GROQ_API_KEY"),
+    ("together", "https://api.together.xyz/v1", "TOGETHER_API_KEY"),
+])
+def test_new_presets_basic(name, base_url, env_name):
+    p = PROVIDER_PRESETS[name]
+    assert p.implementation == "openai_compat"
+    assert p.base_url == base_url
+    assert p.api_key_env == env_name
+    assert len(p.suggested_models) >= 3
+
+
+def test_new_presets_resolve_as_alias():
+    for name in ("openrouter", "siliconflow", "moonshot", "zhipu", "groq", "together"):
+        b = parse_alias(f"{name}:some-model")
+        assert b.provider == name
+        assert b.base_url == PROVIDER_PRESETS[name].base_url
+
+
+def test_old_9_presets_unchanged():
+    """原 9 个预设的 base_url / api_key_env 不变。"""
+    assert PROVIDER_PRESETS["openai"].base_url == "https://api.openai.com/v1"
+    assert PROVIDER_PRESETS["anthropic"].base_url == "https://api.anthropic.com"
+    assert PROVIDER_PRESETS["deepseek"].base_url == "https://api.deepseek.com/v1"
+    assert PROVIDER_PRESETS["doubao"].base_url == (
+        "https://ark.cn-beijing.volces.com/api/v3")
+    assert PROVIDER_PRESETS["qwen"].base_url == (
+        "https://dashscope.aliyuncs.com/compatible-mode/v1")
+    assert PROVIDER_PRESETS["ernie"].base_url == "https://qianfan.baidubce.com/v2"
+    assert PROVIDER_PRESETS["ollama"].base_url == "http://localhost:11434/v1"
+    assert PROVIDER_PRESETS["mock"].implementation == "mock"
+    assert PROVIDER_PRESETS["cli"].implementation == "cli"
