@@ -1486,6 +1486,9 @@ function buildProviderCard(p, testDebounce) {
       tag.addEventListener('click', async () => {
         if (!S.settings) S.settings = {};
         S.settings.defaultModel = alias;
+        // 视觉反馈：更新本卡片内所有标签的 active 态（含其他 provider 卡片也一并刷新）
+        $$('.prov-model-tag').forEach(x => x.classList.remove('active'));
+        modelsWrap.querySelectorAll('.prov-model-tag').forEach(x => x.classList.add('active'));
         try { await window.studio.setSettings({ defaultModel: alias }); toast('success', '已设为默认模型', alias); }
         catch (e) { toast('error', '保存失败', String(e.message || e)); }
       });
