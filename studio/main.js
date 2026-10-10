@@ -642,6 +642,13 @@ function registerIpc() {
 
   ipcMain.handle('shell:showItemInFolder', (_e, p) => { shell.showItemInFolder(String(p.fullPath)); return { ok: true }; });
   ipcMain.handle('shell:openPath', (_e, p) => shell.openPath(String(p.fullPath)));
+  // 在系统浏览器中打开外部 URL（如获取 API Key 的官方页面）；仅放行 http/https，避免任意协议
+  ipcMain.handle('shell:openExternal', async (_e, p) => {
+    const url = String(p && p.url || '');
+    if (!/^https?:\/\//i.test(url)) { throw new Error('仅支持 http/https 链接'); }
+    await shell.openExternal(url);
+    return { ok: true };
+  });
   ipcMain.handle('app:relaunch', () => { app.relaunch(); app.quit(); });
 
   // ---------- 真实模式操作：模型切换 / 任务操作 / 门禁审批 ----------

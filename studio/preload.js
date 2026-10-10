@@ -30,6 +30,8 @@ contextBridge.exposeInMainWorld('studio', {
   // 系统
   revealFile: (fullPath) => invoke('shell:showItemInFolder', { fullPath }),
   openPath: (fullPath) => invoke('shell:openPath', { fullPath }),
+  // 在系统浏览器中打开外部 https 链接（如获取 API Key 页面）
+  openExternal: (url) => invoke('shell:openExternal', { url }),
   // 真实模式操作
   switchModel: (runDir, alias) => invoke('model:switch', { runDir, alias }),
   taskAction: (runDir, taskId, action) => invoke('task:action', { runDir, taskId, action }),
