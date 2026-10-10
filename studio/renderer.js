@@ -2648,6 +2648,8 @@ function effectiveTheme() {
 function applyTheme() {
   const eff = effectiveTheme();
   document.documentElement.dataset.theme = eff;
+  // 缓存已解析的实际主题，供 index.html 首帧内联脚本读取，避免启动闪白
+  try { localStorage.setItem('agentcrew:theme', eff); } catch {}
   const mode = (S.settings && S.settings.theme) || 'dark';
   const btn = document.getElementById('btn-theme');
   if (btn) {
