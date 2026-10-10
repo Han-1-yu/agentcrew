@@ -73,6 +73,7 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         api_key_env="OPENAI_API_KEY",
         capabilities=ProviderCapabilities(
             supports_json_schema=True, supports_json_object=True),
+        suggested_models=["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "o3-mini"],
     ),
     "anthropic": ProviderPreset(
         implementation="anthropic",
@@ -82,6 +83,11 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         # anthropic 的 base_url 不带 /v1，模型列表固定在 /v1/models；显式指过来，
         # 避免先试 /models（可能回 200 HTML 而非 404）后因 parse 错误不再回退。
         models_url="https://api.anthropic.com/v1/models",
+        suggested_models=[
+            "claude-sonnet-4-20250514",
+            "claude-haiku-4-20250414",
+            "claude-opus-4-20250514",
+        ],
     ),
     "deepseek": ProviderPreset(
         implementation="openai_compat",
@@ -100,6 +106,7 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         # _messages_for_level），并有测试钉住，改动那句措辞前先看那里的注释。
         capabilities=ProviderCapabilities(
             supports_json_schema=False, supports_json_object=True),
+        suggested_models=["deepseek-chat", "deepseek-reasoner"],
     ),
     "doubao": ProviderPreset(
         implementation="openai_compat",
@@ -107,6 +114,7 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         api_key_env="ARK_API_KEY",
         capabilities=ProviderCapabilities(
             supports_json_schema=False, supports_json_object=True),
+        suggested_models=["doubao-pro-32k", "doubao-lite-32k", "doubao-1.5-pro-32k"],
     ),
     "qwen": ProviderPreset(
         implementation="openai_compat",
@@ -114,6 +122,7 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         api_key_env="DASHSCOPE_API_KEY",
         capabilities=ProviderCapabilities(
             supports_json_schema=False, supports_json_object=True),
+        suggested_models=["qwen-plus", "qwen-turbo", "qwen-max", "qwen3-235b-a22b"],
     ),
     "ernie": ProviderPreset(
         implementation="openai_compat",
@@ -121,6 +130,7 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         api_key_env="QIANFAN_API_KEY",
         capabilities=ProviderCapabilities(
             supports_json_schema=False, supports_json_object=False),
+        suggested_models=["ernie-4.0", "ernie-3.5", "ernie-speed"],
     ),
     "ollama": ProviderPreset(
         implementation="openai_compat",
@@ -128,6 +138,7 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         api_key_env="",  # 本地模型：api_key 可为任意非空串
         capabilities=ProviderCapabilities(
             supports_json_schema=False, supports_json_object=True),
+        suggested_models=["llama3.1", "qwen2.5", "deepseek-r1"],
     ),
     "mock": ProviderPreset(
         implementation="mock",
@@ -135,6 +146,7 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         api_key_env="",  # 离线确定性回放
         capabilities=ProviderCapabilities(
             supports_json_schema=True, supports_json_object=True),
+        suggested_models=["mock-model"],
     ),
     "cli": ProviderPreset(
         implementation="cli",
@@ -144,6 +156,7 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
             supports_json_schema=False, supports_json_object=False),
         # command 必须通过 provider_overrides 显式指定（不同 CLI 工具语法不同）
         command=None,
+        suggested_models=["cli-model"],
     ),
     # ── A2：新增主流平台预设（全部 OpenAI 兼容）─────────────────────────
     "openrouter": ProviderPreset(

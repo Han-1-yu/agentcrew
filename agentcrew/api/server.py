@@ -919,7 +919,24 @@ class ApiServer:
         if preset is None:
             await self._send_json(writer, 404, {"error": f"未知 provider：{name!r}"})
             return
-        dummy_model = preset.suggested_models[0] if preset.suggested_models else "test"
+        # 测速用模型：优先预设的 suggested_models[0]；若为空则从 default_model
+        # 解析该 provider 的模型；再不行才用占位名（此时 provider 通常不可达，
+        # 错误信息会如实反映，不会误报"连通"）。
+        dummy_model = preset.suggested_models[0] if preset.suggested_models else None
+        if dummy_model is None and settings.default_model:
+            try:
+                from agentcrew.models.config import parse_alias
+                _parsed = parse_alias(
+                    settings.default_model,
+                    overrides=settings.provider_overrides,
+                    custom=settings.custom_providers,
+                )
+                if _parsed.provider == name:
+                    dummy_model = _parsed.model
+            except Exception:
+                pass
+        if dummy_model is None:
+            dummy_model = "ping"  # 最后兜底：比 "test" 更不可能是真实模型名，错误更清晰
         alias = f"{name}:{dummy_model}"
         try:
             record = await factory.health_check(alias)
