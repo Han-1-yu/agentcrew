@@ -695,6 +695,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         model_factory = ModelFactory(settings)
         server = ApiServer(
             host=args.host, port=args.port, output_dir=settings.output_dir,
+            settings=settings,
             auth=auth, rate_limiter=rate_limiter,
             model_factory=model_factory,
         )

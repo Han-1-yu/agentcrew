@@ -58,6 +58,12 @@ function loadSettings() {
   try {
     const raw = JSON.parse(fs.readFileSync(settingsPath(), 'utf8'));
     Object.assign(s, raw);
+    // 迁移：旧字段 pythonCommand → 标准字段 pythonCmd
+    if (!s.pythonCmd && raw.pythonCommand) {
+      s.pythonCmd = raw.pythonCommand;
+      delete s.pythonCommand;
+      try { fs.writeFileSync(settingsPath(), JSON.stringify(s, null, 2), 'utf8'); } catch { /* 非致命 */ }
+    }
   } catch { /* 首次启动或文件损坏：用默认值 */ }
   settings = s;
   return s;
