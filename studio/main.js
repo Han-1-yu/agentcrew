@@ -67,8 +67,8 @@ function saveSettings(next) {
   settings = Object.assign({}, settings, next);
   fs.mkdirSync(path.dirname(settingsPath()), { recursive: true });
   fs.writeFileSync(settingsPath(), JSON.stringify(settings, null, 2), 'utf8');
-  // 主题变更后立即把新的实际主题推给渲染进程（system 模式由主进程解析系统值）
-  pushThemeChanged();
+  // 仅当本次变更涉及主题时才推送 theme:changed（recentGoals/默认模型/预算等无关变更不必打扰渲染端）
+  if (next && Object.prototype.hasOwnProperty.call(next, 'theme')) pushThemeChanged();
   return settings;
 }
 
