@@ -15,7 +15,7 @@ import urllib.error
 
 import pytest
 
-from agentcrew.models.config import ModelBinding, ProviderCapabilities, parse_alias
+from agentcrew.models.config import ModelBinding, ProviderCapabilities
 from agentcrew.models.discovery import (
     DISCOVERY_TIMEOUT_SECS,
     ModelDiscoveryError,

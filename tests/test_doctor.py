@@ -9,8 +9,6 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-import pytest
-
 import main as cli
 from agentcrew.cli.doctor import (
     DoctorReport,
@@ -20,7 +18,6 @@ from agentcrew.cli.doctor import (
 from agentcrew.config import Settings
 from agentcrew.crew.crew import EXIT_CODES
 from agentcrew.models.factory import HealthRecord
-
 from tests.conftest import API_KEY_ENVS
 
 
