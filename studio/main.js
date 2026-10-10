@@ -3,7 +3,7 @@
 // 职责：窗口/设置/Python 探测/run 扫描与读取/CLI 子进程管理/ledger 偏移轮询/IPC。
 // 只读后端产物文件与调用 CLI，不依赖 agentcrew/ 内部实现。
 
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, nativeTheme } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn, spawnSync } = require('child_process');
@@ -44,7 +44,7 @@ function defaultSettings() {
     outputDir: path.join(DEFAULT_REPO_ROOT, 'output'),
     pythonCmd: '',
     theme: 'dark',
-    defaultMock: true,
+    defaultMock: false,  // 默认真实模式：mock 产物是固定夹具，与目标无关
     defaultAuto: true,
     apiBaseUrl: '',  // P3：后端 API 地址，设置后用 SSE 替代文件 watch
   };
@@ -64,7 +64,25 @@ function saveSettings(next) {
   settings = Object.assign({}, settings, next);
   fs.mkdirSync(path.dirname(settingsPath()), { recursive: true });
   fs.writeFileSync(settingsPath(), JSON.stringify(settings, null, 2), 'utf8');
+  // 主题变更后立即把新的实际主题推给渲染进程（system 模式由主进程解析系统值）
+  pushThemeChanged();
   return settings;
+}
+
+// 把用户选择的 theme（light/dark/system）解析为实际生效的 light|dark
+function resolveEffectiveTheme(mode) {
+  if (mode === 'light') return 'light';
+  if (mode === 'dark') return 'dark';
+  // system：跟随操作系统
+  try { return nativeTheme.shouldUseDarkColors ? 'dark' : 'light'; }
+  catch { return 'dark'; }
+}
+
+// 向渲染进程推送当前主题态（仅在窗口存在时）
+function pushThemeChanged() {
+  if (!win || win.isDestroyed()) return;
+  const mode = (settings && settings.theme) || 'dark';
+  win.webContents.send('theme:changed', { mode, effective: resolveEffectiveTheme(mode) });
 }
 
 // ---------- Python 探测 ----------
@@ -519,7 +537,7 @@ function registerIpc() {
   ipcMain.handle('settings:get', () => {
     const repoOk = fs.existsSync(path.join(settings.repoRoot, 'main.py'));
     const outOk = fs.existsSync(settings.outputDir);
-    return { settings, env: { repoOk, outOk, electron: process.versions.electron, node: process.versions.node } };
+    return { settings, effectiveTheme: resolveEffectiveTheme(settings.theme), env: { repoOk, outOk, electron: process.versions.electron, node: process.versions.node } };
   });
   ipcMain.handle('settings:set', (_e, next) => saveSettings(next || {}));
   ipcMain.handle('python:detect', async (_e, candidate) => detectPython(candidate || null));
@@ -755,6 +773,10 @@ if (!gotLock) {
     loadSettings();
     registerIpc();
     createWindow();
+    // system 模式：监听操作系统明暗主题变化，变化时推送给渲染进程
+    nativeTheme.on('updated', () => {
+      if (settings && settings.theme === 'system') pushThemeChanged();
+    });
     if (IS_SELFTEST) {
       try { require('./selftest').run(win); }
       catch (e) { console.error('selftest 启动失败:', e); app.exit(1); }

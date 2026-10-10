@@ -72,14 +72,18 @@ function run(win) {
     await shot('02-Dashboard完整');
 
     // ── 4. 任务详情面板 ──
-    const taskClicked = await js(`(() => {
+    // 注意：此 Chromium 运行时 SVG 元素没有 .click() 方法，须用 dispatchEvent 派发真实点击
+    const clickRes = await js(`(() => {
       const node = document.querySelector('.dag-node, .task-row, [data-task-id]');
-      if (node) { node.click(); return true; }
-      return false;
+      if (!node) return { clicked: false };
+      try { node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return { clicked: true, tag: node.tagName }; }
+      catch (e) { return { clicked: true, error: String(e && e.stack || e) }; }
     })()`);
+    console.log('probe-4:', JSON.stringify(clickRes));
     await sleep(500);
     const detailOpen = await js(`!!document.querySelector('#detail-panel:not(.hidden)')`);
-    check('4. 点击任务节点打开详情面板', taskClicked && detailOpen, `点击=${taskClicked} 面板=${detailOpen}`);
+    check('4. 点击任务节点打开详情面板', clickRes && clickRes.clicked && !clickRes.error && detailOpen,
+      `点击=${clickRes && clickRes.clicked} 面板=${detailOpen}${clickRes && clickRes.error ? ' 异常=' + clickRes.error.split('\n')[0] : ''}`);
     await shot('03-任务详情面板');
     await js(`document.querySelector('#detail-close, .detail-close')?.click()`);
 
@@ -177,8 +181,8 @@ function run(win) {
     // ── 14. 键盘快捷键 ──
     await js(`document.querySelector('.nav-item[data-nav="dashboard"]')?.click()`);
     await sleep(300);
-    // 模拟按 '4' 切换到 Agents
-    await js(`document.dispatchEvent(new KeyboardEvent('keydown', { key: '4' }))`);
+    // 模拟按 '4' 切换到 Agents —— 应用监听 window 的 keydown，直接派发到 window
+    await js(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '4' }))`);
     await sleep(300);
     const agentsActive = await js(`document.querySelector('.nav-item[data-nav="agents"]')?.classList.contains('active')`);
     check('14. 数字键 1-8 快捷键切换页面', agentsActive, `按 4 后 Agents active=${agentsActive}`);
@@ -189,6 +193,34 @@ function run(win) {
     const planTasks = await js('document.querySelectorAll(".plan-task, .task-edit-row, [data-plan-task]").length');
     check('15. 计划审查页面可编辑任务', true, `${planTasks} 个可编辑任务（mock模式下可编辑）`);
     await shot('11-计划审查页面');
+
+    // ── 16. 主题切换 ──
+    // 循环顺序 light→dark→system→light；system 在深色 OS 上可能解析为 dark，
+    // 故最多点 3 次直到 dataset.theme 与 body 背景都真正发生变化。
+    const themeBtnExists = await js(`!!document.querySelector('#btn-theme')`);
+    const themeBefore = await js('document.documentElement.dataset.theme');
+    const bgBefore = await js('getComputedStyle(document.body).backgroundColor');
+    let themeAfter = themeBefore, bgAfter = bgBefore;
+    let changed = false;
+    for (let i = 0; i < 3; i++) {
+      await js(`document.querySelector('#btn-theme')?.click()`);
+      await sleep(450);
+      themeAfter = await js('document.documentElement.dataset.theme');
+      bgAfter = await js('getComputedStyle(document.body).backgroundColor');
+      if (themeBefore !== themeAfter && bgBefore !== bgAfter) { changed = true; break; }
+    }
+    check('16. 顶栏主题按钮切换且 body 背景色实际变化', themeBtnExists && changed,
+      `按钮=${themeBtnExists} theme: ${themeBefore}→${themeAfter}; bg: ${bgBefore}→${bgAfter}`);
+    // 切回深色（最多点 4 次），补一张暗色截图
+    for (let i = 0; i < 4; i++) {
+      const cur = await js('document.documentElement.dataset.theme');
+      if (cur === 'dark') break;
+      await js(`document.querySelector('#btn-theme')?.click()`);
+      await sleep(350);
+    }
+    const darkNow = await js('document.documentElement.dataset.theme');
+    console.log('probe-16: 暗色主题 dataset.theme =', darkNow);
+    await shot('12-暗色主题');
 
     // ── 汇总 ──
     const allPass = checks.every((c) => c.pass);

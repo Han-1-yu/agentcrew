@@ -2249,6 +2249,48 @@ async function switchRun(dir) {
   }
 }
 
+/* ============================================================
+   主题（light / dark / system）
+   ============================================================ */
+const THEME_ORDER = ['light', 'dark', 'system'];
+const THEME_ICONS = {
+  light: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>',
+  dark: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>',
+  system: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
+};
+const THEME_LABEL = { light: '浅色', dark: '深色', system: '跟随系统' };
+
+// 把用户选择的 theme 解析为实际生效的 light|dark
+function effectiveTheme() {
+  const mode = (S.settings && S.settings.theme) || 'dark';
+  if (mode === 'system') {
+    try { return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+    catch { return 'dark'; }
+  }
+  return mode;
+}
+
+// 应用主题到 <html data-theme>，并同步顶栏按钮图标
+function applyTheme() {
+  const eff = effectiveTheme();
+  document.documentElement.dataset.theme = eff;
+  const mode = (S.settings && S.settings.theme) || 'dark';
+  const btn = document.getElementById('btn-theme');
+  if (btn) {
+    btn.innerHTML = THEME_ICONS[mode] || THEME_ICONS.dark;
+    btn.title = `主题：${THEME_LABEL[mode] || mode}（点击切换）`;
+  }
+}
+
+// 顶栏按钮循环：light → dark → system → light
+function cycleTheme() {
+  const cur = (S.settings && S.settings.theme) || 'dark';
+  const next = THEME_ORDER[(THEME_ORDER.indexOf(cur) + 1) % THEME_ORDER.length];
+  S.settings.theme = next;
+  try { window.studio.setSettings({ theme: next }); } catch {}
+  applyTheme();
+}
+
 async function boot(){
   $('#btn-new-run').addEventListener('click',openNewRunModal);
   $('#btn-refresh').addEventListener('click', async () => {
@@ -2259,6 +2301,7 @@ async function boot(){
   });
   $('#btn-notify').addEventListener('click',()=>{ $('#notify-dot').classList.add('hidden'); toast('info','通知','暂无新通知'); });
   $('#btn-user').addEventListener('click',openUserMenu);
+  $('#btn-theme').addEventListener('click', cycleTheme);
   $('#tb-workspace').addEventListener('click',(e)=>{ e.stopPropagation(); toggleRunDropdown(); });
   document.addEventListener('click',(e)=>{ if(!e.target.closest('#run-dropdown')&&!e.target.closest('#tb-workspace')) closeRunDropdown(); });
   $$('.nav-item').forEach(b=>b.addEventListener('click',()=>switchNav(b.dataset.nav)));
@@ -2288,6 +2331,16 @@ async function boot(){
   });
 
   try { const r=await window.studio.getSettings(); S.settings=r.settings; S.env=r.env; } catch { S.settings={}; }
+  // 应用初始主题（light/dark/system）
+  applyTheme();
+  // 主进程推送系统主题变化（system 模式下自动跟随）
+  try {
+    window.studio.on('theme:changed', () => applyTheme());
+    // 兜底：渲染进程侧也监听系统主题变化
+    if (window.matchMedia) window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+      if ((S.settings && S.settings.theme) === 'system') applyTheme();
+    });
+  } catch {}
   try { await window.studio.detectPython(); } catch {}
 
   // 注册 watch 事件监听（真实数据模式下实时更新）
