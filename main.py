@@ -233,6 +233,12 @@ def build_parser() -> argparse.ArgumentParser:
     providers.add_argument("--json", action="store_true",
                            help="以 JSON 输出目录（便于脚本解析）")
 
+    models = sub.add_parser(
+        "models", help="按需拉取指定 provider 的模型列表")
+    models.add_argument("provider", help="provider 名（如 openai / openrouter）")
+    models.add_argument("--json", action="store_true",
+                        help="以 JSON 输出模型列表（便于脚本解析）")
+
     return parser
 
 
@@ -832,6 +838,62 @@ def _cmd_providers(args: argparse.Namespace) -> int:
     return EXIT_CODES["ok"]
 
 
+def _cmd_models(args: argparse.Namespace) -> int:
+    """``models <provider>``：按需拉取该 provider 的 /models 端点。
+
+    错误分类清晰（network/auth/not_found/parse/timeout），不栈崩溃。
+    """
+    from agentcrew.models.config import build_directory, parse_alias
+    from agentcrew.models.discovery import ModelDiscoveryError, fetch_models
+
+    try:
+        settings = _settings_from(args)
+    except (OSError, ValueError) as exc:
+        return _fail(f"配置错误：{exc}")
+
+    directory = build_directory(
+        custom=settings.custom_providers,
+        overrides=settings.provider_overrides,
+    )
+    preset = directory.get(args.provider)
+    if preset is None:
+        return _fail(f"未知 provider：{args.provider!r}")
+
+    # 构造一个临时 binding：model 名用 suggested_models 第一个或 "test"。
+    dummy_model = preset.suggested_models[0] if preset.suggested_models else "test"
+    binding = parse_alias(
+        f"{args.provider}:{dummy_model}",
+        overrides=settings.provider_overrides,
+        custom=settings.custom_providers,
+    )
+    api_key = settings.api_key_for(args.provider) or ""
+
+    try:
+        models = asyncio.run(fetch_models(binding, api_key=api_key))
+    except ModelDiscoveryError as exc:
+        if args.json:
+            print(json.dumps(
+                {"provider": args.provider, "error": {
+                    "kind": exc.kind, "message": str(exc)}},
+                ensure_ascii=False, indent=2))
+        else:
+            print(
+                f"[{exc.kind}] {args.provider} 模型发现失败：{exc}",
+                file=sys.stderr)
+        return EXIT_CODES["config"]
+
+    if args.json:
+        print(json.dumps(
+            {"provider": args.provider, "models": models},
+            ensure_ascii=False, indent=2))
+    else:
+        console = Console()
+        _out(console, f"provider {args.provider}：{len(models)} 个模型")
+        for m in models:
+            _out(console, f"  {m}")
+    return EXIT_CODES["ok"]
+
+
 #: 子命令 → 处理器（``build_parser`` 里注册的 dest 值）。
 _HANDLERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "run": _cmd_run,
@@ -845,6 +907,7 @@ _HANDLERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "doctor": _cmd_doctor,
     "diff": _cmd_diff,
     "providers": _cmd_providers,
+    "models": _cmd_models,
 }
 
 

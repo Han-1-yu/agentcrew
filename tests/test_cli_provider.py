@@ -16,6 +16,7 @@ def _binding(**kwargs) -> ModelBinding:
         alias="cli:test-model",
         provider="cli",
         model="test-model",
+        implementation="cli",
         base_url=None,
         api_key_env="",
         capabilities=ProviderCapabilities(),

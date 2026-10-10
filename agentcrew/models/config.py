@@ -55,10 +55,12 @@ class ModelBinding(BaseModel):
     alias: str
     provider: str
     model: str
+    implementation: Implementation
     base_url: str | None
     api_key_env: str
     capabilities: ProviderCapabilities
     command: str | None = None
+    models_url: str | None = None
 
 
 #: 内置能力预设，逐行对应 spec §12.1 的能力表（8 行）。
@@ -291,8 +293,10 @@ def parse_alias(
         alias=alias,
         provider=provider,
         model=model,
+        implementation=preset.implementation,
         base_url=preset.base_url,
         api_key_env=preset.api_key_env,
         capabilities=preset.capabilities,
         command=preset.command,
+        models_url=preset.models_url,
     )

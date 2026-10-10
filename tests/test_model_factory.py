@@ -182,10 +182,12 @@ def test_context_budget_checks_every_bound_alias(settings, monkeypatch):
     s = settings.model_copy(update={"context_budget_tokens": 60_000})
     f = ModelFactory(s)
     small = ModelBinding(alias="tinylocal:q", provider="ollama", model="q",
+                         implementation="openai_compat",
                          base_url=None, api_key_env="X",
                          capabilities=ProviderCapabilities(max_context_tokens=8192))
     monkeypatch.setattr(f, "_resolve", lambda a: small if a == "tinylocal:q"
                         else ModelBinding(alias=a, provider="openai", model="m",
+                                          implementation="openai_compat",
                                           base_url=None, api_key_env="OPENAI_API_KEY",
                                           capabilities=ProviderCapabilities(
                                               max_context_tokens=128_000)))

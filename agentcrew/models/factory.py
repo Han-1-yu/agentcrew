@@ -513,11 +513,18 @@ class ModelFactory:
         分派顺序：``parse_alias``（含 provider_overrides）→ ``--mock`` 全局覆盖
         → 按 implementation 构造。缺 Key 在这里当场报错，绝不静默。
         """
-        binding = parse_alias(
-            alias,
-            overrides=self._settings.provider_overrides,
-            custom=self._settings.custom_providers,
-        )
+        try:
+            binding = parse_alias(
+                alias,
+                overrides=self._settings.provider_overrides,
+                custom=self._settings.custom_providers,
+            )
+        except UnknownProviderError:
+            raise
+        except ValueError as exc:
+            # pydantic ValidationError 是 ValueError 子类；非法 implementation 等
+            # schema 违例在这里统一收敛成 ModelFactoryError（配置错误）。
+            raise ModelFactoryError(f"非法模型别名 {alias!r}: {exc}") from exc
         implementation = (
             "mock" if self._settings.mock
             else self._implementation_for(binding))
