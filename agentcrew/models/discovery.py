@@ -108,17 +108,19 @@ def _fetch_one_sync(url: str, binding: ModelBinding, api_key: str) -> list[str]:
     except urllib.error.HTTPError as exc:
         if exc.code in (401, 403):
             raise ModelDiscoveryError(
-                f"鉴权失败（HTTP {exc.code}），请检查 API Key", kind="auth")
+                f"鉴权失败（HTTP {exc.code}），请检查 API Key", kind="auth"
+            ) from exc
         if exc.code == 404:
             raise ModelDiscoveryError(
-                f"模型列表端点不存在（HTTP 404）：{url}", kind="not_found")
+                f"模型列表端点不存在（HTTP 404）：{url}", kind="not_found"
+            ) from exc
         raise ModelDiscoveryError(
-            f"HTTP {exc.code}：{url}", kind="network")
+            f"HTTP {exc.code}：{url}", kind="network") from exc
     except urllib.error.URLError as exc:
         reason = str(exc.reason).lower()
         if "timed out" in reason or "timeout" in reason:
-            raise ModelDiscoveryError("请求超时", kind="timeout")
-        raise ModelDiscoveryError(f"网络错误：{exc.reason}", kind="network")
+            raise ModelDiscoveryError("请求超时", kind="timeout") from exc
+        raise ModelDiscoveryError(f"网络错误：{exc.reason}", kind="network") from exc
     return _parse_models(body)
 
 

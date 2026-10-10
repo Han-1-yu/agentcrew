@@ -5,10 +5,10 @@
 环境变量 → CLI 覆盖。
 """
 
+import json
 import os
 import re
 import sys
-import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
@@ -17,12 +17,7 @@ import yaml
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from agentcrew.models.config import (
-    PROVIDER_PRESETS,
-    DuplicateProviderError,
-    ProviderPreset,
-    build_directory,
-)
+from agentcrew.models.config import PROVIDER_PRESETS, ProviderPreset
 
 GateMode = Literal["both", "plan", "delivery", "none"]
 
