@@ -1,5 +1,7 @@
 # AgentCrew 状态
 
+V4 供应商与模型管理升级全部完成（A1-A6 引擎侧 + B1-B4 Studio 侧），全量测试 1682 passed / 1 skipped，Studio e2e 17/17 通过。
+
 V3 三十四项增强全部完成（32 原始规划 + P2-11 Provider 健康监控 + P3-10 权重路由），全量测试 1632 passed / 1 skipped，离线 demo 验证 9/9 任务成功。
 
 V2 七项增强全部完成，1286 passed / 1 skipped。
@@ -68,6 +70,29 @@ python -m pytest -q
 - [x] **E-1** doctor 命令 — `cli/doctor.py`，诊断配置/环境/依赖/Provider 连通性
 - [x] **E-2** diff 命令 — `cli/diff.py`，对比 run 间配置/任务/产物/事件差异
 - [x] **E-3** API 认证与速率限制 — `api/auth.py` + `api/server.py`，API Key 认证 + IP 滑动窗口限流
+
+## V4 供应商与模型管理升级（全部完成）
+
+### 阶段 A：引擎侧（6 项）
+- [x] **A1** 自定义 Provider 注册表 — `config.py` + `models/config.py`，`models.custom_providers` 段、`build_directory()` 合并视图、`parse_alias`/`ModelFactory` 查合并目录、CLI `providers`、密钥脱敏
+- [x] **A2** 预设库扩充 — `models/config.py`，PROVIDER_PRESETS 从 9 增至 15（+openrouter/siliconflow/moonshot/zhipu/groq/together），ProviderPreset 新增 `suggested_models` 字段
+- [x] **A3** 模型发现服务 — `models/discovery.py`，`async fetch_models()`、URL 候选回退、10s 超时、错误分类、anthropic 适配、CLI `models`
+- [x] **A4** 测速与健康整合 — `factory.py` + `api/server.py`，`POST /providers/{name}/test`、HealthRecord 延迟/时间戳
+- [x] **A5** API 供应商目录 — `api/server.py`，`GET /providers`（合并目录+健康+延迟，绝不含密钥值）、`GET /providers/{name}/models`（60s 缓存）
+- [x] **A6** 配置导入导出与版本化 — `main.py`，`config export/import`、写前备份 `.bak`、`config_version` 顶层字段
+
+### 阶段 B：Studio 侧（4 项）
+- [x] **B1** 修复两条链路 bug — `renderer.js` COMMON_MODELS 改 provider:model 结构化别名；`main.js` run:start 传 `--model`（弹窗优先→settings 回落）与 `--max-cost`
+- [x] **B2** 新建运行弹窗模型选择改造 — `renderer.js`，provider 下拉→模型下拉→组装别名，后端不可用时手输降级
+- [x] **B3** 新增第 9 页「供应商」 — `index.html` + `renderer.js`，卡片列表、测速/拉模型、从预设添加弹窗（生成 YAML 片段），快捷键 1-9
+- [x] **B4** e2e/selftest 同步 — `e2e.js` 扩展为 9 页导航 + 供应商页检查（17/17 通过）
+
+### 红线遵守
+- 密钥绝不落盘：custom_providers 只存 `api_key_env` 名；`config_snapshot()` 脱敏同步扩展；GET /providers 响应测试断言不含密钥值
+- 确定性引擎不变：发现/测速均为按需调用，无常驻网络轮询
+- 配置合并顺序不变：custom_providers 接入 `_yaml_values`/`_env_values`（AGENTCREW_CUSTOM_PROVIDERS JSON）/CLI
+- 向后兼容：9 个旧预设 key/语义不变；现有 agentcrew.yaml 照常加载；PUT /runs/{id}/model 不破坏
+- 测试守卫不删：全量 1682 passed 只增不减
 
 ## 改代码前必读
 - **两级并发不得嵌套**：门禁必须在任务槽位释放后执行。守卫是 `test_scheduler_deadlock.py` 的结构性检查，**别删**。

@@ -37,23 +37,25 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, TextIO
 
+import yaml
 from rich.console import Console
 from rich.text import Text
 
-import yaml
-
+from agentcrew.cli.diff import (
+    diff_runs,
+)
+from agentcrew.cli.diff import (
+    print_diff as print_run_diff,
+)
 from agentcrew.cli.doctor import (
     DoctorCheck,
     DoctorReport,
-    print_report as print_doctor_report,
     run_diagnostics,
 )
-from agentcrew.cli.diff import (
-    diff_runs,
-    print_diff as print_run_diff,
+from agentcrew.cli.doctor import (
+    print_report as print_doctor_report,
 )
 from agentcrew.config import GateMode, Settings, redact_overrides
-from agentcrew.models.config import PROVIDER_PRESETS as PROVIDER_PRESETS_NAMES
 from agentcrew.crew.crew import (
     EXIT_CODES,
     Crew,
@@ -63,6 +65,7 @@ from agentcrew.crew.crew import (
 )
 from agentcrew.gate.cli_prompter import CliPrompter
 from agentcrew.gate.gatekeeper import NullPrompter, Prompter
+from agentcrew.models.config import PROVIDER_PRESETS as PROVIDER_PRESETS_NAMES
 from agentcrew.models.factory import ModelFactoryError
 from agentcrew.roles.builtin import BUILTIN_ROLES
 from agentcrew.roles.catalog import RoleCatalog

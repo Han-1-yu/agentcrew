@@ -856,32 +856,38 @@ class ApiServer:
         from agentcrew.models.config import parse_alias
         from agentcrew.models.discovery import ModelDiscoveryError, fetch_models
 
+        settings = self._settings
+        if settings is None:
+            await self._send_json(
+                writer, 503, {"error": "server 未配置 settings"})
+            return
+
         # 检查缓存
         cached = self._discovery_cache.get(name)
         if cached is not None:
-            ts, payload = cached
-            if time.monotonic() - ts < 60:
-                await self._send_json(writer, 200, payload)
+            _ts, cached_payload = cached
+            if time.monotonic() - _ts < 60:
+                await self._send_json(writer, 200, cached_payload)
                 return
 
         # 构造临时 binding
         dummy_model = preset.suggested_models[0] if preset.suggested_models else "test"
         binding = parse_alias(
             f"{name}:{dummy_model}",
-            overrides=self._settings.provider_overrides,
-            custom=self._settings.custom_providers,
+            overrides=settings.provider_overrides,
+            custom=settings.custom_providers,
         )
-        api_key = self._settings.api_key_for(name) or ""
+        api_key = settings.api_key_for(name) or ""
         try:
             models = await fetch_models(binding, api_key=api_key)
-            payload: dict[str, Any] = {"provider": name, "models": models}
+            result_payload: dict[str, Any] = {"provider": name, "models": models}
         except ModelDiscoveryError as exc:
-            payload = {
+            result_payload = {
                 "provider": name,
                 "error": {"kind": exc.kind, "message": str(exc)},
             }
-        self._discovery_cache[name] = (time.monotonic(), payload)
-        await self._send_json(writer, 200, payload)
+        self._discovery_cache[name] = (time.monotonic(), result_payload)
+        await self._send_json(writer, 200, result_payload)
 
     async def _provider_test(
         self, name: str, writer: asyncio.StreamWriter,
@@ -889,6 +895,11 @@ class ApiServer:
         """POST /providers/{name}/test —— 按需测速，发 max_tokens=1 的 ping。"""
         from agentcrew.models.config import build_directory
 
+        settings = self._settings
+        if settings is None:
+            await self._send_json(
+                writer, 503, {"error": "server 未配置 settings"})
+            return
         factory = self._model_factory
         if factory is None:
             await self._send_json(
@@ -896,8 +907,8 @@ class ApiServer:
                 {"error": "server 未配置 model_factory，无法测速"})
             return
         directory = build_directory(
-            custom=self._settings.custom_providers,
-            overrides=self._settings.provider_overrides,
+            custom=settings.custom_providers,
+            overrides=settings.provider_overrides,
         )
         preset = directory.get(name)
         if preset is None:

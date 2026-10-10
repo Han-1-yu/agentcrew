@@ -954,6 +954,68 @@ agent = GenericAgent(
 )
 ```
 
+## V4 增强功能：供应商与模型管理
+
+参考 cc-switch 的供应商管理设计，补齐多供应商接入、模型发现、连通性测速与
+Studio 供应商管理页，并修复两条 Studio 链路 bug。
+
+### 1. 自定义 Provider 注册表
+
+`agentcrew.yaml` 新增 `models.custom_providers` 段，用户可定义全新 provider
+（如中转网关、自建 API），与 15 个内置预设并存。密钥只存环境变量名
+（`api_key_env`），绝不落盘。自定义名与内置重名报错（覆盖内置走
+`models.providers`）。`parse_alias` 与 `ModelFactory` 查合并视图。
+
+CLI：`python main.py providers [name]` 列出合并目录。
+
+### 2. 预设库扩充
+
+内置预设从 9 个扩充到 15 个，新增 `openrouter`、`siliconflow`、`moonshot`、
+`zhipu`（GLM）、`groq`、`together`，每个含能力位注释与 `suggested_models`
+建议模型列表。
+
+### 3. 模型发现服务
+
+新增 `agentcrew/models/discovery.py`：`async fetch_models(binding)` 按需
+拉取 provider 模型列表。OpenAI 兼容 `GET /v1/models`，URL 候选自动回退
+（`/v1/models` → `/models` → 剥离子路径），支持 `models_url` 覆写，10s 超时，
+错误分类（network/auth/not_found/parse/timeout），结果排序去重。anthropic
+单独适配。CLI：`python main.py models <provider>`。
+
+### 4. 测速与健康整合
+
+`HealthRecord` 含延迟（ms）与时间戳。按需测速发最小补全请求（`max_tokens=1`），
+一次只测一个 provider。API `POST /providers/{name}/test` 返回
+`{ok, latency_ms, error?}`。
+
+### 5. API 供应商目录端点
+
+- `GET /providers`：合并目录（内置/自定义标记、base_url、api_key_env 名、
+  `key_configured`、能力位摘要、健康状态、suggested_models）。响应**绝不含密钥值**。
+- `GET /providers/{name}/models`：实时拉取模型列表（60s 进程内缓存，错误透传）。
+
+### 6. 配置导入导出与版本化
+
+- `python main.py config export`：导出合并视图 YAML（脱敏）。
+- `python main.py config import <file>`：校验后合并写入，写前备份
+  `agentcrew.yaml.bak`，含疑似密钥字段的导入被拒绝。
+- `agentcrew.yaml` 顶层 `config_version`（当前 1），更高版本报清晰错误。
+
+### 7. Studio 供应商管理页（第 9 页）
+
+Studio 新增「供应商」页（侧边栏第 9 项，快捷键 9）：卡片列表展示所有 provider
+（名称、base_url、内置/自定义徽标、api_key_env、已配置/未配置、健康状态点、
+最近延迟），支持一键测速、拉取模型、「从预设添加」弹窗（生成 YAML 片段供复制，
+Studio 不直接改 agentcrew.yaml）。
+
+### 8. Studio 链路 bug 修复
+
+- `COMMON_MODELS` 从裸模型名改为 `<provider>:<model>` 结构化别名，设置页
+  选出的默认模型可被引擎正确解析。
+- `main.js` 新建运行时传 `--model`（弹窗显式选择优先，否则回落设置页
+  `defaultModel`）和 `--max-cost`（弹窗优先，否则回落设置页 `maxCostUsd`）。
+- 新建运行弹窗新增 provider 下拉 + 模型下拉（后端不可用时可手输不阻塞）。
+
 ---
 
 ## 自定义角色 / 团队开发指南
@@ -1081,19 +1143,27 @@ asyncio.run(main())
 `--mock` 是全局开关，会覆盖以上所有绑定，把一切别名解析为 MockProvider。
 `ModelFactory` 按别名缓存 provider 实例，避免重复建连。
 
-8 个内置 provider（`agentcrew/models/config.py::PROVIDER_PRESETS`，可被
-`agentcrew.yaml` 的 `models.providers` 覆盖）：
+15 个内置 provider（`agentcrew/models/config.py::PROVIDER_PRESETS`，可被
+`agentcrew.yaml` 的 `models.providers` 覆盖；另可通过 `models.custom_providers`
+新增自定义 provider，见「自定义 Provider」）：
 
 | 别名 | 实现 | 默认 base_url | `json_schema` | `json_object` | API Key 环境变量 |
 |---|---|---|---|---|---|
 | `openai` | OpenAI 兼容 | `https://api.openai.com/v1` | ✅ | ✅ | `OPENAI_API_KEY` |
 | `anthropic` | Anthropic 原生 Messages API | `https://api.anthropic.com` | ❌ | ❌ | `ANTHROPIC_API_KEY` |
-| `deepseek` | OpenAI 兼容 | `https://api.deepseek.com/v1` | ✅ | ✅ | `DEEPSEEK_API_KEY` |
+| `deepseek` | OpenAI 兼容 | `https://api.deepseek.com/v1` | ❌ | ✅ | `DEEPSEEK_API_KEY` |
 | `doubao` | OpenAI 兼容 | `https://ark.cn-beijing.volces.com/api/v3` | ❌ | ✅ | `ARK_API_KEY`（豆包 / 火山方舟） |
 | `qwen` | OpenAI 兼容 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | ❌ | ✅ | `DASHSCOPE_API_KEY`（通义千问） |
 | `ernie` | OpenAI 兼容 | `https://qianfan.baidubce.com/v2` | ❌ | ❌ | `QIANFAN_API_KEY`（文心一言，千帆 v2） |
-| `ollama` | OpenAI 兼容 | `http://localhost:11434/v1` | ❌ | ✅ | 不需要真实 Key（端点用 `models.providers.ollama.base_url` 覆盖，见「配置项」） |
+| `ollama` | OpenAI 兼容 | `http://localhost:11434/v1` | ❌ | ✅ | 不需要真实 Key |
 | `mock` | MockProvider | — | ✅ | ✅ | 不需要（离线确定性回放） |
+| `cli` | 外部 CLI 引擎 | — | ❌ | ❌ | 不需要（command 经 provider_overrides 指定） |
+| `openrouter` | OpenAI 兼容 | `https://openrouter.ai/api/v1` | ❌ | ✅ | `OPENROUTER_API_KEY` |
+| `siliconflow` | OpenAI 兼容 | `https://api.siliconflow.cn/v1` | ❌ | ✅ | `SILICONFLOW_API_KEY` |
+| `moonshot` | OpenAI 兼容 | `https://api.moonshot.cn/v1` | ❌ | ✅ | `MOONSHOT_API_KEY` |
+| `zhipu` | OpenAI 兼容 | `https://open.bigmodel.cn/api/paas/v4` | ❌ | ✅ | `ZHIPU_API_KEY`（智谱 GLM） |
+| `groq` | OpenAI 兼容 | `https://api.groq.com/openai/v1` | ❌ | ✅ | `GROQ_API_KEY` |
+| `together` | OpenAI 兼容 | `https://api.together.xyz/v1` | ❌ | ✅ | `TOGETHER_API_KEY` |
 
 **`json_schema` 支持情况为什么重要**：需要结构化输出的调用（PM 拆解计划、G2 评审）
 走三级降级链 + 修复循环：
@@ -1110,6 +1180,48 @@ asyncio.run(main())
 （工厂默认落账，调用方无需接线；显式传入自定义回调则替换该默认行为），便于事后
 诊断「哪家 provider 不稳定」。能力位描述的是实际在跑的 provider，`--mock`
 下就是 mock 预设的能力位。
+
+### 自定义 Provider
+
+除 15 个内置预设外，可在 `agentcrew.yaml` 的 `models.custom_providers` 段新增
+任意 provider（如自建网关、第三方中转站），与内置预设并存：
+
+```yaml
+models:
+  custom_providers:
+    myrelay:
+      implementation: openai_compat
+      base_url: http://localhost:9000/v1
+      api_key_env: MYRELAY_API_KEY
+      capabilities:
+        supports_json_object: true
+      suggested_models:
+        - gpt-4o-mini
+        - deepseek-chat
+```
+
+- **密钥只存环境变量名**：`api_key_env` 是环境变量的**名字**（如 `MYRELAY_API_KEY`），
+  真实 Key 写进 `.env` 或系统环境变量，绝不落盘。
+- 自定义名与内置重名时报错（想覆盖内置走 `models.providers` 段）。
+- 环境变量 `AGENTCREW_CUSTOM_PROVIDERS` 支持紧凑 JSON 形式。
+- `python main.py providers` 列出合并目录（内置/自定义标记、base_url、能力位）。
+
+### 模型发现与测速
+
+- `python main.py models <provider>`：实时拉取该 provider 的模型列表
+  （OpenAI 兼容 `GET /v1/models`，URL 候选自动回退，10s 超时，错误分类清晰）。
+- `POST /providers/{name}/test`：按需测速（发 `max_tokens=1` 的最小请求），
+  返回 `{ok, latency_ms, error?}`。
+- `GET /providers`：返回合并目录（含健康状态、延迟、`key_configured` 布尔值，
+  **响应不含密钥值**）。
+- `GET /providers/{name}/models`：实时拉取模型列表（60s 缓存）。
+
+### 配置导入导出
+
+- `python main.py config export`：导出合并视图的 YAML（密钥字段天然脱敏）。
+- `python main.py config import <file>`：校验后合并写入 `agentcrew.yaml`，
+  写前自动备份为 `agentcrew.yaml.bak`。
+- `agentcrew.yaml` 顶层支持 `config_version`（当前 1），更高版本报清晰错误。
 
 ---
 

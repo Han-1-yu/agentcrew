@@ -44,6 +44,8 @@ from agentcrew.models import structured
 from agentcrew.models.cache import LLMCache
 from agentcrew.models.complexity import (
     evaluate as evaluate_complexity,
+)
+from agentcrew.models.complexity import (
     get_calibrator,
 )
 from agentcrew.models.config import (
@@ -74,8 +76,8 @@ from agentcrew.utils.retry import TransientError
 from agentcrew.utils.tokens import estimate_tokens
 
 if TYPE_CHECKING:
-    from agentcrew.task.task import Task
     from agentcrew.models.complexity import ComplexityLevel
+    from agentcrew.task.task import Task
 
 
 def _level_rank(level: "ComplexityLevel") -> int:
