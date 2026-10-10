@@ -79,6 +79,9 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         base_url="https://api.anthropic.com",
         api_key_env="ANTHROPIC_API_KEY",
         capabilities=ProviderCapabilities(),  # 结构化输出走围栏提取
+        # anthropic 的 base_url 不带 /v1，模型列表固定在 /v1/models；显式指过来，
+        # 避免先试 /models（可能回 200 HTML 而非 404）后因 parse 错误不再回退。
+        models_url="https://api.anthropic.com/v1/models",
     ),
     "deepseek": ProviderPreset(
         implementation="openai_compat",

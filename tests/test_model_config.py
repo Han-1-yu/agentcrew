@@ -27,6 +27,13 @@ def test_anthropic_uses_native_implementation():
     assert not PROVIDER_PRESETS["anthropic"].capabilities.supports_json_schema
 
 
+def test_anthropic_models_url_explicit():
+    """anthropic base_url 不带 /v1，显式 models_url 指向 /v1/models，避免先试
+    /models 收到非 JSON 后因 parse 错误不再回退。"""
+    assert PROVIDER_PRESETS["anthropic"].models_url == \
+        "https://api.anthropic.com/v1/models"
+
+
 def test_doubao_has_object_but_not_schema():
     c = PROVIDER_PRESETS["doubao"].capabilities
     assert c.supports_json_object and not c.supports_json_schema
