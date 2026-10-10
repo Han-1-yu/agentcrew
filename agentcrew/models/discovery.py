@@ -92,7 +92,11 @@ def _parse_models(body: str) -> list[str]:
         raise ModelDiscoveryError("响应缺少 data 列表", kind="parse")
     names: list[str] = []
     for item in items:
-        if isinstance(item, dict) and isinstance(item.get("id"), str):
+        # 只收录非空字符串 id：部分端点会回 ``{"id": ""}`` 占位条目，
+        # 放过它免得在模型下拉里出现一个「空模型」。
+        if (isinstance(item, dict)
+                and isinstance(item.get("id"), str)
+                and item["id"].strip()):
             names.append(item["id"])
     return names
 
