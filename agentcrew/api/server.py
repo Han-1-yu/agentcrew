@@ -33,6 +33,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from agentcrew.api.auth import APIKeyAuth, RateLimiter
+from agentcrew.models.config import PROVIDER_PRESETS as PROVIDER_PRESETS_NAMES
 
 
 @dataclass
@@ -98,6 +99,7 @@ class ApiServer:
         crew_factory: Callable[[str, Mapping[str, Any]], Any] | None = None,
         auth: APIKeyAuth | None = None,
         rate_limiter: RateLimiter | None = None,
+        model_factory: Any | None = None,
     ) -> None:
         """``settings`` / ``crew_factory`` 只服务于 P1-5 的创建/恢复端点。
 
@@ -131,6 +133,10 @@ class ApiServer:
         self.active_crews: dict[str, Any] = {}
         #: 后台任务句柄（run_id → asyncio.Task），便于优雅收尾。
         self._run_tasks: dict[str, asyncio.Task[None]] = {}
+        #: A5：可选 ModelFactory，用于 /providers 健康查询与 /test 测速。
+        self._model_factory = model_factory
+        #: A5：模型发现结果缓存（provider → (timestamp, models) 或 (timestamp, error)）。
+        self._discovery_cache: dict[str, tuple[float, Any]] = {}
 
     async def start(self) -> None:
         self._server = await asyncio.start_server(
@@ -330,6 +336,10 @@ class ApiServer:
             await self._list_runs(writer)
             return
         segments = [unquote(s) for s in p.split("/") if s]
+        # A5：/providers 目录与 /providers/{name}/models
+        if segments and segments[0] == "providers":
+            await self._handle_providers_get(segments, writer)
+            return
         if len(segments) == 3 and segments[0] == "runs":
             run_id, action = segments[1], segments[2]
             if action == "events":
@@ -367,6 +377,10 @@ class ApiServer:
             return
         parsed = urlsplit(path)
         segments = [unquote(s) for s in parsed.path.split("/") if s]
+        # A4：POST /providers/{name}/test
+        if len(segments) == 3 and segments[0] == "providers" and segments[2] == "test":
+            await self._provider_test(segments[1], writer)
+            return
         if len(segments) == 3 and segments[0] == "runs":
             run_id, action = segments[1], segments[2]
             if action == "cancel":
@@ -755,6 +769,154 @@ class ApiServer:
         await self._send_json(writer, 200, {
             "deleted": run_id,
             "freed_bytes": freed,
+        })
+
+    # ── A4/A5：Provider 目录、模型发现与测速 ────────────────────────────────
+
+    async def _handle_providers_get(
+        self, segments: list[str], writer: asyncio.StreamWriter,
+    ) -> None:
+        """GET /providers 或 GET /providers/{name}/models。"""
+        from agentcrew.models.config import build_directory
+
+        if self._settings is None:
+            await self._send_json(writer, 503, {"error": "server 未配置 settings"})
+            return
+
+        directory = build_directory(
+            custom=self._settings.custom_providers,
+            overrides=self._settings.provider_overrides,
+        )
+        builtin_names = set(PROVIDER_PRESETS_NAMES)
+
+        if len(segments) == 1:
+            # GET /providers —— 返回完整目录
+            entries = []
+            import os
+            for name in sorted(directory):
+                preset = directory[name]
+                env_name = preset.api_key_env or ""
+                key_configured = bool(env_name) and bool(
+                    os.environ.get(env_name, "").strip())
+                # 健康状态：从 factory 的 _health 缓存里找该 provider 的任意 alias
+                health = self._provider_health(name)
+                entries.append({
+                    "name": name,
+                    "kind": "builtin" if name in builtin_names else "custom",
+                    "implementation": preset.implementation,
+                    "base_url": preset.base_url,
+                    "api_key_env": env_name,
+                    "key_configured": key_configured,
+                    "capabilities": preset.capabilities.model_dump(),
+                    "suggested_models": list(preset.suggested_models),
+                    "health": health,
+                })
+            await self._send_json(writer, 200, {"providers": entries})
+            return
+
+        if len(segments) == 3 and segments[2] == "models":
+            # GET /providers/{name}/models —— 实时拉取模型列表（带 60s 缓存）
+            name = segments[1]
+            if name not in directory:
+                await self._send_json(
+                    writer, 404, {"error": f"未知 provider：{name!r}"})
+                return
+            await self._discover_models(name, directory[name], writer)
+            return
+
+        await self._send_json(writer, 404, {"error": "Not Found"})
+
+    def _provider_health(self, provider: str) -> dict[str, Any] | None:
+        """从 factory 的健康缓存里取该 provider 任意 alias 的最新记录。"""
+        factory = self._model_factory
+        if factory is None:
+            return None
+        # health 按 alias 存，找以 f"{provider}:" 开头的最新记录
+        best: Any = None
+        for alias, rec in getattr(factory, "_health", {}).items():
+            if not alias.startswith(f"{provider}:"):
+                continue
+            if best is None or rec.last_check > best.last_check:
+                best = rec
+        if best is None:
+            return None
+        return {
+            "status": best.status,
+            "latency_ms": best.latency_ms,
+            "last_check": best.last_check.isoformat(),
+            "error": best.error,
+        }
+
+    async def _discover_models(
+        self, name: str, preset: Any, writer: asyncio.StreamWriter,
+    ) -> None:
+        """实时拉取模型列表，带 60s 进程内缓存。"""
+        import time
+
+        from agentcrew.models.config import parse_alias
+        from agentcrew.models.discovery import ModelDiscoveryError, fetch_models
+
+        # 检查缓存
+        cached = self._discovery_cache.get(name)
+        if cached is not None:
+            ts, payload = cached
+            if time.monotonic() - ts < 60:
+                await self._send_json(writer, 200, payload)
+                return
+
+        # 构造临时 binding
+        dummy_model = preset.suggested_models[0] if preset.suggested_models else "test"
+        binding = parse_alias(
+            f"{name}:{dummy_model}",
+            overrides=self._settings.provider_overrides,
+            custom=self._settings.custom_providers,
+        )
+        api_key = self._settings.api_key_for(name) or ""
+        try:
+            models = await fetch_models(binding, api_key=api_key)
+            payload: dict[str, Any] = {"provider": name, "models": models}
+        except ModelDiscoveryError as exc:
+            payload = {
+                "provider": name,
+                "error": {"kind": exc.kind, "message": str(exc)},
+            }
+        self._discovery_cache[name] = (time.monotonic(), payload)
+        await self._send_json(writer, 200, payload)
+
+    async def _provider_test(
+        self, name: str, writer: asyncio.StreamWriter,
+    ) -> None:
+        """POST /providers/{name}/test —— 按需测速，发 max_tokens=1 的 ping。"""
+        from agentcrew.models.config import build_directory
+
+        factory = self._model_factory
+        if factory is None:
+            await self._send_json(
+                writer, 503,
+                {"error": "server 未配置 model_factory，无法测速"})
+            return
+        directory = build_directory(
+            custom=self._settings.custom_providers,
+            overrides=self._settings.provider_overrides,
+        )
+        preset = directory.get(name)
+        if preset is None:
+            await self._send_json(writer, 404, {"error": f"未知 provider：{name!r}"})
+            return
+        dummy_model = preset.suggested_models[0] if preset.suggested_models else "test"
+        alias = f"{name}:{dummy_model}"
+        try:
+            record = await factory.health_check(alias)
+        except Exception as exc:
+            await self._send_json(writer, 200, {
+                "ok": False, "latency_ms": None,
+                "error": f"{type(exc).__name__}: {exc}",
+            })
+            return
+        await self._send_json(writer, 200, {
+            "ok": record.status != "unavailable",
+            "latency_ms": record.latency_ms,
+            "error": record.error,
         })
 
     async def _handle_sse(self, run_id: str, writer: asyncio.StreamWriter) -> None:

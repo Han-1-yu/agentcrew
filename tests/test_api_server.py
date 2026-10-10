@@ -293,13 +293,16 @@ class TestRunLifecycle:
         server._crew_factory = lambda goal, options: crew
         port = server._server.sockets[0].getsockname()[1]
         await _request(port, "POST", "/runs", {"goal": "g"})
+        # task 引用必须在取消**前**捕获：crew 退出时会把自己从 _run_tasks 摘除，
+        # 取消响应回来再查字典就变成与调度器的时序竞争（间歇 KeyError）。
+        run_task = server._run_tasks["fake-run-1"]
         assert crew.cancelled is False
         status, data = await _request(
             port, "POST", "/runs/fake-run-1/cancel")
         assert status == 202
         assert data["cancelled"] is True
         assert crew.cancelled is True
-        await asyncio.wait_for(server._run_tasks["fake-run-1"], timeout=3)
+        await asyncio.wait_for(run_task, timeout=3)
 
     @pytest.mark.asyncio
     async def test_post_resume_active_run_conflicts(self, server: ApiServer):
@@ -348,3 +351,78 @@ class TestRunLifecycle:
         assert mine["active"] is True
         crew.cancel()
         await asyncio.wait_for(server._run_tasks["fake-run-1"], timeout=3)
+
+
+# ── A4/A5：Provider 目录、模型发现与测速端点 ────────────────────────────
+
+
+class TestProvidersApi:
+    @pytest.fixture
+    async def server(self, tmp_path, monkeypatch):
+        from agentcrew.config import Settings
+        monkeypatch.setenv("AGENTCREW_OUTPUT_DIR", str(tmp_path / "o"))
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-supersecret-value-12345")
+        settings = Settings.load()
+        srv = ApiServer(port=0, output_dir=tmp_path, settings=settings)
+        await srv.start()
+        try:
+            yield srv
+        finally:
+            await srv.stop()
+
+    @pytest.mark.asyncio
+    async def test_get_providers_lists_directory(self, server: ApiServer):
+        port = server._server.sockets[0].getsockname()[1]
+        status, data = await _request(port, "GET", "/providers")
+        assert status == 200
+        providers = data["providers"]
+        names = {p["name"] for p in providers}
+        assert "openai" in names
+        assert "openrouter" in names
+        openai = next(p for p in providers if p["name"] == "openai")
+        assert openai["kind"] == "builtin"
+        assert openai["implementation"] == "openai_compat"
+        assert openai["api_key_env"] == "OPENAI_API_KEY"
+        assert "key_configured" in openai
+
+    @pytest.mark.asyncio
+    async def test_get_providers_does_not_leak_secret_value(self, server: ApiServer):
+        """红线：GET /providers 响应绝不包含密钥值。"""
+        port = server._server.sockets[0].getsockname()[1]
+        status, data = await _request(port, "GET", "/providers")
+        assert status == 200
+        body_str = json.dumps(data, ensure_ascii=False)
+        assert "sk-supersecret-value-12345" not in body_str
+
+    @pytest.mark.asyncio
+    async def test_get_providers_custom_provider(self, server: ApiServer):
+        from agentcrew.config import Settings
+        settings = server._settings.model_copy(update={
+            "custom_providers": {
+                "myrelay": {
+                    "implementation": "openai_compat",
+                    "base_url": "http://localhost:9/v1",
+                    "api_key_env": "MYRELAY_KEY",
+                    "capabilities": {},
+                }
+            }
+        })
+        server._settings = settings
+        port = server._server.sockets[0].getsockname()[1]
+        status, data = await _request(port, "GET", "/providers")
+        assert status == 200
+        relay = next(p for p in data["providers"] if p["name"] == "myrelay")
+        assert relay["kind"] == "custom"
+        assert relay["base_url"] == "http://localhost:9/v1"
+
+    @pytest.mark.asyncio
+    async def test_post_provider_test_no_factory_503(self, server: ApiServer):
+        port = server._server.sockets[0].getsockname()[1]
+        status, data = await _request(port, "POST", "/providers/openai/test")
+        assert status == 503
+
+    @pytest.mark.asyncio
+    async def test_get_provider_models_not_found(self, server: ApiServer):
+        port = server._server.sockets[0].getsockname()[1]
+        status, data = await _request(port, "GET", "/providers/nosuch/models")
+        assert status == 404

@@ -677,9 +677,13 @@ def _cmd_serve(args: argparse.Namespace) -> int:
             if settings.api_rate_limit_enabled
             else None
         )
+        # A4/A5：构造 ModelFactory 供 /providers 健康查询与 /test 测速。
+        from agentcrew.models.factory import ModelFactory
+        model_factory = ModelFactory(settings)
         server = ApiServer(
             host=args.host, port=args.port, output_dir=settings.output_dir,
             auth=auth, rate_limiter=rate_limiter,
+            model_factory=model_factory,
         )
         await server.start()
         print(f"AgentCrew API server listening on http://{args.host}:{args.port}")
