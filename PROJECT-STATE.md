@@ -94,6 +94,22 @@ python -m pytest -q
 - 向后兼容：9 个旧预设 key/语义不变；现有 agentcrew.yaml 照常加载；PUT /runs/{id}/model 不破坏
 - 测试守卫不删：全量 1682 passed 只增不减
 
+### 阶段 C：Studio 前端完善 V4-FE（7 项，全部完成）
+
+> 独立于引擎侧的纯前端升级，只动 `studio/` 下 8 个文件，零新增 npm 依赖。参考 cc-switch 桌面端设计模式。
+
+- [x] **F0 结构修复** — 补全 index.html DAG 导航按钮（原残缺致空白可点击项）；删除 renderer.js 重复 fmtBytes 与 ROLE_ORDER 局部副本；清理已被真实页面取代的 PLACEHOLDERS 占位文案
+- [x] **F1 明暗主题真正落地** — styles.css 全文件颜色 token 化（:root + [data-theme="dark"] 双套 95 个 CSS 变量，正文零硬编码 hex/rgba）；顶栏主题按钮循环 light→dark→system；main.js nativeTheme 监听系统主题变化推送渲染进程；持久化 settings.json；e2e 第 16 项
+- [x] **F2 模型选择链路修复** — COMMON_MODELS 重构为 BUILTIN_PROVIDERS 结构化常量（9 个内置 provider 逐一对齐后端 config.py，含 base_url/api_key_env/suggested_models）；新建运行弹窗 provider→model 两级选择组装 `<provider>:<model>` 别名；main.js run:start 传 `--model`（弹窗优先→settings 回落）与 `--max-cost`（settings 回落）
+- [x] **F3 供应商管理页（第 9 页）** — 侧边栏第 9 个导航 + 快捷键 1-9；卡片列表（首字母圆标/名称/base_url/内置徽标/密钥环境变量名+配置状态点/模型数摘要）；测试按钮（主进程 IPC provider:test 用 net.fetch 发 GET /models，10s 超时，内联显示延迟/错误）；模型展开+设为默认；「从预设添加」弹窗（5 个额外预设+空白，生成 agentcrew.yaml models.custom_providers YAML 片段+一键复制，Studio 不直接写 yaml）；数据源三级降级（后端API→常量+keyStatus→demo）；CSP connect-src 精确放行 localhost
+- [x] **F4 新建运行弹窗体验升级** — 目标必填行内校验（描红+提示，不 toast 轰炸）；Demo 勾选置灰目标输入（--demo/--goal 互斥 UI 表达）；最近使用目标下拉（主进程持久化最近 5 条到 settings.recentGoals）；高级选项折叠区（预算上限/max-llm-calls/项目名/慢速，默认收起）
+- [x] **F5 设置页分组重构** — 四组卡片：运行环境（Python 命令+即时探测版本/仓库根目录/输出目录）、模型与预算（默认模型选择器/预算上限）、连接（apiBaseUrl+即时测试连通性走 provider:test）、外观（主题三选一 segmented control 即时生效）；保存 toast 回执
+- [x] **F6 细节打磨 + F7 测试文档** — 异步加载区骨架/空态/错误态三态复核；toasts 统一；Esc 覆盖新弹窗；conn-indicator 三态语义复核；e2e 扩展至 21 项（含供应商页/暗色主题/导航按钮非空/模型下拉）；selftest 页面枚举同步；README 与 PROJECT-STATE 更新
+
+**红线遵守**：零新增 npm 依赖（package.json devDependencies 仅 electron）；不修改 agentcrew/、main.py 及任何 Python 文件；CSP connect-src 精确到 localhost:* / 127.0.0.1:* 无 `*`；密钥零接触（provider:keyStatus 只回布尔，api_key 仅环境变量名）；演示模式 buildMockRun/simTick/window.__st 原样保留；styles.css 正文零硬编码色值。
+
+**验收**：`npm run e2e` 21/21 通过退出码 0；`npm run selftest` 退出码 0；grep 色值仅 token 定义区命中；grep api_key 仅环境变量名；git status 无 studio/ 外文件变更。
+
 ## 改代码前必读
 - **两级并发不得嵌套**：门禁必须在任务槽位释放后执行。守卫是 `test_scheduler_deadlock.py` 的结构性检查，**别删**。
 - `bump_rework` 全仓只有 `Gatekeeper` 一处调用，删掉 → 返工回路无界。
