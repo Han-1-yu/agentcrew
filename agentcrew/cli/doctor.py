@@ -162,6 +162,11 @@ def _check_api_keys(settings: Settings) -> DoctorCheck:
             continue  # 别名非法由 config 检查项报告
         if binding.provider in _KEYLESS_PROVIDERS:
             continue
+        # 自定义 provider 把 ``api_key_env`` 留空串表示「本地中转/网关无需鉴权」
+        # （factory._require_api_key 对空 api_key_env 返回占位串、不报错）。这类
+        # provider 不应被 doctor 误报「缺少 API Key」——与 ollama/mock/cli 同属免钥。
+        if not binding.api_key_env:
+            continue
         if settings.api_key_for(binding.provider) is None:
             env = binding.api_key_env or "?"
             if env not in missing:
