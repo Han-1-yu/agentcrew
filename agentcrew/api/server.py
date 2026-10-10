@@ -520,7 +520,7 @@ class ApiServer:
                 original(event, payload)
 
         try:
-            setattr(crew, "_on_event", forward)
+            crew._on_event = forward
         except Exception:
             pass
 

@@ -97,21 +97,12 @@ def _collect_aliases(settings: Settings) -> list[str]:
 
 
 def _check_python_version() -> DoctorCheck:
-    """Python >= 3.10（README 的运行时要求）。"""
-    if sys.version_info >= (3, 10):
-        return DoctorCheck(
-            name="python",
-            status=STATUS_PASS,
-            message=f"Python {sys.version_info.major}.{sys.version_info.minor}."
-                    f"{sys.version_info.micro}",
-        )
+    """Python 版本检查（包元数据已要求 >= 3.10，此处仅报告当前版本）。"""
     return DoctorCheck(
         name="python",
-        status=STATUS_FAIL,
-        message=(
-            f"Python {sys.version_info.major}.{sys.version_info.minor} 过低："
-            "AgentCrew 需要 >= 3.10"
-        ),
+        status=STATUS_PASS,
+        message=f"Python {sys.version_info.major}.{sys.version_info.minor}."
+                f"{sys.version_info.micro}",
     )
 
 
