@@ -741,7 +741,7 @@ h1,h2,h3,h4 { margin: 0; font-weight: 600; letter-spacing: -0.1px; }
 #dag-svg text { font-family: inherit; }
 
 .dag-node { cursor: pointer; }
-.dag-node rect.node-box { transition: stroke .15s ease, stroke-width .15s ease; }
+.dag-node rect.node-box { transition: stroke .15s ease, stroke-width .15s ease; fill: var(--bg-panel); stroke: var(--text-ter); }
 .dag-node:hover rect.node-box { stroke-width: 2.4; }
 .dag-node.flash { animation: nodeFlash .5s ease; }
 @keyframes nodeFlash { 0% { filter: brightness(1.3); } 100% { filter: none; } }
@@ -751,6 +751,63 @@ h1,h2,h3,h4 { margin: 0; font-weight: 600; letter-spacing: -0.1px; }
   0%, 100% { stroke-opacity: 1; }
   50% { stroke-opacity: 0.55; }
 }
+
+/* ---- DAG 节点文字与填充：全部主题化（引用 --status-* / 语义 token） ---- */
+.dag-node text.node-title   { fill: var(--text); }
+.dag-node text.node-meta    { fill: var(--text-ter); }
+.dag-node text.node-role    { fill: var(--text-sub); }
+.dag-node text.node-on-solid{ fill: var(--on-solid); }
+.dag-node text.node-retry   { fill: var(--warn); font-weight: 600; }
+.dag-node text.node-error   { fill: var(--error); }
+.dag-node .node-prog-track  { fill: var(--ink-10); }
+.dag-node .node-prog-fill   { fill: var(--accent); }
+.dag-node .node-check       { fill: var(--success); }
+.dag-node .node-check-mark  { stroke: var(--on-solid); stroke-width: 2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+
+/* 节点框 + 左侧色条 + 状态 chip：按 10 种状态引用 --status-* token */
+.dag-node[data-status="pending"]   .node-box { fill: var(--status-pending-bg);  stroke: var(--status-pending); }
+.dag-node[data-status="pending"]   .node-accent,
+.dag-node[data-status="pending"]   .node-chip { fill: var(--status-pending); }
+.dag-node[data-status="ready"]     .node-box { fill: var(--status-ready-bg);    stroke: var(--status-ready); }
+.dag-node[data-status="ready"]     .node-accent,
+.dag-node[data-status="ready"]     .node-chip { fill: var(--status-ready); }
+.dag-node[data-status="running"]   .node-box { fill: var(--status-running-bg);  stroke: var(--status-running); }
+.dag-node[data-status="running"]   .node-accent,
+.dag-node[data-status="running"]   .node-chip { fill: var(--status-running); }
+.dag-node[data-status="review"]    .node-box { fill: var(--status-review-bg);   stroke: var(--status-review); }
+.dag-node[data-status="review"]    .node-accent,
+.dag-node[data-status="review"]    .node-chip { fill: var(--status-review); }
+.dag-node[data-status="rework"]    .node-box { fill: var(--status-rework-bg);   stroke: var(--status-rework); }
+.dag-node[data-status="rework"]    .node-accent,
+.dag-node[data-status="rework"]    .node-chip { fill: var(--status-rework); }
+.dag-node[data-status="blocked"]   .node-box { fill: var(--status-blocked-bg);  stroke: var(--status-blocked); }
+.dag-node[data-status="blocked"]   .node-accent,
+.dag-node[data-status="blocked"]   .node-chip { fill: var(--status-blocked); }
+.dag-node[data-status="succeeded"] .node-box { fill: var(--status-succeeded-bg); stroke: var(--status-succeeded); }
+.dag-node[data-status="succeeded"] .node-accent,
+.dag-node[data-status="succeeded"] .node-chip { fill: var(--status-succeeded); }
+.dag-node[data-status="failed"]    .node-box { fill: var(--status-failed-bg);   stroke: var(--status-failed); }
+.dag-node[data-status="failed"]    .node-accent,
+.dag-node[data-status="failed"]    .node-chip { fill: var(--status-failed); }
+.dag-node[data-status="skipped"]   .node-box { fill: var(--status-skipped-bg);  stroke: var(--status-skipped); }
+.dag-node[data-status="skipped"]   .node-accent,
+.dag-node[data-status="skipped"]   .node-chip { fill: var(--status-skipped); }
+.dag-node[data-status="cancelled"] .node-box { fill: var(--status-cancelled-bg); stroke: var(--status-cancelled); }
+.dag-node[data-status="cancelled"] .node-accent,
+.dag-node[data-status="cancelled"] .node-chip { fill: var(--status-cancelled); }
+.dag-node[data-status="unknown"]   .node-box { fill: var(--bg-subtle);          stroke: var(--text-ter); }
+.dag-node[data-status="unknown"]   .node-accent,
+.dag-node[data-status="unknown"]   .node-chip { fill: var(--text-ter); }
+
+/* 角色头像圆：按 8 个角色引用语义装饰 token */
+.dag-node[data-role="project_manager"]  .node-avatar { fill: var(--purple); }
+.dag-node[data-role="product_manager"] .node-avatar { fill: var(--pink); }
+.dag-node[data-role="architect"]        .node-avatar { fill: var(--accent); }
+.dag-node[data-role="backend_dev"]      .node-avatar { fill: var(--success); }
+.dag-node[data-role="frontend_dev"]     .node-avatar { fill: var(--sky); }
+.dag-node[data-role="qa_engineer"]      .node-avatar { fill: var(--orange); }
+.dag-node[data-role="devops_engineer"]  .node-avatar { fill: var(--indigo); }
+.dag-node[data-role="technical_writer"] .node-avatar { fill: var(--text-ter); }
 
 .dag-list-fallback { display: flex; flex-direction: column; gap: 6px; }
 .dag-group-title { font-size: 11px; color: var(--text-ter); margin: 6px 0 2px; font-weight: 500; }

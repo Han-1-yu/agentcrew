@@ -370,14 +370,14 @@ function renderDAG() {
   const pad=32, totalW=L.width+pad*2, totalH=L.height+pad*2;
   svg.setAttribute('viewBox',`0 0 ${totalW} ${totalH}`);
 
-  // SVG defs: 箭头 marker
+  // SVG defs: 箭头 marker（颜色走 CSS 变量，随主题切换）
   const defs=s('defs',{});
   defs.appendChild(s('marker',{id:'arrow-hot',viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:6,markerHeight:6,orient:'auto'},
-    s('path',{d:'M 0 0 L 10 5 L 0 10 z',fill:'#007AFF'})));
+    s('path',{d:'M 0 0 L 10 5 L 0 10 z',style:'fill:var(--accent)'})));
   defs.appendChild(s('marker',{id:'arrow-done',viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:6,markerHeight:6,orient:'auto'},
-    s('path',{d:'M 0 0 L 10 5 L 0 10 z',fill:'#34C759'})));
+    s('path',{d:'M 0 0 L 10 5 L 0 10 z',style:'fill:var(--success)'})));
   defs.appendChild(s('marker',{id:'arrow-pending',viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:5,markerHeight:5,orient:'auto'},
-    s('path',{d:'M 0 0 L 10 5 L 0 10 z',fill:'rgba(60,60,67,0.3)'})));
+    s('path',{d:'M 0 0 L 10 5 L 0 10 z',style:'fill:var(--ink-25)'})));
   svg.appendChild(defs);
 
   const vp=s('g',{id:'dag-viewport', transform:`translate(${S.view.x} ${S.view.y}) scale(${S.view.zoom})`});
@@ -402,13 +402,13 @@ function renderDAG() {
       const upDone=up&&up.status==='succeeded';
       const upFailed=up&&up.status==='failed';
       let stroke, sw, marker, dash='none';
-      if(hot){ stroke='#007AFF'; sw=2.2; marker='url(#arrow-hot)'; }
-      else if(upDone){ stroke='#34C759'; sw=1.6; marker='url(#arrow-done)'; }
-      else if(upFailed){ stroke='#FF9F0A'; sw=1.4; marker='url(#arrow-pending)'; dash='4 3'; }
-      else { stroke='rgba(60,60,67,0.25)'; sw=1.2; marker='url(#arrow-pending)'; }
+      if(hot){ stroke='var(--accent)'; sw=2.2; marker='url(#arrow-hot)'; }
+      else if(upDone){ stroke='var(--success)'; sw=1.6; marker='url(#arrow-done)'; }
+      else if(upFailed){ stroke='var(--warn)'; sw=1.4; marker='url(#arrow-pending)'; dash='4 3'; }
+      else { stroke='var(--ink-25)'; sw=1.2; marker='url(#arrow-pending)'; }
       // 正交折线：右出 → 水平 → 垂直 → 水平 → 左入
       vp.appendChild(s('path',{ d:`M ${x1} ${y1} H ${midX} V ${y2} H ${x2-2}`,
-        fill:'none', stroke, 'stroke-width':sw, 'stroke-dasharray':dash, 'marker-end':marker, opacity: hot?1:0.8 }));
+        fill:'none', style:`stroke:${stroke}`, 'stroke-width':sw, 'stroke-dasharray':dash, 'marker-end':marker, opacity: hot?1:0.8 }));
     }
   }
 
@@ -421,54 +421,55 @@ function renderDAG() {
     const isRunning=t.status==='running';
     const isDone=t.status==='succeeded';
     const isFailed=t.status==='failed';
+    const statusKey = STATUS_META[t.status] ? t.status : 'unknown';
 
-    const node=s('g',{class:'dag-node'+(isRunning?' running':''), transform:`translate(${p.x+pad} ${p.y+pad})`, 'data-task':t.id});
+    const node=s('g',{class:'dag-node'+(isRunning?' running':''), transform:`translate(${p.x+pad} ${p.y+pad})`, 'data-task':t.id,
+      'data-status':statusKey, 'data-role':t.role||''});
 
-    // 背景
+    // 背景（fill/stroke 由 CSS 按 data-status 主题化）
     node.appendChild(s('rect',{class:'node-box', width:NW, height:NH, rx:6,
-      fill:meta.fill, stroke:meta.color,
       'stroke-width':isRunning?2.4:(isDone?1.8:1.3),
       'stroke-dasharray':isRetry?'5 3':'none' }));
     // 左侧状态色条
-    node.appendChild(s('rect',{x:0,y:0,width:5,height:NH,rx:2.5,fill:meta.color}));
+    node.appendChild(s('rect',{class:'node-accent',x:0,y:0,width:5,height:NH,rx:2.5}));
 
     // 顶部：task_id + 耗时
-    node.appendChild(s('text',{x:14,y:18,'font-size':10,fill:'#8E8E93','font-family':'ui-monospace, Menlo, monospace'}, t.id));
+    node.appendChild(s('text',{class:'node-meta',x:14,y:18,'font-size':10,'font-family':'ui-monospace, Menlo, monospace'}, t.id));
     if (t.result && t.result.duration_ms!=null)
-      node.appendChild(s('text',{x:NW-12,y:18,'font-size':9,fill:'#8E8E93','text-anchor':'end','font-family':'ui-monospace, Menlo, monospace'}, fmtDur(t.result.duration_ms)));
+      node.appendChild(s('text',{class:'node-meta',x:NW-12,y:18,'font-size':9,'text-anchor':'end','font-family':'ui-monospace, Menlo, monospace'}, fmtDur(t.result.duration_ms)));
 
     // 标题
-    node.appendChild(s('text',{x:14,y:40,'font-size':13,'font-weight':600,fill:'#1C1C1E'}, trunc(t.title,18)));
+    node.appendChild(s('text',{class:'node-title',x:14,y:40,'font-size':13,'font-weight':600}, trunc(t.title,18)));
 
     // 底部：角色头像 + 名称 + 状态
     const avatarY=62;
-    // 角色圆形头像
-    node.appendChild(s('circle',{cx:21,cy:avatarY,r:9,fill:rm.color,opacity:0.9}));
-    node.appendChild(s('text',{x:21,y:avatarY+3.5,'font-size':9,'font-weight':700,fill:'#fff','text-anchor':'middle'}, rm.label.charAt(0)));
+    // 角色圆形头像（fill 由 CSS 按 data-role 主题化）
+    node.appendChild(s('circle',{class:'node-avatar',cx:21,cy:avatarY,r:9,opacity:0.9}));
+    node.appendChild(s('text',{class:'node-on-solid',x:21,y:avatarY+3.5,'font-size':9,'font-weight':700,'text-anchor':'middle'}, rm.label.charAt(0)));
     // 角色名
-    node.appendChild(s('text',{x:34,y:avatarY+3,'font-size':10,fill:'#6E6E73'}, rm.full));
-    // 状态标签（右侧，实心小 chip）
+    node.appendChild(s('text',{class:'node-role',x:34,y:avatarY+3,'font-size':10}, rm.full));
+    // 状态标签（右侧，实心小 chip；fill 由 CSS 按 data-status 主题化）
     const chipW = isRetry?48:42;
-    node.appendChild(s('rect',{x:NW-chipW-10,y:avatarY-8,width:chipW,height:16,rx:3,fill:meta.color}));
-    node.appendChild(s('text',{x:NW-chipW/2-10,y:avatarY+3,'font-size':9,'font-weight':600,fill:'#fff','text-anchor':'middle'}, isRetry?'重试中':meta.label));
+    node.appendChild(s('rect',{class:'node-chip',x:NW-chipW-10,y:avatarY-8,width:chipW,height:16,rx:3}));
+    node.appendChild(s('text',{class:'node-on-solid',x:NW-chipW/2-10,y:avatarY+3,'font-size':9,'font-weight':600,'text-anchor':'middle'}, isRetry?'重试中':meta.label));
 
     // 完成对勾（右上角）
     if(isDone){
-      node.appendChild(s('circle',{cx:NW-16,cy:16,r:8,fill:'#34C759'}));
-      node.appendChild(s('path',{d:'M 11 16 L 14.5 19.5 L 20 13',stroke:'#fff','stroke-width':2,fill:'none','stroke-linecap':'round','stroke-linejoin':'round',transform:`translate(${NW-28},0)`}));
+      node.appendChild(s('circle',{class:'node-check',cx:NW-16,cy:16,r:8}));
+      node.appendChild(s('path',{d:'M 11 16 L 14.5 19.5 L 20 13',class:'node-check-mark',transform:`translate(${NW-28},0)`}));
     }
     // 返工次数
     if ((t.rework_count||0)>0)
-      node.appendChild(s('text',{x:NW-14,y:40,'font-size':9,fill:'#FF9F0A','text-anchor':'end','font-weight':600},`↻${t.rework_count}`));
+      node.appendChild(s('text',{class:'node-retry',x:NW-14,y:40,'font-size':9,'text-anchor':'end','font-weight':600},`↻${t.rework_count}`));
 
     // running：底部进度条
     if (isRunning){
-      node.appendChild(s('rect',{x:14,y:NH-10,width:NW-28,height:3,rx:1.5,fill:'rgba(60,60,67,0.1)'}));
-      node.appendChild(s('rect',{x:14,y:NH-10,width:(NW-28)*(t.progress||0)/100,height:3,rx:1.5,fill:'#007AFF'}));
+      node.appendChild(s('rect',{class:'node-prog-track',x:14,y:NH-10,width:NW-28,height:3,rx:1.5}));
+      node.appendChild(s('rect',{class:'node-prog-fill',x:14,y:NH-10,width:(NW-28)*(t.progress||0)/100,height:3,rx:1.5}));
     }
     // failed：错误摘要
     if (isFailed && t.error)
-      node.appendChild(s('text',{x:14,y:NH-12,'font-size':9,fill:'#FF3B30'}, trunc(t.error,22)));
+      node.appendChild(s('text',{class:'node-error',x:14,y:NH-12,'font-size':9}, trunc(t.error,22)));
 
     node.addEventListener('click',()=>openTaskDetail(t.id));
     vp.appendChild(node);
