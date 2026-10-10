@@ -1328,11 +1328,17 @@ async function renderSettingsPage(container) {
   const themeButtons = {};
   ['light', 'dark', 'system'].forEach(t => {
     const b = h('button', { type: 'button', 'data-theme': t, onclick: async () => {
+      const prev = (S.settings && S.settings.theme) || 'dark';
       S.settings.theme = t;
-      try { await window.studio.setSettings({ theme: t }); } catch {}
-      applyTheme();
-      renderSeg();
-      toast('success', '主题已切换', THEME_LABEL[t] || t);
+      applyTheme(); renderSeg();
+      try {
+        await window.studio.setSettings({ theme: t });
+        toast('success', '主题已切换', THEME_LABEL[t] || t);
+      } catch (e) {
+        S.settings.theme = prev;   // 持久化失败回滚
+        applyTheme(); renderSeg();
+        toast('error', '主题保存失败', String(e && e.message || e));
+      }
     } }, THEME_LABEL[t] || t);
     themeButtons[t] = b;
     segEl.appendChild(b);
@@ -2655,12 +2661,19 @@ function applyTheme() {
 }
 
 // 顶栏按钮循环：light → dark → system → light
-function cycleTheme() {
+async function cycleTheme() {
   const cur = (S.settings && S.settings.theme) || 'dark';
   const next = THEME_ORDER[(THEME_ORDER.indexOf(cur) + 1) % THEME_ORDER.length];
-  S.settings.theme = next;
-  try { window.studio.setSettings({ theme: next }); } catch {}
+  S.settings.theme = next;   // 乐观更新 UI
   applyTheme();
+  try {
+    await window.studio.setSettings({ theme: next });
+  } catch (e) {
+    // 持久化失败：回滚内存态并重应用，避免「看着切了、重启复原」
+    S.settings.theme = cur;
+    applyTheme();
+    toast('error', '主题保存失败', String(e && e.message || e));
+  }
 }
 
 async function boot(){
