@@ -1230,11 +1230,11 @@ async function renderSettingsPage(container) {
   form.appendChild(h('div', { class: 'settings-field' },
     h('label', { for: 'set-model' }, '默认模型'),
     h('div', { style: 'display:flex;gap:6px' },
-      h('select', { id: 'set-model', style: 'flex:1;padding:6px 8px;border:1px solid rgba(60,60,67,.18);border-radius:6px;font-size:12px;font-family:inherit;background:#fff' },
+      h('select', { id: 'set-model', style: 'flex:1;padding:6px 8px;border:1px solid var(--border-input);border-radius:6px;font-size:12px;font-family:inherit;background:var(--bg-panel);color:var(--text)' },
         h('option', { value: '', selected: !cfg.defaultModel }, '选择模型…'),
-        ...COMMON_MODELS.map(m => h('option', { value: modelAlias(m), selected: cfg.defaultModel === modelAlias(m) }, m.label))),
-      h('input', { id: 'set-model-custom', type: 'text', placeholder: '自定义',
-        style: 'width:120px;padding:6px 8px;border:1px solid rgba(60,60,67,.18);border-radius:6px;font-size:12px;font-family:inherit' }))));
+        ...MODEL_ALIASES.map(m => h('option', { value: modelAlias(m), selected: cfg.defaultModel === modelAlias(m) }, m.label))),
+      h('input', { id: 'set-model-custom', type: 'text', placeholder: '自定义 provider:model',
+        style: 'width:160px;padding:6px 8px;border:1px solid var(--border-input);border-radius:6px;font-size:12px;font-family:inherit;background:var(--bg-panel);color:var(--text)' }))));
   form.appendChild(field('预算上限 (USD)', 'set-maxcost', cfg.maxCostUsd || '', '0 = 不限制', 'number'));
   form.appendChild(field('后端 API 地址（可选）', 'set-api', cfg.apiBaseUrl || '', 'http://localhost:8765 — 设置后启用 SSE 实时推送'));
 
@@ -1247,7 +1247,7 @@ async function renderSettingsPage(container) {
       h('span', { style: 'font-weight:600;color:#6E6E73' }, '快捷键'),
       h('br'), 'Esc — 关闭面板 / 弹窗',
       h('br'), 'Ctrl/⌘ + N — 新建运行',
-      h('br'), '1-8 — 切换页面（总览/计划/任务图/Agents/门禁/产物/事件/设置）')));
+      h('br'), '1-9 — 切换页面（总览/计划/任务图/Agents/门禁/产物/事件/供应商/设置）')));
 }
 
 /* ============================================================
@@ -1569,30 +1569,58 @@ function renderPlanPage(container) {
 
 const ROLE_ORDER = ['project_manager','product_manager','architect','backend_dev','frontend_dev','qa_engineer','devops_engineer','technical_writer'];
 
-/* 常用模型别名（结构化：provider + model，引擎按 "<provider>:<model>" 解析） */
-const COMMON_MODELS = [
-  { provider: 'openai',    model: 'gpt-4o',            label: 'gpt-4o (OpenAI)' },
-  { provider: 'openai',    model: 'gpt-4o-mini',       label: 'gpt-4o-mini (OpenAI)' },
-  { provider: 'openai',    model: 'gpt-4-turbo',       label: 'gpt-4-turbo (OpenAI)' },
-  { provider: 'anthropic', model: 'claude-3-5-sonnet', label: 'claude-3-5-sonnet (Anthropic)' },
-  { provider: 'anthropic', model: 'claude-3-opus',     label: 'claude-3-opus (Anthropic)' },
-  { provider: 'deepseek',  model: 'deepseek-chat',     label: 'deepseek-chat (DeepSeek)' },
-  { provider: 'deepseek',  model: 'deepseek-coder',    label: 'deepseek-coder (DeepSeek)' },
-  { provider: 'qwen',      model: 'qwen-max',         label: 'qwen-max (Qwen)' },
-  { provider: 'qwen',      model: 'qwen-plus',         label: 'qwen-plus (Qwen)' },
-  { provider: 'zhipu',     model: 'glm-4',              label: 'glm-4 (Zhipu)' },
-  { provider: 'mock',       model: 'mock',              label: 'mock (内置 Mock)' },
+/* ============================================================
+   内置供应商（对齐 agentcrew/models/config.py）
+   引擎按 "<provider>:<model>" 解析模型别名
+   ============================================================ */
+const BUILTIN_PROVIDERS = [
+  { key:'openai',    label:'OpenAI',    base_url:'https://api.openai.com/v1',                       api_key_env:'OPENAI_API_KEY',    suggested_models:['gpt-4o','gpt-4o-mini','gpt-4-turbo','o1-preview','o1-mini'] },
+  { key:'anthropic', label:'Anthropic', base_url:'https://api.anthropic.com',                       api_key_env:'ANTHROPIC_API_KEY', suggested_models:['claude-3-5-sonnet-20241022','claude-3-opus-20240229','claude-3-haiku-20240307'] },
+  { key:'deepseek',  label:'DeepSeek',  base_url:'https://api.deepseek.com/v1',                     api_key_env:'DEEPSEEK_API_KEY',  suggested_models:['deepseek-chat','deepseek-coder','deepseek-reasoner'] },
+  { key:'doubao',    label:'豆包',       base_url:'https://ark.cn-beijing.volces.com/api/v3',        api_key_env:'ARK_API_KEY',       suggested_models:['doubao-pro-32k','doubao-lite-32k','doubao-1-5-pro-32k'] },
+  { key:'qwen',      label:'通义千问',   base_url:'https://dashscope.aliyuncs.com/compatible-mode/v1',api_key_env:'DASHSCOPE_API_KEY', suggested_models:['qwen-max','qwen-plus','qwen-turbo','qwen2.5-72b-instruct'] },
+  { key:'ernie',     label:'文心一言',   base_url:'https://qianfan.baidubce.com/v2',                  api_key_env:'QIANFAN_API_KEY',   suggested_models:['ernie-4.0','ernie-3.5','ernie-speed'] },
+  { key:'ollama',    label:'Ollama',    base_url:'http://localhost:11434/v1',                       api_key_env:'',                   suggested_models:['llama3.1','qwen2.5','mistral','gemma2'] },
+  { key:'mock',      label:'Mock',      base_url:null,                                                 api_key_env:'',                   suggested_models:['mock'] },
+  { key:'cli',       label:'CLI',       base_url:null,                                                 api_key_env:'',                   suggested_models:[] },
 ];
-const modelAlias = (m) => `${m.provider}:${m.model}`;
+// 「从预设添加」用的额外预设（不加入核心 9 个内置供应商）
+const EXTRA_PRESETS = [
+  { key:'openrouter',  label:'OpenRouter',  base_url:'https://openrouter.ai/api/v1',      api_key_env:'OPENROUTER_API_KEY'  },
+  { key:'siliconflow', label:'SiliconFlow',  base_url:'https://api.siliconflow.cn/v1',    api_key_env:'SILICONFLOW_API_KEY' },
+  { key:'moonshot',    label:'Moonshot',     base_url:'https://api.moonshot.cn/v1',       api_key_env:'MOONSHOT_API_KEY'    },
+  { key:'zhipu',       label:'智谱 AI',      base_url:'https://open.bigmodel.cn/api/paas/v4', api_key_env:'ZHIPU_API_KEY'  },
+  { key:'groq',        label:'Groq',         base_url:'https://api.groq.com/openai/v1',   api_key_env:'GROQ_API_KEY'        },
+];
+// 扁平模型别名列表（供设置页默认模型选择器使用）
+const MODEL_ALIASES = BUILTIN_PROVIDERS.flatMap(p => p.suggested_models.map(m => ({
+  provider: p.key, model: m, label: `${m} (${p.label})`,
+})));
+// 兼容旧调用：接受 {provider, model} 对象或 "provider:model" 字符串
+const modelAlias = (x) => typeof x === 'string' ? x : `${x.provider}:${x.model}`;
+const findProvider = (key) => BUILTIN_PROVIDERS.find(p => p.key === key) || null;
+
+/* 后端 API 调用：无 apiBaseUrl 直接 reject；8s 超时；失败由调用方静默降级（不弹 toast） */
+async function apiFetch(path, options = {}) {
+  const base = S.settings && S.settings.apiBaseUrl ? String(S.settings.apiBaseUrl).replace(/\/+$/, '') : '';
+  if (!base) { const e = new Error('未配置后端 API 地址'); e.code = 'NO_API'; throw e; }
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), options.timeoutMs || 8000);
+  try {
+    const res = await fetch(base + path, { ...options, signal: ctrl.signal });
+    if (!res.ok) { const e = new Error('HTTP ' + res.status); e.code = 'HTTP_' + res.status; throw e; }
+    return await res.json();
+  } finally { clearTimeout(timer); }
+}
 
 /* 模型切换弹窗 */
 function openModelSwitcher() {
   const current = S.dash.run.model || (S.settings && S.settings.defaultModel) || 'openai:gpt-4o';
   showModal(h('div', {},
     h('h3', { class: 'modal-title' }, '切换模型'),
-    h('div', { class: 'confirm-text', style: 'color:#6E6E73;margin-bottom:12px' }, `当前模型：${current}`),
+    h('div', { class: 'confirm-text', style: 'color:var(--text-sub);margin-bottom:12px' }, `当前模型：${current}`),
     h('div', { style: 'display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:14px' },
-      ...COMMON_MODELS.map(m => {
+      ...MODEL_ALIASES.map(m => {
         const alias = modelAlias(m);
         return h('button', {
           class: 'btn' + (alias === current ? ' btn-primary' : ''),
@@ -2423,6 +2451,16 @@ function openNewRunModal(){
     h('div',{style:'margin-top:10px'},
       h('label',{style:'font-size:12px;color:#6E6E73;display:block;margin-bottom:4px'},'项目（可选，用于分组管理）'),
       h('input',{id:'nr-project',type:'text',style:'width:100%;border:1px solid rgba(60,60,67,.2);border-radius:6px;padding:6px 8px;font-family:inherit;font-size:13px',placeholder:'例如：shortlink-service'})),
+    h('div',{style:'margin-top:10px'},
+      h('label',{style:'font-size:12px;color:#6E6E73;display:block;margin-bottom:4px'},'模型（可选，留空用设置默认）'),
+      h('div',{style:'display:flex;gap:6px'},
+        h('select',{id:'nr-provider',style:'flex:0 0 140px;padding:6px 8px;border:1px solid rgba(60,60,67,.18);border-radius:6px;font-size:12px;font-family:inherit;background:#fff'},
+          h('option',{value:''},'自动（设置默认）')),
+        h('select',{id:'nr-model',style:'flex:1;padding:6px 8px;border:1px solid rgba(60,60,67,.18);border-radius:6px;font-size:12px;font-family:inherit;background:#fff'},
+          h('option',{value:''},'选择模型…')),
+        h('input',{id:'nr-model-custom',type:'text',placeholder:'或手输 provider:model',
+          style:'width:160px;padding:6px 8px;border:1px solid rgba(60,60,67,.18);border-radius:6px;font-size:12px;font-family:inherit'})),
+      h('div',{id:'nr-model-preview',style:'margin-top:4px;font-size:11px;color:#8E8E93'},'')),
     h('div',{style:'display:flex;gap:16px;margin-top:10px;font-size:12px;color:#6E6E73;flex-wrap:wrap'},
       h('label',{style:'display:flex;align-items:center;gap:5px;cursor:pointer'},
         h('input',{type:'checkbox',id:'nr-mock',checked:mockDefault}),'Mock 模式'),
@@ -2451,6 +2489,7 @@ function openNewRunModal(){
             mock: mockOn,
             auto: $('#nr-auto').checked,
             project: project || null,
+            model: assembleNrAlias() || null,
             // 慢速 mock：拉长每次模拟 LLM 调用，留出观察与取消窗口
             env: (mockOn && $('#nr-slow').checked) ? { AGENTCREW_MOCK_LATENCY_MS: '2000' } : null,
           });
@@ -2480,6 +2519,58 @@ function openNewRunModal(){
   };
   $('#nr-mock').addEventListener('change',syncMock);
   syncMock();
+
+  // B2：模型选择 —— provider 下拉 → 模型下拉 → 组装 provider:model 别名；后端不可用时可手输
+  const nrProvider = $('#nr-provider');
+  const nrModel = $('#nr-model');
+  const nrModelCustom = $('#nr-model-custom');
+  const nrPreview = $('#nr-model-preview');
+  BUILTIN_PROVIDERS.forEach(p => nrProvider.appendChild(h('option', { value: p.key }, p.label)));
+
+  const updateNrPreview = () => {
+    const c = (nrModelCustom.value || '').trim();
+    nrPreview.textContent = c ? `将使用：${c}`
+      : (nrProvider.value && nrModel.value ? `将使用：${nrProvider.value}:${nrModel.value}` : '');
+  };
+  const assembleNrAlias = () => {
+    const c = (nrModelCustom.value || '').trim();
+    if (c) return c;
+    return (nrProvider.value && nrModel.value) ? `${nrProvider.value}:${nrModel.value}` : '';
+  };
+  const refreshNrModels = async (providerKey) => {
+    nrModel.innerHTML = '<option value="">选择模型…</option>';
+    updateNrPreview();
+    if (!providerKey) return;
+    // 先放内置 suggested_models，保证立即可选
+    const builtin = findProvider(providerKey);
+    ((builtin && builtin.suggested_models) || []).forEach(m => nrModel.appendChild(h('option', { value: m }, m)));
+    // 异步拉后端模型列表，成功则替换（失败保留内置）
+    try {
+      const data = await apiFetch(`/providers/${encodeURIComponent(providerKey)}/models`);
+      const models = (data && data.models) || [];
+      if (models.length) {
+        nrModel.innerHTML = '<option value="">选择模型…</option>';
+        models.forEach(m => {
+          const id = typeof m === 'string' ? m : (m.id || m.name || '');
+          if (id) nrModel.appendChild(h('option', { value: id }, id));
+        });
+      }
+    } catch (e) { console.log('[apiFetch] models fallback:', e.message); }
+  };
+  nrProvider.addEventListener('change', () => { nrModelCustom.value = ''; refreshNrModels(nrProvider.value); });
+  nrModel.addEventListener('change', updateNrPreview);
+  nrModelCustom.addEventListener('input', updateNrPreview);
+  // 异步拉后端 provider 列表（失败保留内置）
+  (async () => {
+    try {
+      const data = await apiFetch('/providers');
+      const list = (data && data.providers) || [];
+      if (list.length) {
+        nrProvider.innerHTML = '<option value="">自动（设置默认）</option>';
+        list.forEach(p => nrProvider.appendChild(h('option', { value: p.name }, p.name)));
+      }
+    } catch (e) { console.log('[apiFetch] providers fallback:', e.message); }
+  })();
 }
 
 boot();
