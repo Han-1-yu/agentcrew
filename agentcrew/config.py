@@ -527,6 +527,16 @@ class Settings(BaseModel):
                     f"custom_providers.{name} 与内置预设重名；"
                     "想调整内置 provider 请用 models.providers 段"
                     "（provider_overrides），不要在 custom_providers 里覆盖内置。")
+            # 别名按「第一个冒号」切成 provider:model（见 parse_alias），因此
+            # provider 名一旦自带冒号就永远无法被任何别名寻址
+            # （"my:relay:m" 会被切成 provider="my"）。空名同理。配置时就拦下，
+            # 好过运行时才报「未知 provider」。
+            if not name.strip():
+                raise ValueError("custom_providers 的 provider 名不能为空")
+            if ":" in name:
+                raise ValueError(
+                    f"custom_providers.{name!r} 的名字含冒号："
+                    "别名按第一个冒号切分 provider:model，名字带冒号将永远无法被引用")
             if not isinstance(patch, Mapping):
                 raise ValueError(
                     f"custom_providers.{name} 必须是映射（字段 → 值），"
