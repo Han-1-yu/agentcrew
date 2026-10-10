@@ -162,7 +162,11 @@ def _check_api_keys(settings: Settings) -> DoctorCheck:
     missing: list[str] = []
     for alias in _collect_aliases(settings):
         try:
-            binding = parse_alias(alias, overrides=settings.provider_overrides)
+            binding = parse_alias(
+                alias,
+                overrides=settings.provider_overrides,
+                custom=settings.custom_providers,
+            )
         except (ValueError, UnknownProviderError):
             continue  # 别名非法由 config 检查项报告
         if binding.provider in _KEYLESS_PROVIDERS:
@@ -192,7 +196,11 @@ def _check_config(settings: Settings) -> DoctorCheck:
     """default_model 别名可解析；mcp_servers 形状正确。"""
     problems: list[str] = []
     try:
-        parse_alias(settings.default_model, overrides=settings.provider_overrides)
+        parse_alias(
+            settings.default_model,
+            overrides=settings.provider_overrides,
+            custom=settings.custom_providers,
+        )
     except (ValueError, UnknownProviderError) as exc:
         problems.append(f"default_model 别名非法：{exc}")
     if not isinstance(settings.mcp_servers, dict):

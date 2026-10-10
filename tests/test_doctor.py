@@ -96,6 +96,35 @@ async def test_output_dir_created_when_missing(tmp_path):
     assert target.is_dir()
 
 
+async def test_custom_provider_default_model_recognized(tmp_path, monkeypatch):
+    """A1 回归：default_model 指向自定义 provider 时 config 检查不得报「别名非法」。"""
+    for env in API_KEY_ENVS:
+        monkeypatch.delenv(env, raising=False)
+    monkeypatch.setenv("MYRELAY_KEY", "sk-relay-1")
+    settings = Settings(
+        mock=False, output_dir=tmp_path / "o",
+        default_model="myrelay:v1",
+        custom_providers={
+            "myrelay": {
+                "implementation": "openai_compat",
+                "base_url": "http://localhost:9/v1",
+                "api_key_env": "MYRELAY_KEY",
+                "capabilities": {},
+            }
+        },
+    )
+
+    async def fake_health(alias: str) -> HealthRecord:
+        return _healthy(alias)
+
+    report = await run_diagnostics(settings, health_check=fake_health)
+    cfg = next(c for c in report.checks if c.name == "config")
+    assert cfg.status == "pass", cfg.message
+    # Key 检查应认得自定义 provider 已配 Key，不再把它当未知 provider 跳过
+    api = next(c for c in report.checks if c.name == "api_keys")
+    assert api.status == "pass", api.message
+
+
 # ── Provider 连通性（注入假 health_check）─────────────────────────────────
 
 
