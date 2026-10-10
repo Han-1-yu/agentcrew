@@ -1251,6 +1251,160 @@ async function renderSettingsPage(container) {
 }
 
 /* ============================================================
+   供应商管理页
+   ============================================================ */
+function renderProvidersPage(container) {
+  container.appendChild(h('div', { class: 'page-head' },
+    h('h2', {}, '供应商管理'),
+    h('div', { style: 'display:flex;gap:8px' },
+      h('button', { class: 'btn', onclick: () => openAddProviderModal() }, '从预设添加'),
+      h('button', { class: 'btn btn-primary', onclick: () => { container.innerHTML = ''; renderProvidersPage(container); } }, '刷新'))));
+
+  const apiReady = !!(S.settings && S.settings.apiBaseUrl);
+  if (!apiReady) {
+    container.appendChild(h('div', { style: 'margin:10px 0;padding:10px 12px;border:1px solid rgba(255,159,10,.4);background:rgba(255,159,10,.08);border-radius:8px;font-size:12px;color:#FF9F0A;line-height:1.6' },
+      '未配置后端 API 地址，请到「设置」页填写后端 API 地址后使用实时健康检查与测速；当前展示内置预设的静态信息。'));
+  }
+
+  const list = h('div', { style: 'display:flex;flex-direction:column;gap:10px;margin-top:10px' });
+  container.appendChild(list);
+  list.appendChild(h('div', { style: 'font-size:12px;color:#8E8E93' }, '加载供应商列表…'));
+
+  // 离线兜底：内置预设映射为与后端一致的结构
+  const fallback = BUILTIN_PROVIDERS.map(p => ({
+    name: p.key, kind: 'builtin', implementation: p.key,
+    base_url: p.base_url || '', api_key_env: p.api_key_env || '',
+    key_configured: false, capabilities: {}, suggested_models: p.suggested_models || [], health: null,
+  }));
+
+  (async () => {
+    let providers = fallback;
+    if (apiReady) {
+      try {
+        const data = await apiFetch('/providers');
+        if (data && Array.isArray(data.providers) && data.providers.length) providers = data.providers;
+      } catch (e) { console.log('[apiFetch] /providers fallback:', e.message); }
+    }
+    list.innerHTML = '';
+    providers.forEach(p => list.appendChild(renderProviderCard(p)));
+  })();
+}
+
+function renderProviderCard(p) {
+  const health = p.health || null;
+  const status = health && health.status;
+  const dotColor = status === 'healthy' ? '#34C759' : (status === 'degraded' ? '#FF9F0A' : '#8E8E93');
+  const cap = p.capabilities || {};
+  const capText = ['json_schema', 'json_object', 'tools'].map(k => `${k}:${cap[k] ? '✓' : '✗'}`).join('  ');
+
+  const card = h('div', { class: 'provider-card', 'data-provider': p.name,
+    style: 'border:1px solid rgba(60,60,67,.18);border-radius:10px;padding:14px 16px;background:#fff' });
+
+  card.appendChild(h('div', { style: 'display:flex;align-items:center;gap:8px' },
+    h('div', { style: 'font-size:15px;font-weight:600' }, p.name),
+    h('span', { style: `font-size:10px;padding:2px 6px;border-radius:4px;${p.kind === 'custom' ? 'background:rgba(0,122,255,.12);color:#007AFF' : 'background:rgba(142,142,147,.15);color:#6E6E73'}` }, p.kind === 'custom' ? '自定义' : '内置'),
+    h('span', { style: 'margin-left:auto;display:flex;align-items:center;gap:6px;font-size:11px;color:#8E8E93' },
+      h('i', { style: `width:8px;height:8px;border-radius:50%;background:${dotColor};display:inline-block` }),
+      status ? `${status}${health.latency_ms != null ? ` · ${health.latency_ms}ms` : ''}` : '未知')));
+
+  if (p.base_url) card.appendChild(h('div', { style: 'font-family:monospace;font-size:11px;color:#6E6E73;margin-top:6px;word-break:break-all' }, p.base_url));
+
+  card.appendChild(h('div', { style: 'font-size:11px;color:#6E6E73;margin-top:4px' },
+    'Key 环境变量：', h('span', { style: 'font-family:monospace' }, p.api_key_env || '（无）'),
+    p.api_key_env ? (p.key_configured
+      ? h('span', { style: 'color:#34C759;margin-left:6px' }, '✓ 已配置')
+      : h('span', { style: 'color:#8E8E93;margin-left:6px' }, '未配置')) : null));
+
+  card.appendChild(h('div', { style: 'font-size:11px;color:#8E8E93;margin-top:4px;font-family:monospace' }, capText));
+
+  const modelsBox = h('div', { style: 'display:flex;flex-wrap:wrap;gap:4px;margin-top:8px' });
+  (p.suggested_models || []).slice(0, 10).forEach(m => modelsBox.appendChild(h('span', { style: 'font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(142,142,147,.12);color:#6E6E73' }, m)));
+  card.appendChild(modelsBox);
+
+  const testBtn = h('button', { class: 'btn btn-sm', style: 'margin-top:10px', onclick: async () => {
+    testBtn.disabled = true; const old = testBtn.textContent; testBtn.textContent = '测试中…';
+    let resultBox = card.querySelector('.prov-test-result');
+    if (!resultBox) { resultBox = h('div', { class: 'prov-test-result', style: 'font-size:11px;margin-top:6px' }); card.appendChild(resultBox); }
+    try {
+      const r = await apiFetch(`/providers/${encodeURIComponent(p.name)}/test`, { method: 'POST' });
+      resultBox.textContent = r.ok ? `✓ 连接正常，延迟 ${r.latency_ms}ms` : `✗ 失败：${(r.error && r.error.message) || '未知错误'}`;
+      resultBox.style.color = r.ok ? '#34C759' : '#FF3B30';
+    } catch (e) {
+      resultBox.textContent = `✗ 测试失败：${e.message}（可能未配置后端 API）`;
+      resultBox.style.color = '#FF3B30';
+    }
+    testBtn.disabled = false; testBtn.textContent = old;
+  } }, '测试');
+
+  const pullBtn = h('button', { class: 'btn btn-sm', style: 'margin-top:10px;margin-left:6px', onclick: async () => {
+    pullBtn.disabled = true; const old = pullBtn.textContent; pullBtn.textContent = '拉取中…';
+    try {
+      const data = await apiFetch(`/providers/${encodeURIComponent(p.name)}/models`);
+      const models = (data && data.models) || [];
+      modelsBox.innerHTML = '';
+      models.forEach(m => {
+        const id = typeof m === 'string' ? m : (m.id || m.name || '');
+        if (id) modelsBox.appendChild(h('span', { style: 'font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(0,122,255,.12);color:#007AFF' }, id));
+      });
+      if (!models.length) modelsBox.appendChild(h('span', { style: 'font-size:11px;color:#8E8E93' }, '无模型'));
+    } catch (e) { console.log('[apiFetch] pull models:', e.message); toast('warning', '拉取失败', '后端不可用，显示内置预设'); }
+    pullBtn.disabled = false; pullBtn.textContent = old;
+  } }, '拉取模型');
+
+  card.appendChild(h('div', {}, testBtn, pullBtn));
+  return card;
+}
+
+function openAddProviderModal() {
+  const presets = [
+    ...BUILTIN_PROVIDERS.map(p => ({ key: p.key, label: p.label, base_url: p.base_url || '', api_key_env: p.api_key_env || '' })),
+    ...EXTRA_PRESETS.map(p => ({ key: p.key, label: p.label, base_url: p.base_url, api_key_env: p.api_key_env })),
+  ];
+  const sel = h('select', { id: 'ap-preset', style: 'width:100%;padding:6px 8px;border:1px solid rgba(60,60,67,.18);border-radius:6px;font-size:12px;font-family:inherit;background:#fff' },
+    ...presets.map(p => h('option', { value: p.key }, `${p.label}（${p.base_url || '无 base_url'}）`)));
+  const baseInput = h('input', { id: 'ap-base', type: 'text', style: 'width:100%;padding:6px 8px;border:1px solid rgba(60,60,67,.18);border-radius:6px;font-size:12px;font-family:inherit', placeholder: 'https://...' });
+  const envInput = h('input', { id: 'ap-env', type: 'text', style: 'width:100%;padding:6px 8px;border:1px solid rgba(60,60,67,.18);border-radius:6px;font-size:12px;font-family:inherit', placeholder: '例如 OPENAI_API_KEY' });
+  const yamlBox = h('pre', { id: 'ap-yaml', style: 'margin-top:10px;padding:10px;background:rgba(142,142,147,.1);border-radius:6px;font-size:11px;overflow:auto;white-space:pre-wrap;word-break:break-all' });
+
+  const genYaml = () => {
+    const key = sel.value;
+    const base = baseInput.value.trim();
+    const env = envInput.value.trim();
+    yamlBox.textContent =
+`models:
+  custom_providers:
+    - name: ${key}
+      kind: custom
+      base_url: ${base || '""'}
+      api_key_env: ${env || '""'}
+`;
+  };
+  sel.addEventListener('change', () => {
+    const p = presets.find(x => x.key === sel.value);
+    if (p) { baseInput.value = p.base_url; envInput.value = p.api_key_env; }
+    genYaml();
+  });
+  baseInput.addEventListener('input', genYaml);
+  envInput.addEventListener('input', genYaml);
+  const first = presets[0]; if (first) { baseInput.value = first.base_url; envInput.value = first.api_key_env; }
+  genYaml();
+
+  showModal(h('div', {},
+    h('h3', { class: 'modal-title' }, '从预设添加供应商'),
+    h('div', { style: 'font-size:12px;color:#6E6E73;margin-bottom:10px;line-height:1.6' },
+      '第一步：选择预设；第二步：确认 base_url 与环境变量名；第三步：复制 YAML 片段。'),
+    h('div', { style: 'margin-bottom:8px' }, h('label', { style: 'font-size:12px;color:#6E6E73;display:block;margin-bottom:4px' }, '预设'), sel),
+    h('div', { style: 'margin-bottom:8px' }, h('label', { style: 'font-size:12px;color:#6E6E73;display:block;margin-bottom:4px' }, 'Base URL'), baseInput),
+    h('div', { style: 'margin-bottom:8px' }, h('label', { style: 'font-size:12px;color:#6E6E73;display:block;margin-bottom:4px' }, 'API Key 环境变量名'), envInput),
+    h('div', { style: 'font-size:11px;color:#FF9F0A;margin:6px 0;line-height:1.5' },
+      '提示：请把真实 Key 写进 .env 或系统环境变量，此处只存环境变量名。Studio 不直接修改 agentcrew.yaml，请将以下片段粘贴到 agentcrew.yaml 的 models: 下。'),
+    yamlBox,
+    h('div', { class: 'modal-actions', style: 'margin-top:12px' },
+      h('button', { class: 'btn', onclick: async () => { try { await navigator.clipboard.writeText(yamlBox.textContent); toast('success', '已复制', 'YAML 片段已写入剪贴板'); } catch (e) { toast('error', '复制失败', String(e.message || e)); } } }, '一键复制'),
+      h('button', { class: 'btn btn-primary', onclick: closeModal }, '完成'))));
+}
+
+/* ============================================================
    事件日志页（全量）
    ============================================================ */
 function renderEventsPage(container) {
@@ -1816,6 +1970,7 @@ function switchNav(key){
   if(key==='tasks'){ renderPlanPage(ph); return; }
   if(key==='agents'){ renderAgentsPage(ph); return; }
   if(key==='gates'){ renderGatesPage(ph); return; }
+  if(key==='providers'){ renderProvidersPage(ph); return; }
   const p={title:key,desc:'该页面开发中。'};
   ph.appendChild(h('div',{class:'ph-icon'},h('svg',{width:30,height:30,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor','stroke-width':1.6,'stroke-linecap':'round','stroke-linejoin':'round'},h('rect',{x:'3',y:'3',width:'18',height:'18',rx:'3'}),h('path',{d:'M8 12h8'}))));
   ph.appendChild(h('h2',{},p.title)); ph.appendChild(h('p',{},p.desc));
@@ -2361,9 +2516,9 @@ async function boot(){
     }
     // Cmd/Ctrl + N：新建运行
     if((e.metaKey||e.ctrlKey)&&e.key==='n'){ e.preventDefault(); openNewRunModal(); return; }
-    // 数字键 1-7：切换导航
-    if(!e.metaKey&&!e.ctrlKey&&!e.altKey&&/^[1-8]$/.test(e.key)){
-      const pages=['dashboard','tasks','dag','agents','gates','artifacts','events','settings'];
+    // 数字键 1-9：切换导航
+    if(!e.metaKey&&!e.ctrlKey&&!e.altKey&&/^[1-9]$/.test(e.key)){
+      const pages=['dashboard','tasks','dag','agents','gates','artifacts','events','providers','settings'];
       const idx=parseInt(e.key)-1;
       if(pages[idx]){ switchNav(pages[idx]); }
     }
@@ -2509,13 +2664,19 @@ function openNewRunModal(){
           toast('error','启动失败', String(e.message||e));
         }
       }},'启动'))));
-  // Mock 勾选联动：模式说明 + 慢速选项可见性
+  // Mock 勾选联动：模式说明 + 慢速选项可见性 + 模型区置灰
   const syncMock = () => {
     const on=$('#nr-mock').checked;
     $('#nr-hint').textContent = on
       ? 'Mock 模式：不调用大模型，产物为内置 Todo 示例（与目标无关），适合演示界面与调试。'
       : '真实模式：调用 .env 配置的大模型（如 deepseek-chat）按目标生成真实产物，通常花费 $0.01–0.2、需数分钟；需先在 .env 配置 API Key。';
     $('#nr-slow-wrap').style.visibility = on ? 'visible' : 'hidden';
+    // Mock 勾选优先：模型选择区置灰（--mock 时别名不参与 CLI 参数）
+    ['#nr-provider', '#nr-model', '#nr-model-custom'].forEach(sel => {
+      const el = $(sel); if (el) el.disabled = on;
+    });
+    const area = $('#nr-provider') && $('#nr-provider').parentElement;
+    if (area) area.style.opacity = on ? '0.45' : '1';
   };
   $('#nr-mock').addEventListener('change',syncMock);
   syncMock();
@@ -2560,6 +2721,7 @@ function openNewRunModal(){
   nrProvider.addEventListener('change', () => { nrModelCustom.value = ''; refreshNrModels(nrProvider.value); });
   nrModel.addEventListener('change', updateNrPreview);
   nrModelCustom.addEventListener('input', updateNrPreview);
+  updateNrPreview();
   // 异步拉后端 provider 列表（失败保留内置）
   (async () => {
     try {
