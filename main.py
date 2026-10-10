@@ -40,6 +40,8 @@ from typing import Any, TextIO
 from rich.console import Console
 from rich.text import Text
 
+import yaml
+
 from agentcrew.cli.doctor import (
     DoctorCheck,
     DoctorReport,
@@ -238,6 +240,14 @@ def build_parser() -> argparse.ArgumentParser:
     models.add_argument("provider", help="provider 名（如 openai / openrouter）")
     models.add_argument("--json", action="store_true",
                         help="以 JSON 输出模型列表（便于脚本解析）")
+
+    config = sub.add_parser("config", help="配置导入导出")
+    config_sub = config.add_subparsers(dest="config_action")
+    export_p = config_sub.add_parser("export", help="导出当前合并配置为 YAML")
+    export_p.add_argument("--output", "-o", metavar="FILE",
+                          help="写入文件而非 stdout")
+    import_p = config_sub.add_parser("import", help="从 YAML 文件导入配置")
+    import_p.add_argument("file", help="要导入的 YAML 文件路径")
 
     return parser
 
@@ -898,6 +908,138 @@ def _cmd_models(args: argparse.Namespace) -> int:
     return EXIT_CODES["ok"]
 
 
+def _cmd_config(args: argparse.Namespace) -> int:
+    """``config export`` / ``config import <file>``：配置导入导出（A6）。"""
+    if getattr(args, "config_action", None) == "export":
+        return _cmd_config_export(args)
+    if getattr(args, "config_action", None) == "import":
+        return _cmd_config_import(args)
+    print("用法：python main.py config export|import ...", file=sys.stderr)
+    return EXIT_CODES["config"]
+
+
+def _cmd_config_export(args: argparse.Namespace) -> int:
+    """导出当前合并配置为 YAML（密钥字段已脱敏）。"""
+    try:
+        settings = _settings_from(args)
+    except (OSError, ValueError) as exc:
+        return _fail(f"配置错误：{exc}")
+    snap = settings.config_snapshot()
+    # 只导出可再导入的段，不导出 output_dir / log_level 等运行环境字段。
+    export_doc: dict[str, Any] = {
+        "config_version": 1,
+        "models": {
+            "default": snap.get("default_model"),
+            "role_bindings": snap.get("role_bindings") or {},
+            "providers": snap.get("provider_overrides") or {},
+            "custom_providers": snap.get("custom_providers") or {},
+        },
+        "mcp_servers": snap.get("mcp_servers") or {},
+        "gate_config": snap.get("gate_config") or {},
+        "tool_permissions": snap.get("tool_permissions") or {},
+    }
+    # 去掉空段
+    export_doc["models"] = {
+        k: v for k, v in export_doc["models"].items() if v
+    }
+    for key in ("mcp_servers", "gate_config", "tool_permissions"):
+        if not export_doc[key]:
+            del export_doc[key]
+    text = yaml.safe_dump(export_doc, allow_unicode=True, sort_keys=False)
+    if getattr(args, "output", None):
+        Path(args.output).write_text(text, encoding="utf-8")
+        print(f"已导出到 {args.output}")
+    else:
+        print(text, end="")
+    return EXIT_CODES["ok"]
+
+
+def _cmd_config_import(args: argparse.Namespace) -> int:
+    """从 YAML 文件导入配置：校验 → 备份 → 合并写入 agentcrew.yaml。"""
+    import re
+
+    src = Path(args.file)
+    if not src.is_file():
+        return _fail(f"导入文件不存在：{src}")
+    try:
+        data = yaml.safe_load(src.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        return _fail(f"无法读取导入文件：{exc}")
+    if not isinstance(data, dict):
+        return _fail("导入文件必须是 YAML 映射")
+
+    # 密钥字段作为值出现 → 拒绝（密钥只从环境变量读）。
+    secret_re = re.compile(
+        r"key|token|secret|password|passwd|credential|auth", re.IGNORECASE)
+
+    def _check_secrets(obj: Any, path: str = "") -> None:
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                # api_key_env 是合法字段（存环境变量名，不是密钥值），跳过。
+                if str(k) == "api_key_env":
+                    continue
+                if secret_re.search(str(k)) and not isinstance(v, (dict, list)):
+                    raise ValueError(
+                        f"导入文件 {path}.{k} 疑似密钥字段："
+                        "API Key 只从环境变量读取，请改用 api_key_env 指定环境变量名。")
+                _check_secrets(v, f"{path}.{k}")
+        elif isinstance(obj, list):
+            for i, item in enumerate(obj):
+                _check_secrets(item, f"{path}[{i}]")
+
+    try:
+        _check_secrets(data)
+    except ValueError as exc:
+        return _fail(str(exc))
+
+    # 校验：用 Settings.load 验证（临时设 AGENTCREW_CONFIG 指向导入文件）。
+    import os
+    tmp_env = os.environ.get("AGENTCREW_CONFIG")
+    os.environ["AGENTCREW_CONFIG"] = str(src)
+    try:
+        Settings.load()
+    except (OSError, ValueError) as exc:
+        return _fail(f"导入文件校验失败：{exc}")
+    finally:
+        if tmp_env is not None:
+            os.environ["AGENTCREW_CONFIG"] = tmp_env
+        else:
+            os.environ.pop("AGENTCREW_CONFIG", None)
+
+    # 合并写入现有 agentcrew.yaml（不是整体覆盖）。
+    target = Path(os.environ.get("AGENTCREW_CONFIG") or "agentcrew.yaml")
+    if not target.is_absolute():
+        target = Path.cwd() / target
+    existing: dict = {}
+    if target.is_file():
+        try:
+            existing = yaml.safe_load(target.read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError):
+            existing = {}
+    # 备份
+    bak = target.with_suffix(".yaml.bak")
+    if target.is_file():
+        bak.write_text(target.read_text(encoding="utf-8"), encoding="utf-8")
+    # 合并 models 段
+    existing_models = existing.get("models") or {}
+    incoming_models = data.get("models") or {}
+    for key in ("default", "role_bindings", "providers", "custom_providers"):
+        if key in incoming_models:
+            existing_models[key] = incoming_models[key]
+    existing["models"] = existing_models
+    # 合并顶层段
+    for key in ("mcp_servers", "gate_config", "tool_permissions"):
+        if key in data:
+            existing[key] = data[key]
+    if "config_version" in data:
+        existing["config_version"] = data["config_version"]
+    target.write_text(
+        yaml.safe_dump(existing, allow_unicode=True, sort_keys=False),
+        encoding="utf-8")
+    print(f"已导入 {src} → {target}（备份在 {bak}）")
+    return EXIT_CODES["ok"]
+
+
 #: 子命令 → 处理器（``build_parser`` 里注册的 dest 值）。
 _HANDLERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "run": _cmd_run,
@@ -912,6 +1054,7 @@ _HANDLERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "diff": _cmd_diff,
     "providers": _cmd_providers,
     "models": _cmd_models,
+    "config": _cmd_config,
 }
 
 
