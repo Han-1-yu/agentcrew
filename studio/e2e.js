@@ -204,13 +204,14 @@ function run(win) {
     await shot('11b-供应商页');
     // 「从预设添加」弹窗可开合
     await js(`document.querySelector('#prov-add-preset')?.click()`);
-    await sleep(400);
-    const addModalOpen = await js(`!!document.querySelector('#ap-preset')`);
+    await sleep(500);
+    const addModalOpen = await js(`!!document.querySelector('#ap-preset') && !document.querySelector('#modal').classList.contains('hidden')`);
     await js(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`);
-    await sleep(300);
-    const addModalClosed = await js(`!document.querySelector('#ap-preset')`);
-    check('13c. 「从预设添加」弹窗可打开并 Esc 关闭', addModalOpen && addModalClosed,
-      `open=${addModalOpen} closed=${addModalClosed}`);
+    await sleep(500);
+    const modalState = await js(`(() => { const m = document.querySelector('#modal'); return m ? { hidden: m.classList.contains('hidden'), show: m.classList.contains('show'), cls: m.className, hasPreset: !!document.querySelector('#ap-preset') } : null; })()`);
+    const addModalClosed = !!(modalState && modalState.hidden);
+    check('13c. 「从预设添加」弹窗可打开并 Esc 关闭', !!addModalOpen && addModalClosed,
+      `open=${addModalOpen} state=${JSON.stringify(modalState)}`);
 
     // ── 14. 键盘快捷键 ──
     await js(`document.querySelector('.nav-item[data-nav="dashboard"]')?.click()`);
