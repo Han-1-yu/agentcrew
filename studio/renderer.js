@@ -1232,7 +1232,7 @@ async function renderSettingsPage(container) {
     h('div', { style: 'display:flex;gap:6px' },
       h('select', { id: 'set-model', style: 'flex:1;padding:6px 8px;border:1px solid rgba(60,60,67,.18);border-radius:6px;font-size:12px;font-family:inherit;background:#fff' },
         h('option', { value: '', selected: !cfg.defaultModel }, '选择模型…'),
-        ...COMMON_MODELS.map(m => h('option', { value: m, selected: cfg.defaultModel === m }, m))),
+        ...COMMON_MODELS.map(m => h('option', { value: modelAlias(m), selected: cfg.defaultModel === modelAlias(m) }, m.label))),
       h('input', { id: 'set-model-custom', type: 'text', placeholder: '自定义',
         style: 'width:120px;padding:6px 8px;border:1px solid rgba(60,60,67,.18);border-radius:6px;font-size:12px;font-family:inherit' }))));
   form.appendChild(field('预算上限 (USD)', 'set-maxcost', cfg.maxCostUsd || '', '0 = 不限制', 'number'));
@@ -1569,21 +1569,37 @@ function renderPlanPage(container) {
 
 const ROLE_ORDER = ['project_manager','product_manager','architect','backend_dev','frontend_dev','qa_engineer','devops_engineer','technical_writer'];
 
-/* 常用模型别名 */
-const COMMON_MODELS = ['gpt-4o','gpt-4o-mini','gpt-4-turbo','claude-3-5-sonnet','claude-3-opus','deepseek-chat','deepseek-coder','qwen-max','qwen-plus','glm-4','gemini-pro','mock'];
+/* 常用模型别名（结构化：provider + model，引擎按 "<provider>:<model>" 解析） */
+const COMMON_MODELS = [
+  { provider: 'openai',    model: 'gpt-4o',            label: 'gpt-4o (OpenAI)' },
+  { provider: 'openai',    model: 'gpt-4o-mini',       label: 'gpt-4o-mini (OpenAI)' },
+  { provider: 'openai',    model: 'gpt-4-turbo',       label: 'gpt-4-turbo (OpenAI)' },
+  { provider: 'anthropic', model: 'claude-3-5-sonnet', label: 'claude-3-5-sonnet (Anthropic)' },
+  { provider: 'anthropic', model: 'claude-3-opus',     label: 'claude-3-opus (Anthropic)' },
+  { provider: 'deepseek',  model: 'deepseek-chat',     label: 'deepseek-chat (DeepSeek)' },
+  { provider: 'deepseek',  model: 'deepseek-coder',    label: 'deepseek-coder (DeepSeek)' },
+  { provider: 'qwen',      model: 'qwen-max',         label: 'qwen-max (Qwen)' },
+  { provider: 'qwen',      model: 'qwen-plus',         label: 'qwen-plus (Qwen)' },
+  { provider: 'zhipu',     model: 'glm-4',              label: 'glm-4 (Zhipu)' },
+  { provider: 'mock',       model: 'mock',              label: 'mock (内置 Mock)' },
+];
+const modelAlias = (m) => `${m.provider}:${m.model}`;
 
 /* 模型切换弹窗 */
 function openModelSwitcher() {
-  const current = S.dash.run.model || (S.settings && S.settings.defaultModel) || 'gpt-4o';
+  const current = S.dash.run.model || (S.settings && S.settings.defaultModel) || 'openai:gpt-4o';
   showModal(h('div', {},
     h('h3', { class: 'modal-title' }, '切换模型'),
     h('div', { class: 'confirm-text', style: 'color:#6E6E73;margin-bottom:12px' }, `当前模型：${current}`),
     h('div', { style: 'display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:14px' },
-      ...COMMON_MODELS.map(m => h('button', {
-        class: 'btn' + (m === current ? ' btn-primary' : ''),
-        style: 'font-size:11px;padding:6px 4px',
-        onclick: () => { applyModel(m); closeModal(); }
-      }, m))),
+      ...COMMON_MODELS.map(m => {
+        const alias = modelAlias(m);
+        return h('button', {
+          class: 'btn' + (alias === current ? ' btn-primary' : ''),
+          style: 'font-size:11px;padding:6px 4px',
+          onclick: () => { applyModel(alias); closeModal(); }
+        }, m.model);
+      })),
     h('div', { style: 'display:flex;gap:8px;align-items:center;margin-bottom:14px' },
       h('input', { id: 'model-custom', type: 'text', placeholder: '自定义别名…',
         style: 'flex:1;padding:6px 10px;border:1px solid rgba(60,60,67,.18);border-radius:6px;font-size:12px;font-family:inherit' }),

@@ -562,8 +562,13 @@ function registerIpc() {
     else args.push('--goal', String(p.goal || ''));
     if (p.mock) args.push('--mock');
     if (p.auto) args.push('--auto');
-    // P0-3：成本预算硬上限
-    if (p.maxCost && Number(p.maxCost) > 0) args.push('--max-cost', String(p.maxCost));
+    // B1：模型选择 —— 弹窗显式选择优先，否则回落设置页默认模型（形如 openai:gpt-4o）
+    const chosenModel = (p.model && String(p.model).trim()) || (settings.defaultModel && String(settings.defaultModel).trim());
+    if (chosenModel) args.push('--model', chosenModel);
+    // P0-3：成本预算硬上限 —— 弹窗显式优先，否则回落设置页 maxCostUsd
+    const chosenMaxCost = (p.maxCost && Number(p.maxCost) > 0) ? Number(p.maxCost)
+      : (settings.maxCostUsd && Number(settings.maxCostUsd) > 0 ? Number(settings.maxCostUsd) : 0);
+    if (chosenMaxCost > 0) args.push('--max-cost', String(chosenMaxCost));
     if (p.maxLlmCalls && Number(p.maxLlmCalls) > 0) args.push('--max-llm-calls', String(p.maxLlmCalls));
     args.push('--no-live', '--output-dir', outputDir);
     const r = spawnCli('run', args, outputDir, p.env || null);
