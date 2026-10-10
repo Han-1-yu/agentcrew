@@ -1359,7 +1359,7 @@ async function renderSettingsPage(container) {
       h('span', { style: 'font-weight:600;color:var(--text-sub)' }, '快捷键'),
       h('br'), 'Esc — 关闭面板 / 弹窗',
       h('br'), 'Ctrl/⌘ + N — 新建运行',
-      h('br'), '1-9 — 切换页面（总览/计划/任务图/Agents/门禁/产物/事件/供应商/设置）')));
+      h('br'), '1-9 — 切换页面（总览/计划/任务图/Agents/门禁/产物/事件/设置/供应商）')));
 }
 
 /* ============================================================
