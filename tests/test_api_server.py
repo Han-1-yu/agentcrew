@@ -426,3 +426,29 @@ class TestProvidersApi:
         port = server._server.sockets[0].getsockname()[1]
         status, data = await _request(port, "GET", "/providers/nosuch/models")
         assert status == 404
+
+    @pytest.mark.asyncio
+    async def test_get_provider_models_error_not_cached(self, server: ApiServer, monkeypatch):
+        """错误不进 60s 缓存：失败后下次请求应立即重试而非返回陈旧错误。"""
+        from agentcrew.models.discovery import ModelDiscoveryError
+
+        calls: list[int] = []
+
+        async def fake_fetch(binding, *, api_key=""):
+            calls.append(1)
+            if len(calls) == 1:
+                raise ModelDiscoveryError("boom", kind="network")
+            return ["gpt-4o", "gpt-4o-mini"]
+
+        monkeypatch.setattr(
+            "agentcrew.models.discovery.fetch_models", fake_fetch)
+        port = server._server.sockets[0].getsockname()[1]
+        # 第一次：失败 → 错误透传
+        status, data = await _request(port, "GET", "/providers/openai/models")
+        assert status == 200
+        assert data["error"]["kind"] == "network"
+        # 第二次：未缓存错误，立即重试成功
+        status, data = await _request(port, "GET", "/providers/openai/models")
+        assert status == 200
+        assert data["models"] == ["gpt-4o", "gpt-4o-mini"]
+        assert len(calls) == 2  # 两次都真的发了请求

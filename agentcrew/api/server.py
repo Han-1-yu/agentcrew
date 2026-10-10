@@ -880,12 +880,17 @@ class ApiServer:
         api_key = settings.api_key_for(name) or ""
         try:
             models = await fetch_models(binding, api_key=api_key)
-            result_payload: dict[str, Any] = {"provider": name, "models": models}
         except ModelDiscoveryError as exc:
-            result_payload = {
+            # 错误不进缓存：瞬时网络抖动/鉴权问题应允许下一次请求立即重试，
+            # 而不是把上次的失败结果钉住 60s（用户点「刷新模型」应是实时的）。
+            result_payload: dict[str, Any] = {
                 "provider": name,
                 "error": {"kind": exc.kind, "message": str(exc)},
             }
+            await self._send_json(writer, 200, result_payload)
+            return
+        result_payload = {"provider": name, "models": models}
+        # 只有成功结果才缓存（模型列表不常变；错误实时透传）。
         self._discovery_cache[name] = (time.monotonic(), result_payload)
         await self._send_json(writer, 200, result_payload)
 
