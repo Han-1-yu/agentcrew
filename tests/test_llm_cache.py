@@ -30,6 +30,7 @@ class _CountingProvider(BaseProvider):
     def __init__(self, text: str = "固定回复") -> None:
         super().__init__(ModelBinding(
             alias="mock:m", provider="mock", model="m",
+            implementation="mock",
             base_url=None, api_key_env="X",
             capabilities=ProviderCapabilities(max_context_tokens=128_000)))
         self.complete_calls = 0
