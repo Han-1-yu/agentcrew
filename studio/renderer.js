@@ -1587,7 +1587,7 @@ function renderEventsPage(container) {
     h('h2', {}, '事件日志'),
     h('div', { style: 'display:flex;gap:8px;align-items:center' },
       h('input', { id: 'ev-search', type: 'text', placeholder: '搜索事件…',
-        style: 'width:200px;padding:6px 10px;border:1px solid rgba(60,60,67,.18);border-radius:6px;font-size:12px;font-family:inherit',
+        style: 'width:200px;padding:6px 10px;border:1px solid var(--border-input);border-radius:6px;font-size:12px;font-family:inherit',
         oninput: () => renderEventsList() }),
       h('button', { class: 'btn', onclick: () => exportEvents() }, '导出 JSON'),
       h('button', { class: 'btn', onclick: () => switchNav('dashboard') }, '返回'))));
@@ -1959,7 +1959,7 @@ function openModelSwitcher() {
       })),
     h('div', { style: 'display:flex;gap:8px;align-items:center;margin-bottom:14px' },
       h('input', { id: 'model-custom', type: 'text', placeholder: '自定义别名…',
-        style: 'flex:1;padding:6px 10px;border:1px solid rgba(60,60,67,.18);border-radius:6px;font-size:12px;font-family:inherit' }),
+        style: 'flex:1;padding:6px 10px;border:1px solid var(--border-input);border-radius:6px;font-size:12px;font-family:inherit' }),
       h('button', { class: 'btn btn-primary', onclick: () => { const v = $('#model-custom').value.trim(); if (v) { applyModel(v); closeModal(); } } }, '应用')),
     h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: closeModal }, '取消'))));
 }
@@ -2028,7 +2028,7 @@ function renderDagPage(container) {
     h('h2', {}, '任务依赖图'),
     h('div', { style: 'display:flex;gap:8px;align-items:center' },
       h('input', { type: 'text', placeholder: '搜索任务…', value: S.taskFilter.q,
-        style: 'width:180px;padding:6px 10px;border:1px solid rgba(60,60,67,.18);border-radius:6px;font-size:12px;font-family:inherit',
+        style: 'width:180px;padding:6px 10px;border:1px solid var(--border-input);border-radius:6px;font-size:12px;font-family:inherit',
         oninput: (e) => { S.taskFilter.q = e.target.value; renderList(); } }),
       h('button', { class: 'btn', onclick: () => switchNav('dashboard') }, '返回'))));
 
