@@ -9,18 +9,19 @@
    ============================================================ */
 
 // TaskStatus 10 态（权威：task/state_machine.py）
+// 颜色全部引用 CSS 变量，随 [data-theme] 切换；styles.css 提供 light/dark 双套 --status-*
 const STATUS_META = {
-  pending:   { label: '待启动', color: '#8E8E93', fill: '#FFFFFF' },
-  ready:     { label: '就绪',   color: '#007AFF', fill: 'rgba(0,122,255,0.06)' },
-  running:   { label: '运行中', color: '#007AFF', fill: 'rgba(0,122,255,0.10)' },
-  review:    { label: '门禁评审', color: '#FF9F0A', fill: 'rgba(255,159,10,0.10)' },
-  rework:    { label: '返工中', color: '#FF9F0A', fill: 'rgba(255,159,10,0.14)' },
-  blocked:   { label: '阻塞',   color: '#FF9F0A', fill: 'rgba(255,159,10,0.08)' },
-  succeeded: { label: '已通过', color: '#34C759', fill: 'rgba(52,199,89,0.10)' },
-  failed:    { label: '失败',   color: '#FF3B30', fill: 'rgba(255,59,48,0.10)' },
-  skipped:   { label: '已跳过', color: '#8E8E93', fill: '#F2F2F7' },
-  cancelled: { label: '已取消', color: '#8E8E93', fill: '#F2F2F7' },
-  unknown:   { label: '未知',   color: '#8E8E93', fill: '#FFFFFF' },
+  pending:   { label: '待启动', color: 'var(--status-pending)',    fill: 'var(--status-pending-bg)' },
+  ready:     { label: '就绪',   color: 'var(--status-ready)',      fill: 'var(--status-ready-bg)' },
+  running:   { label: '运行中', color: 'var(--status-running)',    fill: 'var(--status-running-bg)' },
+  review:    { label: '门禁评审', color: 'var(--status-review)',   fill: 'var(--status-review-bg)' },
+  rework:    { label: '返工中', color: 'var(--status-rework)',     fill: 'var(--status-rework-bg)' },
+  blocked:   { label: '阻塞',   color: 'var(--status-blocked)',    fill: 'var(--status-blocked-bg)' },
+  succeeded: { label: '已通过', color: 'var(--status-succeeded)',  fill: 'var(--status-succeeded-bg)' },
+  failed:    { label: '失败',   color: 'var(--status-failed)',     fill: 'var(--status-failed-bg)' },
+  skipped:   { label: '已跳过', color: 'var(--status-skipped)',    fill: 'var(--status-skipped-bg)' },
+  cancelled: { label: '已取消', color: 'var(--status-cancelled)',  fill: 'var(--status-cancelled-bg)' },
+  unknown:   { label: '未知',   color: 'var(--text-ter)',         fill: 'var(--bg-subtle)' },
 };
 const STATUS_ORDER = ['pending','ready','running','review','rework','blocked','succeeded','failed','skipped','cancelled'];
 
@@ -39,41 +40,42 @@ const RUN_META = {
 // RunPhase：planning / execution / delivery（代码路径，UI 派生）
 const PHASES = ['规划', '执行', '交付'];
 
-// 8 个角色（role 字段权威值）
+// 8 个角色（role 字段权威值）；颜色引用语义装饰 token（--purple/--pink/--sky/--indigo…）
 const ROLE_META = {
-  project_manager:  { label: 'PM',       full: '项目经理',   color: '#AF52DE' },
-  product_manager:  { label: '产品',     full: '产品经理',   color: '#FF2D55' },
-  architect:        { label: '架构',     full: '架构师',     color: '#007AFF' },
-  backend_dev:      { label: '后端',     full: '后端开发',   color: '#34C759' },
-  frontend_dev:     { label: '前端',     full: '前端开发',   color: '#5AC8FA' },
-  qa_engineer:      { label: '测试',     full: '测试工程师', color: '#FF9500' },
-  devops_engineer:  { label: '运维',     full: '运维工程师', color: '#5E5CE6' },
-  technical_writer: { label: '文档',     full: '文档工程师', color: '#8E8E93' },
+  project_manager:  { label: 'PM',       full: '项目经理',   color: 'var(--purple)' },
+  product_manager:  { label: '产品',     full: '产品经理',   color: 'var(--pink)' },
+  architect:        { label: '架构',     full: '架构师',     color: 'var(--accent)' },
+  backend_dev:      { label: '后端',     full: '后端开发',   color: 'var(--success)' },
+  frontend_dev:     { label: '前端',     full: '前端开发',   color: 'var(--sky)' },
+  qa_engineer:      { label: '测试',     full: '测试工程师', color: 'var(--orange)' },
+  devops_engineer:  { label: '运维',     full: '运维工程师', color: 'var(--indigo)' },
+  technical_writer: { label: '文档',     full: '文档工程师', color: 'var(--text-ter)' },
 };
-const roleMeta = (id) => ROLE_META[id] || { label: id || '?', full: id || '未知角色', color: '#8E8E93' };
+const roleMeta = (id) => ROLE_META[id] || { label: id || '?', full: id || '未知角色', color: 'var(--text-ter)' };
 
 // ledger 事件类型（event 字段权威值，见 DATA-CONTRACT-REFERENCE §3）
+// 颜色引用语义 token，随主题切换；淡填充由 CSS color-mix 派生（不再 JS 拼 hex alpha）
 const EVENT_META = {
-  run_started:      { label: '运行创建',   color: '#007AFF' },
-  llm_call:         { label: 'LLM 调用',   color: '#5AC8FA' },
-  plan_created:     { label: '任务生成',   color: '#34C759' },
-  plan_scored:      { label: '计划评分',   color: '#5AC8FA' },
-  task_started:     { label: '任务开始',   color: '#FF9500' },
-  task_notes:       { label: '任务笔记',   color: '#8E8E93' },
-  artifact_written: { label: '产物生成',   color: '#34C759' },
-  task_finished:    { label: '任务完成',   color: '#34C759' },
-  task_transition:  { label: '状态跃迁',   color: '#8E8E93' },
-  gate_result:      { label: '门禁结果',   color: '#AF52DE' },
-  run_finished:     { label: '运行结束',   color: '#8E8E93' },
-  llm_failover:     { label: '故障转移',   color: '#FF9F0A' },
-  llm_model_switched:{ label: '模型切换',  color: '#5AC8FA' },
-  budget_warning:   { label: '预算预警',   color: '#FF9F0A' },
-  budget_exhausted: { label: '预算耗尽',   color: '#FF3B30' },
-  task_timeout:     { label: '任务超时',   color: '#FF9F0A' },
-  checkpoint_saved: { label: '检查点保存', color: '#8E8E93' },
-  human_approved:   { label: '人工批准',   color: '#34C759' },
-  run_cancelled:    { label: '运行取消',   color: '#FF3B30' },
-  error:            { label: '错误',       color: '#FF3B30' },
+  run_started:      { label: '运行创建',   color: 'var(--accent)' },
+  llm_call:         { label: 'LLM 调用',   color: 'var(--sky)' },
+  plan_created:     { label: '任务生成',   color: 'var(--success)' },
+  plan_scored:      { label: '计划评分',   color: 'var(--sky)' },
+  task_started:     { label: '任务开始',   color: 'var(--orange)' },
+  task_notes:       { label: '任务笔记',   color: 'var(--text-ter)' },
+  artifact_written: { label: '产物生成',   color: 'var(--success)' },
+  task_finished:    { label: '任务完成',   color: 'var(--success)' },
+  task_transition:  { label: '状态跃迁',   color: 'var(--text-ter)' },
+  gate_result:      { label: '门禁结果',   color: 'var(--purple)' },
+  run_finished:     { label: '运行结束',   color: 'var(--text-ter)' },
+  llm_failover:     { label: '故障转移',   color: 'var(--warn)' },
+  llm_model_switched:{ label: '模型切换',  color: 'var(--sky)' },
+  budget_warning:   { label: '预算预警',   color: 'var(--warn)' },
+  budget_exhausted: { label: '预算耗尽',   color: 'var(--error)' },
+  task_timeout:     { label: '任务超时',   color: 'var(--warn)' },
+  checkpoint_saved: { label: '检查点保存', color: 'var(--text-ter)' },
+  human_approved:   { label: '人工批准',   color: 'var(--success)' },
+  run_cancelled:    { label: '运行取消',   color: 'var(--error)' },
+  error:            { label: '错误',       color: 'var(--error)' },
 };
 const EVENT_TYPES = Object.keys(EVENT_META);
 
@@ -632,7 +634,7 @@ function renderAgents() {
         metaCell('费用',fmtCost(a.cost)), metaCell('更新',relTime(a.updated)))));
   }
 }
-function metaCell(k,v){ return h('div',{},h('div',{style:'color:#8E8E93'},k),h('b',{},v)); }
+function metaCell(k,v){ return h('div',{},h('div',{style:'color:var(--text-ter)'},k),h('b',{},v)); }
 function agentStatusLabel(st){ return {queued:'等待派发',executing:'执行中',reviewing:'评审中',done:'空闲'}[st]||st; }
 
 function renderGates() {
@@ -733,7 +735,7 @@ function renderCostPanel() {
     h('div', { class: 'cost-by-agent' },
       h('div', { class: 'cost-section-title' }, '按 Agent 分布'),
       ...agentEntries.map(([role, d]) => {
-        const meta = ROLE_META[role] || { label: role, color: '#8E8E93' };
+        const meta = ROLE_META[role] || { label: role, color: 'var(--text-ter)' };
         const w = (d.cost / maxAgentCost * 100).toFixed(1);
         return h('div', { class: 'cost-agent-row' },
           h('span', { class: 'cost-agent-name', style: `color:${meta.color}` }, meta.label || role),
@@ -757,14 +759,14 @@ function renderEvents() {
   filter.innerHTML='';
   for(const ty of mainTypes){ const m=EVENT_META[ty];
     filter.appendChild(h('button',{class:`fchip${S.eventFilter.has(ty)?' on':''}`,
-      style:`--ev-color:${m.color};--ev-soft:${m.color}22`,
+      style:`--ev-color:${m.color}`,
       onclick:()=>{ S.eventFilter.has(ty)?S.eventFilter.delete(ty):S.eventFilter.add(ty); renderEvents(); }},
       h('span',{class:'fdot'}), m.label));
   }
   list.innerHTML='';
   const evs=[...S.dash.events].reverse().filter(e=>S.eventFilter.has(e.event)).slice(0,50);
   for(const e of evs){
-    const m=EVENT_META[e.event]||{color:'#8E8E93',label:e.event};
+    const m=EVENT_META[e.event]||{color:'var(--text-ter)',label:e.event};
     const key=e.ts+e.event; const expanded=S.eventExpanded.has(key);
     const tid=e.data&&e.data.task_id;
     list.appendChild(h('div',{class:`event-row${['error','gate_failed'].includes(e.event)?' ev-error':''}`},
@@ -844,7 +846,7 @@ function openTaskDetail(taskId){
       sec('输出产物', res&&res.artifacts&&res.artifacts.length
         ? h('div',{},res.artifacts.map(a=>h('div',{class:'dp-text',style:'margin:2px 0'},`📄 ${a.path} · ${fmtBytes(a.size_bytes)}`)))
         : h('div',{class:'dp-text dim'},'待生成')),
-      t.error?sec('最近错误',h('div',{class:'dp-text',style:'color:#FF3B30'},t.error)):null,
+      t.error?sec('最近错误',h('div',{class:'dp-text',style:'color:var(--error)'},t.error)):null,
       res&&(res.tokens_used||res.duration_ms)?sec('执行统计',h('div',{class:'dp-meta-grid'},
         metaCell('Token',fmtTokens(res.tokens_used||0)),
         metaCell('耗时',fmtDur(res.duration_ms||0)),
@@ -893,7 +895,7 @@ function openAgentDetail(roleId){
   const myTasks=S.dash.tasks.filter(t=>t.role===roleId);
   openDetailPanel(h('div',{style:'display:flex;flex-direction:column;height:100%'},
     h('div',{class:'dp-head'},h('div',{class:'dp-title-row'},
-      h('div',{},h('div',{class:'mono',style:'color:#8E8E93;font-size:12px'},'AGENT'),h('div',{class:'dp-title'},rm.full)),
+      h('div',{},h('div',{class:'mono',style:'color:var(--text-ter);font-size:12px'},'AGENT'),h('div',{class:'dp-title'},rm.full)),
       h('button',{class:'btn btn-icon',style:'width:28px;height:28px','aria-label':'关闭',title:'关闭',onclick:closeDetailPanel},'✕'))),
     h('div',{class:'dp-body'},
       sec('状态',h('span',{class:'dp-tag'},agentStatusLabel(a.status)),h('span',{class:'dp-tag'},a.model)),
@@ -906,7 +908,7 @@ function openAgentDetail(roleId){
         myTasks.map(t=>{const m=STATUS_META[t.status]||STATUS_META.unknown;
           return h('div',{class:'dag-task-row',onclick:()=>openTaskDetail(t.id)},
             h('span',{class:'dot',style:`background:${m.color}`}),
-            h('span',{class:'mono',style:'color:#8E8E93'},t.id),
+            h('span',{class:'mono',style:'color:var(--text-ter)'},t.id),
             h('span',{},trunc(t.title,16)),
             h('span',{style:`margin-left:auto;font-size:11px;color:${m.color}`},m.label));}))
         :h('div',{class:'dp-text dim'},'暂无任务'))),
@@ -2008,7 +2010,7 @@ function renderDagPage(container) {
         h('div', { class: 'dag-layer-head' }, `第 ${li + 1} 层 · ${layerTasks.length} 个任务`));
       const listEl = h('div', { class: 'dag-layer-tasks' });
       for (const t of layerTasks) {
-        const meta = ROLE_META[t.role] || { label: t.role, color: '#8E8E93' };
+        const meta = ROLE_META[t.role] || { label: t.role, color: 'var(--text-ter)' };
         listEl.appendChild(h('div', { class: 'dag-task-row', onclick: () => openTaskDetail(t.id) },
           h('span', { class: `ts-dot ts-${t.status}` }),
           h('span', { class: 'dag-task-id' }, t.id),
@@ -2057,7 +2059,7 @@ function renderAgentsPage(container) {
   container.appendChild(grid);
   const agents = S.dash.agents || {};
   for (const [role, a] of Object.entries(agents)) {
-    const meta = ROLE_META[role] || { label: role, color: '#8E8E93' };
+    const meta = ROLE_META[role] || { label: role, color: 'var(--text-ter)' };
     const myTasks = S.dash.tasks.filter(t => t.role === role);
     // 派生统计
     const totalCost = myTasks.reduce((s, t) => s + ((t.result && t.result.cost_usd) || 0), 0);
@@ -2174,7 +2176,7 @@ function renderChrome(){
   const sbf=document.querySelector('.sb-progress'); sbf.classList.toggle('warn',pct>=90&&pct<100); sbf.classList.toggle('err',pct>=100);
   $('#sb-conn-dot').className='dot ' + (S.realMode ? 'running' : 'idle');
   $('#sb-conn-label').textContent = S.realMode ? '已连接' : '演示模式';
-  const ds = $('#sb-datasource'); if (ds) { ds.textContent = S.realMode ? '真实' : '演示'; ds.style.color = S.realMode ? '#34C759' : '#FF9F0A'; }
+  const ds = $('#sb-datasource'); if (ds) { ds.textContent = S.realMode ? '真实' : '演示'; ds.style.color = S.realMode ? 'var(--success)' : 'var(--warn)'; }
   updateConnIndicator();
 }
 
@@ -2444,9 +2446,9 @@ function updateConnIndicator() {
    运行列表与切换
    ============================================================ */
 const RUN_STATUS_COLOR = {
-  running: '#007AFF', completed: '#34C759', failed: '#FF3B30',
-  paused: '#FF9F0A', cancelled: '#8E8E93', planning: '#5AC8FA',
-  preparing: '#8E8E93', awaiting_approval: '#AF52DE',
+  running: 'var(--accent)', completed: 'var(--success)', failed: 'var(--error)',
+  paused: 'var(--warn)', cancelled: 'var(--text-ter)', planning: 'var(--sky)',
+  preparing: 'var(--text-ter)', awaiting_approval: 'var(--purple)',
 };
 
 async function loadRunList() {
@@ -2483,7 +2485,7 @@ async function loadRunList() {
         listEl.appendChild(h('div', { class: 'rd-group-header' }, gName));
       }
       for (const r of gRuns) {
-        const color = RUN_STATUS_COLOR[r.status] || '#8E8E93';
+        const color = RUN_STATUS_COLOR[r.status] || 'var(--text-ter)';
         const isActive = S.dash.run && S.dash.run.dir === r.dir;
         const canDelete = r.status !== 'running';
         const item = h('div', { class: 'rd-item' + (isActive ? ' active' : '') },
@@ -2762,7 +2764,7 @@ function openUserMenu(){
     ['paused','用户暂停'],['failed','运行失败'],['gates_failed','门禁失败'],['completed','运行完成'],['empty','无运行记录']];
   showModal(h('div',{},
     h('h3',{class:'modal-title'},'账户与演示'),
-    h('div',{class:'confirm-text',style:'color:#8E8E93'},'工作区：'+(S.settings&&S.settings.outputDir||'默认')),
+    h('div',{class:'confirm-text',style:'color:var(--text-ter)'},'工作区：'+(S.settings&&S.settings.outputDir||'默认')),
     h('div',{style:'margin:10px 0;font-weight:600;font-size:13px'},'演示边界状态：'),
     ...states.map(([k,label])=>h('button',{class:'btn',style:'display:flex;width:100%;margin-bottom:6px;justify-content:flex-start',onclick:()=>{closeModal();applyDemoState(k);}},label)),
     h('div',{class:'modal-actions'},h('button',{class:'btn',onclick:closeModal},'关闭'))));

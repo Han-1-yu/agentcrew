@@ -866,7 +866,7 @@ h1,h2,h3,h4 { margin: 0; font-weight: 600; letter-spacing: -0.1px; }
   font-size: 11px; color: var(--text-sub); cursor: pointer; transition: all .12s;
 }
 .fchip .fdot { width: 6px; height: 6px; border-radius: 50%; background: var(--ev-color, var(--text-ter)); }
-.fchip.on { background: var(--ev-soft, var(--accent-bg)); color: var(--text); border-color: var(--ev-color, var(--accent)); font-weight: 500; }
+.fchip.on { background: color-mix(in srgb, var(--ev-color, var(--accent)) 14%, transparent); color: var(--text); border-color: var(--ev-color, var(--accent)); font-weight: 500; }
 .events-list { max-height: 360px; overflow-y: auto; display: flex; flex-direction: column; }
 .event-row {
   display: flex; gap: 10px; padding: 6px 8px; align-items: flex-start; cursor: default;
