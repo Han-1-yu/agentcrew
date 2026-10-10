@@ -119,6 +119,38 @@ def test_config_import_rejects_secret_value(tmp_path, monkeypatch):
     assert not (merged.get("models") or {}).get("providers")
 
 
+def test_config_import_rejects_key_value_in_api_key_env(tmp_path, monkeypatch):
+    """回归（红线）：用户把真实密钥误填进 api_key_env（应填环境变量名）时，
+    import 必须拒绝，绝不把密钥明文写进 agentcrew.yaml。"""
+    monkeypatch.chdir(tmp_path)
+    existing = tmp_path / "agentcrew.yaml"
+    existing.write_text("models:\n  default: openai:gpt-4o-mini\n", encoding="utf-8")
+    bad_import = tmp_path / "bad_envname.yaml"
+    bad_import.write_text(
+        yaml.safe_dump({
+            "models": {
+                "custom_providers": {
+                    "myrelay": {
+                        "implementation": "openai_compat",
+                        "base_url": "http://x/v1",
+                        "api_key_env": "sk-LEAKED-REAL-KEY-123",  # 误填成密钥值
+                        "capabilities": {},
+                    }
+                }
+            },
+        }, allow_unicode=True),
+        encoding="utf-8")
+    code, out, err = _run_cli(
+        ["config", "import", str(bad_import)], tmp_path,
+        env={"AGENTCREW_CONFIG": str(existing)})
+    assert code != 0
+    # 原文件未被污染：仍只有 default，无 custom_providers
+    merged = yaml.safe_load(existing.read_text(encoding="utf-8"))
+    assert not (merged.get("models") or {}).get("custom_providers")
+    # 报错不得回显该疑似密钥的值
+    assert "sk-LEAKED-REAL-KEY-123" not in (out + err)
+
+
 def test_config_import_missing_file(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     code, out, err = _run_cli(

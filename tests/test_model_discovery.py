@@ -211,3 +211,39 @@ def test_fetch_models_no_base_url():
 
 def test_timeout_constant():
     assert DISCOVERY_TIMEOUT_SECS == 10.0
+
+
+# ── 空 id 过滤与残余 parse 分支 ──────────────────────────────────────────
+
+
+def test_parse_skips_empty_and_blank_ids():
+    """回归：空串 / 纯空白的 model id 不进结果列表。"""
+    from agentcrew.models.discovery import _parse_models
+    names = _parse_models(json.dumps({
+        "data": [{"id": "gpt-4o"}, {"id": ""}, {"id": "   "}, {"id": "claude"}]
+    }))
+    assert names == ["gpt-4o", "claude"]  # 空/空白被滤掉，保输入序
+
+
+def test_parse_body_not_a_dict():
+    from agentcrew.models.discovery import _parse_models
+    with pytest.raises(ModelDiscoveryError) as ei:
+        _parse_models("[1, 2, 3]")
+    assert ei.value.kind == "parse"
+
+
+def test_parse_data_field_not_a_list():
+    from agentcrew.models.discovery import _parse_models
+    with pytest.raises(ModelDiscoveryError) as ei:
+        _parse_models(json.dumps({"data": {"id": "nope"}}))
+    assert ei.value.kind == "parse"
+
+
+def test_fetch_models_other_http_status_is_network(monkeypatch):
+    """5xx 等非 401/403/404 的 HTTP 错误归为 network。"""
+    monkeypatch.setattr(
+        "agentcrew.models.discovery.urllib.request.urlopen", _raise_http(500))
+    with pytest.raises(ModelDiscoveryError) as ei:
+        asyncio.run(fetch_models(_binding(), api_key="x"))
+    assert ei.value.kind == "network"
+

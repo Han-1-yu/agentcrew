@@ -125,6 +125,32 @@ async def test_custom_provider_default_model_recognized(tmp_path, monkeypatch):
     assert api.status == "pass", api.message
 
 
+async def test_keyless_custom_provider_not_flagged_missing_key(tmp_path, monkeypatch):
+    """回归：自定义 provider 把 api_key_env 留空（本地中转免鉴权）时，
+    doctor 不得误报「缺少 API Key」——与 ollama/mock/cli 同属免钥。"""
+    for env in API_KEY_ENVS:
+        monkeypatch.delenv(env, raising=False)
+    settings = Settings(
+        mock=False, output_dir=tmp_path / "o",
+        default_model="myrelay:v1",
+        custom_providers={
+            "myrelay": {
+                "implementation": "openai_compat",
+                "base_url": "http://localhost:9/v1",
+                "api_key_env": "",  # 免鉴权本地网关
+                "capabilities": {},
+            }
+        },
+    )
+
+    async def fake_health(alias: str) -> HealthRecord:
+        return _healthy(alias)
+
+    report = await run_diagnostics(settings, health_check=fake_health)
+    api = next(c for c in report.checks if c.name == "api_keys")
+    assert api.status == "pass", api.message
+
+
 # ── Provider 连通性（注入假 health_check）─────────────────────────────────
 
 

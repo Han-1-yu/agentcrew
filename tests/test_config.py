@@ -242,6 +242,36 @@ def test_custom_provider_duplicate_builtin_rejected(monkeypatch, tmp_path):
         Settings.load()
 
 
+def test_custom_provider_colon_name_rejected(monkeypatch, tmp_path):
+    """回归：provider 名含冒号将无法被别名寻址，加载时即拒绝。"""
+    _yaml_config(monkeypatch, tmp_path, {
+        "models": {"custom_providers": {
+            "my:relay": {
+                "implementation": "openai_compat",
+                "base_url": "http://x",
+                "api_key_env": "X",
+                "capabilities": {},
+            }
+        }}})
+    with pytest.raises(ValueError, match="冒号"):
+        Settings.load()
+
+
+def test_custom_provider_empty_name_rejected(monkeypatch, tmp_path):
+    """回归：空 provider 名无法被别名寻址，加载时即拒绝。"""
+    _yaml_config(monkeypatch, tmp_path, {
+        "models": {"custom_providers": {
+            "": {
+                "implementation": "openai_compat",
+                "base_url": "http://x",
+                "api_key_env": "X",
+                "capabilities": {},
+            }
+        }}})
+    with pytest.raises(ValueError, match="不能为空"):
+        Settings.load()
+
+
 def test_custom_provider_secret_field_rejected(monkeypatch, tmp_path):
     """custom_providers 里写 api_key 值必须报错（密钥绝不落盘）。"""
     _yaml_config(monkeypatch, tmp_path, {
