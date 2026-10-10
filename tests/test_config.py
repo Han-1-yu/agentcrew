@@ -334,6 +334,31 @@ def test_custom_provider_api_key_for(monkeypatch):
     assert s.api_key_for("myrelay") is None
 
 
+def test_builtin_preset_api_key_env_resolves(monkeypatch):
+    """A2 回归：新增内置平台（openrouter 等）的 api_key_env 必须从预设解析。
+
+    修复前 ``api_key_for`` 只查硬编码的 ``_PROVIDER_KEY_ENV``（原始 6 家），
+    openrouter/siliconflow/moonshot/zhipu/groq/together 即便设了环境变量也返回
+    None，工厂误报「缺少 API Key」。这里钉住每个新预设都能正确取到 Key。
+    """
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-1")
+    monkeypatch.setenv("SILICONFLOW_API_KEY", "sk-sf-2")
+    monkeypatch.setenv("MOONSHOT_API_KEY", "sk-ms-3")
+    monkeypatch.setenv("ZHIPU_API_KEY", "sk-zp-4")
+    monkeypatch.setenv("GROQ_API_KEY", "sk-gq-5")
+    monkeypatch.setenv("TOGETHER_API_KEY", "sk-tg-6")
+    s = Settings.load()
+    assert s.api_key_for("openrouter") == "sk-or-1"
+    assert s.api_key_for("siliconflow") == "sk-sf-2"
+    assert s.api_key_for("moonshot") == "sk-ms-3"
+    assert s.api_key_for("zhipu") == "sk-zp-4"
+    assert s.api_key_for("groq") == "sk-gq-5"
+    assert s.api_key_for("together") == "sk-tg-6"
+    # 未设置的新预设仍为 None
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    assert s.api_key_for("openrouter") is None
+
+
 # ── A6：config_version ─────────────────────────────────────────────────
 
 

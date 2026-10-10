@@ -575,11 +575,42 @@ class Settings(BaseModel):
         data["mcp_servers"] = _redact_unknown(self.mcp_servers)
         return data
 
+    def _api_key_env_name(self, provider: str) -> str:
+        """``provider`` → 密钥所在环境变量名（overrides → 内置预设 → 自定义）。
+
+        内置预设里的 ``api_key_env`` 才是唯一事实源：A2 新增 openrouter /
+        siliconflow / moonshot / zhipu / groq / together 时只改了 ``PROVIDER_PRESETS``，
+        没有同步硬编码的 :data:`_PROVIDER_KEY_ENV`，导致即便用户设了对应环境变量，
+        :meth:`api_key_for` 仍返回 None、工厂误报「缺少 API Key」。这里直接查合并目录，
+        不再维护第二份会漂移的映射。
+        """
+        override = self.provider_overrides.get(provider)
+        if isinstance(override, Mapping) and override.get("api_key_env"):
+            return str(override["api_key_env"])
+        preset = PROVIDER_PRESETS.get(provider)
+        if preset is not None:
+            return preset.api_key_env
+        custom = self.custom_providers.get(provider)
+        if isinstance(custom, Mapping) and custom.get("api_key_env"):
+            return str(custom["api_key_env"])
+        return ""
+
     def secret_values(self) -> list[str]:
-        """所有已配置的非空 API Key 值，供日志脱敏使用。"""
+        """所有已配置的非空 API Key 值，供日志脱敏使用。
+
+        覆盖内置预设（含 A2 新增平台）与自定义 provider 的 ``api_key_env``——
+        自定义 provider 的密钥一旦漏进事件/日志也必须被抹掉。
+        """
+        env_names: list[str] = list(_PROVIDER_KEY_ENV.values())
+        for preset in PROVIDER_PRESETS.values():
+            if preset.api_key_env:
+                env_names.append(preset.api_key_env)
+        for custom in self.custom_providers.values():
+            if isinstance(custom, Mapping) and custom.get("api_key_env"):
+                env_names.append(str(custom["api_key_env"]))
         found = [
             raw.strip()
-            for env_name in _PROVIDER_KEY_ENV.values()
+            for env_name in env_names
             if (raw := os.environ.get(env_name, "")).strip()
         ]
         return list(dict.fromkeys(found))
@@ -591,14 +622,7 @@ class Settings(BaseModel):
         if provider == "ollama":
             # ollama 无需密钥，返回 OLLAMA_BASE_URL 或占位串，保证非空。
             return os.environ.get(_OLLAMA_KEY_ENV, "").strip() or _OLLAMA_PLACEHOLDER
-        env_name = _PROVIDER_KEY_ENV.get(provider)
-        if env_name is not None:
-            return os.environ.get(env_name, "").strip() or None
-        # A1：自定义 provider —— 从 custom_providers 配置取 api_key_env 再查环境变量。
-        custom = self.custom_providers.get(provider)
-        if custom is not None:
-            env_name = custom.get("api_key_env") or ""
-            if not env_name:
-                return None
-            return os.environ.get(env_name, "").strip() or None
-        return None
+        env_name = self._api_key_env_name(provider)
+        if not env_name:
+            return None
+        return os.environ.get(env_name, "").strip() or None
