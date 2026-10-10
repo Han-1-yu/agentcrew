@@ -1217,34 +1217,146 @@ async function renderSettingsPage(container) {
     }}, '保存')));
 
   const cfg = S.settings || {};
-  const form = h('div', { class: 'settings-form' });
-  container.appendChild(form);
+  const wrap = h('div', { class: 'settings-groups' });
+  container.appendChild(wrap);
 
-  const field = (label, id, value, placeholder, type = 'text') =>
+  /* ---- 组 1：运行环境 ---- */
+  const pythonStatus = h('div', { class: 'set-inline-status', id: 'set-python-status' });
+  const detectBtn = h('button', { class: 'btn btn-sm', id: 'set-detect-python', type: 'button' }, '探测');
+  detectBtn.addEventListener('click', async () => {
+    detectBtn.disabled = true;
+    const orig = detectBtn.textContent;
+    detectBtn.textContent = '探测中…';
+    pythonStatus.className = 'set-inline-status pending';
+    pythonStatus.textContent = '正在检测 Python 解释器…';
+    try {
+      const r = await window.studio.detectPython();
+      if (r && r.version) {
+        pythonStatus.className = 'set-inline-status ok';
+        pythonStatus.textContent = `Python ${r.version}`;
+      } else {
+        pythonStatus.className = 'set-inline-status err';
+        pythonStatus.textContent = '未找到可用 Python';
+      }
+    } catch (e) {
+      pythonStatus.className = 'set-inline-status err';
+      pythonStatus.textContent = '未找到可用 Python';
+    } finally {
+      detectBtn.disabled = false;
+      detectBtn.textContent = orig;
+    }
+  });
+  wrap.appendChild(h('section', { class: 'settings-group' },
+    h('h3', { class: 'settings-group-title' }, '运行环境'),
     h('div', { class: 'settings-field' },
-      h('label', { for: id }, label),
-      h('input', { id, type, value: value || '', placeholder: placeholder || '' }));
+      h('label', { for: 'set-python' }, 'Python 命令'),
+      h('div', { class: 'set-row' },
+        h('input', { id: 'set-python', class: 'set-input', type: 'text', value: cfg.pythonCmd || '', placeholder: 'python / python3 / 完整路径' }),
+        detectBtn),
+      pythonStatus),
+    h('div', { class: 'settings-field' },
+      h('label', {}, '仓库根目录'),
+      h('div', { class: 'set-repo-root' }, cfg.repoRoot || '—')),
+    h('div', { class: 'settings-field' },
+      h('label', { for: 'set-output' }, '输出目录'),
+      h('input', { id: 'set-output', class: 'set-input', type: 'text', value: cfg.outputDir || '', placeholder: 'E:\\agentcrew\\output' }))));
 
-  form.appendChild(field('Python 命令', 'set-python', cfg.pythonCmd, 'python / python3 / 完整路径'));
-  form.appendChild(field('输出目录', 'set-output', cfg.outputDir, 'E:\\agentcrew\\output'));
-  form.appendChild(h('div', { class: 'settings-field' },
-    h('label', { for: 'set-model' }, '默认模型'),
-    h('div', { style: 'display:flex;gap:6px' },
-      h('select', { id: 'set-model', style: 'flex:1;padding:6px 8px;border:1px solid var(--border-input);border-radius:6px;font-size:12px;font-family:inherit;background:var(--bg-panel);color:var(--text)' },
-        h('option', { value: '', selected: !cfg.defaultModel }, '选择模型…'),
-        ...MODEL_ALIASES.map(m => h('option', { value: modelAlias(m), selected: cfg.defaultModel === modelAlias(m) }, m.label))),
-      h('input', { id: 'set-model-custom', type: 'text', placeholder: '自定义 provider:model',
-        style: 'width:160px;padding:6px 8px;border:1px solid var(--border-input);border-radius:6px;font-size:12px;font-family:inherit;background:var(--bg-panel);color:var(--text)' }))));
-  form.appendChild(field('预算上限 (USD)', 'set-maxcost', cfg.maxCostUsd || '', '0 = 不限制', 'number'));
-  form.appendChild(field('后端 API 地址（可选）', 'set-api', cfg.apiBaseUrl || '', 'http://localhost:8765 — 设置后启用 SSE 实时推送'));
+  /* ---- 组 2：模型与预算 ---- */
+  // 若当前默认模型不在内置别名列表中，回填到自定义输入框
+  const aliasList = MODEL_ALIASES.map(m => modelAlias(m));
+  const customVal = (cfg.defaultModel && aliasList.indexOf(cfg.defaultModel) < 0) ? cfg.defaultModel : '';
+  wrap.appendChild(h('section', { class: 'settings-group' },
+    h('h3', { class: 'settings-group-title' }, '模型与预算'),
+    h('div', { class: 'settings-field' },
+      h('label', { for: 'set-model' }, '默认模型'),
+      h('div', { class: 'set-row' },
+        h('select', { id: 'set-model', class: 'set-input' },
+          h('option', { value: '', selected: !cfg.defaultModel }, '选择模型…'),
+          ...MODEL_ALIASES.map(m => h('option', { value: modelAlias(m), selected: cfg.defaultModel === modelAlias(m) }, m.label))),
+        h('input', { id: 'set-model-custom', class: 'set-input', type: 'text', value: customVal, placeholder: '自定义 provider:model' }))),
+    h('div', { class: 'settings-field' },
+      h('label', { for: 'set-maxcost' }, '预算上限 (USD)'),
+      h('input', { id: 'set-maxcost', class: 'set-input', type: 'number', min: '0', step: '0.01', value: cfg.maxCostUsd || '', placeholder: '0 = 不限制' }))));
 
-  form.appendChild(h('div', { class: 'settings-field' },
-    h('label', {}, '关于'),
+  /* ---- 组 3：连接 ---- */
+  const connStatus = h('div', { class: 'set-inline-status', id: 'set-conn-status' });
+  const testConnBtn = h('button', { class: 'btn btn-sm', id: 'set-test-conn', type: 'button' }, '测试连接');
+  const apiInput = h('input', { id: 'set-api', class: 'set-input', type: 'text', value: cfg.apiBaseUrl || '', placeholder: 'http://localhost:8765 — 设置后启用 SSE 实时推送' });
+  const refreshConnBtnState = () => {
+    const v = apiInput.value.trim();
+    testConnBtn.disabled = !v;
+    testConnBtn.title = v ? '' : '请先填写后端 API 地址';
+  };
+  apiInput.addEventListener('input', refreshConnBtnState);
+  refreshConnBtnState();
+  testConnBtn.addEventListener('click', async () => {
+    const base = apiInput.value.trim();
+    if (!base) return;
+    testConnBtn.disabled = true;
+    const orig = testConnBtn.textContent;
+    testConnBtn.textContent = '测试中…';
+    connStatus.className = 'set-inline-status pending';
+    connStatus.textContent = '正在连接…';
+    try {
+      const r = await window.studio.providerTest({ base_url: base, models_path: '/providers' });
+      if (r && r.ok) {
+        connStatus.className = 'set-inline-status ok';
+        connStatus.textContent = `连接正常 · ${r.latency_ms}ms`;
+      } else {
+        connStatus.className = 'set-inline-status err';
+        connStatus.textContent = `连接失败：${(r && r.error) || (r && r.status ? 'HTTP ' + r.status : '未知错误')}`;
+      }
+    } catch (e) {
+      connStatus.className = 'set-inline-status err';
+      connStatus.textContent = `连接失败：${String(e && e.message || e)}`;
+    } finally {
+      testConnBtn.disabled = false;
+      testConnBtn.textContent = orig;
+      refreshConnBtnState();
+    }
+  });
+  const connModeText = S.sseConnected ? 'SSE 已连接' : (S.realMode && S.watchDir ? '文件监听' : '演示模式');
+  wrap.appendChild(h('section', { class: 'settings-group' },
+    h('h3', { class: 'settings-group-title' }, '连接'),
+    h('div', { class: 'settings-field' },
+      h('label', { for: 'set-api' }, '后端 API 地址'),
+      h('div', { class: 'set-row' }, apiInput, testConnBtn),
+      connStatus),
+    h('div', { class: 'set-conn-mode' }, `当前数据连接模式：${connModeText}`)));
+
+  /* ---- 组 4：外观（主题 segmented control，即时生效） ---- */
+  const segEl = h('div', { class: 'seg', id: 'set-theme' });
+  const themeButtons = {};
+  ['light', 'dark', 'system'].forEach(t => {
+    const b = h('button', { type: 'button', 'data-theme': t, onclick: async () => {
+      S.settings.theme = t;
+      try { await window.studio.setSettings({ theme: t }); } catch {}
+      applyTheme();
+      renderSeg();
+      toast('success', '主题已切换', THEME_LABEL[t] || t);
+    } }, THEME_LABEL[t] || t);
+    themeButtons[t] = b;
+    segEl.appendChild(b);
+  });
+  const renderSeg = () => {
+    const cur = (S.settings && S.settings.theme) || 'dark';
+    Object.entries(themeButtons).forEach(([t, b]) => b.classList.toggle('active', t === cur));
+  };
+  renderSeg();
+  wrap.appendChild(h('section', { class: 'settings-group' },
+    h('h3', { class: 'settings-group-title' }, '外观'),
+    h('div', { class: 'settings-field' },
+      h('label', {}, '主题'),
+      segEl)));
+
+  /* ---- 关于 ---- */
+  wrap.appendChild(h('section', { class: 'settings-group settings-about-group' },
+    h('h3', { class: 'settings-group-title' }, '关于'),
     h('div', { class: 'settings-about' },
       'AgentCrew Studio · 多 Agent 协作开发控制台',
       h('br'), '8 角色协作 · 三层门禁 · DAG 编排 · 实时可观测',
       h('br'), h('br'),
-      h('span', { style: 'font-weight:600;color:#6E6E73' }, '快捷键'),
+      h('span', { style: 'font-weight:600;color:var(--text-sub)' }, '快捷键'),
       h('br'), 'Esc — 关闭面板 / 弹窗',
       h('br'), 'Ctrl/⌘ + N — 新建运行',
       h('br'), '1-9 — 切换页面（总览/计划/任务图/Agents/门禁/产物/事件/供应商/设置）')));
@@ -2661,37 +2773,78 @@ function openNewRunModal(){
   const mockDefault = saved == null ? !!(S.settings && S.settings.defaultMock) : saved === '1';
   showModal(h('div',{},
     h('h3',{class:'modal-title'},'启动新运行'),
-    h('div',{class:'confirm-text'},'用一句话描述要交付的目标：'),
-    h('textarea',{id:'nr-goal',rows:3,style:'width:100%;border:1px solid rgba(60,60,67,.2);border-radius:6px;padding:8px;font-family:inherit;font-size:13px;resize:vertical',placeholder:'例如：开发一个短链接生成服务，含 REST API、缓存与部署文档'}),
-    h('div',{style:'margin-top:10px'},
-      h('label',{style:'font-size:12px;color:#6E6E73;display:block;margin-bottom:4px'},'项目（可选，用于分组管理）'),
-      h('input',{id:'nr-project',type:'text',style:'width:100%;border:1px solid rgba(60,60,67,.2);border-radius:6px;padding:6px 8px;font-family:inherit;font-size:13px',placeholder:'例如：shortlink-service'})),
-    h('div',{style:'margin-top:10px'},
-      h('label',{style:'font-size:12px;color:#6E6E73;display:block;margin-bottom:4px'},'模型（可选，留空用设置默认）'),
-      h('div',{style:'display:flex;gap:6px'},
-        h('select',{id:'nr-provider',style:'flex:0 0 140px;padding:6px 8px;border:1px solid rgba(60,60,67,.18);border-radius:6px;font-size:12px;font-family:inherit;background:#fff'},
-          h('option',{value:''},'自动（设置默认）')),
-        h('select',{id:'nr-model',style:'flex:1;padding:6px 8px;border:1px solid rgba(60,60,67,.18);border-radius:6px;font-size:12px;font-family:inherit;background:#fff'},
-          h('option',{value:''},'选择模型…')),
-        h('input',{id:'nr-model-custom',type:'text',placeholder:'或手输 provider:model',
-          style:'width:160px;padding:6px 8px;border:1px solid rgba(60,60,67,.18);border-radius:6px;font-size:12px;font-family:inherit'})),
-      h('div',{id:'nr-model-preview',style:'margin-top:4px;font-size:11px;color:#8E8E93'},'')),
-    h('div',{style:'display:flex;gap:16px;margin-top:10px;font-size:12px;color:#6E6E73;flex-wrap:wrap'},
-      h('label',{style:'display:flex;align-items:center;gap:5px;cursor:pointer'},
-        h('input',{type:'checkbox',id:'nr-mock',checked:mockDefault}),'Mock 模式'),
-      h('label',{style:'display:flex;align-items:center;gap:5px;cursor:pointer'},
-        h('input',{type:'checkbox',id:'nr-auto',checked:true}),'自动执行'),
-      h('label',{style:'display:flex;align-items:center;gap:5px;cursor:pointer'},
-        h('input',{type:'checkbox',id:'nr-demo'}),'Demo 目标'),
-      h('label',{id:'nr-slow-wrap',style:'display:flex;align-items:center;gap:5px;cursor:pointer;visibility:hidden'},
-        h('input',{type:'checkbox',id:'nr-slow'}),'慢速（便于观察/取消）')),
-    h('div',{id:'nr-hint',style:'margin-top:10px;font-size:12px;line-height:1.6;color:#8E8E93'},''),
+    h('div',{class:'nr-form'},
+      // 最近使用的目标（异步填充；无历史时整行移除）
+      h('div',{class:'nr-row',id:'nr-recent-row',style:'display:none'},
+        h('label',{class:'nr-label',for:'nr-recent-goal'},'最近使用的目标'),
+        h('select',{id:'nr-recent-goal',class:'nr-select'},
+          h('option',{value:''},'选择历史目标…'))),
+
+      // 目标输入 + 行内错误 + Demo 提示
+      h('div',{class:'nr-row'},
+        h('label',{class:'nr-label',for:'nr-goal'},'项目目标'),
+        h('textarea',{id:'nr-goal',class:'nr-textarea',rows:3,
+          placeholder:'例如：开发一个短链接生成服务，含 REST API、缓存与部署文档'}),
+        h('div',{id:'nr-demo-hint',class:'nr-demo-hint',style:'display:none'},
+          'Demo 模式：使用内置示例目标，无需手动输入'),
+        h('div',{id:'nr-goal-error',class:'nr-field-error'})),
+
+      // 模型选择
+      h('div',{class:'nr-row',id:'nr-model-area'},
+        h('label',{class:'nr-label'},'模型（可选，留空用设置默认）'),
+        h('div',{class:'nr-model-row'},
+          h('select',{id:'nr-provider',class:'nr-select fixed'},
+            h('option',{value:''},'自动（设置默认）')),
+          h('select',{id:'nr-model',class:'nr-select'},
+            h('option',{value:''},'选择模型…')),
+          h('input',{id:'nr-model-custom',class:'nr-input',type:'text',
+            placeholder:'或手输 provider:model'})),
+        h('div',{id:'nr-model-preview',class:'nr-model-preview'})),
+
+      // 模式复选
+      h('div',{class:'nr-checks'},
+        h('label',{},h('input',{type:'checkbox',id:'nr-mock',checked:mockDefault}),'Mock 模式'),
+        h('label',{},h('input',{type:'checkbox',id:'nr-auto',checked:true}),'自动执行'),
+        h('label',{},h('input',{type:'checkbox',id:'nr-demo'}),'Demo 目标')),
+
+      // 高级选项（默认收起）
+      h('div',{class:'nr-advanced',id:'nr-advanced'},
+        h('button',{type:'button',class:'nr-advanced-toggle',id:'nr-advanced-toggle'},
+          h('span',{class:'nr-advanced-arrow'},'▶'),
+          h('span',{},'高级选项')),
+        h('div',{class:'nr-advanced-body'},
+          h('div',{class:'nr-row'},
+            h('label',{class:'nr-label',for:'nr-project'},'项目（可选，用于分组管理）'),
+            h('input',{id:'nr-project',class:'nr-input',type:'text',
+              placeholder:'例如：shortlink-service'})),
+          h('div',{class:'nr-adv-grid'},
+            h('div',{class:'nr-row'},
+              h('label',{class:'nr-label',for:'nr-maxcost'},'预算上限 (USD)'),
+              h('input',{id:'nr-maxcost',class:'nr-input',type:'number',min:'0',step:'0.01',
+                placeholder:'0 = 不限制'})),
+            h('div',{class:'nr-row'},
+              h('label',{class:'nr-label',for:'nr-max-llm-calls'},'max-llm-calls'),
+              h('input',{id:'nr-max-llm-calls',class:'nr-input',type:'number',min:'0',step:'1',
+                placeholder:'0 = 不限制'}))),
+          h('label',{id:'nr-slow-wrap',class:'nr-slow-label',style:'visibility:hidden'},
+            h('input',{type:'checkbox',id:'nr-slow'}),'慢速（便于观察/取消）'))),
+
+      h('div',{id:'nr-hint',class:'nr-hint'})),
     h('div',{class:'modal-actions'},
       h('button',{class:'btn',onclick:closeModal},'取消'),
       h('button',{class:'btn btn-primary',id:'nr-start',onclick:async ()=>{
-        const goal=$('#nr-goal').value.trim();
+        const goalEl=$('#nr-goal');
+        const goal=goalEl.value.trim();
         const useDemo=$('#nr-demo').checked;
-        if(!useDemo && !goal){ toast('warning','需要目标','请输入项目目标或勾选 Demo'); return; }
+        // 行内校验（不用 toast，避免轰炸）
+        goalEl.classList.remove('input-error');
+        const errBox=$('#nr-goal-error'); if(errBox) errBox.textContent='';
+        if(!useDemo && !goal){
+          goalEl.classList.add('input-error');
+          if(errBox) errBox.textContent='请输入项目目标，或勾选 Demo 目标';
+          goalEl.focus();
+          return;
+        }
         const project=$('#nr-project').value.trim();
         const mockOn=$('#nr-mock').checked;
         const startBtn=$('#nr-start');
@@ -2705,6 +2858,8 @@ function openNewRunModal(){
             auto: $('#nr-auto').checked,
             project: project || null,
             model: assembleNrAlias() || null,
+            maxCost: parseFloat($('#nr-maxcost').value) || 0,
+            maxLlmCalls: parseInt($('#nr-max-llm-calls').value) || 0,
             // 慢速 mock：拉长每次模拟 LLM 调用，留出观察与取消窗口
             env: (mockOn && $('#nr-slow').checked) ? { AGENTCREW_MOCK_LATENCY_MS: '2000' } : null,
           });
@@ -2724,6 +2879,47 @@ function openNewRunModal(){
           toast('error','启动失败', String(e.message||e));
         }
       }},'启动'))));
+
+  // 输入时自动清除目标错误态
+  $('#nr-goal').addEventListener('input',()=>{
+    $('#nr-goal').classList.remove('input-error');
+    const eb=$('#nr-goal-error'); if(eb) eb.textContent='';
+  });
+  // Demo 勾选：目标框置灰 + 提示
+  const syncDemo = () => {
+    const on=$('#nr-demo').checked;
+    $('#nr-goal').disabled = on;
+    $('#nr-demo-hint').style.display = on ? '' : 'none';
+    if(on){ $('#nr-goal').classList.remove('input-error'); const eb=$('#nr-goal-error'); if(eb) eb.textContent=''; }
+  };
+  $('#nr-demo').addEventListener('change',syncDemo);
+  syncDemo();
+  // 高级选项折叠
+  $('#nr-advanced-toggle').addEventListener('click',()=>{
+    $('#nr-advanced').classList.toggle('open');
+  });
+  // 最近使用的目标（F2 已持久化 recentGoals，最多 5 条）
+  (async () => {
+    const row = $('#nr-recent-row'); if(!row) return;
+    let goals = [];
+    try { goals = (await window.studio.recentGoals()) || []; } catch {}
+    goals = Array.isArray(goals) ? goals.filter(g => g && String(g).trim()) : [];
+    if(!goals.length){ row.remove(); return; }
+    const sel = $('#nr-recent-goal');
+    goals.slice(0,5).forEach(g => {
+      const text = String(g);
+      sel.appendChild(h('option',{value:text}, text.length>60 ? text.slice(0,60)+'…' : text));
+    });
+    row.style.display = '';
+    sel.addEventListener('change',()=>{
+      if(sel.value){
+        $('#nr-goal').value = sel.value;
+        $('#nr-goal').classList.remove('input-error');
+        const eb=$('#nr-goal-error'); if(eb) eb.textContent='';
+      }
+    });
+  })();
+
   // Mock 勾选联动：模式说明 + 慢速选项可见性 + 模型区置灰
   const syncMock = () => {
     const on=$('#nr-mock').checked;
@@ -2735,7 +2931,7 @@ function openNewRunModal(){
     ['#nr-provider', '#nr-model', '#nr-model-custom'].forEach(sel => {
       const el = $(sel); if (el) el.disabled = on;
     });
-    const area = $('#nr-provider') && $('#nr-provider').parentElement;
+    const area = $('#nr-model-area');
     if (area) area.style.opacity = on ? '0.45' : '1';
   };
   $('#nr-mock').addEventListener('change',syncMock);
