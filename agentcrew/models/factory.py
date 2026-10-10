@@ -50,6 +50,7 @@ from agentcrew.models.config import (
     PROVIDER_PRESETS,
     ModelBinding,
     UnknownProviderError,
+    build_directory,
     parse_alias,
 )
 from agentcrew.models.pricing import estimate_cost
@@ -305,7 +306,11 @@ class ModelFactory:
     def _validate_alias(self, alias: str) -> None:
         """``parse_alias`` 校验 + 把解析异常统一收敛成 ``ModelFactoryError``。"""
         try:
-            parse_alias(alias, overrides=self._settings.provider_overrides)
+            parse_alias(
+                alias,
+                overrides=self._settings.provider_overrides,
+                custom=self._settings.custom_providers,
+            )
         except (ValueError, UnknownProviderError) as exc:
             raise ModelFactoryError(f"非法模型别名 {alias!r}: {exc}") from exc
 
@@ -508,7 +513,11 @@ class ModelFactory:
         分派顺序：``parse_alias``（含 provider_overrides）→ ``--mock`` 全局覆盖
         → 按 implementation 构造。缺 Key 在这里当场报错，绝不静默。
         """
-        binding = parse_alias(alias, overrides=self._settings.provider_overrides)
+        binding = parse_alias(
+            alias,
+            overrides=self._settings.provider_overrides,
+            custom=self._settings.custom_providers,
+        )
         implementation = (
             "mock" if self._settings.mock
             else self._implementation_for(binding))
@@ -1140,8 +1149,13 @@ class ModelFactory:
     def _implementation_for(self, binding: ModelBinding) -> str:
         """binding 的生效实现方式（``provider_overrides`` 可整体替换它）。"""
         patch = self._settings.provider_overrides.get(binding.provider) or {}
-        implementation = patch.get(
-            "implementation", PROVIDER_PRESETS[binding.provider].implementation)
+        if "implementation" in patch:
+            implementation = patch["implementation"]
+        else:
+            # A1：查合并目录（内置 + 自定义），而非直接 PROVIDER_PRESETS。
+            directory = build_directory(
+                custom=self._settings.custom_providers)
+            implementation = directory[binding.provider].implementation
         if implementation not in _IMPLEMENTATIONS:
             raise ModelFactoryError(
                 f"provider {binding.provider!r} 的 implementation 非法："
@@ -1172,8 +1186,14 @@ class ModelFactory:
         ``ollama`` **先于** :meth:`Settings.api_key_for` 判断：后者在
         ``OLLAMA_BASE_URL`` 已设时返回的是 base URL，把 URL 当 key 传进去虽无
         害（本地服务不鉴权），但会让占位串分支永远不可达。
+
+        A1：自定义 provider 若 ``api_key_env`` 为空串（本地中转/网关无需鉴权），
+        与 ollama 一样返回占位串，不报错。
         """
         if binding.provider == "ollama":
+            return _OLLAMA_PLACEHOLDER
+        if not binding.api_key_env:
+            # 本地 / 无需鉴权的自定义 provider：返回占位串。
             return _OLLAMA_PLACEHOLDER
         api_key = self._settings.api_key_for(binding.provider)
         if api_key:

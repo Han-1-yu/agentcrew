@@ -8,6 +8,7 @@
 import os
 import re
 import sys
+import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
@@ -16,7 +17,12 @@ import yaml
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from agentcrew.models.config import PROVIDER_PRESETS, ProviderPreset
+from agentcrew.models.config import (
+    PROVIDER_PRESETS,
+    DuplicateProviderError,
+    ProviderPreset,
+    build_directory,
+)
 
 GateMode = Literal["both", "plan", "delivery", "none"]
 
@@ -66,6 +72,7 @@ _YAML_SCALAR_KEYS = ("max_concurrency", "context_budget_tokens", "gate", "roles_
 _MAPPING_FIELDS = (
     "role_bindings", "provider_overrides", "model_tiers", "model_failover",
     "mcp_servers", "gate_config", "tool_permissions", "api_keys",
+    "custom_providers",
 )
 
 #: ``AGENTCREW_TIER_<LEVEL>`` → ``model_tiers[<level>]``（V2：按复杂度选模型）。
@@ -209,6 +216,10 @@ def _yaml_values() -> dict[str, object]:
     values: dict[str, object] = {
         key: data[key] for key in _YAML_SCALAR_KEYS if data.get(key) is not None
     }
+    # A6：配置版本号 —— 高于当前支持的版本直接报错（不静默吞掉未知字段）。
+    config_version = data.get("config_version")
+    if config_version is not None:
+        values["config_version"] = config_version
     models = data.get("models") or {}
     if not isinstance(models, dict):
         raise ValueError(f"配置文件 models 段必须是映射：{path}")
@@ -218,6 +229,12 @@ def _yaml_values() -> dict[str, object]:
         values["role_bindings"] = dict(models["role_bindings"])
     if models.get("providers"):
         values["provider_overrides"] = dict(models["providers"])
+    if models.get("custom_providers"):
+        custom = models["custom_providers"]
+        if not isinstance(custom, dict):
+            raise ValueError(
+                f"配置文件 models.custom_providers 段必须是映射：{path}")
+        values["custom_providers"] = dict(custom)
     mcp_servers = data.get("mcp_servers")
     if mcp_servers:
         if not isinstance(mcp_servers, dict):
@@ -276,6 +293,20 @@ def _env_values() -> dict[str, object]:
         values["api_keys"] = [
             key.strip() for key in values["api_keys"].split(",") if key.strip()
         ]
+    # A1：AGENTCREW_CUSTOM_PROVIDERS 紧凑 JSON → dict[str, dict]。
+    # 形如 '{"myrelay":{"implementation":"openai_compat","base_url":"http://h/v1",
+    # "api_key_env":"MYRELAY_KEY"}}'。
+    raw_custom = os.environ.get("AGENTCREW_CUSTOM_PROVIDERS", "").strip()
+    if raw_custom:
+        try:
+            parsed = json.loads(raw_custom)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"AGENTCREW_CUSTOM_PROVIDERS 不是合法 JSON：{exc}") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError(
+                "AGENTCREW_CUSTOM_PROVIDERS 必须是 JSON 对象（名字 → 预设映射）")
+        values["custom_providers"] = parsed
     return values
 
 
@@ -312,6 +343,16 @@ class Settings(BaseModel):
     role_bindings: dict[str, str] = Field(default_factory=dict)
     roles_dir: Path | None = None
     provider_overrides: dict[str, dict] = Field(default_factory=dict)
+    custom_providers: dict[str, dict] = Field(default_factory=dict)
+    """用户自定义 provider 注册表（A1）：名字 → ProviderPreset 形状的映射。
+
+    与内置预设并存，不允许与内置重名（想改内置走 ``provider_overrides``）。
+    每个条目形状同 :class:`~agentcrew.models.config.ProviderPreset`，必填
+    ``implementation`` / ``base_url`` / ``api_key_env`` / ``capabilities``。
+    ``api_key_env`` 只存环境变量名，密钥值绝不落盘。
+    """
+    config_version: int = 1
+    """配置文件版本号（A6）。当前支持 v1；读取到更高版本时报清晰错误。"""
     model_tiers: dict[str, str] = Field(default_factory=dict)
     model_failover: dict[str, list[str | dict[str, Any]]] = Field(default_factory=dict)
     mcp_servers: dict[str, dict[str, Any]] = Field(default_factory=dict)
@@ -472,6 +513,47 @@ class Settings(BaseModel):
                 patch, ProviderPreset, path=f"provider_overrides.{provider}")
         return value
 
+    @field_validator("custom_providers")
+    @classmethod
+    def _validate_custom_providers(
+        cls, value: dict[str, dict]
+    ) -> dict[str, dict]:
+        """校验 ``models.custom_providers``：重名 / 未知字段 / 疑似密钥字段。
+
+        - 与内置预设重名 → 报错（想改内置走 ``provider_overrides``）；
+        - 每个条目按 :class:`ProviderPreset` 的 schema 递归校验（未知字段与疑似
+          密钥字段一律报错，与 ``provider_overrides`` 同一条规则）；
+        - 再用 pydantic 校验必填字段（implementation/base_url/api_key_env/
+          capabilities）。
+        """
+        for name, patch in value.items():
+            if name in PROVIDER_PRESETS:
+                raise ValueError(
+                    f"custom_providers.{name} 与内置预设重名；"
+                    "想调整内置 provider 请用 models.providers 段"
+                    "（provider_overrides），不要在 custom_providers 里覆盖内置。")
+            if not isinstance(patch, Mapping):
+                raise ValueError(
+                    f"custom_providers.{name} 必须是映射（字段 → 值），"
+                    f"实际是 {type(patch).__name__}")
+            _check_override_fields(
+                patch, ProviderPreset, path=f"custom_providers.{name}")
+            try:
+                ProviderPreset.model_validate(patch)
+            except Exception as exc:
+                raise ValueError(
+                    f"custom_providers.{name} 校验失败：{exc}") from exc
+        return value
+
+    @field_validator("config_version")
+    @classmethod
+    def _validate_config_version(cls, value: int) -> int:
+        """A6：高于当前支持的 v1 报清晰错误。"""
+        if value > 1:
+            raise ValueError(
+                f"配置文件版本 v{value} 高于当前支持的 v1，请升级 AgentCrew")
+        return value
+
     @classmethod
     def load(cls, **cli_overrides: object) -> "Settings":
         """按五级优先级合并出 ``Settings``（spec §17.1）。"""
@@ -491,6 +573,8 @@ class Settings(BaseModel):
         """
         data = self.model_dump(mode="json")
         data["provider_overrides"] = redact_overrides(self.provider_overrides)
+        # custom_providers 的值形状与 ProviderPreset 一致，复用同款 schema 递归脱敏。
+        data["custom_providers"] = redact_overrides(self.custom_providers)
         # mcp_servers 是自由形状映射（command/args/env…），没有 schema 可依，
         # 逐层按字段名判密钥（含 key/token/secret 即抹成 ***）。
         data["mcp_servers"] = _redact_unknown(self.mcp_servers)
@@ -513,6 +597,13 @@ class Settings(BaseModel):
             # ollama 无需密钥，返回 OLLAMA_BASE_URL 或占位串，保证非空。
             return os.environ.get(_OLLAMA_KEY_ENV, "").strip() or _OLLAMA_PLACEHOLDER
         env_name = _PROVIDER_KEY_ENV.get(provider)
-        if env_name is None:
-            return None
-        return os.environ.get(env_name, "").strip() or None
+        if env_name is not None:
+            return os.environ.get(env_name, "").strip() or None
+        # A1：自定义 provider —— 从 custom_providers 配置取 api_key_env 再查环境变量。
+        custom = self.custom_providers.get(provider)
+        if custom is not None:
+            env_name = custom.get("api_key_env") or ""
+            if not env_name:
+                return None
+            return os.environ.get(env_name, "").strip() or None
+        return None

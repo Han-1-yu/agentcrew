@@ -208,3 +208,141 @@ def test_real_env_vars_still_override_defaults_under_isolation(monkeypatch):
     """
     monkeypatch.setenv("AGENTCREW_MAX_CONCURRENCY", "9")
     assert Settings.load().max_concurrency == 9
+
+
+# ── A1：custom_providers ────────────────────────────────────────────────
+
+
+def test_custom_provider_loads_from_yaml(monkeypatch, tmp_path):
+    _yaml_config(monkeypatch, tmp_path, {
+        "models": {"custom_providers": {
+            "myrelay": {
+                "implementation": "openai_compat",
+                "base_url": "http://localhost:9/v1",
+                "api_key_env": "MYRELAY_KEY",
+                "capabilities": {"supports_json_object": True},
+            }
+        }}})
+    s = Settings.load()
+    assert "myrelay" in s.custom_providers
+    assert s.custom_providers["myrelay"]["base_url"] == "http://localhost:9/v1"
+
+
+def test_custom_provider_duplicate_builtin_rejected(monkeypatch, tmp_path):
+    _yaml_config(monkeypatch, tmp_path, {
+        "models": {"custom_providers": {
+            "openai": {
+                "implementation": "openai_compat",
+                "base_url": "http://x",
+                "api_key_env": "X",
+                "capabilities": {},
+            }
+        }}})
+    with pytest.raises(ValueError, match="重名"):
+        Settings.load()
+
+
+def test_custom_provider_secret_field_rejected(monkeypatch, tmp_path):
+    """custom_providers 里写 api_key 值必须报错（密钥绝不落盘）。"""
+    _yaml_config(monkeypatch, tmp_path, {
+        "models": {"custom_providers": {
+            "myrelay": {
+                "implementation": "openai_compat",
+                "base_url": "http://x",
+                "api_key_env": "X",
+                "api_key": YAML_SECRET,
+                "capabilities": {},
+            }
+        }}})
+    with pytest.raises(ValueError) as ei:
+        Settings.load()
+    assert "api_key" in str(ei.value)
+    assert YAML_SECRET not in str(ei.value)
+
+
+def test_custom_provider_unknown_field_rejected(monkeypatch, tmp_path):
+    _yaml_config(monkeypatch, tmp_path, {
+        "models": {"custom_providers": {
+            "myrelay": {
+                "implementation": "openai_compat",
+                "base_url": "http://x",
+                "api_key_env": "X",
+                "capabilities": {},
+                "bogus_field": 1,
+            }
+        }}})
+    with pytest.raises(ValueError, match="未知字段"):
+        Settings.load()
+
+
+def test_custom_provider_missing_required_field_rejected(monkeypatch, tmp_path):
+    """缺 implementation / base_url / api_key_env / capabilities 之一应报错。"""
+    _yaml_config(monkeypatch, tmp_path, {
+        "models": {"custom_providers": {
+            "myrelay": {
+                "base_url": "http://x",
+                "api_key_env": "X",
+                "capabilities": {},
+            }
+        }}})
+    with pytest.raises(ValueError, match="custom_providers"):
+        Settings.load()
+
+
+def test_custom_provider_snapshot_redacted(monkeypatch, tmp_path):
+    """config_snapshot 对 custom_providers 脱敏（模拟旧 run.json 注入密钥）。"""
+    s = Settings.load().model_copy(update={
+        "custom_providers": {
+            "myrelay": {
+                "implementation": "openai_compat",
+                "base_url": "http://x",
+                "api_key_env": "X",
+                "capabilities": {},
+                "api_key": YAML_SECRET,
+            }
+        }
+    })
+    snap = s.config_snapshot()
+    assert snap["custom_providers"]["myrelay"]["api_key"] == "***"
+    assert YAML_SECRET not in str(snap)
+
+
+def test_custom_provider_env_json(monkeypatch):
+    monkeypatch.setenv(
+        "AGENTCREW_CUSTOM_PROVIDERS",
+        '{"myrelay":{"implementation":"openai_compat",'
+        '"base_url":"http://h/v1","api_key_env":"MYKEY","capabilities":{}}}',
+    )
+    s = Settings.load()
+    assert s.custom_providers["myrelay"]["base_url"] == "http://h/v1"
+
+
+def test_custom_provider_api_key_for(monkeypatch):
+    monkeypatch.setenv("MYRELAY_KEY", "sk-relay-123")
+    s = Settings.load().model_copy(update={
+        "custom_providers": {
+            "myrelay": {
+                "implementation": "openai_compat",
+                "base_url": "http://x",
+                "api_key_env": "MYRELAY_KEY",
+                "capabilities": {},
+            }
+        }
+    })
+    assert s.api_key_for("myrelay") == "sk-relay-123"
+    monkeypatch.delenv("MYRELAY_KEY", raising=False)
+    assert s.api_key_for("myrelay") is None
+
+
+# ── A6：config_version ─────────────────────────────────────────────────
+
+
+def test_config_version_too_high_raises(monkeypatch, tmp_path):
+    _yaml_config(monkeypatch, tmp_path, {"config_version": 99})
+    with pytest.raises(ValueError, match="高于当前支持的 v1"):
+        Settings.load()
+
+
+def test_config_version_default_is_1(monkeypatch, tmp_path):
+    _yaml_config(monkeypatch, tmp_path, {})
+    assert Settings.load().config_version == 1

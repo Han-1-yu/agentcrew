@@ -51,6 +51,7 @@ from agentcrew.cli.diff import (
     print_diff as print_run_diff,
 )
 from agentcrew.config import GateMode, Settings, redact_overrides
+from agentcrew.models.config import PROVIDER_PRESETS as PROVIDER_PRESETS_NAMES
 from agentcrew.crew.crew import (
     EXIT_CODES,
     Crew,
@@ -225,6 +226,12 @@ def build_parser() -> argparse.ArgumentParser:
     diff.add_argument("--output-dir", metavar="DIR", help="run 输出根目录")
     diff.add_argument("--json", action="store_true",
                       help="以 JSON 输出差异（便于脚本解析）")
+
+    providers = sub.add_parser(
+        "providers", help="列出合并后的 provider 目录（内置 + 自定义）")
+    providers.add_argument("name", nargs="?", help="只显示指定 provider 的详情")
+    providers.add_argument("--json", action="store_true",
+                           help="以 JSON 输出目录（便于脚本解析）")
 
     return parser
 
@@ -757,6 +764,74 @@ def _cmd_diff(args: argparse.Namespace) -> int:
     return EXIT_CODES["ok"]
 
 
+def _cmd_providers(args: argparse.Namespace) -> int:
+    """``providers [name]``：列出合并后的 provider 目录（内置 + 自定义）。
+
+    显示每个 provider 的 kind（builtin/custom）、implementation、base_url、
+    api_key_env（环境变量名，不显示值）、能力位摘要、建议模型。
+    ``--json`` 输出结构化 JSON；``name`` 参数只显示单个 provider。
+    """
+    import os
+
+    from agentcrew.models.config import build_directory
+
+    try:
+        settings = _settings_from(args)
+    except (OSError, ValueError) as exc:
+        return _fail(f"配置错误：{exc}")
+
+    directory = build_directory(
+        custom=settings.custom_providers,
+        overrides=settings.provider_overrides,
+    )
+    builtin_names = set(PROVIDER_PRESETS_NAMES)
+
+    def _entry(name: str, preset) -> dict[str, Any]:
+        env_name = preset.api_key_env or ""
+        key_configured = bool(env_name) and bool(os.environ.get(env_name, "").strip())
+        return {
+            "name": name,
+            "kind": "builtin" if name in builtin_names else "custom",
+            "implementation": preset.implementation,
+            "base_url": preset.base_url,
+            "api_key_env": env_name,
+            "key_configured": key_configured,
+            "capabilities": preset.capabilities.model_dump(),
+            "suggested_models": list(preset.suggested_models),
+            "command": preset.command,
+        }
+
+    if args.name:
+        if args.name not in directory:
+            return _fail(f"未知 provider：{args.name!r}")
+        entries = [_entry(args.name, directory[args.name])]
+    else:
+        entries = [_entry(n, directory[n]) for n in sorted(directory)]
+
+    if args.json:
+        print(json.dumps(
+            entries if args.name else {"providers": entries},
+            ensure_ascii=False, indent=2))
+        return EXIT_CODES["ok"]
+
+    console = Console()
+    for e in entries:
+        _out(console, f"[{e['kind']}] {e['name']}  ({e['implementation']})")
+        _out(console, f"  base_url       {e['base_url']}")
+        _out(console, f"  api_key_env    {e['api_key_env'] or '(无)'}"
+                       + ("  [已配置]" if e["key_configured"] else "  [未配置]"))
+        caps = e["capabilities"]
+        caps_summary = (
+            f"json_schema={caps['supports_json_schema']} "
+            f"json_object={caps['supports_json_object']} "
+            f"tools={caps['supports_tool_calls']}")
+        _out(console, f"  capabilities   {caps_summary}")
+        if e["suggested_models"]:
+            _out(console, f"  suggested      {', '.join(e['suggested_models'])}")
+        _out(console, "")
+    return EXIT_CODES["ok"]
+
+
 #: 子命令 → 处理器（``build_parser`` 里注册的 dest 值）。
 _HANDLERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "run": _cmd_run,
@@ -769,6 +844,7 @@ _HANDLERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "serve": _cmd_serve,
     "doctor": _cmd_doctor,
     "diff": _cmd_diff,
+    "providers": _cmd_providers,
 }
 
 

@@ -2,7 +2,9 @@ import pytest
 
 from agentcrew.models.config import (
     PROVIDER_PRESETS,
+    DuplicateProviderError,
     UnknownProviderError,
+    build_directory,
     parse_alias,
 )
 
@@ -67,3 +69,61 @@ def test_base_url_override_applied():
     b = parse_alias("openai:gpt-4o", overrides={"openai": {
         "base_url": "https://proxy.internal/v1"}})
     assert b.base_url == "https://proxy.internal/v1"
+
+
+# ── A1：自定义 Provider 注册表 ──────────────────────────────────────────
+
+_CUSTOM = {
+    "myrelay": {
+        "implementation": "openai_compat",
+        "base_url": "http://localhost:9/v1",
+        "api_key_env": "MYRELAY_KEY",
+        "capabilities": {"supports_json_object": True},
+        "suggested_models": ["relay-model-a", "relay-model-b"],
+    }
+}
+
+
+def test_custom_provider_resolves():
+    b = parse_alias("myrelay:some-model", custom=_CUSTOM)
+    assert b.provider == "myrelay"
+    assert b.model == "some-model"
+    assert b.base_url == "http://localhost:9/v1"
+    assert b.api_key_env == "MYRELAY_KEY"
+
+
+def test_custom_provider_unknown_raises():
+    with pytest.raises(UnknownProviderError):
+        parse_alias("nosuch:x", custom=_CUSTOM)
+
+
+def test_custom_provider_duplicate_builtin_rejected():
+    bad = {"openai": {
+        "implementation": "openai_compat", "base_url": "http://x",
+        "api_key_env": "X", "capabilities": {}}}
+    with pytest.raises(DuplicateProviderError):
+        build_directory(custom=bad)
+
+
+def test_build_directory_merges_builtin_and_custom():
+    d = build_directory(custom=_CUSTOM)
+    assert "openai" in d
+    assert "myrelay" in d
+    assert d["myrelay"].suggested_models == ["relay-model-a", "relay-model-b"]
+
+
+def test_custom_provider_overrides_apply():
+    """overrides 仍只作用于内置 provider（config.py 校验已拦未知 provider）。"""
+    d = build_directory(
+        custom=_CUSTOM,
+        overrides={"openai": {"base_url": "http://proxy/v1"}},
+    )
+    assert d["openai"].base_url == "http://proxy/v1"
+    # custom provider 不被 overrides 影响
+    assert d["myrelay"].base_url == "http://localhost:9/v1"
+
+
+def test_provider_preset_has_suggested_models_field():
+    p = PROVIDER_PRESETS["openai"]
+    assert hasattr(p, "suggested_models")
+    assert isinstance(p.suggested_models, list)

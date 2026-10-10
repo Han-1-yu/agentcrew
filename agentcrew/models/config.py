@@ -6,7 +6,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 #: provider 的实现方式（决定 Task 21 的 ModelFactory 如何构造 Provider）。
 Implementation = Literal["openai_compat", "anthropic", "mock", "cli"]
@@ -41,6 +41,10 @@ class ProviderPreset(BaseModel):
     #: CLI 引擎的命令模板（仅 implementation="cli" 时使用）。
     #: 支持占位符 {model} {prompt} {max_tokens} {temperature}。
     command: str | None = None
+    #: 建议模型名清单（供 Studio / CLI 模型选择器展示，不参与调度）。
+    suggested_models: list[str] = Field(default_factory=list)
+    #: 模型发现端点覆写（缺省时由 base_url 派生 ``/models``）。
+    models_url: str | None = None
 
 
 class ModelBinding(BaseModel):
@@ -152,24 +156,64 @@ def _apply_override(preset: ProviderPreset, override: dict) -> ProviderPreset:
     return preset.model_copy(update=updates)
 
 
-def parse_alias(alias: str, *, overrides: dict[str, dict] | None = None) -> ModelBinding:
+class DuplicateProviderError(ValueError):
+    """自定义 provider 与内置预设重名（不允许覆盖内置，想覆盖走 provider_overrides）。"""
+
+
+def build_directory(
+    *,
+    custom: dict[str, dict] | None = None,
+    overrides: dict[str, dict] | None = None,
+) -> dict[str, ProviderPreset]:
+    """返回「内置预设 + 用户自定义 + provider_overrides」合并后的只读目录。
+
+    - 自定义 provider 与内置重名时抛 :class:`DuplicateProviderError`
+      （想改内置走 ``provider_overrides``，不允许静默覆盖）；
+    - 自定义 provider 的形状与 :class:`ProviderPreset` 一致，pydantic 会校验
+      必填字段与未知字段（``extra="forbid"``）；
+    - ``overrides``（即 ``provider_overrides``）逐 provider 叠加在内置与自定义之上。
+    """
+    directory: dict[str, ProviderPreset] = dict(PROVIDER_PRESETS)
+    for name, patch in (custom or {}).items():
+        if name in PROVIDER_PRESETS:
+            raise DuplicateProviderError(
+                f"自定义 provider {name!r} 与内置预设重名；"
+                "想调整内置 provider 请用 models.providers 段（provider_overrides），"
+                "不要在 models.custom_providers 里覆盖内置。")
+        directory[name] = ProviderPreset.model_validate(patch)
+    for name, patch in (overrides or {}).items():
+        existing = directory.get(name)
+        if existing is None:
+            # provider_overrides 只允许覆盖内置（config.py 的校验已拦未知 provider），
+            # 但这里防御性跳过——不应发生。
+            continue
+        directory[name] = _apply_override(existing, patch)
+    return directory
+
+
+def parse_alias(
+    alias: str,
+    *,
+    overrides: dict[str, dict] | None = None,
+    custom: dict[str, dict] | None = None,
+) -> ModelBinding:
     """把 ``"<provider>:<model>"`` 解析成 :class:`ModelBinding`。
 
     - 只按第一个冒号切分（模型名可含冒号）；
     - 无冒号或模型名为空 → :class:`ValueError`；
-    - provider 不在 :data:`PROVIDER_PRESETS` 中 → :class:`UnknownProviderError`；
-    - ``overrides`` 形如 ``{"doubao": {"capabilities": {...}, "base_url": "..."}}``。
+    - provider 不在合并目录（内置 + ``custom``）中 → :class:`UnknownProviderError`；
+    - ``overrides`` 形如 ``{"doubao": {"capabilities": {...}, "base_url": "..."}}``；
+    - ``custom`` 形如 ``{"myrelay": {"implementation": "openai_compat", ...}}``。
     """
     provider, sep, model = alias.partition(":")
     if not sep:
         raise ValueError(f"模型别名缺少 ':'：{alias!r}（应为 '<provider>:<model>'）")
     if not model:
         raise ValueError(f"模型别名为空：{alias!r}")
-    preset = PROVIDER_PRESETS.get(provider)
+    directory = build_directory(custom=custom, overrides=overrides)
+    preset = directory.get(provider)
     if preset is None:
         raise UnknownProviderError(f"未知 provider：{provider!r}（alias={alias!r}）")
-    if overrides and provider in overrides:
-        preset = _apply_override(preset, overrides[provider])
     return ModelBinding(
         alias=alias,
         provider=provider,
