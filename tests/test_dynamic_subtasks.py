@@ -101,6 +101,24 @@ def test_children_of_filters_by_parent(env):
     assert [t.id for t in kids] == ["T-DYN-001", "T-DYN-002"]
 
 
+def test_failed_dynamic_task_does_not_crash_refresh(env):
+    """动态子任务 FAILED 后 refresh() 不得 KeyError（回归：真实 run 曾整跑崩掉）。
+
+    动态任务不在建图节点集里，失败传播对它是空集——但 refresh 必须照常执行：
+    图上任务照旧被判定，动态任务的失败不阻塞任何图上任务。
+    """
+    board = env["board"]
+    board.add_task(Task(id="T-DYN-001", title="子", description="d", role="x",
+                        acceptance_criteria=[], deliverables=[], parent_id="T-1",
+                        dynamic=True))
+    board.transition("T-DYN-001", S.RUNNING, reason="test-dispatch")
+    board.transition("T-DYN-001", S.FAILED, reason="test-fail")
+    # refresh 不抛 KeyError；图上任务（T-1）不因动态子任务失败而 BLOCKED，
+    # 照常按依赖判定（无前置 → PENDING 转 READY）
+    board.refresh()
+    assert board.get("T-1").status is S.READY
+
+
 # ── Agent 层 ──
 
 async def test_agent_creates_subtask_from_fence(env, tmp_path):

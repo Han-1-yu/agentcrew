@@ -401,10 +401,14 @@ class TaskBoard:
         ``CANCELLED``）与在跑（``RUNNING`` / ``REVIEW`` / ``REWORK``）的一律
         不动——``SUCCEEDED → BLOCKED`` 本就是非法跃迁，跳过它们既是语义要求，
         也避免无谓抛错。
+
+        P2-1 动态子任务**不在**建图时的节点集里（独立调度、无图上边），失败
+        传播对它们是空集；直接查图会 ``KeyError`` 让整个 run 崩在 ``refresh()``
+        里，故先做成员判定再查 ``descendants()``。
         """
         doomed: set[str] = set()
         for task in self.all():
-            if task.status in _FAILED_UPSTREAM_STATES:
+            if task.status in _FAILED_UPSTREAM_STATES and task.id in self._graph.dependents_map:
                 doomed |= self._graph.descendants(task.id)
         return [
             task.id
