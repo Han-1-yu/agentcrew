@@ -1377,6 +1377,17 @@ async function renderProvidersPage(container) {
       h('span', { class: 'conn-indicator demo', id: 'prov-source-badge' }, '加载中…')),
     h('button', { class: 'btn btn-primary', id: 'prov-add-preset', type: 'button' }, '从预设添加')));
 
+  // 搜索 + 分类筛选工具条
+  S.provFilter = S.provFilter || { q: '', cat: 'all' };
+  const toolBar = h('div', { class: 'prov-toolbar' },
+    h('input', {
+      id: 'prov-search', class: 'prov-search', type: 'text',
+      placeholder: '搜索供应商（名称 / 别名）…', value: S.provFilter.q || '',
+    }),
+    h('div', { class: 'prov-cat-bar', id: 'prov-cat-bar' }),
+    h('span', { class: 'prov-count', id: 'prov-count' }));
+  container.appendChild(toolBar);
+
   const listEl = h('div', { class: 'prov-list', id: 'prov-list' });
   container.appendChild(listEl);
 
@@ -1404,6 +1415,8 @@ async function renderProvidersPage(container) {
       name: p.key, label: p.label, kind: 'builtin',
       base_url: p.base_url, api_key_env: p.api_key_env || '',
       suggested_models: p.suggested_models || [],
+      category: p.category, search_aliases: p.search_aliases || [],
+      api_key_url: p.api_key_url, endpoint_candidates: p.endpoint_candidates,
     }));
     source = base ? 'watch' : 'demo';
   }
@@ -1422,8 +1435,77 @@ async function renderProvidersPage(container) {
     } else if (p.key_configured != null) {
       status = p.key_configured ? 'configured' : 'missing';
     }
-    return { ...p, _status: status, _builtin: p.kind !== 'custom' };
+    // 元数据回填（API 已带则保留；缺失时从内置常量补齐）
+    const preset = findProvider(p.name);
+    return {
+      ...p, _status: status, _builtin: p.kind !== 'custom',
+      category: p.category || (preset && preset.category) || 'specialized',
+      search_aliases: p.search_aliases || (preset && preset.search_aliases) || [],
+      api_key_url: p.api_key_url != null ? p.api_key_url : (preset && preset.api_key_url) || null,
+      endpoint_candidates: p.endpoint_candidates != null ? p.endpoint_candidates : (preset && preset.endpoint_candidates) || null,
+    };
   }));
+
+  // ── 分类筛选按钮 ──
+  const catBar = $('#prov-cat-bar');
+  const catOrder = [
+    ['all', '全部'], ['aggregator', '聚合'], ['national', '国内'],
+    ['international', '国际'], ['local', '本地'], ['specialized', '专用'],
+  ];
+  const catBtns = {};
+  for (const [val, label] of catOrder) {
+    const b = h('button', {
+      class: 'prov-cat-btn' + (S.provFilter.cat === val ? ' active' : ''),
+      type: 'button', 'data-cat': val,
+      onclick: (ev) => {
+        S.provFilter.cat = val;
+        catBar.querySelectorAll('.prov-cat-btn').forEach(x => x.classList.remove('active'));
+        ev.currentTarget.classList.add('active');
+        renderProvList();
+      },
+    }, label);
+    catBtns[val] = b;
+    catBar.appendChild(b);
+  }
+
+  // ── 搜索输入（200ms 防抖）──
+  let searchTimer = null;
+  $('#prov-search').addEventListener('input', (e) => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => { S.provFilter.q = e.target.value; renderProvList(); }, 200);
+  });
+
+  // ── 列表渲染（搜索 + 分类 AND 过滤）──
+  function applyFilter() {
+    const q = (S.provFilter.q || '').trim().toLowerCase();
+    const cat = S.provFilter.cat || 'all';
+    return enriched.filter(p => {
+      if (cat !== 'all' && p.category !== cat) return false;
+      if (!q) return true;
+      const hay = [p.name, p.label, p.key, ...(p.search_aliases || [])]
+        .filter(Boolean).join(' ').toLowerCase();
+      return hay.includes(q);
+    });
+  }
+  function renderProvList() {
+    const list = $('#prov-list');
+    if (!list) return;
+    const filtered = applyFilter();
+    list.innerHTML = '';
+    const countEl = $('#prov-count');
+    if (countEl) {
+      countEl.textContent = (S.provFilter.q || S.provFilter.cat !== 'all')
+        ? `${filtered.length} 个匹配 / 共 ${enriched.length} 个供应商`
+        : `${enriched.length} 个供应商`;
+    }
+    if (!filtered.length) {
+      list.appendChild(h('div', { class: 'prov-empty' },
+        h('h3', {}, '无匹配供应商'),
+        h('p', {}, '尝试调整搜索关键词或分类筛选。')));
+      return;
+    }
+    for (const p of filtered) list.appendChild(buildProviderCard(p, testDebounce));
+  }
 
   listEl.innerHTML = '';
   if (!enriched.length) {
@@ -1433,7 +1515,7 @@ async function renderProvidersPage(container) {
       h('button', { class: 'btn btn-primary', onclick: () => switchNav('settings') }, '到设置页配置后端地址')));
     return;
   }
-  for (const p of enriched) listEl.appendChild(buildProviderCard(p, testDebounce));
+  renderProvList();
   $('#prov-add-preset').addEventListener('click', openAddProviderModal);
 }
 
@@ -1447,6 +1529,12 @@ function buildProviderCard(p, testDebounce) {
     : p._status === 'missing'
       ? h('span', { class: 'prov-dot off', title: '未检测到环境变量 ' + (p.api_key_env || '') })
       : h('span', { class: 'prov-dot none', title: '无需密钥' });
+
+  // 分类徽标
+  const catLabel = PROV_CATEGORY_LABELS[p.category] || null;
+  const catBadge = catLabel
+    ? h('span', { class: 'prov-cat prov-cat-' + p.category, title: '分类：' + catLabel }, catLabel)
+    : null;
 
   const resultBox = h('div', { class: 'prov-test-result' });
 
@@ -1474,6 +1562,13 @@ function buildProviderCard(p, testDebounce) {
       }
     },
   }, '测试');
+
+  // 编辑按钮
+  const editBtn = h('button', {
+    class: 'btn btn-sm prov-edit-btn', type: 'button',
+    title: '生成覆盖/新增 YAML 片段（Studio 不直接写 agentcrew.yaml）',
+    onclick: () => openEditProviderModal(p),
+  }, '编辑');
 
   const modelsWrap = h('div', { class: 'prov-models hidden' });
   if (models.length) {
@@ -1506,44 +1601,76 @@ function buildProviderCard(p, testDebounce) {
     },
   }, '模型');
 
+  // meta 区：密钥环境变量名（+ 获取 Key 链接）、建议模型数、端点候选数、流式状态
+  const metaChildren = [];
+  if (p.api_key_env) {
+    const envSpan = h('span', { class: 'prov-env', title: '环境变量名（真实 Key 请写入 .env）' }, '密钥：' + p.api_key_env);
+    metaChildren.push(envSpan);
+    if (p.api_key_url) {
+      metaChildren.push(h('button', {
+        class: 'prov-getkey', type: 'button', title: '在浏览器打开官方 Key 页面',
+        onclick: () => { if (window.studio.openExternal) window.studio.openExternal(p.api_key_url); },
+      }, '🔗 获取Key'));
+    }
+  } else {
+    metaChildren.push(h('span', { class: 'prov-env none' }, '无需密钥'));
+  }
+  metaChildren.push(h('span', { class: 'prov-model-count' }, `${models.length} 个建议模型`));
+  if (Array.isArray(p.endpoint_candidates) && p.endpoint_candidates.length > 1) {
+    metaChildren.push(h('span', { class: 'prov-ep', title: '多端点候选，按顺序回退' }, `${p.endpoint_candidates.length} 端点候选`));
+  }
+  const streamOk = p.health ? p.health.stream_ok : p.stream_ok;
+  if (streamOk === true) {
+    metaChildren.push(h('span', { class: 'prov-stream ok', title: '流式输出可用' }, '流式 ✓'));
+  } else if (streamOk === false) {
+    metaChildren.push(h('span', { class: 'prov-stream err', title: '流式输出不可用' }, '流式 ✗'));
+  }
+
   return h('div', { class: 'prov-card', 'data-provider': p.name },
     h('div', { class: 'prov-avatar' }, initial),
     h('div', { class: 'prov-main' },
       h('div', { class: 'prov-title-row' },
         h('span', { class: 'prov-name' }, p.label || p.name),
+        catBadge,
         h('span', { class: 'prov-badge' + (p._builtin ? ' builtin' : ' custom') }, p._builtin ? '内置' : '自定义'),
         statusDot),
       h('div', { class: 'prov-url' }, p.base_url || '（无 HTTP 端点）'),
-      h('div', { class: 'prov-meta' },
-        p.api_key_env
-          ? h('span', { class: 'prov-env', title: '环境变量名（真实 Key 请写入 .env）' }, '密钥：' + p.api_key_env)
-          : h('span', { class: 'prov-env none' }, '无需密钥'),
-        h('span', { class: 'prov-model-count' }, `${models.length} 个建议模型`)),
+      h('div', { class: 'prov-meta' }, ...metaChildren),
       resultBox,
       modelsWrap),
-    h('div', { class: 'prov-actions' }, testBtn, toggleBtn));
+    h('div', { class: 'prov-actions' }, testBtn, editBtn, toggleBtn));
 }
 
-function openAddProviderModal() {
-  const presets = [
-    ...EXTRA_PRESETS.map(p => ({ key: p.key, label: p.label, base_url: p.base_url, api_key_env: p.api_key_env })),
-    { key: '__custom', label: '空白自定义', base_url: '', api_key_env: '' },
-  ];
-  const sel = h('select', { id: 'ap-preset', class: 'ap-field' },
-    h('option', { value: '' }, '选择预设…'),
-    ...presets.map(p => h('option', { value: p.key }, p.label)));
+/* 构建添加/编辑弹窗共用的表单字段；返回控件引用与 genYaml。
+   mode: 'custom' → models.custom_providers.<key>；'override' → models.providers.<key>（内置覆盖） */
+function buildProviderFormFields(initial) {
   const nameInput = h('input', { id: 'ap-name', class: 'ap-field', type: 'text', placeholder: '如 my-relay（小写英文/数字/-）' });
   const urlInput = h('input', { id: 'ap-url', class: 'ap-field', type: 'text', placeholder: 'https://…' });
   const envInput = h('input', { id: 'ap-env', class: 'ap-field', type: 'text', placeholder: '环境变量名，如 MYRELAY_KEY；真实 Key 请写入 .env 或系统环境变量' });
   const modelsInput = h('input', { id: 'ap-models', class: 'ap-field', type: 'text', placeholder: 'model-a, model-b（逗号分隔，可选）' });
   const yamlBox = h('textarea', { id: 'ap-yaml', class: 'ap-yaml', readonly: true, rows: 10 });
 
+  nameInput.value = initial.name || '';
+  urlInput.value = initial.base_url || '';
+  envInput.value = initial.api_key_env || '';
+  modelsInput.value = (initial.models || []).join(', ');
+
   const genYaml = () => {
+    const mode = initial.mode === 'override' ? 'override' : 'custom';
     const key = (nameInput.value.trim() || 'myprovider').toLowerCase().replace(/[^a-z0-9_-]/g, '-');
     const models = modelsInput.value.split(',').map(s => s.trim()).filter(Boolean);
-    const lines = ['models:', '  custom_providers:', `    ${key}:`, '      implementation: openai_compat'];
-    lines.push('      base_url: ' + (urlInput.value.trim() || 'https://your-endpoint'));
-    if (envInput.value.trim()) lines.push('      api_key_env: ' + envInput.value.trim());
+    let lines;
+    if (mode === 'override') {
+      // 内置 provider 覆盖：models.providers.<key>
+      lines = ['models:', '  providers:', `    ${key}:`];
+      lines.push('      base_url: ' + (urlInput.value.trim() || 'https://your-endpoint'));
+      if (envInput.value.trim()) lines.push('      api_key_env: ' + envInput.value.trim());
+    } else {
+      // 自定义 provider：models.custom_providers.<key>
+      lines = ['models:', '  custom_providers:', `    ${key}:`, '      implementation: openai_compat'];
+      lines.push('      base_url: ' + (urlInput.value.trim() || 'https://your-endpoint'));
+      if (envInput.value.trim()) lines.push('      api_key_env: ' + envInput.value.trim());
+    }
     if (models.length) {
       lines.push('      suggested_models:');
       for (const m of models) lines.push(`        - ${m}`);
@@ -1551,37 +1678,86 @@ function openAddProviderModal() {
     yamlBox.value = lines.join('\n');
   };
   [nameInput, urlInput, envInput, modelsInput].forEach(el => el.addEventListener('input', genYaml));
+  genYaml();
+
+  return { nameInput, urlInput, envInput, modelsInput, yamlBox, genYaml };
+}
+
+function copyYaml(yamlBox) {
+  return async () => {
+    const text = yamlBox.value;
+    try { await navigator.clipboard.writeText(text); toast('success', '已复制', 'YAML 片段已写入剪贴板'); }
+    catch (e) {
+      yamlBox.focus(); yamlBox.select();
+      try { document.execCommand('copy'); toast('success', '已复制', 'YAML 片段已写入剪贴板'); }
+      catch (e2) { toast('error', '复制失败', '请手动选择文本复制'); }
+    }
+  };
+}
+
+function openAddProviderModal() {
+  const presets = [
+    ...BUILTIN_PROVIDERS.map(p => ({ key: p.key, label: p.label, base_url: p.base_url || '', api_key_env: p.api_key_env || '' })),
+    { key: '__custom', label: '空白自定义', base_url: '', api_key_env: '' },
+  ];
+  const sel = h('select', { id: 'ap-preset', class: 'ap-field' },
+    h('option', { value: '' }, '选择预设…'),
+    ...presets.map(p => h('option', { value: p.key }, p.label)));
+  const f = buildProviderFormFields({ mode: 'custom', name: '', base_url: '', api_key_env: '', models: [] });
+
   sel.addEventListener('change', () => {
     const p = presets.find(x => x.key === sel.value);
-    if (p && p.key !== '__custom') { nameInput.value = p.key; urlInput.value = p.base_url; envInput.value = p.api_key_env; }
-    else if (p && p.key === '__custom') { nameInput.value = ''; urlInput.value = ''; envInput.value = ''; }
-    genYaml();
+    if (p && p.key !== '__custom') { f.nameInput.value = p.key; f.urlInput.value = p.base_url; f.envInput.value = p.api_key_env; }
+    else if (p && p.key === '__custom') { f.nameInput.value = ''; f.urlInput.value = ''; f.envInput.value = ''; }
+    f.genYaml();
   });
-  genYaml();
 
   showModal(h('div', { class: 'ap-modal' },
     h('h3', { class: 'modal-title' }, '从预设添加供应商'),
     h('div', { class: 'ap-hint' }, '第一步：选择预设；第二步：确认名称/base_url/环境变量名；第三步：复制 YAML 片段。'),
     h('div', { class: 'ap-field-row' }, h('label', {}, '预设'), sel),
-    h('div', { class: 'ap-field-row' }, h('label', {}, 'Provider key'), nameInput),
-    h('div', { class: 'ap-field-row' }, h('label', {}, 'Base URL'), urlInput),
-    h('div', { class: 'ap-field-row' }, h('label', {}, 'API Key 环境变量名'), envInput),
-    h('div', { class: 'ap-field-row' }, h('label', {}, '建议模型（逗号分隔）'), modelsInput),
+    h('div', { class: 'ap-field-row' }, h('label', {}, 'Provider key'), f.nameInput),
+    h('div', { class: 'ap-field-row' }, h('label', {}, 'Base URL'), f.urlInput),
+    h('div', { class: 'ap-field-row' }, h('label', {}, 'API Key 环境变量名'), f.envInput),
+    h('div', { class: 'ap-field-row' }, h('label', {}, '建议模型（逗号分隔）'), f.modelsInput),
     h('div', { class: 'ap-field-row' },
       h('label', {}, 'agentcrew.yaml 片段（只读）'),
-      yamlBox,
+      f.yamlBox,
       h('div', { class: 'ap-warn' }, 'Studio 不直接修改 agentcrew.yaml，复制后请粘贴到项目根目录 agentcrew.yaml。')),
     h('div', { class: 'modal-actions' },
       h('button', { class: 'btn', onclick: closeModal }, '关闭'),
-      h('button', { class: 'btn btn-primary', onclick: async () => {
-        const text = yamlBox.value;
-        try { await navigator.clipboard.writeText(text); toast('success', '已复制', 'YAML 片段已写入剪贴板'); }
-        catch (e) {
-          yamlBox.focus(); yamlBox.select();
-          try { document.execCommand('copy'); toast('success', '已复制', 'YAML 片段已写入剪贴板'); }
-          catch (e2) { toast('error', '复制失败', '请手动选择文本复制'); }
-        }
-      } }, '一键复制'))));
+      h('button', { class: 'btn btn-primary', onclick: copyYaml(f.yamlBox) }, '一键复制'))));
+}
+
+/* 编辑现有 provider：内置 → models.providers.<name> 覆盖片段；自定义 → custom_providers 片段 */
+function openEditProviderModal(p) {
+  const builtin = !!p._builtin;
+  const f = buildProviderFormFields({
+    mode: builtin ? 'override' : 'custom',
+    name: p.name || '',
+    base_url: p.base_url || '',
+    api_key_env: p.api_key_env || '',
+    models: p.suggested_models || [],
+  });
+  // 内置 provider 的 key 不建议改（覆盖是按 key 匹配的）
+  if (builtin) f.nameInput.readOnly = true;
+
+  showModal(h('div', { class: 'ap-modal' },
+    h('h3', { class: 'modal-title' }, `编辑供应商：${p.label || p.name}`),
+    h('div', { class: 'ap-hint' }, builtin
+      ? '内置供应商：修改将生成 models.providers.<name> 覆盖片段（不可在 custom_providers 中重名）。'
+      : '自定义供应商：修改将生成 models.custom_providers.<name> 片段。'),
+    h('div', { class: 'ap-field-row' }, h('label', {}, 'Provider key' + (builtin ? '（内置，不可改）' : '')), f.nameInput),
+    h('div', { class: 'ap-field-row' }, h('label', {}, 'Base URL'), f.urlInput),
+    h('div', { class: 'ap-field-row' }, h('label', {}, 'API Key 环境变量名'), f.envInput),
+    h('div', { class: 'ap-field-row' }, h('label', {}, '建议模型（逗号分隔）'), f.modelsInput),
+    h('div', { class: 'ap-field-row' },
+      h('label', {}, 'agentcrew.yaml 片段（只读）'),
+      f.yamlBox,
+      h('div', { class: 'ap-warn' }, 'Studio 不直接修改 agentcrew.yaml，复制后请粘贴到项目根目录 agentcrew.yaml。')),
+    h('div', { class: 'modal-actions' },
+      h('button', { class: 'btn', onclick: closeModal }, '关闭'),
+      h('button', { class: 'btn btn-primary', onclick: copyYaml(f.yamlBox) }, '一键复制'))));
 }
 
 /* ============================================================
@@ -1907,24 +2083,76 @@ const ROLE_ORDER = ['project_manager','product_manager','architect','backend_dev
    内置供应商（对齐 agentcrew/models/config.py）
    引擎按 "<provider>:<model>" 解析模型别名
    ============================================================ */
+/* ============================================================
+   内置供应商（对齐 agentcrew/models/config.py 的 PROVIDER_PRESETS，共 27 个）
+   引擎按 "<provider>:<model>" 解析模型别名
+   字段：category / family / search_aliases / endpoint_candidates / api_key_url
+   ============================================================ */
+const PROV_CATEGORY_LABELS = {
+  aggregator: '聚合', national: '国内', international: '国际',
+  local: '本地', specialized: '专用',
+};
+
 const BUILTIN_PROVIDERS = [
-  { key:'openai',    label:'OpenAI',    base_url:'https://api.openai.com/v1',                       api_key_env:'OPENAI_API_KEY',    suggested_models:['gpt-4o','gpt-4o-mini','gpt-4-turbo','o1-preview','o1-mini'] },
-  { key:'anthropic', label:'Anthropic', base_url:'https://api.anthropic.com',                       api_key_env:'ANTHROPIC_API_KEY', suggested_models:['claude-3-5-sonnet-20241022','claude-3-opus-20240229','claude-3-haiku-20240307'] },
-  { key:'deepseek',  label:'DeepSeek',  base_url:'https://api.deepseek.com/v1',                     api_key_env:'DEEPSEEK_API_KEY',  suggested_models:['deepseek-chat','deepseek-coder','deepseek-reasoner'] },
-  { key:'doubao',    label:'豆包',       base_url:'https://ark.cn-beijing.volces.com/api/v3',        api_key_env:'ARK_API_KEY',       suggested_models:['doubao-pro-32k','doubao-lite-32k','doubao-1-5-pro-32k'] },
-  { key:'qwen',      label:'通义千问',   base_url:'https://dashscope.aliyuncs.com/compatible-mode/v1',api_key_env:'DASHSCOPE_API_KEY', suggested_models:['qwen-max','qwen-plus','qwen-turbo','qwen2.5-72b-instruct'] },
-  { key:'ernie',     label:'文心一言',   base_url:'https://qianfan.baidubce.com/v2',                  api_key_env:'QIANFAN_API_KEY',   suggested_models:['ernie-4.0','ernie-3.5','ernie-speed'] },
-  { key:'ollama',    label:'Ollama',    base_url:'http://localhost:11434/v1',                       api_key_env:'',                   suggested_models:['llama3.1','qwen2.5','mistral','gemma2'] },
-  { key:'mock',      label:'Mock',      base_url:null,                                                 api_key_env:'',                   suggested_models:['mock'] },
-  { key:'cli',       label:'CLI',       base_url:null,                                                 api_key_env:'',                   suggested_models:[] },
-];
-// 「从预设添加」用的额外预设（不加入核心 9 个内置供应商）
-const EXTRA_PRESETS = [
-  { key:'openrouter',  label:'OpenRouter',  base_url:'https://openrouter.ai/api/v1',      api_key_env:'OPENROUTER_API_KEY'  },
-  { key:'siliconflow', label:'SiliconFlow',  base_url:'https://api.siliconflow.cn/v1',    api_key_env:'SILICONFLOW_API_KEY' },
-  { key:'moonshot',    label:'Moonshot',     base_url:'https://api.moonshot.cn/v1',       api_key_env:'MOONSHOT_API_KEY'    },
-  { key:'zhipu',       label:'智谱 AI',      base_url:'https://open.bigmodel.cn/api/paas/v4', api_key_env:'ZHIPU_API_KEY'  },
-  { key:'groq',        label:'Groq',         base_url:'https://api.groq.com/openai/v1',   api_key_env:'GROQ_API_KEY'        },
+  // ── 核心 9 个 ──
+  { key:'openai',    label:'OpenAI',    base_url:'https://api.openai.com/v1',                       api_key_env:'OPENAI_API_KEY',    suggested_models:['gpt-4o','gpt-4o-mini','gpt-4-turbo','o1-preview','o1-mini'],
+    category:'international', family:'openai_compat', search_aliases:['gpt','open ai'], endpoint_candidates:null, api_key_url:'https://platform.openai.com/api-keys' },
+  { key:'anthropic', label:'Anthropic', base_url:'https://api.anthropic.com',                       api_key_env:'ANTHROPIC_API_KEY', suggested_models:['claude-3-5-sonnet-20241022','claude-3-opus-20240229','claude-3-haiku-20240307'],
+    category:'international', family:'anthropic', search_aliases:['claude'], endpoint_candidates:null, api_key_url:'https://console.anthropic.com/settings/keys' },
+  { key:'deepseek',  label:'DeepSeek',  base_url:'https://api.deepseek.com/v1',                     api_key_env:'DEEPSEEK_API_KEY',  suggested_models:['deepseek-chat','deepseek-coder','deepseek-reasoner'],
+    category:'national', family:'openai_compat', search_aliases:['ds','深度求索'], endpoint_candidates:null, api_key_url:'https://platform.deepseek.com/api_keys' },
+  { key:'doubao',    label:'豆包',       base_url:'https://ark.cn-beijing.volces.com/api/v3',        api_key_env:'ARK_API_KEY',       suggested_models:['doubao-pro-32k','doubao-lite-32k','doubao-1-5-pro-32k'],
+    category:'national', family:'openai_compat', search_aliases:['豆包','volcengine','火山'], endpoint_candidates:null, api_key_url:'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey' },
+  { key:'qwen',      label:'通义千问',   base_url:'https://dashscope.aliyuncs.com/compatible-mode/v1',api_key_env:'DASHSCOPE_API_KEY', suggested_models:['qwen-max','qwen-plus','qwen-turbo','qwen2.5-72b-instruct'],
+    category:'national', family:'openai_compat', search_aliases:['通义','千问','aliyun','阿里云'], endpoint_candidates:null, api_key_url:'https://dashscope.console.aliyun.com/apiKey' },
+  { key:'ernie',     label:'文心一言',   base_url:'https://qianfan.baidubce.com/v2',                  api_key_env:'QIANFAN_API_KEY',   suggested_models:['ernie-4.0','ernie-3.5','ernie-speed'],
+    category:'national', family:'openai_compat', search_aliases:['文心','百度','baidu'], endpoint_candidates:null, api_key_url:'https://console.bce.baidu.com/qianfan/ais/console/applicationConsole/application' },
+  { key:'ollama',    label:'Ollama',    base_url:'http://localhost:11434/v1',                       api_key_env:'',                   suggested_models:['llama3.1','qwen2.5','mistral','gemma2'],
+    category:'local', family:'openai_compat', search_aliases:['本地','local'], endpoint_candidates:null, api_key_url:null },
+  { key:'mock',      label:'Mock',      base_url:null,                                                 api_key_env:'',                   suggested_models:['mock'],
+    category:'specialized', family:'mock', search_aliases:[], endpoint_candidates:null, api_key_url:null },
+  { key:'cli',       label:'CLI',       base_url:null,                                                 api_key_env:'',                   suggested_models:[],
+    category:'specialized', family:'cli', search_aliases:[], endpoint_candidates:null, api_key_url:null },
+  // ── 额外预设 6 个（原 EXTRA_PRESETS + together）──
+  { key:'openrouter',  label:'OpenRouter',  base_url:'https://openrouter.ai/api/v1',                api_key_env:'OPENROUTER_API_KEY',  suggested_models:['openai/gpt-4o','anthropic/claude-3.5-sonnet','meta-llama/llama-3.3-70b-instruct'],
+    category:'aggregator', family:'openai_compat', search_aliases:['or','路由'], endpoint_candidates:null, api_key_url:'https://openrouter.ai/keys' },
+  { key:'siliconflow', label:'SiliconFlow',  base_url:'https://api.siliconflow.cn/v1',              api_key_env:'SILICONFLOW_API_KEY', suggested_models:['deepseek-ai/DeepSeek-V3','Qwen/Qwen2.5-72B-Instruct'],
+    category:'national', family:'openai_compat', search_aliases:['硅基流动','sf'], endpoint_candidates:null, api_key_url:'https://cloud.siliconflow.cn/account/ak' },
+  { key:'moonshot',    label:'Moonshot',     base_url:'https://api.moonshot.cn/v1',                 api_key_env:'MOONSHOT_API_KEY',    suggested_models:['kimi-k2-0905-preview','kimi-latest'],
+    category:'national', family:'openai_compat', search_aliases:['月之暗面','kimi'], endpoint_candidates:null, api_key_url:'https://platform.moonshot.cn/console/api-keys' },
+  { key:'zhipu',       label:'智谱 AI',      base_url:'https://open.bigmodel.cn/api/paas/v4',       api_key_env:'ZHIPU_API_KEY',       suggested_models:['glm-4-plus','glm-4-flash'],
+    category:'national', family:'openai_compat', search_aliases:['智谱','glm','chatglm'], endpoint_candidates:null, api_key_url:'https://open.bigmodel.cn/usercenter/apikeys' },
+  { key:'groq',        label:'Groq',         base_url:'https://api.groq.com/openai/v1',            api_key_env:'GROQ_API_KEY',        suggested_models:['llama-3.3-70b-versatile','llama-3.1-8b-instant'],
+    category:'aggregator', family:'openai_compat', search_aliases:['groqcloud'], endpoint_candidates:null, api_key_url:'https://console.groq.com/keys' },
+  { key:'together',    label:'Together AI',   base_url:'https://api.together.xyz/v1',               api_key_env:'TOGETHER_API_KEY',    suggested_models:['meta-llama/Llama-3.3-70B-Instruct-Turbo'],
+    category:'aggregator', family:'openai_compat', search_aliases:['together ai'], endpoint_candidates:null, api_key_url:'https://api.together.xyz/settings/api-keys' },
+  // ── V5 P1 新增 12 个：聚合 4 ──
+  { key:'fireworks',   label:'Fireworks',     base_url:'https://api.fireworks.ai/inference/v1',     api_key_env:'FIREWORKS_API_KEY',   suggested_models:['accounts/fireworks/models/llama-v3p1-70b-instruct'],
+    category:'aggregator', family:'openai_compat', search_aliases:['fireworks ai','烟花'], endpoint_candidates:null, api_key_url:'https://fireworks.ai/account/api-keys' },
+  { key:'deepinfra',   label:'DeepInfra',     base_url:'https://api.deepinfra.com/v1/openai',       api_key_env:'DEEPINFRA_API_KEY',   suggested_models:['meta-llama/Llama-3.1-70B-Instruct'],
+    category:'aggregator', family:'openai_compat', search_aliases:['deep infra'], endpoint_candidates:null, api_key_url:'https://deepinfra.com/dash/api_keys' },
+  { key:'replicate',   label:'Replicate',     base_url:'https://openai.replicate.com/v1',           api_key_env:'REPLICATE_API_TOKEN', suggested_models:['meta/meta-llama-3.1-70b-instruct'],
+    category:'aggregator', family:'openai_compat', search_aliases:['replicate','复制'], endpoint_candidates:null, api_key_url:'https://replicate.com/account/api-tokens' },
+  { key:'huggingface', label:'HuggingFace',    base_url:'https://router.huggingface.co/v1',           api_key_env:'HF_API_TOKEN',        suggested_models:['meta-llama/Llama-3.1-70B-Instruct'],
+    category:'aggregator', family:'openai_compat', search_aliases:['hf','hugging face','拥抱脸'], endpoint_candidates:null, api_key_url:'https://huggingface.co/settings/tokens' },
+  // ── V5 P1 新增：国内 5 ──
+  { key:'baichuan',    label:'百川',           base_url:'https://api.baichuan-ai.com/v1',             api_key_env:'BAICHUAN_API_KEY',    suggested_models:['Baichuan4-Turbo','Baichuan3-Turbo'],
+    category:'national', family:'openai_compat', search_aliases:['百川','baichuan'], endpoint_candidates:null, api_key_url:'https://platform.baichuan-ai.com/console/apikey' },
+  { key:'minimax',     label:'MiniMax',        base_url:'https://api.minimax.chat/v1',                 api_key_env:'MINIMAX_API_KEY',     suggested_models:['abab6.5s-chat','abab6.5-chat'],
+    category:'national', family:'openai_compat', search_aliases:['minimax','海螺'], endpoint_candidates:null, api_key_url:'https://platform.minimaxi.com/user-center/basic-information/interface-key' },
+  { key:'stepfun',     label:'阶跃星辰',       base_url:'https://api.stepfun.com/v1',                  api_key_env:'STEPFUN_API_KEY',    suggested_models:['step-1-8k','step-1-32k'],
+    category:'national', family:'openai_compat', search_aliases:['阶跃星辰','step'], endpoint_candidates:null, api_key_url:'https://platform.stepfun.com/interface/key' },
+  { key:'lingyi',      label:'零一万物',       base_url:'https://api.lingyiwanwu.com/v1',             api_key_env:'YI_API_KEY',         suggested_models:['yi-large','yi-medium'],
+    category:'national', family:'openai_compat', search_aliases:['零一万物','01ai','yi'], endpoint_candidates:null, api_key_url:'https://platform.lingyiwanwu.com/apikeys' },
+  { key:'xinghuo',     label:'讯飞星火',       base_url:'https://spark-api-open.xf-yun.com/v1',       api_key_env:'XINGHUO_API_KEY',     suggested_models:['4.0Ultra','generalv3.5'],
+    category:'national', family:'openai_compat', search_aliases:['讯飞','星火','xfyun'], endpoint_candidates:null, api_key_url:'https://console.xfyun.cn/services/cbm' },
+  // ── V5 P1 新增：国际 3 ──
+  { key:'gemini',      label:'Gemini',         base_url:'https://generativelanguage.googleapis.com/v1beta/openai', api_key_env:'GEMINI_API_KEY', suggested_models:['gemini-1.5-pro','gemini-1.5-flash'],
+    category:'international', family:'openai_compat', search_aliases:['gemini','google','谷歌','bard'], endpoint_candidates:null, api_key_url:'https://aistudio.google.com/app/apikey' },
+  { key:'mistral',     label:'Mistral',        base_url:'https://api.mistral.ai/v1',                  api_key_env:'MISTRAL_API_KEY',    suggested_models:['mistral-large-latest','mistral-small-latest'],
+    category:'international', family:'openai_compat', search_aliases:['mistral','米斯特拉尔'], endpoint_candidates:null, api_key_url:'https://console.mistral.ai/api-keys' },
+  { key:'cohere',      label:'Cohere',         base_url:'https://api.cohere.com/v2',                  api_key_env:'CO_API_KEY',          suggested_models:['command-r-plus','command-r'],
+    category:'international', family:'openai_compat', search_aliases:['cohere','coral'], endpoint_candidates:null, api_key_url:'https://dashboard.cohere.com/api-keys' },
 ];
 // 扁平模型别名列表（供设置页默认模型选择器使用）
 const MODEL_ALIASES = BUILTIN_PROVIDERS.flatMap(p => p.suggested_models.map(m => ({

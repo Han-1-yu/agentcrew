@@ -1039,6 +1039,48 @@ h1,h2,h3,h4 { margin: 0; font-weight: 600; letter-spacing: -0.1px; }
 }
 .ap-warn { font-size: 11px; color: var(--warn-text); margin-top: 4px; line-height: 1.5; }
 
+/* ===== 供应商页：搜索 / 分类工具条 ===== */
+.prov-toolbar {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin-bottom: 12px; padding: 10px 12px;
+  border: 1px solid var(--border-weak); border-radius: 10px; background: var(--bg-subtle);
+}
+.prov-search {
+  flex: 0 1 260px; padding: 6px 10px;
+  border: 1px solid var(--border-input); border-radius: 6px;
+  font-size: 12px; font-family: inherit; background: var(--bg-panel); color: var(--text);
+}
+.prov-search:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-focus); }
+.prov-cat-bar { display: flex; gap: 6px; flex-wrap: wrap; }
+.prov-cat-btn {
+  font-size: 11px; padding: 4px 10px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border-input); background: var(--bg-panel); color: var(--text-sub);
+  transition: background .12s ease, color .12s ease, border-color .12s ease;
+}
+.prov-cat-btn:hover { border-color: var(--accent-border); color: var(--accent-text); }
+.prov-cat-btn.active { background: var(--accent-bg-strong); color: var(--accent-text); border-color: var(--accent-border-soft); }
+.prov-count { font-size: 11px; color: var(--text-ter); margin-left: auto; }
+
+/* ===== 供应商卡片：分类徽标 / 获取Key / 端点 / 流式状态 ===== */
+.prov-cat {
+  font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: 500;
+}
+.prov-cat-aggregator   { background: var(--accent-bg-strong); color: var(--accent-text); }
+.prov-cat-national     { background: var(--success-bg-chip); color: var(--success-text); }
+.prov-cat-international{ background: var(--purple-bg, var(--ink-10)); color: var(--purple); }
+.prov-cat-local        { background: var(--warn-bg); color: var(--warn-text); }
+.prov-cat-specialized  { background: var(--ink-10); color: var(--text-sub); }
+.prov-getkey {
+  font-size: 10px; padding: 1px 6px; border-radius: 4px; cursor: pointer;
+  border: 1px solid var(--accent-border-soft); background: transparent; color: var(--accent-text);
+}
+.prov-getkey:hover { background: var(--accent-bg-strong); }
+.prov-ep { color: var(--text-ter); }
+.prov-stream { font-size: 10px; padding: 1px 6px; border-radius: 4px; font-weight: 500; }
+.prov-stream.ok { background: var(--success-bg-chip); color: var(--success-text); }
+.prov-stream.err { background: var(--error-bg-chip); color: var(--error-text); }
+.prov-edit-btn { /* btn-sm 基础样式 */ }
+
 /* ===== 响应式 ===== */
 @media (max-width: 1280px) {
   #detail-panel { width: 340px; }
