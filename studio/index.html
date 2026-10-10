@@ -4,14 +4,7 @@
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://localhost:* http://127.0.0.1:*;">
 <title>AgentCrew Studio</title>
-<script>
-// 首帧前同步预置主题，避免 applyTheme() 在异步 getSettings 后才执行导致的浅色闪烁(FOUC)
-// 渲染端在 applyTheme() 时把已解析的实际主题缓存到 localStorage；默认 dark（与 main.js defaultSettings 一致）
-try {
-  var __t = localStorage.getItem('agentcrew:theme');
-  document.documentElement.dataset.theme = (__t === 'light' || __t === 'dark') ? __t : 'dark';
-} catch (e) { document.documentElement.dataset.theme = 'dark'; }
-</script>
+<script src="boot-theme.js"></script>
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
