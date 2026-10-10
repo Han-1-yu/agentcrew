@@ -974,12 +974,24 @@ def _cmd_config_import(args: argparse.Namespace) -> int:
     # 密钥字段作为值出现 → 拒绝（密钥只从环境变量读）。
     secret_re = re.compile(
         r"key|token|secret|password|passwd|credential|auth", re.IGNORECASE)
+    # 环境变量名约定：字母/下划线开头，后跟字母/数字/下划线。用于识别
+    # 「把真实密钥误填进 api_key_env」——那样会被原样写进 agentcrew.yaml
+    # （明文落盘红线），且永不生效（os.environ.get(<密钥>) 必为空）。
+    env_name_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
     def _check_secrets(obj: Any, path: str = "") -> None:
         if isinstance(obj, dict):
             for k, v in obj.items():
-                # api_key_env 是合法字段（存环境变量名，不是密钥值），跳过。
                 if str(k) == "api_key_env":
+                    # api_key_env 存的是环境变量「名」。空串合法（免钥 provider）；
+                    # 非空则必须长得像环境变量名，否则判定为用户把密钥值误填到了
+                    # 这里——拒绝并说明，绝不回显这个疑似密钥的值。
+                    if (isinstance(v, str) and v.strip()
+                            and env_name_re.match(v) is None):
+                        raise ValueError(
+                            f"导入文件 {path}.{k} 的值不像环境变量名："
+                            "api_key_env 应填环境变量名（如 MYRELAY_KEY），"
+                            "不要直接粘贴密钥值；密钥请放进环境变量，绝不写进配置文件。")
                     continue
                 if secret_re.search(str(k)) and not isinstance(v, (dict, list)):
                     raise ValueError(
