@@ -905,6 +905,85 @@ h1,h2,h3,h4 { margin: 0; font-weight: 600; letter-spacing: -0.1px; }
 .banner.err { background: var(--error-bg); color: var(--error-text); border-color: var(--error-border-soft); }
 .banner.info { background: var(--accent-bg-soft); color: var(--accent-text); border-color: var(--accent-border-soft); }
 
+/* ===== F3：供应商管理页 ===== */
+.prov-head { margin-bottom: 12px; }
+.prov-list { display: flex; flex-direction: column; gap: 10px; padding-bottom: 20px; }
+.prov-skeleton { display: flex; flex-direction: column; gap: 10px; }
+.prov-skel-card { height: 72px; }
+
+.prov-card {
+  display: flex; align-items: flex-start; gap: 14px;
+  padding: 14px 16px; border: 1px solid var(--border);
+  border-radius: 10px; background: var(--bg-panel);
+}
+.prov-avatar {
+  flex: 0 0 36px; width: 36px; height: 36px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 600; font-size: 15px;
+  background: var(--accent-bg-strong); color: var(--accent);
+}
+.prov-main { flex: 1 1 auto; min-width: 0; }
+.prov-title-row { display: flex; align-items: center; gap: 8px; }
+.prov-name { font-size: 14px; font-weight: 600; color: var(--text); }
+.prov-badge {
+  font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: 500;
+}
+.prov-badge.builtin { background: var(--ink-10); color: var(--text-sub); }
+.prov-badge.custom { background: var(--accent-bg-strong); color: var(--accent-text); }
+.prov-dot {
+  width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-left: 4px;
+}
+.prov-dot.ok { background: var(--success); }
+.prov-dot.off { background: var(--ink-30); }
+.prov-dot.none { background: transparent; border: 1px solid var(--border-input); }
+.prov-url {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px; color: var(--text-sub); margin-top: 4px; word-break: break-all;
+}
+.prov-meta { display: flex; gap: 12px; margin-top: 6px; font-size: 11px; color: var(--text-ter); flex-wrap: wrap; }
+.prov-env { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.prov-env.none { color: var(--text-ter); }
+.prov-model-count { color: var(--text-ter); }
+.prov-test-result { margin-top: 6px; font-size: 11px; min-height: 14px; }
+.prov-test-ok { color: var(--success-text); font-weight: 500; }
+.prov-test-err { color: var(--error-text); }
+.prov-models { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.prov-models.hidden { display: none; }
+.prov-model-tag {
+  font-size: 10px; padding: 3px 8px; border-radius: 4px; cursor: pointer;
+  background: var(--ink-08); color: var(--text-sub); border: 1px solid transparent;
+  transition: background .12s ease, color .12s ease;
+}
+.prov-model-tag:hover { background: var(--accent-bg-strong); color: var(--accent-text); }
+.prov-model-tag.active { background: var(--accent-bg-strong); color: var(--accent-text); border-color: var(--accent-border-soft); }
+.prov-models-empty { font-size: 11px; color: var(--text-ter); }
+.prov-actions { display: flex; flex-direction: column; gap: 6px; flex: 0 0 auto; }
+.provider-test-btn.is-disabled { opacity: 0.4; cursor: not-allowed; }
+.prov-toggle-models { /* btn-sm 已提供基础样式 */ }
+
+.prov-empty { text-align: center; padding: 40px 20px; color: var(--text-sub); }
+.prov-empty h3 { font-size: 15px; color: var(--text); margin: 10px 0 6px; }
+.prov-empty p { font-size: 12px; margin-bottom: 14px; }
+
+/* 「从预设添加」弹窗 */
+.ap-modal { min-width: 480px; max-width: 640px; }
+.ap-hint { font-size: 12px; color: var(--text-sub); margin-bottom: 12px; line-height: 1.6; }
+.ap-field-row { margin-bottom: 10px; }
+.ap-field-row label { display: block; font-size: 12px; font-weight: 600; color: var(--text-sub); margin-bottom: 4px; }
+.ap-field {
+  width: 100%; padding: 6px 8px; border: 1px solid var(--border-input);
+  border-radius: 6px; font-size: 12px; font-family: inherit;
+  background: var(--bg-panel); color: var(--text);
+}
+.ap-field:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-focus); }
+.ap-yaml {
+  width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px; padding: 8px; border: 1px solid var(--border-input);
+  border-radius: 6px; background: var(--bg-inset); color: var(--text);
+  resize: vertical; box-sizing: border-box;
+}
+.ap-warn { font-size: 11px; color: var(--warn-text); margin-top: 4px; line-height: 1.5; }
+
 /* ===== 响应式 ===== */
 @media (max-width: 1280px) {
   #detail-panel { width: 340px; }

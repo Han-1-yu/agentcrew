@@ -1,6 +1,6 @@
 'use strict';
 // AgentCrew Studio E2E 自动化测试（electron . --e2e）
-// 适配当前 8 页侧边栏导航 UI，验证核心流程：启动→8页导航→任务详情→运行管理→成本分析→连接状态
+// 适配当前 9 页侧边栏导航 UI，验证核心流程：启动→9页导航→任务详情→运行管理→成本分析→连接状态→供应商管理
 // 只用 Electron 自带能力（executeJavaScript / capturePage），无额外依赖。
 
 const fs = require('fs');
@@ -45,8 +45,8 @@ function run(win) {
     check('1. 应用启动且侧边栏导航就绪', booted);
     await sleep(1500);
 
-    // ── 2. 8 页导航 ──
-    const pages = ['dashboard', 'tasks', 'dag', 'agents', 'gates', 'artifacts', 'events', 'settings'];
+    // ── 2. 9 页导航 ──
+    const pages = ['dashboard', 'tasks', 'dag', 'agents', 'gates', 'artifacts', 'events', 'providers', 'settings'];
     const pageResults = {};
     for (const page of pages) {
       await js(`document.querySelector('.nav-item[data-nav="${page}"]')?.click()`);
@@ -55,8 +55,11 @@ function run(win) {
       pageResults[page] = visible;
     }
     const allPagesOk = pages.every(p => pageResults[p]);
-    check('2. 8 页导航全部可切换且 active 状态正确', allPagesOk, JSON.stringify(pageResults));
-    await shot('01-8页导航验证');
+    check('2. 9 页导航全部可切换且 active 状态正确', allPagesOk, JSON.stringify(pageResults));
+    // F3 防回归：每个 nav-item 都有可见文字
+    const navTextOk = await js(`Array.from(document.querySelectorAll('.nav-item')).every(b => b.textContent.trim().length > 0)`);
+    check('2b. 侧边栏每个导航按钮含可见文字', !!navTextOk);
+    await shot('01-9页导航验证');
 
     // 回到 Dashboard
     await js(`document.querySelector('.nav-item[data-nav="dashboard"]')?.click()`);
@@ -105,9 +108,15 @@ function run(win) {
       auto: !!document.querySelector('#nr-auto'),
       demo: !!document.querySelector('#nr-demo'),
       project: !!document.querySelector('#nr-project'),
+      nrProvider: !!document.querySelector('#nr-provider'),
+      nrModel: !!document.querySelector('#nr-model'),
+      nrModelCustom: !!document.querySelector('#nr-model-custom'),
+      providerOptions: document.querySelectorAll('#nr-provider option').length,
+      modelOptions: document.querySelectorAll('#nr-model option').length,
     }))()`);
-    const modalOk = modalFields && modalFields.goal && modalFields.mock && modalFields.auto && modalFields.demo && modalFields.project;
-    check('6. 新建运行模态框包含目标/项目/Mock/自动/Demo 字段', modalOk, JSON.stringify(modalFields));
+    const modalOk = modalFields && modalFields.goal && modalFields.mock && modalFields.auto && modalFields.demo && modalFields.project
+      && modalFields.nrProvider && modalFields.nrModel && Number(modalFields.providerOptions) > 1;
+    check('6. 新建运行模态框包含目标/项目/Mock/自动/Demo/模型选择字段', modalOk, JSON.stringify(modalFields));
     await shot('05-新建运行模态框');
     // 关闭模态
     await js(`document.querySelector('#modal .modal-actions .btn')?.click()`);
@@ -178,6 +187,31 @@ function run(win) {
     check('13. 设置页面（Python/目录/模型/预算/API地址）', settingsOk, JSON.stringify(settingsFields));
     await shot('10-设置页面');
 
+    // ── 13b. F3 供应商管理页 ──
+    await js(`document.querySelector('.nav-item[data-nav="providers"]')?.click()`);
+    await sleep(1200); // 等待 keyStatus / 卡片渲染
+    const provActive = await js(`document.querySelector('.nav-item[data-nav="providers"]')?.classList.contains('active')`);
+    const provStats = await js(`(() => ({
+      cards: document.querySelectorAll('.prov-card').length,
+      testBtns: document.querySelectorAll('.provider-test-btn').length,
+      addBtn: !!document.querySelector('#prov-add-preset'),
+      badge: !!document.querySelector('#prov-source-badge'),
+    }))()`);
+    const provOk = provActive && provStats && Number(provStats.cards) >= 9
+      && Number(provStats.testBtns) >= 1 && provStats.addBtn;
+    check('13b. 供应商页（active + ≥9 卡片 + 测试按钮 + 添加按钮）', !!provOk,
+      `active=${provActive} ` + JSON.stringify(provStats));
+    await shot('11b-供应商页');
+    // 「从预设添加」弹窗可开合
+    await js(`document.querySelector('#prov-add-preset')?.click()`);
+    await sleep(400);
+    const addModalOpen = await js(`!!document.querySelector('#ap-preset')`);
+    await js(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`);
+    await sleep(300);
+    const addModalClosed = await js(`!document.querySelector('#ap-preset')`);
+    check('13c. 「从预设添加」弹窗可打开并 Esc 关闭', addModalOpen && addModalClosed,
+      `open=${addModalOpen} closed=${addModalClosed}`);
+
     // ── 14. 键盘快捷键 ──
     await js(`document.querySelector('.nav-item[data-nav="dashboard"]')?.click()`);
     await sleep(300);
@@ -185,7 +219,11 @@ function run(win) {
     await js(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '4' }))`);
     await sleep(300);
     const agentsActive = await js(`document.querySelector('.nav-item[data-nav="agents"]')?.classList.contains('active')`);
-    check('14. 数字键 1-8 快捷键切换页面', agentsActive, `按 4 后 Agents active=${agentsActive}`);
+    // 模拟按 '9' 切换到供应商页
+    await js(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '9' }))`);
+    await sleep(300);
+    const providersActive = await js(`document.querySelector('.nav-item[data-nav="providers"]')?.classList.contains('active')`);
+    check('14. 数字键 1-9 快捷键切换页面', agentsActive && providersActive, `按 4→Agents=${agentsActive}; 按 9→供应商=${providersActive}`);
 
     // ── 15. 计划审查页面 ──
     await js(`document.querySelector('.nav-item[data-nav="tasks"]')?.click()`);
@@ -221,6 +259,14 @@ function run(win) {
     const darkNow = await js('document.documentElement.dataset.theme');
     console.log('probe-16: 暗色主题 dataset.theme =', darkNow);
     await shot('12-暗色主题');
+
+    // ── 17. 供应商管理页 ──
+    await js(`document.querySelector('.nav-item[data-nav="providers"]')?.click()`);
+    await sleep(900); // 等卡片异步渲染（无后端时回落内置预设）
+    const provCards = await js('document.querySelectorAll(".provider-card, [data-provider]").length');
+    const hasAddBtn = await js(`[...document.querySelectorAll('button')].some(b => b.textContent.trim() === '从预设添加')`);
+    check('17. 供应商页渲染卡片并含「从预设添加」按钮', Number(provCards) >= 1 && !!hasAddBtn, `${provCards} 张卡片, 添加按钮=${hasAddBtn}`);
+    await shot('13-供应商页面');
 
     // ── 汇总 ──
     const allPass = checks.every((c) => c.pass);

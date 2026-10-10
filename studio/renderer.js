@@ -1253,155 +1253,215 @@ async function renderSettingsPage(container) {
 /* ============================================================
    供应商管理页
    ============================================================ */
-function renderProvidersPage(container) {
-  container.appendChild(h('div', { class: 'page-head' },
-    h('h2', {}, '供应商管理'),
-    h('div', { style: 'display:flex;gap:8px' },
-      h('button', { class: 'btn', onclick: () => openAddProviderModal() }, '从预设添加'),
-      h('button', { class: 'btn btn-primary', onclick: () => { container.innerHTML = ''; renderProvidersPage(container); } }, '刷新'))));
+async function renderProvidersPage(container) {
+  container.appendChild(h('div', { class: 'page-head prov-head' },
+    h('div', { style: 'display:flex;align-items:center;gap:10px' },
+      h('h2', {}, '供应商管理'),
+      h('span', { class: 'conn-indicator demo', id: 'prov-source-badge' }, '加载中…')),
+    h('button', { class: 'btn btn-primary', id: 'prov-add-preset', type: 'button' }, '从预设添加')));
 
-  const apiReady = !!(S.settings && S.settings.apiBaseUrl);
-  if (!apiReady) {
-    container.appendChild(h('div', { style: 'margin:10px 0;padding:10px 12px;border:1px solid rgba(255,159,10,.4);background:rgba(255,159,10,.08);border-radius:8px;font-size:12px;color:#FF9F0A;line-height:1.6' },
-      '未配置后端 API 地址，请到「设置」页填写后端 API 地址后使用实时健康检查与测速；当前展示内置预设的静态信息。'));
+  const listEl = h('div', { class: 'prov-list', id: 'prov-list' });
+  container.appendChild(listEl);
+
+  // 骨架屏
+  const skeleton = h('div', { class: 'prov-skeleton' });
+  for (let i = 0; i < 4; i++) skeleton.appendChild(h('div', { class: 'skeleton prov-skel-card' }));
+  listEl.appendChild(skeleton);
+
+  const badge = $('#prov-source-badge');
+  const testDebounce = new Map();
+
+  // 数据源三级降级：apiBaseUrl → 常量+keyStatus → demo
+  let providers = null;
+  let source = 'demo';
+  const base = (S.settings && S.settings.apiBaseUrl) || '';
+  if (base) {
+    try {
+      const data = await apiFetch('/providers', { timeoutMs: 5000 });
+      const list = Array.isArray(data) ? data : (data && data.providers) || [];
+      if (list.length) { providers = list; source = 'api'; }
+    } catch (e) { /* 回落常量 */ }
   }
+  if (!providers) {
+    providers = BUILTIN_PROVIDERS.map(p => ({
+      name: p.key, label: p.label, kind: 'builtin',
+      base_url: p.base_url, api_key_env: p.api_key_env || '',
+      suggested_models: p.suggested_models || [],
+    }));
+    source = base ? 'watch' : 'demo';
+  }
+  badge.className = 'conn-indicator ' + (source === 'api' ? 'live' : source === 'watch' ? 'watch' : 'demo');
+  badge.textContent = source === 'api' ? '后端 API' : source === 'watch' ? '文件监听' : '演示模式';
 
-  const list = h('div', { style: 'display:flex;flex-direction:column;gap:10px;margin-top:10px' });
-  container.appendChild(list);
-  list.appendChild(h('div', { style: 'font-size:12px;color:#8E8E93' }, '加载供应商列表…'));
-
-  // 离线兜底：内置预设映射为与后端一致的结构
-  const fallback = BUILTIN_PROVIDERS.map(p => ({
-    name: p.key, kind: 'builtin', implementation: p.key,
-    base_url: p.base_url || '', api_key_env: p.api_key_env || '',
-    key_configured: false, capabilities: {}, suggested_models: p.suggested_models || [], health: null,
+  // 内置/常量来源时，对每个有 api_key_env 的 provider 查询配置状态（只回布尔）
+  const enriched = await Promise.all(providers.map(async (p) => {
+    const envName = p.api_key_env || '';
+    let status = 'none';
+    if (envName && window.studio.providerKeyStatus) {
+      try {
+        const r = await window.studio.providerKeyStatus(envName);
+        status = r.configured ? 'configured' : 'missing';
+      } catch { status = 'missing'; }
+    } else if (p.key_configured != null) {
+      status = p.key_configured ? 'configured' : 'missing';
+    }
+    return { ...p, _status: status, _builtin: p.kind !== 'custom' };
   }));
 
-  (async () => {
-    let providers = fallback;
-    if (apiReady) {
-      try {
-        const data = await apiFetch('/providers');
-        if (data && Array.isArray(data.providers) && data.providers.length) providers = data.providers;
-      } catch (e) { console.log('[apiFetch] /providers fallback:', e.message); }
-    }
-    list.innerHTML = '';
-    providers.forEach(p => list.appendChild(renderProviderCard(p)));
-  })();
+  listEl.innerHTML = '';
+  if (!enriched.length) {
+    listEl.appendChild(h('div', { class: 'prov-empty' },
+      h('h3', {}, '无法加载供应商列表'),
+      h('p', {}, '后端 API 不可达，且本地常量不可用。'),
+      h('button', { class: 'btn btn-primary', onclick: () => switchNav('settings') }, '到设置页配置后端地址')));
+    return;
+  }
+  for (const p of enriched) listEl.appendChild(buildProviderCard(p, testDebounce));
+  $('#prov-add-preset').addEventListener('click', openAddProviderModal);
 }
 
-function renderProviderCard(p) {
-  const health = p.health || null;
-  const status = health && health.status;
-  const dotColor = status === 'healthy' ? '#34C759' : (status === 'degraded' ? '#FF9F0A' : '#8E8E93');
-  const cap = p.capabilities || {};
-  const capText = ['json_schema', 'json_object', 'tools'].map(k => `${k}:${cap[k] ? '✓' : '✗'}`).join('  ');
+function buildProviderCard(p, testDebounce) {
+  const initial = (p.label || p.name || p.key || '?').trim().charAt(0).toUpperCase();
+  const needsHttp = !!p.base_url;
+  const models = p.suggested_models || [];
 
-  const card = h('div', { class: 'provider-card', 'data-provider': p.name,
-    style: 'border:1px solid rgba(60,60,67,.18);border-radius:10px;padding:14px 16px;background:#fff' });
+  const statusDot = p._status === 'configured'
+    ? h('span', { class: 'prov-dot ok', title: '已配置密钥' })
+    : p._status === 'missing'
+      ? h('span', { class: 'prov-dot off', title: '未检测到环境变量 ' + (p.api_key_env || '') })
+      : h('span', { class: 'prov-dot none', title: '无需密钥' });
 
-  card.appendChild(h('div', { style: 'display:flex;align-items:center;gap:8px' },
-    h('div', { style: 'font-size:15px;font-weight:600' }, p.name),
-    h('span', { style: `font-size:10px;padding:2px 6px;border-radius:4px;${p.kind === 'custom' ? 'background:rgba(0,122,255,.12);color:#007AFF' : 'background:rgba(142,142,147,.15);color:#6E6E73'}` }, p.kind === 'custom' ? '自定义' : '内置'),
-    h('span', { style: 'margin-left:auto;display:flex;align-items:center;gap:6px;font-size:11px;color:#8E8E93' },
-      h('i', { style: `width:8px;height:8px;border-radius:50%;background:${dotColor};display:inline-block` }),
-      status ? `${status}${health.latency_ms != null ? ` · ${health.latency_ms}ms` : ''}` : '未知')));
+  const resultBox = h('div', { class: 'prov-test-result' });
 
-  if (p.base_url) card.appendChild(h('div', { style: 'font-family:monospace;font-size:11px;color:#6E6E73;margin-top:6px;word-break:break-all' }, p.base_url));
+  const testBtn = h('button', {
+    class: 'btn btn-sm provider-test-btn' + (needsHttp ? '' : ' is-disabled'),
+    type: 'button', disabled: !needsHttp,
+    title: needsHttp ? '测试连通性（主进程直连，10s 超时）' : '该 provider 无 HTTP 端点（mock/cli）',
+    onclick: async () => {
+      const now = Date.now();
+      if (now - (testDebounce.get(p.name) || 0) < 1500) return;
+      testDebounce.set(p.name, now);
+      testBtn.disabled = true;
+      const orig = testBtn.textContent;
+      testBtn.textContent = '测试中…';
+      resultBox.innerHTML = '';
+      try {
+        const r = await window.studio.providerTest({ base_url: p.base_url });
+        resultBox.appendChild(h('span', { class: 'prov-test-' + (r.ok ? 'ok' : 'err') },
+          r.ok ? `${r.latency_ms}ms` : (r.error || `HTTP ${r.status}`)));
+      } catch (e) {
+        resultBox.appendChild(h('span', { class: 'prov-test-err' }, String(e && e.message || e)));
+      } finally {
+        testBtn.disabled = !needsHttp;
+        testBtn.textContent = orig;
+      }
+    },
+  }, '测试');
 
-  card.appendChild(h('div', { style: 'font-size:11px;color:#6E6E73;margin-top:4px' },
-    'Key 环境变量：', h('span', { style: 'font-family:monospace' }, p.api_key_env || '（无）'),
-    p.api_key_env ? (p.key_configured
-      ? h('span', { style: 'color:#34C759;margin-left:6px' }, '✓ 已配置')
-      : h('span', { style: 'color:#8E8E93;margin-left:6px' }, '未配置')) : null));
-
-  card.appendChild(h('div', { style: 'font-size:11px;color:#8E8E93;margin-top:4px;font-family:monospace' }, capText));
-
-  const modelsBox = h('div', { style: 'display:flex;flex-wrap:wrap;gap:4px;margin-top:8px' });
-  (p.suggested_models || []).slice(0, 10).forEach(m => modelsBox.appendChild(h('span', { style: 'font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(142,142,147,.12);color:#6E6E73' }, m)));
-  card.appendChild(modelsBox);
-
-  const testBtn = h('button', { class: 'btn btn-sm', style: 'margin-top:10px', onclick: async () => {
-    testBtn.disabled = true; const old = testBtn.textContent; testBtn.textContent = '测试中…';
-    let resultBox = card.querySelector('.prov-test-result');
-    if (!resultBox) { resultBox = h('div', { class: 'prov-test-result', style: 'font-size:11px;margin-top:6px' }); card.appendChild(resultBox); }
-    try {
-      const r = await apiFetch(`/providers/${encodeURIComponent(p.name)}/test`, { method: 'POST' });
-      resultBox.textContent = r.ok ? `✓ 连接正常，延迟 ${r.latency_ms}ms` : `✗ 失败：${(r.error && r.error.message) || '未知错误'}`;
-      resultBox.style.color = r.ok ? '#34C759' : '#FF3B30';
-    } catch (e) {
-      resultBox.textContent = `✗ 测试失败：${e.message}（可能未配置后端 API）`;
-      resultBox.style.color = '#FF3B30';
-    }
-    testBtn.disabled = false; testBtn.textContent = old;
-  } }, '测试');
-
-  const pullBtn = h('button', { class: 'btn btn-sm', style: 'margin-top:10px;margin-left:6px', onclick: async () => {
-    pullBtn.disabled = true; const old = pullBtn.textContent; pullBtn.textContent = '拉取中…';
-    try {
-      const data = await apiFetch(`/providers/${encodeURIComponent(p.name)}/models`);
-      const models = (data && data.models) || [];
-      modelsBox.innerHTML = '';
-      models.forEach(m => {
-        const id = typeof m === 'string' ? m : (m.id || m.name || '');
-        if (id) modelsBox.appendChild(h('span', { style: 'font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(0,122,255,.12);color:#007AFF' }, id));
+  const modelsWrap = h('div', { class: 'prov-models hidden' });
+  if (models.length) {
+    for (const m of models) {
+      const alias = `${p.name}:${m}`;
+      const tag = h('span', {
+        class: 'prov-model-tag' + ((S.settings && S.settings.defaultModel === alias) ? ' active' : ''),
+        title: '点击设为默认模型',
+      }, m);
+      tag.addEventListener('click', async () => {
+        if (!S.settings) S.settings = {};
+        S.settings.defaultModel = alias;
+        try { await window.studio.setSettings({ defaultModel: alias }); toast('success', '已设为默认模型', alias); }
+        catch (e) { toast('error', '保存失败', String(e.message || e)); }
       });
-      if (!models.length) modelsBox.appendChild(h('span', { style: 'font-size:11px;color:#8E8E93' }, '无模型'));
-    } catch (e) { console.log('[apiFetch] pull models:', e.message); toast('warning', '拉取失败', '后端不可用，显示内置预设'); }
-    pullBtn.disabled = false; pullBtn.textContent = old;
-  } }, '拉取模型');
+      modelsWrap.appendChild(tag);
+    }
+  } else {
+    modelsWrap.appendChild(h('span', { class: 'prov-models-empty' }, '该 provider 无可建议模型'));
+  }
 
-  card.appendChild(h('div', {}, testBtn, pullBtn));
-  return card;
+  const toggleBtn = h('button', {
+    class: 'btn btn-sm prov-toggle-models', type: 'button',
+    onclick: () => {
+      modelsWrap.classList.toggle('hidden');
+      toggleBtn.textContent = modelsWrap.classList.contains('hidden') ? '模型' : '收起';
+    },
+  }, '模型');
+
+  return h('div', { class: 'prov-card', 'data-provider': p.name },
+    h('div', { class: 'prov-avatar' }, initial),
+    h('div', { class: 'prov-main' },
+      h('div', { class: 'prov-title-row' },
+        h('span', { class: 'prov-name' }, p.label || p.name),
+        h('span', { class: 'prov-badge' + (p._builtin ? ' builtin' : ' custom') }, p._builtin ? '内置' : '自定义'),
+        statusDot),
+      h('div', { class: 'prov-url' }, p.base_url || '（无 HTTP 端点）'),
+      h('div', { class: 'prov-meta' },
+        p.api_key_env
+          ? h('span', { class: 'prov-env', title: '环境变量名（真实 Key 请写入 .env）' }, '密钥：' + p.api_key_env)
+          : h('span', { class: 'prov-env none' }, '无需密钥'),
+        h('span', { class: 'prov-model-count' }, `${models.length} 个建议模型`)),
+      resultBox,
+      modelsWrap),
+    h('div', { class: 'prov-actions' }, testBtn, toggleBtn));
 }
 
 function openAddProviderModal() {
   const presets = [
-    ...BUILTIN_PROVIDERS.map(p => ({ key: p.key, label: p.label, base_url: p.base_url || '', api_key_env: p.api_key_env || '' })),
     ...EXTRA_PRESETS.map(p => ({ key: p.key, label: p.label, base_url: p.base_url, api_key_env: p.api_key_env })),
+    { key: '__custom', label: '空白自定义', base_url: '', api_key_env: '' },
   ];
-  const sel = h('select', { id: 'ap-preset', style: 'width:100%;padding:6px 8px;border:1px solid rgba(60,60,67,.18);border-radius:6px;font-size:12px;font-family:inherit;background:#fff' },
-    ...presets.map(p => h('option', { value: p.key }, `${p.label}（${p.base_url || '无 base_url'}）`)));
-  const baseInput = h('input', { id: 'ap-base', type: 'text', style: 'width:100%;padding:6px 8px;border:1px solid rgba(60,60,67,.18);border-radius:6px;font-size:12px;font-family:inherit', placeholder: 'https://...' });
-  const envInput = h('input', { id: 'ap-env', type: 'text', style: 'width:100%;padding:6px 8px;border:1px solid rgba(60,60,67,.18);border-radius:6px;font-size:12px;font-family:inherit', placeholder: '例如 OPENAI_API_KEY' });
-  const yamlBox = h('pre', { id: 'ap-yaml', style: 'margin-top:10px;padding:10px;background:rgba(142,142,147,.1);border-radius:6px;font-size:11px;overflow:auto;white-space:pre-wrap;word-break:break-all' });
+  const sel = h('select', { id: 'ap-preset', class: 'ap-field' },
+    h('option', { value: '' }, '选择预设…'),
+    ...presets.map(p => h('option', { value: p.key }, p.label)));
+  const nameInput = h('input', { id: 'ap-name', class: 'ap-field', type: 'text', placeholder: '如 my-relay（小写英文/数字/-）' });
+  const urlInput = h('input', { id: 'ap-url', class: 'ap-field', type: 'text', placeholder: 'https://…' });
+  const envInput = h('input', { id: 'ap-env', class: 'ap-field', type: 'text', placeholder: '环境变量名，如 MYRELAY_KEY；真实 Key 请写入 .env 或系统环境变量' });
+  const modelsInput = h('input', { id: 'ap-models', class: 'ap-field', type: 'text', placeholder: 'model-a, model-b（逗号分隔，可选）' });
+  const yamlBox = h('textarea', { id: 'ap-yaml', class: 'ap-yaml', readonly: true, rows: 10 });
 
   const genYaml = () => {
-    const key = sel.value;
-    const base = baseInput.value.trim();
-    const env = envInput.value.trim();
-    yamlBox.textContent =
-`models:
-  custom_providers:
-    - name: ${key}
-      kind: custom
-      base_url: ${base || '""'}
-      api_key_env: ${env || '""'}
-`;
+    const key = (nameInput.value.trim() || 'myprovider').toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+    const models = modelsInput.value.split(',').map(s => s.trim()).filter(Boolean);
+    const lines = ['models:', '  custom_providers:', `    ${key}:`, '      implementation: openai_compat'];
+    lines.push('      base_url: ' + (urlInput.value.trim() || 'https://your-endpoint'));
+    if (envInput.value.trim()) lines.push('      api_key_env: ' + envInput.value.trim());
+    if (models.length) {
+      lines.push('      suggested_models:');
+      for (const m of models) lines.push(`        - ${m}`);
+    }
+    yamlBox.value = lines.join('\n');
   };
+  [nameInput, urlInput, envInput, modelsInput].forEach(el => el.addEventListener('input', genYaml));
   sel.addEventListener('change', () => {
     const p = presets.find(x => x.key === sel.value);
-    if (p) { baseInput.value = p.base_url; envInput.value = p.api_key_env; }
+    if (p && p.key !== '__custom') { nameInput.value = p.key; urlInput.value = p.base_url; envInput.value = p.api_key_env; }
+    else if (p && p.key === '__custom') { nameInput.value = ''; urlInput.value = ''; envInput.value = ''; }
     genYaml();
   });
-  baseInput.addEventListener('input', genYaml);
-  envInput.addEventListener('input', genYaml);
-  const first = presets[0]; if (first) { baseInput.value = first.base_url; envInput.value = first.api_key_env; }
   genYaml();
 
-  showModal(h('div', {},
+  showModal(h('div', { class: 'ap-modal' },
     h('h3', { class: 'modal-title' }, '从预设添加供应商'),
-    h('div', { style: 'font-size:12px;color:#6E6E73;margin-bottom:10px;line-height:1.6' },
-      '第一步：选择预设；第二步：确认 base_url 与环境变量名；第三步：复制 YAML 片段。'),
-    h('div', { style: 'margin-bottom:8px' }, h('label', { style: 'font-size:12px;color:#6E6E73;display:block;margin-bottom:4px' }, '预设'), sel),
-    h('div', { style: 'margin-bottom:8px' }, h('label', { style: 'font-size:12px;color:#6E6E73;display:block;margin-bottom:4px' }, 'Base URL'), baseInput),
-    h('div', { style: 'margin-bottom:8px' }, h('label', { style: 'font-size:12px;color:#6E6E73;display:block;margin-bottom:4px' }, 'API Key 环境变量名'), envInput),
-    h('div', { style: 'font-size:11px;color:#FF9F0A;margin:6px 0;line-height:1.5' },
-      '提示：请把真实 Key 写进 .env 或系统环境变量，此处只存环境变量名。Studio 不直接修改 agentcrew.yaml，请将以下片段粘贴到 agentcrew.yaml 的 models: 下。'),
-    yamlBox,
-    h('div', { class: 'modal-actions', style: 'margin-top:12px' },
-      h('button', { class: 'btn', onclick: async () => { try { await navigator.clipboard.writeText(yamlBox.textContent); toast('success', '已复制', 'YAML 片段已写入剪贴板'); } catch (e) { toast('error', '复制失败', String(e.message || e)); } } }, '一键复制'),
-      h('button', { class: 'btn btn-primary', onclick: closeModal }, '完成'))));
+    h('div', { class: 'ap-hint' }, '第一步：选择预设；第二步：确认名称/base_url/环境变量名；第三步：复制 YAML 片段。'),
+    h('div', { class: 'ap-field-row' }, h('label', {}, '预设'), sel),
+    h('div', { class: 'ap-field-row' }, h('label', {}, 'Provider key'), nameInput),
+    h('div', { class: 'ap-field-row' }, h('label', {}, 'Base URL'), urlInput),
+    h('div', { class: 'ap-field-row' }, h('label', {}, 'API Key 环境变量名'), envInput),
+    h('div', { class: 'ap-field-row' }, h('label', {}, '建议模型（逗号分隔）'), modelsInput),
+    h('div', { class: 'ap-field-row' },
+      h('label', {}, 'agentcrew.yaml 片段（只读）'),
+      yamlBox,
+      h('div', { class: 'ap-warn' }, 'Studio 不直接修改 agentcrew.yaml，复制后请粘贴到项目根目录 agentcrew.yaml。')),
+    h('div', { class: 'modal-actions' },
+      h('button', { class: 'btn', onclick: closeModal }, '关闭'),
+      h('button', { class: 'btn btn-primary', onclick: async () => {
+        const text = yamlBox.value;
+        try { await navigator.clipboard.writeText(text); toast('success', '已复制', 'YAML 片段已写入剪贴板'); }
+        catch (e) {
+          yamlBox.focus(); yamlBox.select();
+          try { document.execCommand('copy'); toast('success', '已复制', 'YAML 片段已写入剪贴板'); }
+          catch (e2) { toast('error', '复制失败', '请手动选择文本复制'); }
+        }
+      } }, '一键复制'))));
 }
 
 /* ============================================================
@@ -2518,7 +2578,7 @@ async function boot(){
     if((e.metaKey||e.ctrlKey)&&e.key==='n'){ e.preventDefault(); openNewRunModal(); return; }
     // 数字键 1-9：切换导航
     if(!e.metaKey&&!e.ctrlKey&&!e.altKey&&/^[1-9]$/.test(e.key)){
-      const pages=['dashboard','tasks','dag','agents','gates','artifacts','events','providers','settings'];
+      const pages=['dashboard','tasks','dag','agents','gates','artifacts','events','settings','providers'];
       const idx=parseInt(e.key)-1;
       if(pages[idx]){ switchNav(pages[idx]); }
     }

@@ -3,7 +3,7 @@
 // 职责：窗口/设置/Python 探测/run 扫描与读取/CLI 子进程管理/ledger 偏移轮询/IPC。
 // 只读后端产物文件与调用 CLI，不依赖 agentcrew/ 内部实现。
 
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu, nativeTheme } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, nativeTheme, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn, spawnSync } = require('child_process');
@@ -47,6 +47,9 @@ function defaultSettings() {
     defaultMock: false,  // 默认真实模式：mock 产物是固定夹具，与目标无关
     defaultAuto: true,
     apiBaseUrl: '',  // P3：后端 API 地址，设置后用 SSE 替代文件 watch
+    defaultModel: '',   // F2：默认模型别名 "<provider>:<model>"
+    maxCostUsd: 0,     // F2：默认预算上限 USD，>0 时自动传给 CLI
+    recentGoals: [],   // F4：最近目标历史（最多 5 条）
   };
 }
 
@@ -563,8 +566,9 @@ function registerIpc() {
     if (p.mock) args.push('--mock');
     if (p.auto) args.push('--auto');
     // B1：模型选择 —— 弹窗显式选择优先，否则回落设置页默认模型（形如 openai:gpt-4o）
+    // Mock 模式下不调用真实模型，--model 不参与 CLI 参数
     const chosenModel = (p.model && String(p.model).trim()) || (settings.defaultModel && String(settings.defaultModel).trim());
-    if (chosenModel) args.push('--model', chosenModel);
+    if (chosenModel && !p.mock) args.push('--model', chosenModel);
     // P0-3：成本预算硬上限 —— 弹窗显式优先，否则回落设置页 maxCostUsd
     const chosenMaxCost = (p.maxCost && Number(p.maxCost) > 0) ? Number(p.maxCost)
       : (settings.maxCostUsd && Number(settings.maxCostUsd) > 0 ? Number(settings.maxCostUsd) : 0);
@@ -573,6 +577,16 @@ function registerIpc() {
     args.push('--no-live', '--output-dir', outputDir);
     const r = spawnCli('run', args, outputDir, p.env || null);
     if (r.error) throw new Error(r.error);
+    // F4：记录最近目标（去重、最多 5 条、非 demo）
+    if (!p.demo && p.goal && String(p.goal).trim()) {
+      try {
+        const goal = String(p.goal).trim();
+        const list = (Array.isArray(settings.recentGoals) ? settings.recentGoals : []).filter(g => g !== goal);
+        list.unshift(goal);
+        if (list.length > 5) list.length = 5;
+        saveSettings({ recentGoals: list });
+      } catch { /* 非致命 */ }
+    }
     return { key: r.key };
   });
 
@@ -692,6 +706,40 @@ function registerIpc() {
     writeJsonAtomic(runFile, r.data);
     return { ok: true, layer, action };
   });
+
+  // ---------- F3：供应商管理 ----------
+  // 只读环境变量是否存在，绝不返回值本身
+  ipcMain.handle('provider:keyStatus', (_e, envName) => {
+    const name = String(envName || '').trim();
+    if (!name) return { configured: false, note: '无需密钥' };
+    const v = process.env[name];
+    return { configured: !!(v && String(v).trim()) };
+  });
+
+  // 用 Electron net.fetch 测试 provider 连通性（主进程天然绕开渲染进程 CORS）
+  ipcMain.handle('provider:test', async (_e, opts) => {
+    const o = opts || {};
+    const base_url = o.base_url == null ? null : String(o.base_url);
+    if (!base_url) return { ok: false, latency_ms: 0, status: 0, error: '该 provider 无 HTTP 端点（mock/cli）' };
+    const models_path = o.models_path ? String(o.models_path) : '/models';
+    const url = base_url.replace(/\/+$/, '') + (models_path.startsWith('/') ? models_path : '/' + models_path);
+    const ac = new AbortController();
+    const timer = setTimeout(() => { try { ac.abort(); } catch {} }, 10000);
+    const t0 = Date.now();
+    try {
+      const res = await net.fetch(url, { method: 'GET', signal: ac.signal, redirect: 'follow' });
+      return { ok: res.ok, latency_ms: Date.now() - t0, status: res.status, error: res.ok ? null : `HTTP ${res.status}` };
+    } catch (e) {
+      const msg = String(e && e.message || e);
+      const aborted = /abort/i.test(msg);
+      return { ok: false, latency_ms: Date.now() - t0, status: 0, error: aborted ? '连接超时（10s）' : msg };
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+
+  // F4：最近目标列表（也可通过 settings:get 读取）
+  ipcMain.handle('goals:recent', () => (Array.isArray(settings.recentGoals) ? settings.recentGoals : []));
 }
 
 // ---------- 窗口 ----------

@@ -34,6 +34,11 @@ contextBridge.exposeInMainWorld('studio', {
   switchModel: (runDir, alias) => invoke('model:switch', { runDir, alias }),
   taskAction: (runDir, taskId, action) => invoke('task:action', { runDir, taskId, action }),
   gateAction: (runDir, layer, action) => invoke('gate:action', { runDir, layer, action }),
+  // F3：供应商管理（只回布尔/连通性，不回传 Key 值）
+  providerKeyStatus: (envName) => invoke('provider:keyStatus', envName),
+  providerTest: (opts) => invoke('provider:test', opts),
+  // F4：最近目标
+  recentGoals: () => invoke('goals:recent'),
   // 主进程推送
   on: (channel, cb) => {
     const wrapped = (_e, payload) => { try { cb(payload); } catch (err) { console.error('回调异常', channel, err); } };
