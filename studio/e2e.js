@@ -117,6 +117,18 @@ function run(win) {
     const modalOk = modalFields && modalFields.goal && modalFields.mock && modalFields.auto && modalFields.demo && modalFields.project
       && modalFields.nrProvider && modalFields.nrModel && Number(modalFields.providerOptions) > 1;
     check('6. 新建运行模态框包含目标/项目/Mock/自动/Demo/模型选择字段', modalOk, JSON.stringify(modalFields));
+    // 6b. Mock 勾选置灰模型选择区（--mock 时别名不参与 CLI 参数）
+    const mockToggle = await js(`(() => {
+      const m = document.querySelector('#nr-mock'); if (!m) return null;
+      m.checked = true; m.dispatchEvent(new Event('change'));
+      const prov = document.querySelector('#nr-provider');
+      const area = document.querySelector('#nr-model-area');
+      return { disabled: prov ? prov.disabled : null, opacity: area ? area.style.opacity : null };
+    })()`);
+    check('6b. 勾选Mock后模型下拉置灰', !!(mockToggle && mockToggle.disabled === true && mockToggle.opacity === '0.45'),
+      JSON.stringify(mockToggle));
+    // 还原 mock 勾选，便于后续流程
+    await js(`(() => { const m = document.querySelector('#nr-mock'); if (m) { m.checked = false; m.dispatchEvent(new Event('change')); } })()`);
     await shot('05-新建运行模态框');
     // 关闭模态
     await js(`document.querySelector('#modal .modal-actions .btn')?.click()`);
@@ -260,6 +272,30 @@ function run(win) {
     const darkNow = await js('document.documentElement.dataset.theme');
     console.log('probe-16: 暗色主题 dataset.theme =', darkNow);
     await shot('12-暗色主题');
+
+    // ── 16b. FE-001 回归：暗色下 DAG 节点主标题可读（fill 非近黑）──
+    await js(`document.querySelector('.nav-item[data-nav="dashboard"]')?.click()`);
+    await sleep(700);
+    const dagTitle = await js(`(() => {
+      const t = document.querySelector('.dag-node text.node-title') || document.querySelector('.dag-node text');
+      if (!t) return null;
+      const cs = getComputedStyle(t);
+      const mm = /rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/.exec(cs.fill || '');
+      if (!mm) return { fill: String(cs.fill), ok: false };
+      const lum = (Number(mm[1]) + Number(mm[2]) + Number(mm[3])) / 3;
+      return { fill: cs.fill, luminance: lum, ok: lum > 100 };
+    })()`);
+    check('16b. 暗色下DAG节点主标题可读(fill亮度>100, 防FE-001回归)', !!(dagTitle && dagTitle.ok),
+      JSON.stringify(dagTitle));
+    // 节点框在暗色下不应是纯白突兀卡片（与 --status-*-bg 一致）
+    const nodeBox = await js(`(() => {
+      const r = document.querySelector('.dag-node rect.node-box');
+      if (!r) return null;
+      const cs = getComputedStyle(r);
+      return { fill: cs.fill };
+    })()`);
+    check('16c. DAG节点框fill已主题化(非写死#FFFFFF)', !!(nodeBox && !/rgb\(255, ?255, ?255\)/.test(nodeBox.fill)),
+      JSON.stringify(nodeBox));
 
     // ── 17. 供应商管理页 ──
     await js(`document.querySelector('.nav-item[data-nav="providers"]')?.click()`);
