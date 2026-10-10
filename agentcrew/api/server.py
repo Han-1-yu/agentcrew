@@ -377,9 +377,11 @@ class ApiServer:
             return
         parsed = urlsplit(path)
         segments = [unquote(s) for s in parsed.path.split("/") if s]
-        # A4：POST /providers/{name}/test
+        # A4：POST /providers/{name}/test（V5 P2：支持 ?mode=stream 流式测速）
         if len(segments) == 3 and segments[0] == "providers" and segments[2] == "test":
-            await self._provider_test(segments[1], writer)
+            query = parse_qs(parsed.query)
+            mode = query.get("mode", ["completion"])[0]
+            await self._provider_test(segments[1], writer, mode=mode)
             return
         if len(segments) == 3 and segments[0] == "runs":
             run_id, action = segments[1], segments[2]
@@ -810,6 +812,23 @@ class ApiServer:
                     "capabilities": preset.capabilities.model_dump(),
                     "suggested_models": list(preset.suggested_models),
                     "health": health,
+                    # ── V5 P1：新增元数据字段（向后兼容，仅增字段）─────────
+                    "category": preset.category,
+                    "family": preset.family,
+                    "search_aliases": list(preset.search_aliases),
+                    "endpoint_candidates": (
+                        list(preset.endpoint_candidates)
+                        if preset.endpoint_candidates is not None else None
+                    ),
+                    "api_key_url": preset.api_key_url,
+                    # ── V6 P1：价格/窗口/并发/RPM 元数据（向后兼容，仅增字段）─
+                    "input_price": preset.input_price,
+                    "output_price": preset.output_price,
+                    "context_window": preset.context_window,
+                    "max_output_tokens": preset.max_output_tokens,
+                    "fallback_models": list(preset.fallback_models),
+                    "max_concurrency": preset.max_concurrency,
+                    "max_rpm": preset.max_rpm,
                 })
             await self._send_json(writer, 200, {"providers": entries})
             return
@@ -895,9 +914,17 @@ class ApiServer:
         await self._send_json(writer, 200, result_payload)
 
     async def _provider_test(
-        self, name: str, writer: asyncio.StreamWriter,
+        self,
+        name: str,
+        writer: asyncio.StreamWriter,
+        *,
+        mode: str = "completion",
     ) -> None:
-        """POST /providers/{name}/test —— 按需测速，发 max_tokens=1 的 ping。"""
+        """POST /providers/{name}/test —— 按需测速，发 max_tokens=1 的 ping。
+
+        ``mode=completion``（默认）：走普通补全探测，返回 ``{ok, latency_ms, error}``；
+        ``mode=stream``：走 SSE 流式探测，返回额外 ``stream_ok`` 字段。
+        """
         from agentcrew.models.config import build_directory
 
         settings = self._settings
@@ -938,6 +965,24 @@ class ApiServer:
         if dummy_model is None:
             dummy_model = "ping"  # 最后兜底：比 "test" 更不可能是真实模型名，错误更清晰
         alias = f"{name}:{dummy_model}"
+        if mode == "stream":
+            # V5 P2：SSE 流式测速 —— 发 stream=true 请求，验证第一个 data 帧。
+            try:
+                record = await factory.health_check_stream(alias)
+            except Exception as exc:
+                await self._send_json(writer, 200, {
+                    "ok": False, "stream_ok": False, "latency_ms": None,
+                    "error": f"{type(exc).__name__}: {exc}",
+                })
+                return
+            await self._send_json(writer, 200, {
+                "ok": bool(record.stream_ok),
+                "stream_ok": record.stream_ok,
+                "latency_ms": record.latency_ms,
+                "error": record.error,
+            })
+            return
+        # 默认：普通补全探测（保持原有返回字段）
         try:
             record = await factory.health_check(alias)
         except Exception as exc:

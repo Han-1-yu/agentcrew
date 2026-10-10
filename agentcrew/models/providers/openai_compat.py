@@ -41,6 +41,12 @@ _HTTP_STATUS_RE = re.compile(r"Error code:\s*(\d{3})")
 #: 其余状态码（400/401/403/404/422 等）与无法识别的错误一律快速失败。
 _TRANSIENT_STATUSES = frozenset({429, 500, 502, 503, 504})
 
+#: 触发工厂层故障转移但 Provider 内部**不重试**的状态码。
+#: 402 余额不足：再打一次同样扣费失败，毫无意义；但应该让工厂层切到备用模型。
+#: 这些状态码被翻译成 :class:`~agentcrew.utils.retry.TransientError`（工厂据此
+#: 进入 failover 循环），但经 :data:`_should_retry` 过滤后不进入内部退避重试。
+_FAILOVER_ONLY_STATUSES = frozenset({402})
+
 #: 异常类型名含这些子串即视为瞬时故障：各 SDK/httpx 的超时与连接错误
 #: （``APITimeoutError``、``ConnectTimeout``、``APIConnectionError``、
 #: ``httpx.ConnectError``、``TransportError`` …）。按类型名匹配而非 import
@@ -68,15 +74,30 @@ def classify_http_error(exc: Exception) -> type[Exception]:
     顺序：先解析异常字符串里的 ``Error code: NNN``（openai SDK 的格式），
     再看异常类型名是否命中 :data:`_TRANSIENT_TYPE_MARKERS`（超时/连接/传输/网络）；
     两者都不命中时返回 ``PermanentError`` —— 未知错误快速失败，胜过无限重试。
+
+    :data:`_FAILOVER_ONLY_STATUSES`（如 402 余额不足）也归类为 ``TransientError``，
+    让工厂层能进入故障转移；但 :data:`_should_retry` 会拦掉内部重试。
     """
     match = _HTTP_STATUS_RE.search(str(exc))
     if match is not None:
         status = int(match.group(1))
-        return TransientError if status in _TRANSIENT_STATUSES else PermanentError
+        if status in _TRANSIENT_STATUSES or status in _FAILOVER_ONLY_STATUSES:
+            return TransientError
+        return PermanentError
     type_name = type(exc).__name__
     if any(marker in type_name for marker in _TRANSIENT_TYPE_MARKERS):
         return TransientError
     return PermanentError
+
+
+def _should_retry(exc: BaseException) -> bool:
+    """``retry_async`` 的 ``retry_filter``：402 余额不足不在 Provider 内部重试。
+
+    402 已被 :func:`classify_http_error` 标成 TransientError（工厂层据此故障转移），
+    但余额不足再打一次同样失败 —— 立即上抛给工厂层切备用模型。
+    其他 TransientError（429/5xx/超时/连接错误）照常退避重试。
+    """
+    return getattr(exc, "status_code", None) != 402
 
 
 def retry_after_seconds(exc: BaseException) -> float | None:
@@ -197,6 +218,7 @@ class OpenAICompatProvider(BaseProvider):
             retry_on=(TransientError,),
             on_retry=self._on_retry,
             retry_after=retry_after_seconds,
+            retry_filter=_should_retry,
         )
         latency_ms = round((time.perf_counter() - started) * 1000)
         usage = getattr(response, "usage", None)
@@ -216,11 +238,19 @@ class OpenAICompatProvider(BaseProvider):
         捕获 ``Exception`` 而非具体 SDK 类型：注入的 fake client 与各 SDK 抛出
         的异常类各不相同，而本 try 只包住 SDK 调用本身。``BaseException`` 不在
         此列，故 ``CancelledError`` 等照常穿透。
+
+        翻译后的异常上挂 ``status_code`` 属性（HTTP 状态码，可解析时）—— 工厂层
+        的冷却追踪据此区分 402 / 429 / 5xx / 404 并设置不同的冷却时长。
         """
         try:
             return await self._client.chat.completions.create(**kwargs)
         except Exception as exc:
-            raise classify_http_error(exc)(str(exc)) from exc
+            cls = classify_http_error(exc)
+            new_exc = cls(str(exc))
+            match = _HTTP_STATUS_RE.search(str(exc))
+            if match is not None:
+                setattr(new_exc, "status_code", int(match.group(1)))
+            raise new_exc from exc
 
     def _prepare_messages(self, messages: Sequence[Message]) -> list[dict[str, str]]:
         """``supports_system_role=False`` 时把 system 内容并入首条 user 消息。"""

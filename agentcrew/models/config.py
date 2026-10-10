@@ -67,6 +67,23 @@ class ProviderPreset(BaseModel):
     endpoint_candidates: list[str] | None = None
     #: 获取 API Key 的官方页面 URL（本地/离线 provider 为 ``None``）。
     api_key_url: str | None = None
+    # ── V6 P0：故障转移与元数据增强（全部可选，保持向后兼容）─────────────
+    #: 该 provider 的推荐 fallback 模型列表（模型名，不含 provider 前缀）。
+    #: 主模型失败时按顺序尝试；空列表表示不预设 fallback（仍可由 settings.model_failover 覆盖）。
+    fallback_models: list[str] = Field(default_factory=list)
+    #: 输入价格（USD / 百万 token）；``None`` 表示未知，成本估算按 0 计。
+    input_price: float | None = None
+    #: 输出价格（USD / 百万 token）；``None`` 表示未知。
+    output_price: float | None = None
+    #: 上下文窗口（token 数）；``None`` 表示用 capabilities.max_context_tokens 默认值。
+    context_window: int | None = None
+    #: 最大输出 token 数；``None`` 表示用 capabilities.max_output_tokens 默认值。
+    max_output_tokens: int | None = None
+    # ── V6 P0.5：per-provider 并发与速率限制 ───────────────────────────────
+    #: 该 provider 的最大并发请求数；``None`` 表示用全局 settings.max_concurrency。
+    max_concurrency: int | None = None
+    #: 该 provider 的每分钟最大请求数（RPM）；``None`` 表示不限制。
+    max_rpm: int | None = None
 
 
 class ModelBinding(BaseModel):
@@ -89,6 +106,14 @@ class ModelBinding(BaseModel):
     search_aliases: list[str] = Field(default_factory=list)
     endpoint_candidates: list[str] | None = None
     api_key_url: str | None = None
+    # ── V6 P0/P0.5/P1：从 preset 拷贝的故障转移/元数据/并发字段 ─────────
+    fallback_models: list[str] = Field(default_factory=list)
+    input_price: float | None = None
+    output_price: float | None = None
+    context_window: int | None = None
+    max_output_tokens: int | None = None
+    max_concurrency: int | None = None
+    max_rpm: int | None = None
 
 
 #: 内置能力预设，逐行对应 spec §12.1 的能力表（8 行）。
@@ -106,6 +131,11 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         family="openai_compat",
         search_aliases=["gpt", "open ai"],
         api_key_url="https://platform.openai.com/api-keys",
+        fallback_models=["gpt-4o", "gpt-4o-mini"],
+        input_price=2.50,
+        output_price=10.00,
+        context_window=128_000,
+        max_output_tokens=16_384,
     ),
     "anthropic": ProviderPreset(
         implementation="anthropic",
@@ -125,6 +155,11 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         family="anthropic",
         search_aliases=["claude"],
         api_key_url="https://console.anthropic.com/settings/keys",
+        fallback_models=["claude-haiku-5-5", "claude-sonnet-5-5"],
+        input_price=3.00,
+        output_price=15.00,
+        context_window=200_000,
+        max_output_tokens=8_192,
     ),
     "deepseek": ProviderPreset(
         implementation="openai_compat",
@@ -148,6 +183,11 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         family="openai_compat",
         search_aliases=["ds", "深度求索"],
         api_key_url="https://platform.deepseek.com/api_keys",
+        fallback_models=["deepseek-chat", "deepseek-v4-flash"],
+        input_price=0.27,
+        output_price=1.10,
+        context_window=64_000,
+        max_output_tokens=8_192,
     ),
     "doubao": ProviderPreset(
         implementation="openai_compat",
@@ -160,6 +200,11 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         family="openai_compat",
         search_aliases=["豆包", "volcengine", "火山"],
         api_key_url="https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey",
+        fallback_models=["doubao-lite-32k"],
+        input_price=0.80,
+        output_price=2.00,
+        context_window=32_000,
+        max_output_tokens=4_096,
     ),
     "qwen": ProviderPreset(
         implementation="openai_compat",
@@ -172,6 +217,11 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         family="openai_compat",
         search_aliases=["通义", "千问", "aliyun", "阿里云"],
         api_key_url="https://dashscope.console.aliyun.com/apiKey",
+        fallback_models=["qwen3.7-flash", "qwen3.7-plus"],
+        input_price=0.55,
+        output_price=2.19,
+        context_window=32_000,
+        max_output_tokens=8_192,
     ),
     "ernie": ProviderPreset(
         implementation="openai_compat",
@@ -186,6 +236,11 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         api_key_url=(
             "https://console.bce.baidu.com/qianfan/ais/console/"
             "applicationConsole/application"),
+        fallback_models=["ernie-speed", "ernie-3.5"],
+        input_price=0.84,
+        output_price=2.00,
+        context_window=8_000,
+        max_output_tokens=2_048,
     ),
     "ollama": ProviderPreset(
         implementation="openai_compat",
@@ -198,6 +253,11 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         family="openai_compat",
         search_aliases=["本地", "local"],
         api_key_url=None,
+        fallback_models=[],
+        input_price=None,
+        output_price=None,
+        context_window=None,
+        max_output_tokens=None,
     ),
     "mock": ProviderPreset(
         implementation="mock",
@@ -210,6 +270,11 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         family="mock",
         search_aliases=[],
         api_key_url=None,
+        fallback_models=[],
+        input_price=0.0,
+        output_price=0.0,
+        context_window=128_000,
+        max_output_tokens=8_192,
     ),
     "cli": ProviderPreset(
         implementation="cli",
@@ -224,6 +289,11 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         family="cli",
         search_aliases=[],
         api_key_url=None,
+        fallback_models=[],
+        input_price=None,
+        output_price=None,
+        context_window=None,
+        max_output_tokens=None,
     ),
     # ── A2：新增主流平台预设（全部 OpenAI 兼容）─────────────────────────
     "openrouter": ProviderPreset(
@@ -242,6 +312,11 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         family="openai_compat",
         search_aliases=["or", "路由"],
         api_key_url="https://openrouter.ai/keys",
+        fallback_models=[],
+        input_price=None,
+        output_price=None,
+        context_window=None,
+        max_output_tokens=None,
     ),
     "siliconflow": ProviderPreset(
         implementation="openai_compat",
@@ -258,6 +333,11 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         family="openai_compat",
         search_aliases=["硅基流动", "sf"],
         api_key_url="https://cloud.siliconflow.cn/account/ak",
+        fallback_models=["deepseek-ai/DeepSeek-V4"],
+        input_price=0.27,
+        output_price=1.10,
+        context_window=32_768,
+        max_output_tokens=None,
     ),
     "moonshot": ProviderPreset(
         implementation="openai_compat",
@@ -274,6 +354,11 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         family="openai_compat",
         search_aliases=["月之暗面", "kimi"],
         api_key_url="https://platform.moonshot.cn/console/api-keys",
+        fallback_models=["kimi-k2.6"],
+        input_price=3.00,
+        output_price=15.00,
+        context_window=128_000,
+        max_output_tokens=8_192,
     ),
     "zhipu": ProviderPreset(
         implementation="openai_compat",
@@ -290,6 +375,11 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         family="openai_compat",
         search_aliases=["智谱", "glm", "chatglm"],
         api_key_url="https://open.bigmodel.cn/usercenter/apikeys",
+        fallback_models=["glm-4-flash"],
+        input_price=0.50,
+        output_price=2.00,
+        context_window=128_000,
+        max_output_tokens=None,
     ),
     "groq": ProviderPreset(
         implementation="openai_compat",
@@ -306,6 +396,11 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         family="openai_compat",
         search_aliases=["groqcloud"],
         api_key_url="https://console.groq.com/keys",
+        fallback_models=["llama-3.3-8b-instant"],
+        input_price=0.59,
+        output_price=0.79,
+        context_window=128_000,
+        max_output_tokens=None,
     ),
     "together": ProviderPreset(
         implementation="openai_compat",
@@ -322,6 +417,11 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         family="openai_compat",
         search_aliases=["together ai"],
         api_key_url="https://api.together.xyz/settings/api-keys",
+        fallback_models=[],
+        input_price=0.88,
+        output_price=0.88,
+        context_window=128_000,
+        max_output_tokens=None,
     ),
     # ── V5 P1：聚合/中转平台（4 个）─────────────────────────────────────
     "fireworks": ProviderPreset(
@@ -340,6 +440,11 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         family="openai_compat",
         search_aliases=["fireworks ai", "烟花"],
         api_key_url="https://fireworks.ai/account/api-keys",
+        fallback_models=[],
+        input_price=0.19,
+        output_price=0.79,
+        context_window=128_000,
+        max_output_tokens=None,
     ),
     "deepinfra": ProviderPreset(
         implementation="openai_compat",
@@ -357,6 +462,11 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         family="openai_compat",
         search_aliases=["deep infra"],
         api_key_url="https://deepinfra.com/dash/api_keys",
+        fallback_models=[],
+        input_price=0.19,
+        output_price=0.19,
+        context_window=128_000,
+        max_output_tokens=None,
     ),
     "replicate": ProviderPreset(
         implementation="openai_compat",
@@ -373,6 +483,11 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         family="openai_compat",
         search_aliases=["replicate", "复制"],
         api_key_url="https://replicate.com/account/api-tokens",
+        fallback_models=[],
+        input_price=None,
+        output_price=None,
+        context_window=None,
+        max_output_tokens=None,
     ),
     "huggingface": ProviderPreset(
         implementation="openai_compat",
@@ -390,6 +505,11 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         family="openai_compat",
         search_aliases=["hf", "hugging face", "拥抱脸"],
         api_key_url="https://huggingface.co/settings/tokens",
+        fallback_models=[],
+        input_price=None,
+        output_price=None,
+        context_window=None,
+        max_output_tokens=None,
     ),
     # ── V5 P1：国内平台（5 个）─────────────────────────────────────────
     "baichuan": ProviderPreset(
@@ -408,6 +528,11 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         family="openai_compat",
         search_aliases=["百川", "baichuan"],
         api_key_url="https://platform.baichuan-ai.com/console/apikey",
+        fallback_models=["Baichuan3-Turbo"],
+        input_price=0.80,
+        output_price=2.00,
+        context_window=32_768,
+        max_output_tokens=None,
     ),
     "minimax": ProviderPreset(
         implementation="openai_compat",
@@ -425,6 +550,11 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         family="openai_compat",
         search_aliases=["minimax", "海螺"],
         api_key_url="https://platform.minimaxi.com/user-center/basic-information/interface-key",
+        fallback_models=[],
+        input_price=0.15,
+        output_price=1.50,
+        context_window=24_576,
+        max_output_tokens=None,
     ),
     "stepfun": ProviderPreset(
         implementation="openai_compat",
@@ -442,6 +572,11 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         family="openai_compat",
         search_aliases=["阶跃星辰", "step"],
         api_key_url="https://platform.stepfun.com/interface/key",
+        fallback_models=["step-1-8k"],
+        input_price=0.16,
+        output_price=0.16,
+        context_window=32_768,
+        max_output_tokens=None,
     ),
     "lingyi": ProviderPreset(
         implementation="openai_compat",
@@ -459,6 +594,11 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         family="openai_compat",
         search_aliases=["零一万物", "01ai", "yi"],
         api_key_url="https://platform.lingyiwanwu.com/apikeys",
+        fallback_models=["yi-medium"],
+        input_price=0.80,
+        output_price=2.00,
+        context_window=32_768,
+        max_output_tokens=None,
     ),
     "xinghuo": ProviderPreset(
         implementation="openai_compat",
@@ -476,6 +616,11 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         family="openai_compat",
         search_aliases=["讯飞", "星火", "xfyun"],
         api_key_url="https://console.xfyun.cn/services/cbm",
+        fallback_models=["generalv3.5"],
+        input_price=0.80,
+        output_price=2.00,
+        context_window=8_192,
+        max_output_tokens=None,
     ),
     # ── V5 P1：国际主流（3 个）───────────────────────────────────────────
     "gemini": ProviderPreset(
@@ -494,6 +639,11 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         family="openai_compat",
         search_aliases=["gemini", "google", "谷歌", "bard"],
         api_key_url="https://aistudio.google.com/app/apikey",
+        fallback_models=["gemini-1.5-flash"],
+        input_price=1.25,
+        output_price=5.00,
+        context_window=1_000_000,
+        max_output_tokens=8_192,
     ),
     "mistral": ProviderPreset(
         implementation="openai_compat",
@@ -511,6 +661,11 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         family="openai_compat",
         search_aliases=["mistral", "米斯特拉尔"],
         api_key_url="https://console.mistral.ai/api-keys",
+        fallback_models=["mistral-small-latest"],
+        input_price=2.00,
+        output_price=6.00,
+        context_window=128_000,
+        max_output_tokens=None,
     ),
     "cohere": ProviderPreset(
         implementation="openai_compat",
@@ -528,6 +683,11 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         family="openai_compat",
         search_aliases=["cohere", "coral"],
         api_key_url="https://dashboard.cohere.com/api-keys",
+        fallback_models=["command-r"],
+        input_price=2.50,
+        output_price=10.00,
+        context_window=128_000,
+        max_output_tokens=None,
     ),
 }
 
@@ -618,4 +778,11 @@ def parse_alias(
         search_aliases=preset.search_aliases,
         endpoint_candidates=preset.endpoint_candidates,
         api_key_url=preset.api_key_url,
+        fallback_models=preset.fallback_models,
+        input_price=preset.input_price,
+        output_price=preset.output_price,
+        context_window=preset.context_window,
+        max_output_tokens=preset.max_output_tokens,
+        max_concurrency=preset.max_concurrency,
+        max_rpm=preset.max_rpm,
     )

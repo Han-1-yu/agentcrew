@@ -48,6 +48,7 @@ _ENV_TO_FIELD: dict[str, str] = {
     "AGENTCREW_REVIEW_SCORE_THRESHOLD": "review_score_threshold",
     "AGENTCREW_MAX_COST_USD": "max_cost_usd",
     "AGENTCREW_MAX_LLM_CALLS": "max_llm_calls",
+    "AGENTCREW_LOOP_GUARD": "loop_guard_enabled",
     "AGENTCREW_HEALTH_CHECK_ENABLED": "health_check_enabled",
     "AGENTCREW_HEALTH_CHECK_INTERVAL": "health_check_interval_secs",
     "AGENTCREW_LLM_CACHE_ENABLED": "llm_cache_enabled",
@@ -380,6 +381,31 @@ class Settings(BaseModel):
 
     ``None`` = 不限制。与 ``max_cost_usd`` 任一超限即触发预算耗尽收尾。
     环境变量 ``AGENTCREW_MAX_LLM_CALLS``。
+    """
+    budget_warning_threshold: float = 0.8
+    """预算接近警告阈值（P2 增强）：占 ``max_cost_usd`` 的比例。
+
+    累计成本首次达到 ``max_cost_usd * budget_warning_threshold`` 时，工厂落一条
+    ``budget_warning`` 事件（含 current / limit / pct），只警告不中断。
+    仅当 ``max_cost_usd`` 不为 ``None`` 时生效；否则行为完全不变。
+    """
+    budget_downgrade_threshold: float = 0.9
+    """预算自动降级阈值（P2 增强）：占 ``max_cost_usd`` 的比例。
+
+    累计成本首次达到 ``max_cost_usd * budget_downgrade_threshold`` 时，若
+    ``model_failover`` 里存在 input 单价更低的备用别名，工厂落一条
+    ``budget_downgrade`` 事件并把后续调用切到最便宜的备用别名（而不是直接
+    抛 :class:`~agentcrew.models.factory.BudgetExhaustedError`）。无更便宜
+    选项时保持原行为。仅当 ``max_cost_usd`` 不为 ``None`` 时生效。
+    """
+    loop_guard_enabled: bool = False
+    """流式循环检测总开关（P1.5）。
+
+    ``False``（默认）时 :meth:`~agentcrew.models.factory.ModelFactory.stream_call`
+    不挂 :class:`~agentcrew.models.loop_guard.LoopGuard`，行为与改造前逐字节一致。
+    ``True`` 时每个流式 chunk 喂入滑动窗口检测器，窗口内 distinct unit 过少即
+    抛 :class:`~agentcrew.models.loop_guard.LoopDetectedError` 并落 ``loop_detected``
+    事件。环境变量 ``AGENTCREW_LOOP_GUARD``。
     """
     health_check_enabled: bool = True
     """Provider 主动健康监控开关（P2-11）。

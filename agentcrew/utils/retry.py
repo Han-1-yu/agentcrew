@@ -48,6 +48,7 @@ async def retry_async(
     retry_on: tuple[type[Exception], ...] = (TransientError,),
     on_retry: Callable[[int, Exception, float], None] | None = None,
     retry_after: Callable[[BaseException], float | None] | None = None,
+    retry_filter: Callable[[BaseException], bool] | None = None,
 ) -> T:
     """调用 ``fn``，捕获 ``retry_on`` 中的异常并按退避策略重试。
 
@@ -58,6 +59,11 @@ async def retry_async(
     若提供了 ``retry_after`` 且其返回非 ``None``，该值（服务端 ``Retry-After``）
     覆盖本轮计算出的退避时长并照常等待。``base_delay=0`` 只让引擎自身计算的退避
     为 0（测试用即时模式），不会关闭对 ``Retry-After`` 的尊重。
+
+    ``retry_filter``（可选）在 ``retry_on`` 命中后再做一次判定：返回 ``False`` 时
+    立即把异常向上抛出、不进入重试退避 —— 用于区分「应重试的瞬时故障」与
+    「同类但不该重试的故障」（例如 402 余额不足：重试无意义，但工厂层要据此
+    故障转移到备用模型）。
     """
     if attempts < 1:
         raise ValueError(f"attempts 必须 >= 1，收到 {attempts}")
@@ -65,6 +71,8 @@ async def retry_async(
         try:
             return await fn()
         except retry_on as exc:
+            if retry_filter is not None and not retry_filter(exc):
+                raise
             if attempt_index >= attempts:
                 raise
             delay = compute_delay(

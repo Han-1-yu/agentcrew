@@ -1,5 +1,9 @@
 # AgentCrew 状态
 
+V6 借鉴 Magpie 供应商韧性增强全部完成（P0 故障转移 + P0.5 并发/RPM + P1 元数据 + P1.5 循环检测 + P2 预算软阈值），全量测试 1810 passed / 1 skipped，新增 34 测试。
+
+V5 供应商模块深化全部完成（P1-P5），全量测试 1776 passed / 1 skipped，Studio e2e 27/27 通过。
+
 V4 供应商与模型管理升级全部完成（A1-A6 引擎侧 + B1-B4 Studio 侧），全量测试 1682 passed / 1 skipped，Studio e2e 17/17 通过。
 
 V3 三十四项增强全部完成（32 原始规划 + P2-11 Provider 健康监控 + P3-10 权重路由），全量测试 1632 passed / 1 skipped，离线 demo 验证 9/9 任务成功。
@@ -109,6 +113,109 @@ python -m pytest -q
 **红线遵守**：零新增 npm 依赖（package.json devDependencies 仅 electron）；不修改 agentcrew/、main.py 及任何 Python 文件；CSP connect-src 精确到 localhost:* / 127.0.0.1:* 无 `*`；密钥零接触（provider:keyStatus 只回布尔，api_key 仅环境变量名）；演示模式 buildMockRun/simTick/window.__st 原样保留；styles.css 正文零硬编码色值。
 
 **验收**：`npm run e2e` 21/21 通过退出码 0；`npm run selftest` 退出码 0；grep 色值仅 token 定义区命中；grep api_key 仅环境变量名；git status 无 studio/ 外文件变更。
+
+## V5 供应商模块深化（全部完成）
+
+参考 cc-switch provider 模块设计（provider.rs 数据模型、端点候选回退、流式连通检测、ProviderCard 信息展示），在 V4 基础上深化扩充。
+
+### P1：预设库扩充 + 元数据增强
+- `ProviderPreset` / `ModelBinding` 新增 5 个可选字段：`category`（aggregator/national/international/local/specialized）、`family`、`search_aliases`、`endpoint_candidates`、`api_key_url`
+- 预设从 15 扩充到 **27 个**（+fireworks/deepinfra/replicate/huggingface/baichuan/minimax/stepfun/lingyi/xinghuo/gemini/mistral/cohere）
+- 现有 15 个预设回填 category/family/search_aliases/api_key_url
+- `GET /providers` 响应包含全部新字段
+- 新增测试 46 个（`tests/test_provider_presets_v5.py`）
+
+### P2：模型发现增强 + 流式检测
+- `discovery.py` `candidate_urls()` 扩展为"端点候选 × 路径变体"矩阵回退；无 endpoint_candidates 时行为逐字节不变
+- 新增 `agentcrew/models/stream_check.py`：`async check_streaming()` 发 stream=true 最小请求，验证 SSE 第一个 data 帧
+- `HealthRecord` 新增 `stream_ok: bool | None`；`ModelFactory.health_check_stream()` 按需探测
+- `POST /providers/{name}/test?mode=stream` 支持流式检测；默认 mode=completion 不变
+- 新增测试 22 个（`tests/test_discovery_stream_v5.py`）
+
+### P3：Studio 供应商页增强
+- `BUILTIN_PROVIDERS` 从 14 扩充到 27，删除 EXTRA_PRESETS 合并，与引擎对齐
+- 卡片增强：category 徽标、「🔗 获取Key」链接（shell:openExternal IPC）、端点候选数量、流式状态
+- 搜索框（name/label/search_aliases，200ms 防抖）+ 6 个 category 筛选按钮，AND 组合
+- 编辑 provider：卡片「编辑」按钮→弹窗，内置生成 `models.providers.<name>:` 覆盖片段，自定义生成 `models.custom_providers.<name>:`，一键复制；Studio 仍不直接写 yaml
+- 新增 `shell:openExternal` IPC + preload 暴露
+- e2e 新增 4 项（13d-13g），总计 27/27 通过
+
+### P4：配置与 CLI 增强
+- `providers` 输出增加 category/endpoints/api_key_url；`--json` 完整元数据
+- `providers --category <cat>` 按分类过滤；`providers --search <kw>` 按 name/search_aliases 搜索（支持中文别名）；可 AND 组合
+- `models <provider> --verbose` 显示端点候选尝试过程；JSON 含 endpoints_tried/successful_endpoint
+- `doctor` 集成流式检测状态（生产路径真实调用，测试注入时跳过）
+- 新增测试 14 个（`tests/test_cli_providers_v5.py`）
+
+### P5：测试与文档
+- 全量测试 **1776 passed / 1 skipped**（基线 1695 + 新增 82，只增不减）
+- `ruff check` V5 修改文件零错误
+- `mypy` 新模块零错误
+- 密钥安全自查通过（config_snapshot 脱敏、GET /providers 不含密钥值）
+- README.md 新增 V5 章节（含 27 预设表格、元数据说明、流式检测、Studio/CLI 增强）
+- PROJECT-STATE.md 新增 V5 小节
+
+### 红线遵守
+- 密钥绝不落盘：仅存 api_key_env 环境变量名；config_snapshot 脱敏；GET /providers 响应不含密钥值；stream_check 只从参数收 key
+- 向后兼容：现有 15 个预设 key/base_url/api_key_env/implementation 完全不变；现有 API 响应只增字段；custom_providers 格式不变；无 endpoint_candidates 时 discovery 行为逐字节一致；/test 默认 mode 不变
+- 配置合并顺序不变：代码默认 → .env → agentcrew.yaml → 环境变量 → CLI
+- 测试守卫不删：全量 1695→1776 只增不减
+- Studio 零框架：不新增 npm 依赖，沿用 vanilla JS + h()
+- 确定性引擎不变：发现/测速/流式检测均为按需调用，无常驻网络轮询
+- 不修改 cc-switch 参考目录
+
+## V6 借鉴 Magpie：供应商韧性与元数据增强（全部完成）
+
+借鉴 Magpie（Go AI 网关，`E:\magpie-main\magpie-main`）的故障转移、冷却矩阵、并发限速、循环检测、预算软阈值等机制，完善 AgentCrew 供应商模块。深度阅读 18 个 Magpie 核心源码文件后产出对比分析 `docs/MAGPIE_COMPARISON.md`，按 ROI 排序实施 6 项。
+
+### P0：模型调用故障转移（核心）
+- **402 余额不足触发故障转移**：`openai_compat.classify_http_error` 将 402 归入 `TransientError`（工厂层据此切换），但 Provider 内部不重试（`_should_retry` 过滤），翻译后的异常上挂 `status_code`
+- **冷却矩阵**（借鉴 Magpie `routing.go restAfterMarked`）：402=固定 30min；429=优先 Retry-After，否则 1min 起步指数退避封顶 30min；5xx=1min 起步指数退避封顶 10min；404=1min；其他=1min。冷却中的别名自动排到尝试列表末尾
+- **preset fallback_models**：`ProviderPreset.fallback_models` 自动派生 `provider:model` 备用别名，优先级 `settings.model_failover` > preset 自动派生 > 无
+- **流式故障转移**：`stream_call` 在首个 chunk 前可切换别名，首块 yield 后锁定通道（借鉴 Magpie `holdWriter` 思想）
+- `retry_async` 新增 `retry_filter` 参数，支持"归类为可重试但不内部退避"的精细控制
+
+### P0.5：per-provider 并发与 RPM 限速
+- **per-provider 信号量**：`_provider_semaphores` 替代全局信号量，按 provider 名独立限流；未配置 `max_concurrency` 时回退 `settings.max_concurrency`
+- **60 秒滑动窗口 RPM**：`_rpm_timestamps` 记录请求时间戳，超限时等待到最早时间戳+60s；`max_rpm=None` 不限制
+- `ProviderPreset` / `ModelBinding` 新增 `max_concurrency` / `max_rpm` 字段
+
+### P1：模型元数据增强
+- `ProviderPreset` / `ModelBinding` 新增 `input_price` / `output_price`（USD/百万 token）、`context_window` / `max_output_tokens` 字段
+- **27 个预设全部填充**价格/窗口数据（openai/anthropic/deepseek 等已知价格精确填写，聚合平台/未知模型留 None）
+- `_account()` 优先用 preset 价计算成本，回退到 `pricing.MODEL_PRICING` 表
+- `GET /providers` 响应暴露 8 个新元数据字段
+
+### P1.5：循环检测（借鉴 Magpie `loop_guard.go`）
+- 新增 `agentcrew/models/loop_guard.py`：`UnitRun` 环形缓冲（256 slots）+ FNV-1a 64 位哈希计数，O(1) 维护窗口内 distinct unit 数；窗口满且 distinct ≤ 24 即判循环
+- 双通道独立检测（reasoning / text），按句末标点切 unit，无字母 unit 跳过
+- `stream_call` 集成：`loop_guard_enabled=True` 时每个 chunk 喂检测器，触发抛 `LoopDetectedError` 并落 `loop_detected` 事件
+- **默认关闭**（`loop_guard_enabled=False`），既有流式调用零影响
+
+### P2：预算软阈值增强
+- `Settings` 新增 `budget_warning_threshold=0.8` / `budget_downgrade_threshold=0.9`
+- 累计成本达 80% 时落 `budget_warning` 事件（一次性）
+- 达 90% 时若有 input 单价更低的 fallback 模型，自动降级并落 `budget_downgrade` 事件
+- `max_cost_usd=None` 时完全空转；`reset_stats()` 一并复位警告/降级状态
+
+### 测试与验证
+- 全量测试 **1810 passed / 1 skipped**（V5 基线 1776 + 新增 34，只增不减）
+- 新增测试文件：`test_fallback_enhanced.py`（7）、`test_provider_limits.py`（8）、`test_provider_metadata.py`（7）、`test_loop_guard.py`（8）、`test_budget_enhanced.py`（4）
+- `ruff check` V6 修改文件零错误
+- `mypy` 新增代码零错误（剩余 5 个均为 V5 及之前预存）
+- 修复 9 个集成测试失败（`_ScriptedProvider` 补充 `.binding` mock 属性）
+
+### 红线遵守
+- 向后兼容：所有新字段有默认值；现有 `agentcrew.yaml` / `run.json` 照常加载；未配置 failover 时 `_failover_aliases` 返回 `[alias]` 行为不变
+- 故障转移 opt-in：preset fallback_models 有合理默认但不改变单模型调用行为；循环检测默认关闭
+- 密钥安全：不在任何响应/日志/文件中泄露 API key
+- 只修改 `agentcrew/` 下 Python 代码和测试，不碰 Magpie 项目（只读参考）
+- 测试只增不减：1776→1810
+
+### 未实施（ROI 较低，留待后续）
+- P2.5 数据脱敏（Magpie `redact` 模块的双向确定性占位符机制）——对比分析中 ROI 排序第 6，需新增完整子系统
+- 会话亲和性（Magpie `affinity.go`）——前提是 AgentCrew 做多 key 池聚合，当前单 key 场景收益有限
+- 配额感知路由（Magpie `Allowance` 多窗口配额）——需对接订阅账号体系，超出当前供应商模块范围
 
 ## 改代码前必读
 - **两级并发不得嵌套**：门禁必须在任务槽位释放后执行。守卫是 `test_scheduler_deadlock.py` 的结构性检查，**别删**。

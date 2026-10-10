@@ -270,7 +270,7 @@ async def test_call_forwards_kwargs_and_logs_exact_fields(
 
 
 async def test_semaphore_is_released_before_accounting(settings, tmp_path, monkeypatch):
-    """信号量只包住 ``complete()``：本地记账不得占着全局 LLM 调用额度。"""
+    """信号量只包住 ``complete()``：本地记账不得占着 per-provider 调用额度。"""
     s = settings.model_copy(update={"max_concurrency": 1})
     lg = Ledger(tmp_path / "l.jsonl", run_id="R")
     f = ModelFactory(s, ledger=lg)
@@ -281,7 +281,8 @@ async def test_semaphore_is_released_before_accounting(settings, tmp_path, monke
 
     async def spy_complete(*a, **kw):
         # asyncio.Semaphore 无公开只读接口，用 _value 白盒断言（容量 1）。
-        inside_call.append(f.llm_semaphore._value)
+        # V6 P0.5：信号量改为 per-provider，查 "mock" provider 的专属锁。
+        inside_call.append(f._provider_semaphores["mock"]._value)
         return await original_complete(*a, **kw)
 
     p.complete = spy_complete
@@ -289,7 +290,7 @@ async def test_semaphore_is_released_before_accounting(settings, tmp_path, monke
     original_emit = lg.emit
 
     def spy_emit(event, **data):
-        emitted.append((event, f.llm_semaphore._value))
+        emitted.append((event, f._provider_semaphores["mock"]._value))
         return original_emit(event, **data)
 
     monkeypatch.setattr(lg, "emit", spy_emit)
@@ -300,12 +301,16 @@ async def test_semaphore_is_released_before_accounting(settings, tmp_path, monke
 
 
 async def test_mock_mode_still_records_cost_for_priced_model(settings, tmp_path):
-    """mock 下保留原模型名，成本统计在看板里才是真实可演示的（spec §16.1）。"""
+    """mock 下保留原模型名，成本统计在看板里才是真实可演示的（spec §16.1）。
+
+    V6 P1：走 ``openai:gpt-4o-mini``（mock 模式下被改写成 MockProvider，但保留
+    openai preset 的价格），而非显式 ``mock:`` provider（其 preset 价格为 0.0）。
+    """
     lg = Ledger(tmp_path / "l.jsonl", run_id="R")
     f = ModelFactory(settings, ledger=lg)
-    p = f.get("mock:gpt-4o-mini")
+    p = f.get("openai:gpt-4o-mini")
     set_purpose(p, "execute", role="r", task_id="T-1", attempt=1)
-    await f.call("mock:gpt-4o-mini", [{"role": "user", "content": "hello"}],
+    await f.call("openai:gpt-4o-mini", [{"role": "user", "content": "hello"}],
                  temperature=0, max_tokens=10, purpose="execute", role="r")
     ev = list(lg.events("llm_call"))[-1]
     assert ev.data["model"] == "gpt-4o-mini"
@@ -461,7 +466,8 @@ async def test_structured_emits_one_llm_call_with_purpose(
 
     def spy_emit(event, **data):
         if event == "llm_call":
-            emitted.append(f.llm_semaphore._value)
+            # V6 P0.5：信号量改为 per-provider（"openai" 的专属锁）。
+            emitted.append(f._provider_semaphores["openai"]._value)
         return original_emit(event, **data)
 
     monkeypatch.setattr(lg, "emit", spy_emit)
@@ -475,12 +481,13 @@ async def test_structured_emits_one_llm_call_with_purpose(
     assert f.total_prompt_tokens == 5 and f.total_completion_tokens == 2
     assert emitted == [1]                       # 记账在信号量释放之后
     ev = list(lg.events("llm_call"))[-1]
+    # V6 P1：openai preset 价格 (2.50, 10.00) → 5/1e6*2.50 + 2/1e6*10.00 = 3.25e-05
     assert ev.data == {
         "role": "architect",
         "model": "m",
         "prompt_tokens": 5,
         "completion_tokens": 2,
-        "estimated_cost_usd": 0.0,
+        "estimated_cost_usd": 3.25e-05,
         "latency_ms": 3,
         "purpose": "review",
     }
@@ -692,14 +699,14 @@ def _patch_openai_provider(monkeypatch, client: _Always429Client) -> None:
 
 async def test_clamped_retry_after_reaches_ledger(
         settings, tmp_path, monkeypatch, no_sleep):
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-a-real-key")
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
     client = _Always429Client(retry_after="86400")
     _patch_openai_provider(monkeypatch, client)
     lg = Ledger(tmp_path / "l.jsonl", run_id="R")
     f = ModelFactory(settings.model_copy(update={"mock": False}), ledger=lg)
 
     with pytest.raises(TransientError):
-        await f.call("openai:gpt-4o-mini", [{"role": "user", "content": "x"}],
+        await f.call("ollama:llama3.3", [{"role": "user", "content": "x"}],
                      temperature=0, max_tokens=10, purpose="execute", role="r")
 
     assert client.calls == 4                        # attempts=4 → 重试 3 次
@@ -715,13 +722,13 @@ async def test_clamped_retry_after_reaches_ledger(
 
 async def test_retry_without_clamp_has_no_clamp_field(
         settings, tmp_path, monkeypatch, no_sleep):
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-a-real-key")
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
     _patch_openai_provider(monkeypatch, _Always429Client(retry_after=None))
     lg = Ledger(tmp_path / "l.jsonl", run_id="R")
     f = ModelFactory(settings.model_copy(update={"mock": False}), ledger=lg)
 
     with pytest.raises(TransientError):
-        await f.call("openai:gpt-4o-mini", [{"role": "user", "content": "x"}],
+        await f.call("ollama:llama3.3", [{"role": "user", "content": "x"}],
                      temperature=0, max_tokens=10, purpose="execute", role="r")
 
     retries = list(lg.events("llm_retry"))
@@ -732,12 +739,12 @@ async def test_retry_without_clamp_has_no_clamp_field(
 async def test_retry_events_are_skipped_without_ledger(
         settings, tmp_path, monkeypatch, no_sleep):
     """没有 ledger 时 on_retry 是无副作用的空操作（重试本身照常进行）。"""
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-a-real-key")
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
     client = _Always429Client(retry_after="86400")
     _patch_openai_provider(monkeypatch, client)
     f = ModelFactory(settings.model_copy(update={"mock": False}), ledger=None)
     with pytest.raises(TransientError):
-        await f.call("openai:gpt-4o-mini", [{"role": "user", "content": "x"}],
+        await f.call("ollama:llama3.3", [{"role": "user", "content": "x"}],
                      temperature=0, max_tokens=10, purpose="execute", role="r")
     assert client.calls == 4
 

@@ -1016,6 +1016,79 @@ Studio 不直接改 agentcrew.yaml）。
   `defaultModel`）和 `--max-cost`（弹窗优先，否则回落设置页 `maxCostUsd`）。
 - 新建运行弹窗新增 provider 下拉 + 模型下拉（后端不可用时可手输不阻塞）。
 
+## V5 增强功能：供应商模块深化
+
+参考 cc-switch 的供应商模块设计（provider 数据模型、端点候选回退、流式连通检测、ProviderCard 信息展示），在 V4 基础上深化扩充：预设库 15→27、元数据增强、端点候选回退矩阵、流式检测、Studio 编辑与搜索过滤、CLI 过滤增强。
+
+### 1. 预设库扩充（15→27）
+
+内置预设从 15 个扩充到 27 个，新增 12 个：
+
+| 分类 | Provider | base_url | 环境变量 |
+|---|---|---|---|
+| 聚合 | fireworks | `https://api.fireworks.ai/inference/v1` | `FIREWORKS_API_KEY` |
+| 聚合 | deepinfra | `https://api.deepinfra.com/v1/openai` | `DEEPINFRA_API_KEY` |
+| 聚合 | replicate | `https://openai.replicate.com/v1` | `REPLICATE_API_TOKEN` |
+| 聚合 | huggingface | `https://router.huggingface.co/v1` | `HF_API_TOKEN` |
+| 国内 | baichuan | `https://api.baichuan-ai.com/v1` | `BAICHUAN_API_KEY` |
+| 国内 | minimax | `https://api.minimax.chat/v1` | `MINIMAX_API_KEY` |
+| 国内 | stepfun | `https://api.stepfun.com/v1` | `STEPFUN_API_KEY` |
+| 国内 | lingyi（零一万物） | `https://api.lingyiwanwu.com/v1` | `YI_API_KEY` |
+| 国内 | xinghuo（讯飞星火） | `https://spark-api-open.xf-yun.com/v1` | `XINGHUO_API_KEY` |
+| 国际 | gemini | `https://generativelanguage.googleapis.com/v1beta/openai` | `GEMINI_API_KEY` |
+| 国际 | mistral | `https://api.mistral.ai/v1` | `MISTRAL_API_KEY` |
+| 国际 | cohere | `https://api.cohere.com/v2` | `CO_API_KEY` |
+
+按分类分布：国际 5、国内 12、本地 1（ollama）、专用 2（mock/cli）、聚合 7。
+
+### 2. ProviderPreset 元数据增强
+
+`ProviderPreset` 新增 5 个可选字段（全部有默认值，向后兼容）：
+
+- `category`：`aggregator` / `national` / `international` / `local` / `specialized`
+- `family`：预设家族（如 `openai_compat`、`anthropic`）
+- `search_aliases`：搜索别名（如 deepseek 的 `["ds", "深度求索"]`）
+- `endpoint_candidates`：多端点候选列表，用于模型发现和测速时自动回退
+- `api_key_url`：获取 API Key 的官方页面 URL（Studio 显示"获取 Key"链接）
+
+`ModelBinding` 同步携带这些字段，`GET /providers` 响应包含全部新字段。
+
+### 3. 端点候选回退矩阵
+
+`discovery.py` 的 `candidate_urls()` 扩展为"端点候选 × 路径变体"矩阵：当 provider 预设了 `endpoint_candidates` 时，对每个端点依次派生 `/models` 和 `/v1/models` 路径变体，按顺序尝试，第一个成功即返回。无 `endpoint_candidates` 时保持 V4 行为（单端点 + 路径变体回退）。
+
+### 4. 流式检测
+
+新增 `agentcrew/models/stream_check.py`：`async check_streaming(binding, *, api_key, timeout_secs)` 发一个 `stream=true` 的最小补全请求（`max_tokens=1`），验证 SSE 流能正常返回（检测第一个 `data:` 帧的到达时间）。比普通测速更严格——有些端点普通补全能通但流式会挂。
+
+- `HealthRecord` 新增 `stream_ok: bool | None` 字段
+- `ModelFactory.health_check_stream(alias)` 按需探测流式能力
+- API `POST /providers/{name}/test?mode=stream` 返回 `{ok, stream_ok, latency_ms, error}`
+- 默认 `mode=completion` 保持 V4 行为不变
+
+### 5. Studio 供应商页增强
+
+- **编辑 provider**：卡片新增「编辑」按钮，打开编辑弹窗（复用添加弹窗表单结构），修改后生成 YAML 片段供复制。内置 provider 生成 `models.providers.<name>:` 覆盖片段，自定义生成 `models.custom_providers.<name>:`。Studio 仍不直接写 agentcrew.yaml。
+- **卡片信息增强**：category 徽标（聚合/国内/国际/本地/专用，不同配色）、「🔗 获取Key」链接（打开官方页面）、多端点候选数量标签、流式状态（流式 ✓/✗）。
+- **搜索与过滤**：顶部搜索框（按 name/label/search_aliases 实时过滤，200ms 防抖）+ 6 个 category 筛选按钮，AND 组合，结果计数。
+- **BUILTIN_PROVIDERS 同步**：从 14 个扩充到 27 个，与引擎 `config.py` 对齐，含全部新元数据字段。
+
+### 6. CLI 增强
+
+- `python main.py providers`：文本输出增加 category 标签、endpoint_candidates 数量、api_key_url；`--json` 输出完整元数据。
+- `python main.py providers --category <cat>`：按分类过滤。
+- `python main.py providers --search <keyword>`：按 name/search_aliases 搜索（支持中文别名）。
+- `--category` 与 `--search` 可 AND 组合。
+- `python main.py models <provider> --verbose`：显示端点候选尝试过程；JSON 输出含 `endpoints_tried` 和 `successful_endpoint`。
+- `python main.py doctor`：provider 检测增加流式状态行。
+
+### 红线遵守
+
+- 密钥绝不落盘：仅存 `api_key_env` 环境变量名；`config_snapshot()` 脱敏；`GET /providers` 响应不含密钥值
+- 向后兼容：现有 15 个预设 key/语义不变；现有 API 响应只增字段；custom_providers 格式不变；无 endpoint_candidates 时 discovery 行为逐字节一致
+- 确定性引擎不变：发现/测速/流式检测均为按需调用，无常驻网络轮询
+- Studio 零框架：不新增 npm 依赖，沿用 vanilla JS + h() DOM 构建
+
 ---
 
 ## 自定义角色 / 团队开发指南

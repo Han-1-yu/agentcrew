@@ -24,7 +24,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from agentcrew.config import Settings
-from agentcrew.models.config import UnknownProviderError, parse_alias
+from agentcrew.models.config import ModelBinding, UnknownProviderError, parse_alias
 from agentcrew.models.factory import HealthRecord, ModelFactory
 
 #: 检查项状态：pass / warn / fail。warn 不阻断退出码，fail 阻断。
@@ -274,16 +274,74 @@ def _health_to_check(alias: str, record: HealthRecord) -> DoctorCheck:
     )
 
 
+async def _check_streaming(settings: Settings, aliases: list[str]) -> list[DoctorCheck]:
+    """逐别名探测流式可用性（P2 stream_check）。
+
+    防御性：模块尚不存在时只回一条 ``流式检测：未实现``，状态为 warn
+    （不阻断退出码），不崩。模块存在时发一个 stream=true 的最小补全请求，
+    收到第一个 SSE data 帧即判 ok。
+    """
+    try:
+        from agentcrew.models.stream_check import check_streaming
+    except ImportError:
+        return [DoctorCheck(
+            name="streaming",
+            status=STATUS_WARN,
+            message="流式检测：未实现（P2 stream_check 模块尚未就绪）",
+        )]
+    checks: list[DoctorCheck] = []
+    for alias in aliases:
+        try:
+            binding = parse_alias(
+                alias,
+                overrides=settings.provider_overrides,
+                custom=settings.custom_providers,
+            )
+        except (ValueError, UnknownProviderError):
+            continue
+        api_key = settings.api_key_for(binding.provider) or ""
+        try:
+            result = await check_streaming(binding, api_key=api_key)
+        except Exception as exc:  # noqa: BLE001 —— 诊断命令绝不因探测崩掉
+            checks.append(DoctorCheck(
+                name=f"streaming:{alias}",
+                status=STATUS_WARN,
+                message=f"流式检测异常：{type(exc).__name__}: {exc}",
+            ))
+            continue
+        if result.get("ok"):
+            latency = result.get("latency_ms")
+            lat = f"{latency:.0f}ms" if isinstance(latency, (int, float)) else "—"
+            checks.append(DoctorCheck(
+                name=f"streaming:{alias}",
+                status=STATUS_PASS,
+                message=f"流式：✓（{lat}）",
+            ))
+        else:
+            err = result.get("error") or "未知错误"
+            checks.append(DoctorCheck(
+                name=f"streaming:{alias}",
+                status=STATUS_WARN,
+                message=f"流式：✗（{err}）",
+            ))
+    return checks
+
+
 async def run_diagnostics(
     settings: Settings,
     *,
     health_check: Callable[[str], Awaitable[HealthRecord]] | None = None,
+    stream_check: Callable[[ModelBinding, str], Awaitable[dict]] | None = None,
 ) -> DoctorReport:
     """跑全部检查并汇成报告；``health_check`` 缺省用 ModelFactory 的实现。
 
     ``health_check`` 注入点：测试传一个假协程，避免真发网络请求；生产路径
     下缺省时构造 :class:`ModelFactory` 并逐别名探测（P2-11 的同一套
     healthy / degraded / unavailable 三级结论）。
+
+    ``stream_check`` 注入点同理：测试传假协程避免真实 SSE 请求；生产路径下
+    缺省时加载 P2 的 :mod:`agentcrew.models.stream_check`。当 ``health_check``
+    被显式注入（单元测试）时，流式检测自动跳过，避免测试发真实网络请求。
     """
     checks: list[DoctorCheck] = [
         _check_python_version(),
@@ -310,6 +368,11 @@ async def run_diagnostics(
             )
             continue
         checks.append(_health_to_check(alias, record))
+
+    # 流式检测：仅在生产路径（health_check 未被注入）时真实执行；
+    # 测试注入 health_check 时跳过，避免真实 SSE 请求挂起。
+    if health_check is None:
+        checks.extend(await _check_streaming(settings, aliases))
 
     ok = not any(c.status == STATUS_FAIL for c in checks)
     return DoctorReport(ok=ok, checks=checks)

@@ -39,28 +39,47 @@ class ModelDiscoveryError(Exception):
         self.kind = kind
 
 
-def candidate_urls(binding: ModelBinding) -> list[str]:
-    """从 ``base_url``（或 ``models_url`` 覆写）派生 ``/models`` 候选 URL。
+def _path_variants(base: str) -> list[str]:
+    """对单个 base 派生 ``/models`` 候选路径变体。
 
-    - 若 ``binding.models_url`` 显式指定，只试它；
-    - 否则：``{base_url}/models``；若 base_url 不以 ``/v1`` 结尾，再试
-      ``{base_url}/v1/models``。
-    去重保序。
+    - ``{base}/models`` 总是加入；
+    - 若 base 不以 ``/v1`` 结尾，再追加 ``{base}/v1/models``。
+    抽取成纯函数便于端点候选矩阵对每个端点复用同一套派生规则。
+    """
+    base = (base or "").rstrip("/")
+    if not base:
+        return []
+    out = [f"{base}/models"]
+    if not base.endswith("/v1"):
+        out.append(f"{base}/v1/models")
+    return out
+
+
+def candidate_urls(binding: ModelBinding) -> list[str]:
+    """派生 ``/models`` 候选 URL 列表（V5 P2：端点候选 × 路径变体矩阵）。
+
+    - 若 ``binding.models_url`` 显式指定，只试它（优先级最高）；
+    - 否则：对 ``binding.endpoint_candidates``（若非空）中的**每个**端点，
+      依次派生路径变体（``/models``、``/v1/models``），形成「端点候选 ×
+      路径变体」的矩阵 —— 先试第一个端点的全部路径变体，再试第二个，依此类推；
+    - 若 ``binding.endpoint_candidates`` 为 ``None``，退化为只用
+      ``binding.base_url`` 派生（与 P1 行为逐字节一致）。
+    全程去重保序。
     """
     if binding.models_url:
         return [binding.models_url]
-    base = (binding.base_url or "").rstrip("/")
-    if not base:
-        return []
-    candidates = [f"{base}/models"]
-    if not base.endswith("/v1"):
-        candidates.append(f"{base}/v1/models")
+    endpoints: list[str]
+    if binding.endpoint_candidates:
+        endpoints = list(binding.endpoint_candidates)
+    else:
+        endpoints = [binding.base_url or ""]
     seen: set[str] = set()
     result: list[str] = []
-    for url in candidates:
-        if url not in seen:
-            seen.add(url)
-            result.append(url)
+    for endpoint in endpoints:
+        for url in _path_variants(endpoint):
+            if url not in seen:
+                seen.add(url)
+                result.append(url)
     return result
 
 

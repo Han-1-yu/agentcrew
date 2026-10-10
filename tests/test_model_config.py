@@ -15,6 +15,12 @@ def test_all_providers_present():
         "ollama", "mock", "cli",
         # A2 新增
         "openrouter", "siliconflow", "moonshot", "zhipu", "groq", "together",
+        # V5 P1 新增：聚合/中转
+        "fireworks", "deepinfra", "replicate", "huggingface",
+        # V5 P1 新增：国内
+        "baichuan", "minimax", "stepfun", "lingyi", "xinghuo",
+        # V5 P1 新增：国际
+        "gemini", "mistral", "cohere",
     }
 
 

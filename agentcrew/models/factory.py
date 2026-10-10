@@ -33,9 +33,9 @@ import asyncio
 import random
 import time
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -55,7 +55,12 @@ from agentcrew.models.config import (
     build_directory,
     parse_alias,
 )
-from agentcrew.models.pricing import estimate_cost
+from agentcrew.models.loop_guard import (
+    LoopDetectedError,
+    LoopGuard,
+    UnitRun,
+)
+from agentcrew.models.pricing import MODEL_PRICING, estimate_cost
 from agentcrew.models.providers.anthropic import AnthropicProvider
 from agentcrew.models.providers.base import (
     BaseProvider,
@@ -84,6 +89,20 @@ def _level_rank(level: "ComplexityLevel") -> int:
     """复杂度级别排序权重（P3-1：判断上调 / 下调）。LOW < MEDIUM < HIGH。"""
     return {"low": 0, "medium": 1, "high": 2}[level.value]
 
+
+def _input_price_of(model: str) -> float:
+    """取模型 input 单价（USD / 1M tokens）；未知模型返回 0.0。
+
+    与 :func:`~agentcrew.models.pricing.estimate_cost` 同款最长前缀匹配，
+    仅取 input 价（P2 自动降级：比较「哪个备用模型更便宜」用 input 价即可，
+    无需完整估算）。
+    """
+    prefix = max(
+        (p for p in MODEL_PRICING if model.startswith(p)), key=len, default=None)
+    if prefix is None:
+        return 0.0
+    return MODEL_PRICING[prefix][0]
+
 #: 默认 fixture 根目录（仓库根的 ``examples/fixtures``）。模块级常量是契约的
 #: 一部分：测试与 Task 34 的 Crew 都靠 monkeypatch 它注入临时 fixtures。
 DEFAULT_FIXTURES_DIR: Path = (
@@ -104,11 +123,48 @@ _HEALTH_DEGRADED_THRESHOLD_MS = 2000.0
 #: P2-11：健康探测单次超时（秒）。
 _HEALTH_CHECK_TIMEOUT_SECS = 5.0
 
+#: P2 增强：预算软阈值比较的浮点容差（USD）。累计成本是多次加法累加的，
+#: 与 ``limit * threshold`` 直接比会有 ~1e-17 误差，导致「刚好达到阈值」漏触发。
+_BUDGET_EPSILON = 1e-9
+
 #: P0-2：触发故障转移的异常类型 —— Provider 内部重试耗尽后的瞬时故障。
 #: openai_compat / anthropic 抛 TransientError；cli 抛 TimeoutError / ConnectionError。
 _PROVIDER_UNAVAILABLE_TYPES: tuple[type[BaseException], ...] = (
     TransientError, TimeoutError, ConnectionError,
 )
+
+
+# ── P0 故障转移增强：冷却矩阵（借鉴 Magpie routing.go restAfterMarked）─────────
+#: 402 余额不足冷却时长（分钟）—— creditRest，30 分钟。
+_COOLDOWN_402_MIN = 30
+#: 429 限流基础冷却（分钟）—— 无 Retry-After 时的起步值。
+_COOLDOWN_429_BASE_MIN = 1
+#: 429 限流冷却上限（分钟）—— 指数退避封顶。
+_COOLDOWN_429_MAX_MIN = 30
+#: 5xx 瞬时故障基础冷却（分钟）。
+_COOLDOWN_5XX_BASE_MIN = 1
+#: 5xx 瞬时故障冷却上限（分钟）。
+_COOLDOWN_5XX_MAX_MIN = 10
+#: 404 模型不存在冷却（分钟）—— 只冷却该模型键，不冷却整个 provider。
+_COOLDOWN_404_MIN = 1
+#: 其他未分类瞬时故障冷却（分钟）。
+_COOLDOWN_DEFAULT_MIN = 1
+
+# ── P0 故障转移增强：冷却矩阵（借鉴 Magpie routing.go restAfterMarked）─────────
+#: 402 余额不足冷却时长（分钟）—— creditRest，30 分钟。
+_COOLDOWN_402_MIN = 30
+#: 429 限流基础冷却（分钟）—— 无 Retry-After 时的起步值。
+_COOLDOWN_429_BASE_MIN = 1
+#: 429 限流冷却上限（分钟）—— 指数退避封顶。
+_COOLDOWN_429_MAX_MIN = 30
+#: 5xx 瞬时故障基础冷却（分钟）。
+_COOLDOWN_5XX_BASE_MIN = 1
+#: 5xx 瞬时故障冷却上限（分钟）。
+_COOLDOWN_5XX_MAX_MIN = 10
+#: 404 模型不存在冷却（分钟）—— 只冷却该模型键，不冷却整个 provider。
+_COOLDOWN_404_MIN = 1
+#: 其他未分类瞬时故障冷却（分钟）。
+_COOLDOWN_DEFAULT_MIN = 1
 
 
 class ModelFactoryError(RuntimeError):
@@ -180,6 +236,10 @@ class HealthRecord(BaseModel):
     last_check: datetime
     error: str | None = None
     consecutive_failures: int = 0
+    #: V5 P2：流式探测结果（None = 未做过流式检测）。
+    #: 由 :meth:`ModelFactory.health_check_stream` 按需更新；普通 :meth:`health_check`
+    #: 不触碰此字段，两者独立维护。
+    stream_ok: bool | None = None
 
 
 class WeightedAlias(BaseModel):
@@ -217,7 +277,14 @@ class ModelFactory:
         self._cache: dict[str, BaseProvider] = {}
         # Python 3.10+ 的 Semaphore 不再在构造时绑定事件循环，因此可以在这里
         # 创建；容量即全局 LLM 调用并发上限（spec §7.3）。
+        # V6 P0.5：保留全局信号量作为只读属性（向后兼容），实际 call/stream_call/
+        # complete_structured 路径改用 per-provider 信号量（_provider_semaphores）。
         self._llm_semaphore = asyncio.Semaphore(settings.max_concurrency)
+        # V6 P0.5：per-provider 并发信号量缓存（provider 名 → Semaphore）。
+        # 未配置 max_concurrency 的 provider 回退到 settings.max_concurrency。
+        self._provider_semaphores: dict[str, asyncio.Semaphore] = {}
+        # V6 P0.5：per-provider RPM 滑动窗口时间戳（provider 名 → 单调递增时间戳列表）。
+        self._rpm_timestamps: dict[str, list[float]] = {}
         self._llm_calls = 0
         self._total_prompt_tokens = 0
         self._total_completion_tokens = 0
@@ -225,6 +292,15 @@ class ModelFactory:
         # P2-11：主动健康监控 —— 各别名的健康状态缓存与后台探测任务。
         self._health: dict[str, HealthRecord] = {}
         self._health_task: asyncio.Task | None = None
+        # P0 故障转移增强：失败冷却追踪 —— key = alias（或模型级键）。
+        # value = 冷却到期时间；过期条目在 _is_cooled_down 里惰性清除。
+        self._cooldowns: dict[str, datetime] = {}
+        # 连续失败计数（指数退避用）；成功时清零。
+        self._consecutive_failures: dict[str, int] = {}
+        # P2 增强：预算警告 / 自动降级的一次性状态。``reset_stats`` 一并清零，
+        # 让阈值在新 run 重新武装（否则一次 run 警告过后永久沉默）。
+        self._budget_warning_emitted = False
+        self._budget_downgrade_to: str | None = None
 
     # ── 只读视图 ──────────────────────────────────────────────────────────
 
@@ -268,6 +344,9 @@ class ModelFactory:
         self._total_prompt_tokens = 0
         self._total_completion_tokens = 0
         self._total_cost_usd = 0.0
+        # P2 增强：预算警告 / 降级状态随计数器一起复位，新 run 重新武装阈值。
+        self._budget_warning_emitted = False
+        self._budget_downgrade_to = None
 
     # ── P1-6：运行时切换模型绑定 ───────────────────────────────────────────
 
@@ -286,6 +365,8 @@ class ModelFactory:
         self._validate_alias(alias)
         self._settings = self._settings.model_copy(update={"default_model": alias})
         self._cache.clear()
+        self._provider_semaphores.clear()
+        self._rpm_timestamps.clear()
         self._emit_model_switched(old, alias, scope="default")
 
     def set_role_binding(self, role: str, alias: str) -> None:
@@ -303,6 +384,8 @@ class ModelFactory:
         self._settings = self._settings.model_copy(
             update={"role_bindings": old_bindings})
         self._cache.clear()
+        self._provider_semaphores.clear()
+        self._rpm_timestamps.clear()
         self._emit_model_switched(old, alias, scope=f"role:{role}")
 
     def _validate_alias(self, alias: str) -> None:
@@ -398,6 +481,61 @@ class ModelFactory:
 
         self._health[alias] = record
         self._emit_health(record)
+        return record
+
+    async def health_check_stream(self, alias: str) -> HealthRecord:
+        """对单个别名做**流式探测**，返回并缓存结果（V5 P2）。
+
+        与 :meth:`health_check` 的区别：
+
+        - 走 :mod:`agentcrew.models.stream_check` 发一个 ``stream=true`` 的最小
+          补全请求，只验证 SSE 第一个 ``data:`` 帧能否到达；
+        - **只更新** ``HealthRecord.stream_ok``，不改变 ``status`` /
+          ``latency_ms`` / ``consecutive_failures``（那些由普通 health_check
+          维护）。若该别名还没有健康记录，则新建一条（status 按流式结果推断）。
+        - mock/cli 实现由 stream_check 直接短路为 ok=True，无需 API Key。
+        """
+        from agentcrew.models import stream_check
+
+        # 解析 binding + 取 API Key（与 health_check 同一套配置来源）。
+        try:
+            binding = parse_alias(
+                alias,
+                overrides=self._settings.provider_overrides,
+                custom=self._settings.custom_providers,
+            )
+            api_key = self._require_api_key(binding)
+        except Exception as exc:
+            # 配置错误（缺 Key、非法别名等）：落成 unavailable + stream_ok=False，
+            # 与普通 health_check 的失败路径同形，便于 /test 端点统一读取。
+            record = HealthRecord(
+                alias=alias,
+                status="unavailable",
+                latency_ms=None,
+                last_check=datetime.now(),
+                error=f"{type(exc).__name__}: {exc}",
+                stream_ok=False,
+            )
+            self._health[alias] = record
+            return record
+
+        result = await stream_check.check_streaming(
+            binding, api_key=api_key)
+
+        existing = self._health.get(alias)
+        if existing is not None:
+            # 已有普通探测记录：只补丁 stream_ok，其余字段原样保留。
+            record = existing.model_copy(update={"stream_ok": result["ok"]})
+        else:
+            record = HealthRecord(
+                alias=alias,
+                status="healthy" if result["ok"] else "unavailable",
+                latency_ms=result["latency_ms"],
+                last_check=datetime.now(),
+                error=result["error"],
+                stream_ok=result["ok"],
+            )
+        self._health[alias] = record
         return record
 
     async def _health_loop(self) -> None:
@@ -597,7 +735,13 @@ class ModelFactory:
 
         P3-10：如果 failover 配置使用权重格式（含 dict 项），按权重随机选择别名，
         失败时从剩余别名按剩余权重重选。
+
+        P2 增强：若上一次记账已触发预算自动降级（``_budget_downgrade_to`` 已设），
+        本次调用强制走更便宜的备别名，而不是原 alias。
         """
+        # P2 增强：预算降级一旦触发，后续调用统一走便宜模型（仅作用一次，
+        # 调用方显式请求便宜模型本身时不重复切换）。
+        alias = self._maybe_apply_downgrade(alias)
         # P3-10：权重路由路径
         pool = self._build_weighted_pool(alias)
         if pool is not None:
@@ -608,7 +752,7 @@ class ModelFactory:
                                              response_format=response_format)
 
         aliases = self._failover_aliases(alias)
-        last_error: Exception | None = None
+        last_error: BaseException | None = None
         for idx, current_alias in enumerate(aliases):
             try:
                 # P3-2：确定性调用先查响应缓存 —— 命中直接返回，不占信号量、
@@ -623,18 +767,27 @@ class ModelFactory:
                             cached, purpose=purpose, role=role)
                         return cached.model_copy(update={"from_cache": True})
                 provider = self.get(current_alias)
-                async with self._llm_semaphore:
+                provider_name = provider.binding.provider
+                sem = self._get_provider_semaphore(
+                    provider_name, provider.binding.max_concurrency)
+                await self._wait_for_rpm(provider_name, provider.binding.max_rpm)
+                async with sem:
                     result = await provider.complete(
                         messages,
                         temperature=temperature,
                         max_tokens=max_tokens,
                         response_format=response_format)
-                self._account(result, purpose=purpose, role=role)
+                self._account(
+                    result, purpose=purpose, role=role,
+                    binding=provider.binding)
+                self._reset_cooldown(current_alias)
                 if cache_key is not None:
                     self._resp_cache.set(cache_key, result)
                 return result
             except _PROVIDER_UNAVAILABLE_TYPES as exc:
                 last_error = exc
+                self._mark_cooldown(
+                    current_alias, getattr(exc, "status_code", None), exc)
                 if idx < len(aliases) - 1:
                     self._emit_failover(current_alias, aliases[idx + 1], exc)
                     continue
@@ -664,22 +817,31 @@ class ModelFactory:
     ) -> CompletionResult:
         """P3-10：权重路由的 ``call()`` 实现 —— 按权重选择，失败后从剩余权重重选。"""
         available = list(pool)
-        last_error: Exception | None = None
+        last_error: BaseException | None = None
         while available:
             chosen, reason = self._select_weighted(available)
             self._emit_routed(chosen, available, reason)
             try:
                 provider = self.get(chosen)
-                async with self._llm_semaphore:
+                provider_name = provider.binding.provider
+                sem = self._get_provider_semaphore(
+                    provider_name, provider.binding.max_concurrency)
+                await self._wait_for_rpm(provider_name, provider.binding.max_rpm)
+                async with sem:
                     result = await provider.complete(
                         messages,
                         temperature=temperature,
                         max_tokens=max_tokens,
                         response_format=response_format)
-                self._account(result, purpose=purpose, role=role)
+                self._account(
+                    result, purpose=purpose, role=role,
+                    binding=provider.binding)
+                self._reset_cooldown(chosen)
                 return result
             except _PROVIDER_UNAVAILABLE_TYPES as exc:
                 last_error = exc
+                self._mark_cooldown(
+                    chosen, getattr(exc, "status_code", None), exc)
                 available = [wa for wa in available if wa.alias != chosen]
                 if available:
                     self._emit_failover(chosen, available[0].alias, exc)
@@ -716,34 +878,89 @@ class ModelFactory:
           落一条 ``llm_call`` 事件（token/成本/预算检查与非流式完全一致）。
 
         信号量同样只包住 ``stream_complete`` 的逐块消费；流结束后才释放并记账。
+
+        P1.5：``settings.loop_guard_enabled`` 为真时，每个 chunk 喂入 text 通道的
+        :class:`~agentcrew.models.loop_guard.LoopGuard`；窗口内 distinct unit 过少即
+        抛 :class:`LoopDetectedError` 中断流（已 yield 的 chunk 不回滚），并落
+        ``loop_detected`` 事件。``False``（默认）时行为与改造前逐字节一致。
         """
-        provider = self.get(alias)
-        started = time.perf_counter()
-        parts: list[str] = []
-        finish_reason: str | None = None
-        async with self._llm_semaphore:
-            async for chunk in provider.stream_complete(
-                messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                response_format=response_format,
-            ):
-                parts.append(chunk.delta)
-                if chunk.finish_reason is not None:
-                    finish_reason = chunk.finish_reason
-                yield chunk
-        latency_ms = int((time.perf_counter() - started) * 1000)
-        text = "".join(parts)
-        result = CompletionResult(
-            text=text,
-            provider=provider.binding.provider,
-            model=provider.binding.model,
-            prompt_tokens=sum(estimate_tokens(m["content"]) for m in messages),
-            completion_tokens=estimate_tokens(text),
-            latency_ms=latency_ms,
-            finish_reason=finish_reason,
-        )
-        self._account(result, purpose=purpose, role=role)
+        aliases = self._failover_aliases(alias)
+        last_error: BaseException | None = None
+        for idx, current_alias in enumerate(aliases):
+            provider = self.get(current_alias)
+            started = time.perf_counter()
+            parts: list[str] = []
+            finish_reason: str | None = None
+            guard = LoopGuard(enabled=self._settings.loop_guard_enabled)
+            provider_name = provider.binding.provider
+            sem = self._get_provider_semaphore(
+                provider_name, provider.binding.max_concurrency)
+            await self._wait_for_rpm(provider_name, provider.binding.max_rpm)
+            yielded_first = False
+            success = False
+            try:
+                async with sem:
+                    async for chunk in provider.stream_complete(
+                        messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        response_format=response_format,
+                    ):
+                        yielded_first = True
+                        parts.append(chunk.delta)
+                        if guard.enabled:
+                            samples = guard.feed_text(chunk.delta)
+                            if samples:
+                                self._emit_loop_detected(
+                                    "text", samples, UnitRun.LOOP_WINDOW)
+                                raise LoopDetectedError(
+                                    "text", samples, UnitRun.LOOP_WINDOW)
+                        if chunk.finish_reason is not None:
+                            finish_reason = chunk.finish_reason
+                        yield chunk
+                # 流正常结束后冲刷缓冲（最后一个不完整 unit 也参与判定）。
+                if guard.enabled:
+                    for channel, samples in guard.flush().items():
+                        self._emit_loop_detected(
+                            channel, samples, UnitRun.LOOP_WINDOW)
+                        raise LoopDetectedError(
+                            channel, samples, UnitRun.LOOP_WINDOW)
+                success = True
+            except _PROVIDER_UNAVAILABLE_TYPES as exc:
+                last_error = exc
+                if yielded_first:
+                    # 已吐出块给调用方，无法回滚 —— 直接上抛。
+                    raise
+                # 第一个 chunk 前失败：标记冷却并切换到下一个备用别名。
+                self._mark_cooldown(
+                    current_alias, getattr(exc, "status_code", None), exc)
+                if idx < len(aliases) - 1:
+                    self._emit_failover(current_alias, aliases[idx + 1], exc)
+                    continue
+                if len(aliases) > 1:
+                    raise ProviderUnavailableError(
+                        f"全部故障转移别名均不可用（primary={alias!r}，"
+                        f"尝试了 {len(aliases)} 个）：{exc}") from exc
+                raise
+            if success:
+                self._reset_cooldown(current_alias)
+                latency_ms = int((time.perf_counter() - started) * 1000)
+                text = "".join(parts)
+                result = CompletionResult(
+                    text=text,
+                    provider=provider.binding.provider,
+                    model=provider.binding.model,
+                    prompt_tokens=sum(
+                        estimate_tokens(m["content"]) for m in messages),
+                    completion_tokens=estimate_tokens(text),
+                    latency_ms=latency_ms,
+                    finish_reason=finish_reason,
+                )
+                self._account(
+                    result, purpose=purpose, role=role, binding=provider.binding)
+                return
+        if last_error is not None:
+            raise last_error
 
     async def complete_structured(
         self,
@@ -780,7 +997,10 @@ class ModelFactory:
         记 ``llm_failover`` 事件。失败别名已消耗的 token 仍记账（真实 LLM 调用）。
 
         P3-10：权重格式 failover 时按权重随机选择，失败后从剩余权重重选。
+
+        P2 增强：与 :meth:`call` 同形，预算降级触发后本入口也走便宜备别名。
         """
+        alias = self._maybe_apply_downgrade(alias)
         # P3-10：权重路由路径
         pool = self._build_weighted_pool(alias)
         if pool is not None:
@@ -791,7 +1011,7 @@ class ModelFactory:
                 repair_attempts=repair_attempts, on_degrade=on_degrade)
 
         aliases = self._failover_aliases(alias)
-        last_error: Exception | None = None
+        last_error: BaseException | None = None
         for idx, current_alias in enumerate(aliases):
             provider = self.get(current_alias)
             collecting = _CollectingProvider(provider)
@@ -813,7 +1033,10 @@ class ModelFactory:
                         self._account_cached(cached, purpose=purpose, role=role)
                         return parsed
             try:
-                async with self._llm_semaphore:
+                provider_name = provider.binding.provider
+                sem = self._get_provider_semaphore(
+                    provider_name, provider.binding.max_concurrency)
+                async with sem:
                     model = await structured.complete_structured(
                         collecting,
                         messages,
@@ -837,7 +1060,9 @@ class ModelFactory:
                 # 走同一条记账路径，已消耗的 token 一条都不丢。故障转移时失败别名
                 # 的消耗也照记（真实 LLM 调用）。
                 for result in collecting.results:
-                    self._account(result, purpose=purpose, role=role)
+                    self._account(
+                        result, purpose=purpose, role=role,
+                        binding=provider.binding)
             # 阶梯成功：把最后一次（产出合法 schema 的）结果文本写入响应缓存。
             if cache_key is not None and collecting.results:
                 self._resp_cache.set(cache_key, collecting.results[-1])
@@ -863,7 +1088,7 @@ class ModelFactory:
     ) -> BaseModel:
         """P3-10：权重路由的 ``complete_structured()`` 实现。"""
         available = list(pool)
-        last_error: Exception | None = None
+        last_error: BaseException | None = None
         while available:
             chosen, reason = self._select_weighted(available)
             self._emit_routed(chosen, available, reason)
@@ -871,7 +1096,10 @@ class ModelFactory:
             collecting = _CollectingProvider(provider)
             degrade_cb = on_degrade if on_degrade is not None else self._emit_degrade
             try:
-                async with self._llm_semaphore:
+                provider_name = provider.binding.provider
+                sem = self._get_provider_semaphore(
+                    provider_name, provider.binding.max_concurrency)
+                async with sem:
                     return await structured.complete_structured(
                         collecting,
                         messages,
@@ -891,7 +1119,9 @@ class ModelFactory:
                     f"尝试了 {len(pool)} 个）：{exc}") from exc
             finally:
                 for result in collecting.results:
-                    self._account(result, purpose=purpose, role=role)
+                    self._account(
+                        result, purpose=purpose, role=role,
+                        binding=provider.binding)
         if last_error is not None:
             raise last_error
         raise RuntimeError(
@@ -985,6 +1215,79 @@ class ModelFactory:
 
     # ── P0-2：有序故障转移 ────────────────────────────────────────────────
 
+    # ── P0 故障转移增强：冷却追踪 ──────────────────────────────────────────
+
+    def _is_cooled_down(self, alias: str) -> bool:
+        """检查 ``alias`` 是否在冷却中；冷却已过期则惰性清除并返回 ``False``。"""
+        until = self._cooldowns.get(alias)
+        if until is None:
+            return False
+        if datetime.now() >= until:
+            self._cooldowns.pop(alias, None)
+            return False
+        return True
+
+    def _reset_cooldown(self, alias: str) -> None:
+        """调用成功后清除该 alias 的冷却状态与连续失败计数。"""
+        self._cooldowns.pop(alias, None)
+        self._consecutive_failures.pop(alias, None)
+
+    @staticmethod
+    def _extract_retry_after(exc: BaseException) -> float | None:
+        """沿异常链读 ``Retry-After``（秒）；复用 openai_compat 的解析逻辑。"""
+        from agentcrew.models.providers.openai_compat import retry_after_seconds
+        return retry_after_seconds(exc)
+
+    def _mark_cooldown(
+        self, alias: str, status_code: int | None, exc: BaseException,
+    ) -> None:
+        """按失败分类设置冷却到期时间（借鉴 Magpie routing.go restAfterMarked）。
+
+        - 402 余额不足 → 固定冷却 30 分钟（creditRest）；
+        - 429 限流 → 优先 ``Retry-After``，否则 1 分钟起步指数退避（封顶 30 分钟）；
+        - 5xx → 1 分钟起步指数退避（封顶 10 分钟）；
+        - 404 模型不存在 → 冷却模型级键（alias 本身即 ``provider:model``），1 分钟；
+        - 其他瞬时故障 → 1 分钟。
+        """
+        n = self._consecutive_failures.get(alias, 0) + 1
+        self._consecutive_failures[alias] = n
+        minutes: float
+        if status_code == 402:
+            minutes = _COOLDOWN_402_MIN
+        elif status_code == 429:
+            retry_after = self._extract_retry_after(exc)
+            if retry_after is not None:
+                minutes = retry_after / 60.0
+            else:
+                minutes = min(
+                    _COOLDOWN_429_BASE_MIN * (2 ** (n - 1)),
+                    _COOLDOWN_429_MAX_MIN,
+                )
+        elif status_code is not None and 500 <= status_code < 600:
+            minutes = min(
+                _COOLDOWN_5XX_BASE_MIN * (2 ** (n - 1)),
+                _COOLDOWN_5XX_MAX_MIN,
+            )
+        elif status_code == 404:
+            minutes = _COOLDOWN_404_MIN
+        else:
+            minutes = _COOLDOWN_DEFAULT_MIN
+        self._cooldowns[alias] = datetime.now() + timedelta(minutes=minutes)
+
+    def _preset_fallback_aliases(self, alias: str) -> list[str]:
+        """从 preset 的 ``fallback_models`` 派生备用别名（``provider:model``）。"""
+        try:
+            binding = parse_alias(
+                alias,
+                overrides=self._settings.provider_overrides,
+                custom=self._settings.custom_providers,
+            )
+        except Exception:
+            return []
+        if not binding.fallback_models:
+            return []
+        return [f"{binding.provider}:{m}" for m in binding.fallback_models]
+
     def _failover_aliases(self, alias: str) -> list[str]:
         """返回 ``[primary] + 备用别名`` 的尝试列表（P0-2 故障转移）。
 
@@ -997,13 +1300,23 @@ class ModelFactory:
         都 unavailable，仍返回原列表（最后一搏）。健康监控未启用或无数据时
         行为不变。
         """
-        backups = self._settings.model_failover.get(alias, [])
+        explicit = self._settings.model_failover.get(alias)
+        if explicit:
+            backups: list[str | dict[str, Any]] = explicit
+        else:
+            # 无显式配置 → 从 preset.fallback_models 自动派生（P0 增强）。
+            backups = cast(list[str | dict[str, Any]], self._preset_fallback_aliases(alias))
         seen: set[str] = {alias}
         result = [alias]
         for backup in backups:
-            if backup not in seen:
-                seen.add(backup)
-                result.append(backup)
+            # model_failover 可能含 dict 项（权重格式）；这里只接受字符串别名。
+            if isinstance(backup, dict):
+                backup_str = str(backup.get("alias", ""))
+            else:
+                backup_str = str(backup)
+            if backup_str and backup_str not in seen:
+                seen.add(backup_str)
+                result.append(backup_str)
         # P2-11：健康感知重排 —— unavailable 的别名移到末尾。
         if self._settings.health_check_enabled and self._health:
             healthy_part: list[str] = []
@@ -1017,9 +1330,20 @@ class ModelFactory:
             if unavailable_part and healthy_part:
                 result = healthy_part + unavailable_part
             # 全部 unavailable 时保持原序（最后一搏）。
+        # P0 冷却感知重排 —— 冷却中的别名移到末尾。
+        active_part: list[str] = []
+        cooled_part: list[str] = []
+        for a in result:
+            if self._is_cooled_down(a):
+                cooled_part.append(a)
+            else:
+                active_part.append(a)
+        if cooled_part and active_part:
+            result = active_part + cooled_part
+        # 全部冷却中时保持原序（最后一搏）。
         return result
 
-    def _emit_failover(self, from_alias: str, to_alias: str, exc: Exception) -> None:
+    def _emit_failover(self, from_alias: str, to_alias: str, exc: BaseException) -> None:
         """记一条 ``llm_failover`` 事件（P0-2：诚实留痕）。
 
         每次从一个别名切换到下一个备用别名时调用，含 from_alias / to_alias /
@@ -1072,6 +1396,53 @@ class ModelFactory:
             key=key[:12],
         )
 
+    # ── V6 P0.5：per-provider 并发与 RPM 限制 ───────────────────────────────
+
+    def _get_provider_semaphore(
+        self, provider: str, max_concurrency: int | None
+    ) -> asyncio.Semaphore:
+        """返回某 provider 的专属信号量（按 provider 名缓存）。
+
+        - ``max_concurrency`` 来自该 provider 的 preset（经 binding 拷贝）；
+        - 为 ``None`` 时回退到全局 ``settings.max_concurrency``（向后兼容）；
+        - 同一 provider 名复用同一信号量实例 —— 不同 alias 打同一上游时
+          受同一把锁约束，避免触发上游 429。
+        """
+        sem = self._provider_semaphores.get(provider)
+        if sem is None:
+            cap = (
+                max_concurrency if max_concurrency is not None
+                else self._settings.max_concurrency)
+            sem = asyncio.Semaphore(cap)
+            self._provider_semaphores[provider] = sem
+        return sem
+
+    async def _wait_for_rpm(self, provider: str, max_rpm: int | None) -> None:
+        """滑动窗口 RPM 限速（60 秒窗口）。
+
+        - ``max_rpm`` 为 ``None`` 时直接返回（不限制，向后兼容）；
+        - 每次调用清理 60 秒前的旧时间戳；
+        - 若窗口内已达 ``max_rpm``，await 到最早时间戳滑出窗口再继续；
+        - 调用结束把当前时间戳入列 —— 即本次请求占用一个 RPM 槽位。
+        """
+        if max_rpm is None:
+            return
+        timestamps = self._rpm_timestamps.setdefault(provider, [])
+        now = time.monotonic()
+        cutoff = now - 60.0
+        while timestamps and timestamps[0] < cutoff:
+            timestamps.pop(0)
+        if len(timestamps) >= max_rpm:
+            wait_time = timestamps[0] + 60.0 - now
+            if wait_time > 0:
+                await asyncio.sleep(wait_time)
+                # 睡醒后再清一次窗口（sleep 期间可能又有其他协程入列）。
+                now = time.monotonic()
+                cutoff = now - 60.0
+                while timestamps and timestamps[0] < cutoff:
+                    timestamps.pop(0)
+        timestamps.append(time.monotonic())
+
     def _account_cached(
         self, result: CompletionResult, *, purpose: str, role: str
     ) -> None:
@@ -1095,18 +1466,162 @@ class ModelFactory:
             cached=True,
         )
 
-    def _account(self, result: CompletionResult, *, purpose: str, role: str) -> None:
+    # ── P1.5 / P2 增强：循环检测留痕与预算降级 ──────────────────────────────
+
+    def _emit_loop_detected(
+        self, channel: str, sample_units: list[str], window_size: int
+    ) -> None:
+        """记一条 ``loop_detected`` 事件（P1.5：诚实留痕）。"""
+        if self._ledger is None:
+            return
+        self._ledger.emit(
+            "loop_detected",
+            channel=channel,
+            sample_units=sample_units,
+            window_size=window_size,
+            distinct_units=len(sample_units),
+        )
+
+    def _maybe_apply_downgrade(self, alias: str) -> str:
+        """P2 增强：预算降级触发后，后续调用改走便宜备别名。
+
+        只在 ``_budget_downgrade_to`` 已设置且与请求 alias 不同时替换；调用方
+        显式请求便宜模型本身时原样返回，避免无意义的二次切换。
+        """
+        target = self._budget_downgrade_to
+        if target is not None and target != alias:
+            return target
+        return alias
+
+    def _find_cheaper_fallback(
+        self, current_model: str, binding: ModelBinding | None = None
+    ) -> str | None:
+        """找 input 单价最低且比当前模型便宜的备别名。
+
+        候选来源合并两处：(1) ``settings.model_failover`` 显式配置的备用列表；
+        (2) 当前 binding 的 ``fallback_models``（preset 自带的降级链，V6 P0）。
+        价格用 :data:`~agentcrew.models.pricing.MODEL_PRICING` 最长前缀匹配；
+        候选 binding 若自带 ``input_price`` 则优先用它（聚合平台 / 自定义模型
+        不在公开价目表里）。
+
+        当前模型价格未知（0.0）时不降级——无法判断谁更便宜，贸然切换可能更贵。
+        无更便宜选项返回 ``None``，保持原行为（达 100% 时抛 BudgetExhaustedError）。
+        """
+        current_in = _input_price_of(current_model)
+        if current_in <= 0:
+            return None
+        best: tuple[float, str] | None = None
+
+        def consider(alias: str, price: float) -> None:
+            nonlocal best
+            if 0 < price < current_in and (
+                    best is None or price < best[0]):
+                best = (price, alias)
+
+        for backups in self._settings.model_failover.values():
+            for entry in backups:
+                alias = (
+                    entry if isinstance(entry, str) else entry.get("alias"))
+                if not alias:
+                    continue
+                mname = alias.split(":", 1)[1] if ":" in alias else alias
+                consider(alias, _input_price_of(mname))
+        if binding is not None and binding.fallback_models:
+            for mname in binding.fallback_models:
+                alias = f"{binding.provider}:{mname}"
+                consider(alias, _input_price_of(mname))
+        return best[1] if best is not None else None
+
+    def _maybe_emit_budget_warning(self) -> None:
+        """P2 增强：累计成本首次达 ``budget_warning_threshold`` 时落 ``budget_warning``。
+
+        只警告、不中断；一次性（``_budget_warning_emitted`` 防止每次记账都刷一条）。
+        ``max_cost_usd`` 为 None 时整段跳过，行为完全不变。
+        """
+        limit = self._settings.max_cost_usd
+        if limit is None or self._budget_warning_emitted:
+            return
+        threshold = self._settings.budget_warning_threshold
+        # 浮点容差：累计成本是多次加法累加的，直接与 limit*threshold 比会有
+        # ~1e-17 误差，导致「刚好达到阈值」被判成未达到。
+        if self._total_cost_usd < limit * threshold - _BUDGET_EPSILON:
+            return
+        self._budget_warning_emitted = True
+        if self._ledger is None:
+            return
+        self._ledger.emit(
+            "budget_warning",
+            current_cost_usd=self._total_cost_usd,
+            limit_usd=limit,
+            threshold=threshold,
+            pct=round(self._total_cost_usd / limit, 4),
+        )
+
+    def _maybe_downgrade_to_cheaper(
+        self, result: CompletionResult, binding: ModelBinding | None = None
+    ) -> None:
+        """P2 增强：累计成本达 ``budget_downgrade_threshold`` 时切到便宜备模型。
+
+        找到更便宜备别名后只设置 ``_budget_downgrade_to`` 标志位 + 落
+        ``budget_downgrade`` 事件；实际模型切换由 :meth:`call` /
+        :meth:`complete_structured` 下次调用时经 :meth:`_maybe_apply_downgrade`
+        完成——已经开始的这次调用不半途切 provider（流已吐的 chunk 无法回滚）。
+        """
+        limit = self._settings.max_cost_usd
+        if limit is None or self._budget_downgrade_to is not None:
+            return
+        threshold = self._settings.budget_downgrade_threshold
+        if self._total_cost_usd < limit * threshold - _BUDGET_EPSILON:
+            return
+        cheaper = self._find_cheaper_fallback(result.model, binding)
+        if cheaper is None:
+            return
+        self._budget_downgrade_to = cheaper
+        if self._ledger is None:
+            return
+        self._ledger.emit(
+            "budget_downgrade",
+            from_model=result.model,
+            to_alias=cheaper,
+            reason="budget_threshold",
+            current_cost_usd=self._total_cost_usd,
+            limit_usd=limit,
+            threshold=threshold,
+        )
+
+    def _account(
+        self,
+        result: CompletionResult,
+        *,
+        purpose: str,
+        role: str,
+        binding: ModelBinding | None = None,
+    ) -> None:
         """累加用量、估算成本并发一条 ``llm_call`` —— **两条调用路径共用**。
 
         单一记账路径是刻意的：``call()`` 与 ``complete_structured()`` 若各写一份，
         迟早漂移，而 spec §14.3 的运行报告会照抄其中一份。
 
+        V6 P1：若 ``binding`` 同时给出 ``input_price`` / ``output_price``，优先
+        用 preset 价格（USD/百万 token）计算成本；否则回退到 ``pricing.py`` 的
+        ``MODEL_PRICING`` 最长前缀表 —— 聚合平台 / 未知模型仍按表估。
+
         P0-3：记账后检查 ``max_cost_usd`` / ``max_llm_calls`` 硬上限，超限抛
         ``BudgetExhaustedError``。ledger 事件先于异常发出（触发超限的那次调用
         也必须留痕），Crew 捕获异常后优雅收尾。
         """
-        cost = estimate_cost(
-            result.model, result.prompt_tokens, result.completion_tokens)
+        if (
+            binding is not None
+            and binding.input_price is not None
+            and binding.output_price is not None
+        ):
+            cost = (
+                result.prompt_tokens / 1e6 * binding.input_price
+                + result.completion_tokens / 1e6 * binding.output_price
+            )
+        else:
+            cost = estimate_cost(
+                result.model, result.prompt_tokens, result.completion_tokens)
         self._llm_calls += 1
         self._total_prompt_tokens += result.prompt_tokens
         self._total_completion_tokens += result.completion_tokens
@@ -1121,6 +1636,11 @@ class ModelFactory:
                 estimated_cost_usd=cost,
                 latency_ms=result.latency_ms,
                 purpose=purpose)
+        # P2 增强：先做软阈值（80% 警告 / 90% 降级），再做 100% 硬上限。
+        # 软阈值不抛异常，只落事件 + 置标志位；硬超限仍按原逻辑抛
+        # BudgetExhaustedError。max_cost_usd 为 None 时这两个方法整体空转。
+        self._maybe_emit_budget_warning()
+        self._maybe_downgrade_to_cheaper(result, binding)
         # P0-3：预算硬上限检查（ledger 事件已发出，超限调用可追溯）。
         # 严格大于才抛：上限本身包含在内（max_llm_calls=1 允许 1 次成功调用）。
         if (self._settings.max_cost_usd is not None

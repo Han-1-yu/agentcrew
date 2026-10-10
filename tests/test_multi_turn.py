@@ -42,9 +42,14 @@ class _ScriptedProvider:
     """按队列依次返回预设回复的假 provider；记录每次 complete 收到的 messages。"""
 
     def __init__(self, responses: list[str]) -> None:
+        from types import SimpleNamespace
         self._responses = list(responses)
         self.calls = 0
         self.seen_messages: list[list[Message]] = []
+        # V6 P0.5：per-provider 信号量代码读 provider.binding.provider / .max_rpm。
+        self.binding = SimpleNamespace(
+            provider="scripted", max_rpm=None, max_concurrency=None,
+            input_price=None, output_price=None)
 
     async def complete(self, messages, *, temperature, max_tokens,
                        response_format=None):
