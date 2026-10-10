@@ -225,6 +225,65 @@ function run(win) {
     check('13c. 「从预设添加」弹窗可打开并 Esc 关闭', !!addModalOpen && addModalClosed,
       `open=${addModalOpen} state=${JSON.stringify(modalState)}`);
 
+    // ── 13d. V5 P3：搜索框 / 分类筛选 / 编辑按钮 ──
+    await sleep(400);
+    const provEnhance = await js(`(() => ({
+      search: !!document.querySelector('#prov-search'),
+      catBtns: document.querySelectorAll('#prov-cat-bar .prov-cat-btn').length,
+      editBtns: document.querySelectorAll('.prov-edit-btn').length,
+      count: !!document.querySelector('#prov-count'),
+      builtinCount: (typeof BUILTIN_PROVIDERS !== 'undefined') ? BUILTIN_PROVIDERS.length : -1,
+    }))()`);
+    const enhanceOk = provEnhance && provEnhance.search
+      && Number(provEnhance.catBtns) >= 6
+      && Number(provEnhance.editBtns) >= 1
+      && provEnhance.count
+      && Number(provEnhance.builtinCount) >= 25;
+    check('13d. 供应商页增强（搜索框 + ≥6 分类按钮 + 编辑按钮 + BUILTIN≥25）', !!enhanceOk,
+      JSON.stringify(provEnhance));
+
+    // 搜索输入实时过滤
+    const searchResult = await js(`(() => {
+      const s = document.querySelector('#prov-search');
+      if (!s) return null;
+      s.value = 'openai';
+      s.dispatchEvent(new Event('input', { bubbles: true }));
+      return { typed: s.value };
+    })()`);
+    await sleep(500); // 等 200ms 防抖 + 重渲染
+    const filteredCount = await js(`document.querySelectorAll('.prov-card').length`);
+    check('13e. 搜索框输入后实时过滤卡片', !!searchResult && Number(filteredCount) >= 1,
+      `typed=${searchResult && searchResult.typed} 剩余卡片=${filteredCount}`);
+    // 清空搜索
+    await js(`(() => { const s = document.querySelector('#prov-search'); if (s) { s.value=''; s.dispatchEvent(new Event('input',{bubbles:true})); } })()`);
+    await sleep(400);
+
+    // 分类筛选按钮可点击
+    const catClick = await js(`(() => {
+      const b = document.querySelector('#prov-cat-bar .prov-cat-btn[data-cat="national"]');
+      if (!b) return null;
+      b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      return { clicked: true, active: b.classList.contains('active') };
+    })()`);
+    await sleep(400);
+    const afterCatCards = await js(`document.querySelectorAll('.prov-card').length`);
+    check('13f. 分类筛选按钮（国内）可点击并筛选', !!(catClick && catClick.active && Number(afterCatCards) >= 1),
+      `active=${catClick && catClick.active} 卡片=${afterCatCards}`);
+    // 切回全部
+    await js(`document.querySelector('#prov-cat-bar .prov-cat-btn[data-cat="all"]')?.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}))`);
+    await sleep(300);
+
+    // 编辑按钮打开弹窗 → Esc 关闭
+    await js(`document.querySelector('.prov-edit-btn')?.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}))`);
+    await sleep(400);
+    const editModalOpen = await js(`!!document.querySelector('#modal') && !document.querySelector('#modal').classList.contains('hidden') && !!document.querySelector('#ap-yaml')`);
+    await js(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`);
+    await sleep(400);
+    const editModalClosed = await js(`(() => { const m = document.querySelector('#modal'); return m ? m.classList.contains('hidden') : true; })()`);
+    check('13g. 编辑按钮打开弹窗并 Esc 关闭', !!(editModalOpen && editModalClosed),
+      `open=${editModalOpen} closed=${editModalClosed}`);
+    await shot('11c-供应商增强');
+
     // ── 14. 键盘快捷键 ──
     await js(`document.querySelector('.nav-item[data-nav="dashboard"]')?.click()`);
     await sleep(300);
