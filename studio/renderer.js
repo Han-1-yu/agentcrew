@@ -79,10 +79,6 @@ const EVENT_META = {
 };
 const EVENT_TYPES = Object.keys(EVENT_META);
 
-// iOS 硬编码颜色
-const C = { blue:'#007AFF', success:'#34C759', warn:'#FF9F0A', error:'#FF3B30',
-  text:'#1C1C1E', sub:'#6E6E73', ter:'#8E8E93' };
-
 /* ============================================================
    全局状态
    ============================================================ */
@@ -515,7 +511,7 @@ function renderDAGFallback() {
     for(const t of items){ const rm=roleMeta(t.role);
       host.appendChild(h('div',{class:'dag-task-row',onclick:()=>openTaskDetail(t.id)},
         h('span',{class:'dot',style:`background:${meta.color}`}),
-        h('span',{class:'mono',style:`color:${C.ter}`},t.id),
+        h('span',{class:'mono',style:`color:var(--text-ter)`},t.id),
         h('span',{},t.title),
         h('span',{style:`color:${rm.color};margin-left:auto;font-size:11px`},rm.full)));
     }

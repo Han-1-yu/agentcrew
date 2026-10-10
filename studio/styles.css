@@ -71,7 +71,6 @@
   --warn-text: #B25A00;
   --warn-bg-soft: rgba(255,159,10,0.08);
   --warn-bg: rgba(255,159,10,0.10);
-  --warn-bg-chip: rgba(255,159,10,0.12);
   --warn-border-soft: rgba(255,159,10,0.15);
   --warn-border: rgba(255,159,10,0.20);
 
@@ -185,7 +184,6 @@
   --warn-text: #FFD60A;
   --warn-bg-soft: rgba(255,214,10,0.10);
   --warn-bg: rgba(255,214,10,0.14);
-  --warn-bg-chip: rgba(255,214,10,0.16);
   --warn-border-soft: rgba(255,214,10,0.20);
   --warn-border: rgba(255,214,10,0.30);
 
