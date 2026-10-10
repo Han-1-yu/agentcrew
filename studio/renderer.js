@@ -552,8 +552,10 @@ function renderRunStatusBar() {
     actions.push(h('button',{class:'btn btn-primary',onclick:async ()=>{
       if (isReal && run.dir) {
         try {
-          await window.studio.resumeRun({runDir: run.dir, mock: true, auto: true});
-          toast('success','已恢复','从检查点继续运行');
+          // 按原运行的模式恢复（config_snapshot.mock 是落盘事实），不能硬编码 mock
+          const origMock = !!(run.config_snapshot && run.config_snapshot.mock);
+          await window.studio.resumeRun({runDir: run.dir, mock: origMock, auto: true});
+          toast('success','已恢复', origMock ? '从检查点继续运行（Mock）' : '从检查点继续运行（真实模型）');
           setTimeout(async ()=>{ try { await switchRun(run.dir); } catch {} }, 2000);
         } catch(e) { toast('error','恢复失败',String(e.message||e)); }
       } else {
@@ -614,8 +616,7 @@ function iconPlay(){ return h('svg',{width:13,height:13,viewBox:'0 0 24 24',fill
 function renderAgents() {
   const grid=$('#agents-grid'); if(!grid)return; grid.innerHTML='';
   const agents=S.dash.agents;
-  const order=['project_manager','product_manager','architect','backend_dev','frontend_dev','qa_engineer','devops_engineer','technical_writer'];
-  for(const rid of order){ const a=agents[rid]; const rm=roleMeta(rid);
+  for(const rid of ROLE_ORDER){ const a=agents[rid]; const rm=roleMeta(rid);
     const active=S.detail&&S.detail.kind==='agent'&&S.detail.id===rid;
     grid.appendChild(h('div',{class:`agent-card${active?' active':''}`,onclick:()=>openAgentDetail(rid)},
       h('div',{class:'ac-head'},
@@ -1002,16 +1003,8 @@ function simTick(){
 }
 
 /* ============================================================
-   导航 & 占位页
+   导航
    ============================================================ */
-const PLACEHOLDERS={
-  tasks:{title:'任务图',desc:'完整 DAG 编辑器与任务调试视图正在开发中。当前请使用上方运行总览中的依赖图。'},
-  agents:{title:'Agents',desc:'Agent 编排与提示词配置面板正在开发中。当前请使用上方的 Agent 协作状态卡片。'},
-  gates:{title:'质量门禁',desc:'门禁规则配置与历史报告正在开发中。当前请使用上方的三层质量门禁概览。'},
-  artifacts:{title:'产物',desc:'产物浏览器与预览正在开发中。运行完成后 artifacts/ 目录将自动填充交付物。'},
-  events:{title:'事件日志',desc:'完整 ledger 搜索与过滤正在开发中。当前请使用上方的最近事件时间线。'},
-  settings:{title:'设置',desc:'连接设置、预算策略与主题配置正在开发中。'},
-};
 /* ============================================================
    产物页
    ============================================================ */
@@ -1200,13 +1193,6 @@ function highlightCode(text, filename) {
     }
   }
   return escaped;
-}
-
-function fmtBytes(n) {
-  if (n == null) return '—';
-  if (n < 1024) return n + ' B';
-  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
-  return (n / 1024 / 1024).toFixed(1) + ' MB';
 }
 
 /* ============================================================
@@ -1786,7 +1772,7 @@ function switchNav(key){
   if(key==='tasks'){ renderPlanPage(ph); return; }
   if(key==='agents'){ renderAgentsPage(ph); return; }
   if(key==='gates'){ renderGatesPage(ph); return; }
-  const p=PLACEHOLDERS[key]||{title:key,desc:'该页面开发中。'};
+  const p={title:key,desc:'该页面开发中。'};
   ph.appendChild(h('div',{class:'ph-icon'},h('svg',{width:30,height:30,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor','stroke-width':1.6,'stroke-linecap':'round','stroke-linejoin':'round'},h('rect',{x:'3',y:'3',width:'18',height:'18',rx:'3'}),h('path',{d:'M8 12h8'}))));
   ph.appendChild(h('h2',{},p.title)); ph.appendChild(h('p',{},p.desc));
   ph.appendChild(h('button',{class:'btn btn-primary',onclick:()=>switchNav('dashboard')},'返回运行总览'));
@@ -2358,6 +2344,9 @@ function openUserMenu(){
 }
 
 function openNewRunModal(){
+  // 记忆上次的模式选择；首次默认**真实模式**——Mock 产物是固定 Todo 夹具，与目标无关
+  const saved = localStorage.getItem('agentcrew:nrMock');
+  const mockDefault = saved == null ? !!(S.settings && S.settings.defaultMock) : saved === '1';
   showModal(h('div',{},
     h('h3',{class:'modal-title'},'启动新运行'),
     h('div',{class:'confirm-text'},'用一句话描述要交付的目标：'),
@@ -2365,41 +2354,63 @@ function openNewRunModal(){
     h('div',{style:'margin-top:10px'},
       h('label',{style:'font-size:12px;color:#6E6E73;display:block;margin-bottom:4px'},'项目（可选，用于分组管理）'),
       h('input',{id:'nr-project',type:'text',style:'width:100%;border:1px solid rgba(60,60,67,.2);border-radius:6px;padding:6px 8px;font-family:inherit;font-size:13px',placeholder:'例如：shortlink-service'})),
-    h('div',{style:'display:flex;gap:16px;margin-top:10px;font-size:12px;color:#6E6E73'},
+    h('div',{style:'display:flex;gap:16px;margin-top:10px;font-size:12px;color:#6E6E73;flex-wrap:wrap'},
       h('label',{style:'display:flex;align-items:center;gap:5px;cursor:pointer'},
-        h('input',{type:'checkbox',id:'nr-mock',checked:true}),'Mock 模式'),
+        h('input',{type:'checkbox',id:'nr-mock',checked:mockDefault}),'Mock 模式'),
       h('label',{style:'display:flex;align-items:center;gap:5px;cursor:pointer'},
         h('input',{type:'checkbox',id:'nr-auto',checked:true}),'自动执行'),
       h('label',{style:'display:flex;align-items:center;gap:5px;cursor:pointer'},
-        h('input',{type:'checkbox',id:'nr-demo'}),'Demo 目标')),
+        h('input',{type:'checkbox',id:'nr-demo'}),'Demo 目标'),
+      h('label',{id:'nr-slow-wrap',style:'display:flex;align-items:center;gap:5px;cursor:pointer;visibility:hidden'},
+        h('input',{type:'checkbox',id:'nr-slow'}),'慢速（便于观察/取消）')),
+    h('div',{id:'nr-hint',style:'margin-top:10px;font-size:12px;line-height:1.6;color:#8E8E93'},''),
     h('div',{class:'modal-actions'},
       h('button',{class:'btn',onclick:closeModal},'取消'),
-      h('button',{class:'btn btn-primary',onclick:async ()=>{
+      h('button',{class:'btn btn-primary',id:'nr-start',onclick:async ()=>{
         const goal=$('#nr-goal').value.trim();
         const useDemo=$('#nr-demo').checked;
         if(!useDemo && !goal){ toast('warning','需要目标','请输入项目目标或勾选 Demo'); return; }
         const project=$('#nr-project').value.trim();
-        closeModal();
+        const mockOn=$('#nr-mock').checked;
+        const startBtn=$('#nr-start');
+        startBtn.disabled=true; startBtn.textContent='启动中…';
         try {
-          const r = await window.studio.startRun({
+          localStorage.setItem('agentcrew:nrMock', mockOn ? '1' : '0');
+          await window.studio.startRun({
             goal: useDemo ? '' : goal,
             demo: useDemo,
-            mock: $('#nr-mock').checked,
+            mock: mockOn,
             auto: $('#nr-auto').checked,
             project: project || null,
+            // 慢速 mock：拉长每次模拟 LLM 调用，留出观察与取消窗口
+            env: (mockOn && $('#nr-slow').checked) ? { AGENTCREW_MOCK_LATENCY_MS: '2000' } : null,
           });
-          toast('success','已启动','运行已提交，正在初始化…');
-          // 等待 CLI 创建 run 目录后切换
-          setTimeout(async ()=>{
+          closeModal();
+          toast('success','已启动', mockOn ? 'Mock 运行已提交…' : '真实模型运行已提交，耗时数分钟…');
+          // 轮询等 CLI 创建出**新的** run 目录再切换（不能取 runs[0]——可能是别的运行）
+          const before = new Set(((await window.studio.listRuns())||[]).map(x=>x.dir));
+          for(let i=0;i<120;i++){
+            await new Promise(res=>setTimeout(res,500));
             try {
-              const runs = await window.studio.listRuns();
-              if(runs && runs.length) await switchRun(runs[0].dir);
+              const fresh = ((await window.studio.listRuns())||[]).find(x=>!before.has(x.dir));
+              if(fresh){ await switchRun(fresh.dir); break; }
             } catch {}
-          }, 2500);
+          }
         } catch(e) {
+          startBtn.disabled=false; startBtn.textContent='启动';
           toast('error','启动失败', String(e.message||e));
         }
       }},'启动'))));
+  // Mock 勾选联动：模式说明 + 慢速选项可见性
+  const syncMock = () => {
+    const on=$('#nr-mock').checked;
+    $('#nr-hint').textContent = on
+      ? 'Mock 模式：不调用大模型，产物为内置 Todo 示例（与目标无关），适合演示界面与调试。'
+      : '真实模式：调用 .env 配置的大模型（如 deepseek-chat）按目标生成真实产物，通常花费 $0.01–0.2、需数分钟；需先在 .env 配置 API Key。';
+    $('#nr-slow-wrap').style.visibility = on ? 'visible' : 'hidden';
+  };
+  $('#nr-mock').addEventListener('change',syncMock);
+  syncMock();
 }
 
 boot();
