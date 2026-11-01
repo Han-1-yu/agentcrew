@@ -11,6 +11,17 @@ const { buildZipFromDir } = require('./zip');
 
 const IS_SELFTEST = process.argv.includes('--selftest');
 const IS_E2E = process.argv.includes('--e2e');
+const IS_PROBE = process.argv.includes('--probe');
+
+// 测试进程（--selftest / --e2e）使用独立 userData profile：
+// 测试会走真实弹窗启动 mock run、切换主题，若与用户共用 profile，
+// 会把「上次模式选择=Mock」(localStorage)、测试目标(recentGoals)、主题等写进用户配置。
+// 每次先清空 test-profile 保证用例从干净状态开始；独立 profile 也不与在用的 Studio 抢单实例锁。
+if (IS_SELFTEST || IS_E2E) {
+  const testProfile = path.join(app.getPath('userData'), 'test-profile');
+  try { fs.rmSync(testProfile, { recursive: true, force: true }); } catch { /* 忽略 */ }
+  app.setPath('userData', testProfile);
+}
 
 // 后端 CLI 的退出码语义（main.py EXIT_CODES）
 const EXIT_MEANINGS = {
@@ -56,10 +67,12 @@ function defaultSettings() {
 function loadSettings() {
   const s = defaultSettings();
   try {
-    const raw = JSON.parse(fs.readFileSync(settingsPath(), 'utf8'));
-    Object.assign(s, raw);
+    // 兼容记事本等编辑器写入的 UTF-8 BOM：有 BOM 时 JSON.parse 抛错会导致全部设置静默回退默认
+    let raw = fs.readFileSync(settingsPath(), 'utf8');
+    if (raw.charCodeAt(0) === 0xFEFF) raw = raw.slice(1);
+    Object.assign(s, JSON.parse(raw));
     // 迁移：旧字段 pythonCommand → 标准字段 pythonCmd
-    if (!s.pythonCmd && raw.pythonCommand) {
+    if (!s.pythonCmd && s.pythonCommand) {
       s.pythonCmd = raw.pythonCommand;
       delete s.pythonCommand;
       try { fs.writeFileSync(settingsPath(), JSON.stringify(s, null, 2), 'utf8'); } catch { /* 非致命 */ }
@@ -336,6 +349,8 @@ function spawnCli(kind, args, outputDir, extraEnv) {
       rec.live = true;
       const text = d.toString('utf8');
       logLine(`[err] ${text.trim()}`);
+      // 保留尾部若干行：秒退（如参数错误）时渲染端凭它提示原因
+      rec.stderrTail = ((rec.stderrTail || '') + text).split('\n').slice(-8).join('\n');
       send('proc:log', { key, stream: 'err', text });
     });
     proc.on('error', (e) => {
@@ -345,7 +360,13 @@ function spawnCli(kind, args, outputDir, extraEnv) {
     proc.on('exit', (code) => {
       logLine(`[exit] code=${code}`);
       discoverRunDir(rec, true);
-      send('proc:exit', { key, code, meaning: EXIT_MEANINGS[code] || `退出码 ${code}` });
+      send('proc:exit', {
+        key, code,
+        meaning: EXIT_MEANINGS[code] || `退出码 ${code}`,
+        hadRunDir: !!rec.runDir,
+        killed: !!rec.killed,
+        stderrTail: (rec.stderrTail || '').slice(-400),
+      });
       setTimeout(() => { if (procs.get(key) === rec) procs.delete(key); }, 60_000);
     });
   };
@@ -540,6 +561,47 @@ function readArtifact(runDir, relPath) {
   return { binary: false, content: buf.toString('utf8'), sizeBytes: st.size, truncated, path: relPath };
 }
 
+// ---------- 供应商模型列表拉取（借鉴 cc-switch model-fetch） ----------
+
+// 为 base_url 生成 /models 候选地址并按序尝试：
+// 1) 直接拼 /models；2) 未带版本号时补 /v1/models（如 Anthropic）；
+// 3) 剥离 /anthropic、/compatible-mode 等兼容子路径后兜底。
+function buildModelsUrlCandidates(baseUrl, family) {
+  const b = String(baseUrl).replace(/\/+$/, '');
+  const cands = [];
+  const push = (u) => { if (u && !cands.includes(u)) cands.push(u); };
+
+  push(b + '/models');
+  const hasVersionSegment = /\/v\d+(?:\.\d+)?(?:beta)?(?:\/|$)/.test(b) || /\/openai(?:\/|$)/.test(b);
+  if (!hasVersionSegment) push(b + '/v1/models');
+  // 兼容子路径兜底：.../anthropic → .../models、.../anthropic/v1/models
+  const compat = b.replace(/\/(anthropic|claude|compatible-mode)(\/v\d+(?:\.\d+)?)?$/i, '');
+  if (compat !== b) { push(compat.replace(/\/+$/, '') + '/v1/models'); push(compat.replace(/\/+$/, '') + '/models'); }
+  return cands;
+}
+
+// 解析三种常见模型列表响应格式
+function parseModelsPayload(json) {
+  if (!json || typeof json !== 'object') return null;
+  // OpenAI / Anthropic / 智谱 v4：{ data: [{ id, owned_by }] }
+  if (Array.isArray(json.data)) {
+    const out = json.data.map((d) => ({
+      id: String(d.id || d.slug || d.name || '').trim(),
+      owned_by: d.owned_by || d.ownedBy || null,
+    })).filter(x => x.id);
+    return out.length ? out : null;
+  }
+  // 智谱 Responses 旧端点 / Cohere：{ models: [{ slug | name | id }] }
+  if (Array.isArray(json.models)) {
+    const out = json.models.map((d) => (typeof d === 'string' ? { id: d, owned_by: null } : {
+      id: String(d.slug || d.id || d.name || '').trim(),
+      owned_by: d.owned_by || d.ownedBy || d.provider || null,
+    })).filter(x => x.id);
+    return out.length ? out : null;
+  }
+  return null;
+}
+
 // ---------- IPC ----------
 
 function registerIpc() {
@@ -571,10 +633,11 @@ function registerIpc() {
     else args.push('--goal', String(p.goal || ''));
     if (p.mock) args.push('--mock');
     if (p.auto) args.push('--auto');
-    // B1：模型选择 —— 弹窗显式选择优先，否则回落设置页默认模型（形如 openai:gpt-4o）
-    // Mock 模式下不调用真实模型，--model 不参与 CLI 参数
+    // B1：模型选择 —— 弹窗显式选择优先，否则回落设置页默认模型（形如 openai:gpt-4o）。
+    // CLI 参数名为 --default-model（main.py _add_run_flags）；传 --model 会被 argparse 拒绝（退出码 2）
+    // Mock 模式下不调用真实模型，--default-model 不参与 CLI 参数
     const chosenModel = (p.model && String(p.model).trim()) || (settings.defaultModel && String(settings.defaultModel).trim());
-    if (chosenModel && !p.mock) args.push('--model', chosenModel);
+    if (chosenModel && !p.mock) args.push('--default-model', chosenModel);
     // P0-3：成本预算硬上限 —— 弹窗显式优先，否则回落设置页 maxCostUsd
     const chosenMaxCost = (p.maxCost && Number(p.maxCost) > 0) ? Number(p.maxCost)
       : (settings.maxCostUsd && Number(settings.maxCostUsd) > 0 ? Number(settings.maxCostUsd) : 0);
@@ -729,6 +792,34 @@ function registerIpc() {
     return { configured: !!(v && String(v).trim()) };
   });
 
+  // 保存 API Key：写入项目根目录 .env（后端 config.py load_dotenv 的标准读取位置），
+  // 同时注入主进程 process.env —— keyStatus / 在线拉取立即生效，CLI 子进程继承。
+  // .env 已被 .gitignore 忽略；Key 值只落盘本机，绝不回传渲染进程。
+  ipcMain.handle('provider:saveKey', (_e, opts) => {
+    const o = opts || {};
+    const envName = String(o.env_name || o.envName || '').trim();
+    const value = String(o.value == null ? '' : o.value).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(envName)) throw new Error(`环境变量名非法：${envName}`);
+    if (!value) throw new Error('Key 值不能为空');
+    if (/\r?\n/.test(value)) throw new Error('Key 值不能包含换行');
+    const envPath = path.join(settings.repoRoot, '.env');
+    let lines = [];
+    try { lines = fs.readFileSync(envPath, 'utf8').split(/\r?\n/); } catch { /* .env 不存在：新建 */ }
+    const probe = new RegExp(`^${envName}\\s*=`);
+    let replaced = false;
+    for (let i = 0; i < lines.length; i++) {
+      if (probe.test(lines[i])) { lines[i] = `${envName}=${value}`; replaced = true; break; }
+    }
+    if (!replaced) {
+      if (lines.length && lines[lines.length - 1].trim() !== '') lines.push('');
+      lines.push(`${envName}=${value}`);
+    }
+    try { fs.mkdirSync(settings.repoRoot, { recursive: true }); } catch { /* 已存在 */ }
+    fs.writeFileSync(envPath, lines.join('\n') + '\n', 'utf8');
+    process.env[envName] = value;
+    return { ok: true, env_name: envName, replaced, path: envPath };
+  });
+
   // 用 Electron net.fetch 测试 provider 连通性（主进程天然绕开渲染进程 CORS）
   ipcMain.handle('provider:test', async (_e, opts) => {
     const o = opts || {};
@@ -749,6 +840,70 @@ function registerIpc() {
     } finally {
       clearTimeout(timer);
     }
+  });
+
+  // 从供应商实时拉取可用模型列表（借鉴 cc-switch model-fetch）。
+  // Key 只在主进程从环境变量读取，绝不回传渲染进程。
+  // 兼容三种响应：OpenAI/Anthropic/智谱v4 {data:[{id,owned_by}]}、智谱Responses/Cohere {models:[{slug|name}]}。
+  ipcMain.handle('provider:fetchModels', async (_e, opts) => {
+    const o = opts || {};
+    const baseUrl = o.base_url == null ? '' : String(o.base_url).trim();
+    if (!baseUrl) return { ok: false, models: [], error: '该 provider 无 HTTP 端点（mock/cli）' };
+    const family = String(o.family || 'openai_compat');
+    const apiKey = o.api_key_env ? (process.env[String(o.api_key_env)] || '').trim() : '';
+
+    const candidates = buildModelsUrlCandidates(baseUrl, family);
+    let lastErr = '所有候选端点均不可用';
+    let lastStatus = 0;
+    for (const url of candidates) {
+      const headers = {};
+      if (apiKey) {
+        if (family === 'anthropic') {
+          headers['x-api-key'] = apiKey;
+          headers['anthropic-version'] = '2023-06-01';
+        } else {
+          headers['Authorization'] = 'Bearer ' + apiKey;
+        }
+      }
+      const ac = new AbortController();
+      const timer = setTimeout(() => { try { ac.abort(); } catch {} }, 10000);
+      try {
+        const res = await net.fetch(url, { method: 'GET', signal: ac.signal, redirect: 'follow', headers });
+        if (!res.ok) { lastErr = `HTTP ${res.status}`; lastStatus = res.status; continue; }
+        const json = await res.json();
+        const models = parseModelsPayload(json);
+        if (!models) { lastErr = '响应格式无法解析（供应商可能未开放模型列表接口）'; lastStatus = res.status; continue; }
+        return { ok: true, models, url, status: res.status, authed: !!apiKey };
+      } catch (e) {
+        const msg = String(e && e.message || e);
+        lastErr = /abort/i.test(msg) ? '连接超时（10s）' : msg;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    return { ok: false, models: [], status: lastStatus, error: lastErr };
+  });
+
+  // 批量端点测速（借鉴 cc-switch EndpointSpeedTest），返回每个 URL 的延迟与状态
+  ipcMain.handle('provider:testEndpoints', async (_e, opts) => {
+    const o = opts || {};
+    const urls = Array.isArray(o.urls) ? o.urls.map(u => String(u)).filter(Boolean) : [];
+    if (!urls.length) return { ok: false, results: [], error: '无候选端点' };
+    const results = await Promise.all(urls.map(async (url) => {
+      const ac = new AbortController();
+      const timer = setTimeout(() => { try { ac.abort(); } catch {} }, 8000);
+      const t0 = Date.now();
+      try {
+        const res = await net.fetch(url, { method: 'GET', signal: ac.signal, redirect: 'follow' });
+        return { url, ok: res.ok, latency_ms: Date.now() - t0, status: res.status, error: res.ok ? null : `HTTP ${res.status}` };
+      } catch (e) {
+        const msg = String(e && e.message || e);
+        return { url, ok: false, latency_ms: Date.now() - t0, status: 0, error: /abort/i.test(msg) ? '超时' : msg };
+      } finally {
+        clearTimeout(timer);
+      }
+    }));
+    return { ok: true, results };
   });
 
   // F4：最近目标列表（也可通过 settings:get 读取）
@@ -850,6 +1005,10 @@ if (!gotLock) {
     if (IS_E2E) {
       try { require('./e2e').run(win); }
       catch (e) { console.error('e2e 启动失败:', e); app.exit(1); }
+    }
+    if (IS_PROBE) {
+      try { require('./probe-edge').run(win); }
+      catch (e) { console.error('probe 启动失败:', e); app.exit(1); }
     }
   });
   app.on('window-all-closed', () => {

@@ -284,6 +284,55 @@ function run(win) {
       `open=${editModalOpen} closed=${editModalClosed}`);
     await shot('11c-供应商增强');
 
+    // ── 13h. 编辑弹窗保存 API Key → 写入 .env → 注入主进程环境（模型切换生效链路）──
+    // 用临时变量名 __E2E_STUDIO_KEY__，不碰真实供应商 Key；结束后还原 .env
+    const envPath = path.join(__dirname, '..', '.env');
+    const envBackup = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : null;
+    try {
+      await js(`(() => {
+        const card = document.querySelector('.prov-card');
+        card?.querySelector('.prov-edit-btn')?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      })()`);
+      await sleep(400);
+      const keyUi = await js(`(() => ({
+        keyInput: !!document.querySelector('#ap-key'),
+        keyType: document.querySelector('#ap-key')?.type || null,
+        saveBtn: !!document.querySelector('.ap-key-save'),
+        statusBefore: document.querySelector('.ap-key-status')?.textContent || null,
+      }))()`);
+      // 改环境变量名为测试名 → 填 Key 值 → 点保存
+      await js(`(() => {
+        const env = document.querySelector('#ap-env');
+        if (env) { env.value = '__E2E_STUDIO_KEY__'; env.dispatchEvent(new Event('input', { bubbles: true })); }
+        const key = document.querySelector('#ap-key');
+        if (key) key.value = 'sk-e2e-test-123';
+      })()`);
+      await shot('11d-编辑弹窗APIKey输入');
+      await js(`document.querySelector('.ap-key-save')?.click()`);
+      await sleep(800); // 等 IPC + .env 写入
+      const keyUiAfter = await js(`(() => ({
+        status: document.querySelector('.ap-key-status')?.textContent || null,
+        cleared: (document.querySelector('#ap-key')?.value || '') === '',
+      }))()`);
+      const envAfter = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
+      const inEnvFile = /^__E2E_STUDIO_KEY__=sk-e2e-test-123$/m.test(envAfter);
+      const injected = process.env.__E2E_STUDIO_KEY__ === 'sk-e2e-test-123';
+      check('13h. 编辑弹窗保存 API Key → 写入 .env → 注入主进程环境',
+        !!(keyUi && keyUi.keyInput && keyUi.keyType === 'password' && keyUi.saveBtn
+          && keyUiAfter && /已配置/.test(keyUiAfter.status || '') && keyUiAfter.cleared
+          && inEnvFile && injected),
+        `控件=${JSON.stringify(keyUi)} 保存后=${JSON.stringify(keyUiAfter)} .env命中=${inEnvFile} 环境注入=${injected}`);
+      await js(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`);
+      await sleep(400);
+    } finally {
+      // 还原 .env 与主进程环境
+      try {
+        if (envBackup === null) fs.rmSync(envPath, { force: true });
+        else fs.writeFileSync(envPath, envBackup, 'utf8');
+      } catch (e) { console.log('env 还原失败:', e.message); }
+      delete process.env.__E2E_STUDIO_KEY__;
+    }
+
     // ── 14. 键盘快捷键 ──
     await js(`document.querySelector('.nav-item[data-nav="dashboard"]')?.click()`);
     await sleep(300);
@@ -291,11 +340,15 @@ function run(win) {
     await js(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '4' }))`);
     await sleep(300);
     const agentsActive = await js(`document.querySelector('.nav-item[data-nav="agents"]')?.classList.contains('active')`);
-    // 模拟按 '9' 切换到供应商页
-    await js(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '9' }))`);
+    // 数字键映射须与侧边栏视觉顺序一致：8→供应商、9→设置
+    await js(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '8' }))`);
     await sleep(300);
     const providersActive = await js(`document.querySelector('.nav-item[data-nav="providers"]')?.classList.contains('active')`);
-    check('14. 数字键 1-9 快捷键切换页面', agentsActive && providersActive, `按 4→Agents=${agentsActive}; 按 9→供应商=${providersActive}`);
+    await js(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '9' }))`);
+    await sleep(300);
+    const settingsActive = await js(`document.querySelector('.nav-item[data-nav="settings"]')?.classList.contains('active')`);
+    check('14. 数字键 1-9 快捷键切换页面（对齐侧边栏顺序）', agentsActive && providersActive && settingsActive,
+      `按 4→Agents=${agentsActive}; 按 8→供应商=${providersActive}; 按 9→设置=${settingsActive}`);
 
     // ── 15. 计划审查页面 ──
     await js(`document.querySelector('.nav-item[data-nav="tasks"]')?.click()`);

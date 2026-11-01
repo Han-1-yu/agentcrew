@@ -249,7 +249,7 @@ class OpenAICompatProvider(BaseProvider):
             new_exc = cls(str(exc))
             match = _HTTP_STATUS_RE.search(str(exc))
             if match is not None:
-                setattr(new_exc, "status_code", int(match.group(1)))
+                new_exc.status_code = int(match.group(1))
             raise new_exc from exc
 
     def _prepare_messages(self, messages: Sequence[Message]) -> list[dict[str, str]]:

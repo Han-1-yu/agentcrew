@@ -38,7 +38,12 @@ contextBridge.exposeInMainWorld('studio', {
   gateAction: (runDir, layer, action) => invoke('gate:action', { runDir, layer, action }),
   // F3：供应商管理（只回布尔/连通性，不回传 Key 值）
   providerKeyStatus: (envName) => invoke('provider:keyStatus', envName),
+  // 保存 API Key 到项目根目录 .env 并注入主进程环境（值单向传入，不回传）
+  providerSaveKey: (opts) => invoke('provider:saveKey', opts),
   providerTest: (opts) => invoke('provider:test', opts),
+  // 实时拉取供应商可用模型列表 / 批量端点测速（Key 仅在主进程读取）
+  providerFetchModels: (opts) => invoke('provider:fetchModels', opts),
+  providerTestEndpoints: (opts) => invoke('provider:testEndpoints', opts),
   // F4：最近目标
   recentGoals: () => invoke('goals:recent'),
   // 主进程推送

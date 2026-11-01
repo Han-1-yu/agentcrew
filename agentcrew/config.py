@@ -56,6 +56,12 @@ _ENV_TO_FIELD: dict[str, str] = {
     "AGENTCREW_API_KEYS": "api_keys",
     "AGENTCREW_API_RATE_LIMIT_ENABLED": "api_rate_limit_enabled",
     "AGENTCREW_API_RATE_LIMIT_MAX": "api_rate_limit_max",
+    "AGENTCREW_REDACT_ENABLED": "redact_enabled",
+    "AGENTCREW_REDACT_API_KEYS": "redact_api_keys",
+    "AGENTCREW_REDACT_PII": "redact_pii",
+    "AGENTCREW_REDACT_CREDENTIALS": "redact_credentials",
+    "AGENTCREW_ROUTING_STRATEGY": "routing_strategy",
+    "AGENTCREW_AFFINITY_MODE": "affinity_mode",
 }
 
 #: ``AGENTCREW_MODEL_<ROLE>`` → ``role_bindings[<role 小写>]``（spec §17.2）。
@@ -407,6 +413,75 @@ class Settings(BaseModel):
     抛 :class:`~agentcrew.models.loop_guard.LoopDetectedError` 并落 ``loop_detected``
     事件。环境变量 ``AGENTCREW_LOOP_GUARD``。
     """
+    redact_enabled: bool = False
+    """请求数据脱敏总开关（V7-P0，借鉴 magpie redact）。
+
+    ``False``（默认）时所有 LLM 请求原样发送，行为与改造前逐字节一致。
+    ``True`` 时 :class:`~agentcrew.models.factory.ModelFactory` 在每次调用前用
+    :class:`~agentcrew.models.redact.Redactor` 对消息内容中的 API Key、密码、
+    个人身份信息等做确定性占位符替换，响应返回后还原。
+    环境变量 ``AGENTCREW_REDACT_ENABLED``。
+    """
+    redact_api_keys: bool = True
+    """脱敏时是否替换 API Key / Secret / Token（V7-P0）。仅 ``redact_enabled`` 为真时生效。"""
+    redact_pii: bool = True
+    """脱敏时是否替换个人身份信息（邮箱、手机号、身份证、银行卡）（V7-P0）。"""
+    redact_credentials: bool = True
+    """脱敏时是否替换密码和私钥块（V7-P0）。"""
+    redact_custom_words: list[str] = Field(default_factory=list)
+    """自定义敏感词列表（V7-P0）：精确匹配、大小写不敏感，命中即替换为占位符。"""
+    routing_strategy: str = "weighted"
+    """多模型路由策略（V7-P1，借鉴 magpie routing）。
+
+    当 ``model_failover`` 配置了权重格式的备用别名池时，本字段决定选择算法：
+
+    - ``weighted``（默认）：按权重随机选择，与 V3-10 行为完全一致；
+    - ``rotate``：轮询，每次调用选下一个别名，均匀分摊请求；
+    - ``usage``：优先选累计 token 使用量最少的别名（指数衰减，半衰期 1 小时）；
+    - ``order``：按列表顺序选第一个可用别名（等价于顺序 failover）。
+
+    未配置权重池时本字段无效，走顺序 failover。环境变量 ``AGENTCREW_ROUTING_STRATEGY``。
+    """
+    quotas: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    """按别名的多窗口配额（V7-P2，借鉴 magpie budget）。
+
+    与全局 ``max_cost_usd`` / ``max_llm_calls``（run 生命周期累计）不同，本配置
+    按日/周/月自然窗口滚动重置，且每个别名独立计数。适合多 key 池化时给每个 key
+    设独立限额（如免费额度 100 次/天）。
+
+    配置格式::
+
+        quotas:
+          openai:gpt-4o-mini:
+            daily:
+              max_calls: 100
+              max_tokens: 100000
+            weekly:
+              max_cost_usd: 5.0
+          anthropic:claude-3-5-sonnet:
+            monthly:
+              max_calls: 1000
+
+    配额耗尽时工厂抛 :class:`~agentcrew.models.quota.QuotaExhaustedError`，
+    触发故障转移到下一个备用别名。状态持久化到 ``output/quota_state.json``，
+    跨 run 保留。空 dict = 不启用，行为与改造前完全一致。
+    """
+    quota_enabled: bool = True
+    """多窗口配额总开关（V7-P2）。``False`` 时即使配置了 ``quotas`` 也不检查。"""
+    affinity_mode: str = "off"
+    """会话亲和性模式（V7-P3，借鉴 magpie affinity）。
+
+    多 key / 多模型池化时，让同一会话保持在同一别名上以利用厂商 prompt 缓存：
+
+    - ``off``（默认）：关闭，每次调用按路由策略选择，行为与改造前一致；
+    - ``session``：整个会话固定一个别名，直到该别名不可用才切换；
+    - ``turn``：每轮可重新选择（保留追踪能力但不强制亲和）。
+
+    仅当 ``model_failover`` 配置了备用别名池时有意义。环境变量
+    ``AGENTCREW_AFFINITY_MODE``。
+    """
+    affinity_ttl_days: int = 7
+    """亲和性记录过期天数（V7-P3）。超过此天数未使用的会话记录自动清理。"""
     health_check_enabled: bool = True
     """Provider 主动健康监控开关（P2-11）。
 

@@ -9,6 +9,7 @@ import hashlib
 import os
 import secrets
 import stat
+import time
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from uuid import uuid4
@@ -74,17 +75,34 @@ def safe_relpath(raw: str) -> PurePosixPath:
     return PurePosixPath(*segments)
 
 
+#: os.replace 遇 Windows 瞬时锁（杀软实时扫描 / 并发读取，WinError 5）时的重试参数。
+_REPLACE_RETRIES = 5
+_REPLACE_RETRY_DELAY = 0.05
+
+
 def atomic_write_bytes(path: Path, data: bytes) -> None:
     """原子写入字节：同目录临时文件写入后 ``os.replace`` 覆盖目标。
 
     临时文件与目标同目录（跨盘 ``os.replace`` 非原子且会直接失败），命名
     ``.{name}.{uuid}.tmp``；任何失败路径都在 ``finally`` 中清理残留。
+
+    Windows 上杀软实时扫描或并发读取会对 tmp / 目标持有瞬时共享锁，使
+    ``os.replace`` 抛 ``PermissionError``——不重试会让整个 run 因一次文件
+    写入崩溃退出（历史故障：tasks.json 被锁 → 进程死亡、run 卡在 running）。
+    有界线性退避重试只吸收瞬时钟，真锁超时后原样抛出。
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
     try:
         tmp.write_bytes(data)
-        os.replace(tmp, path)
+        for attempt in range(_REPLACE_RETRIES):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                if attempt == _REPLACE_RETRIES - 1:
+                    raise
+                time.sleep(_REPLACE_RETRY_DELAY * (attempt + 1))
     finally:
         tmp.unlink(missing_ok=True)
 
