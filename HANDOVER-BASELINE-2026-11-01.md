@@ -137,7 +137,7 @@ PYTHONPATH= ./.venv-handover/Scripts/python.exe main.py run --sample hierarchy -
 
 ## 七、Git 提交结果（已执行）
 
-原来的 168 个文件已全部落地，**工作区干净（0 项待提交）**，共 7 个 commit：
+原来的 168 个文件已全部落地，**工作区干净（0 项待提交）**，内容批次共 7 个 commit：
 
 | # | SHA | 内容 | 文件数 |
 | --- | --- | --- | ---: |
@@ -148,6 +148,8 @@ PYTHONPATH= ./.venv-handover/Scripts/python.exe main.py run --sample hierarchy -
 | 5 | `87c136d` | docs: 交接/验收/基线报告 + 数据契约参考副本 | 12 |
 | 6 | `f1a6ddf` | chore: 忽略本地调试归档与打包过程产物 | 2 |
 | 7 | `e3a41b1` | docs(baseline): 记录提交结果与 push 阻断原因 | 1 |
+
+> 另有若干仅修正本文档计数的收尾 commit，不涉及代码。
 
 **相对交接文档四步计划的四处修正**（照抄原计划会漏文件）：
 
@@ -179,7 +181,7 @@ curl: (7) CONNECT tunnel failed, response 502
 
 ```bash
 cd E:/agentcrew
-git push origin master        # 本地领先 140 个提交（133 + 本次 7 个）
+git push origin master        # 一次推送全部本地提交（原 133 个 + 本次接手批次）
 ```
 
 推送后到 Actions 页面看矩阵；若低版本报错，把日志发我，我按兼容性修。
