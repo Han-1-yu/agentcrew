@@ -207,3 +207,50 @@ git push origin master        # 一次推送全部本地提交（原 133 个 + �
 | 7 个 commit | 见 §7 |
 
 工作区当前 **0 项待提交**（`.venv-handover` 由 venv 自带 `.gitignore` 自我忽略）。
+
+---
+
+## 十一、真实模型通道验证（2026-11-01 17:46–18:06）
+
+Key 更新后 `doctor` 6 项全通过（`provider:deepseek:deepseek-chat: healthy（807ms）`）。
+随后连跑三次真实 DeepSeek 端到端，**每次都暴露一个 mock 结构上无法暴露的缺陷**：
+
+| 轮次 | 结果 | 卡点 | 处置 |
+| --- | --- | --- | --- |
+| realrun9 | 5 成功 / 1 失败 / 1 阻塞 | T6 的验收标准要求「README 与 `logstat/cli.py` 一致」，G2 只渲染本任务产物 → 三轮驳回 → FAILED | 修复：评审材料补「参考材料」节 |
+| realrun10 | 4 成功 / 1 失败 / 4 阻塞 | 动态子任务 `T-DYN-001` 抢占父任务契约里的 `logstat/__init__.py`，父任务落盘被冲突检测拒掉，3 次 attempt 烧光 | 修复：子任务入板前剔除已契约路径 |
+| realrun11 | **9/9 全通** | — | 两个修复同时生效 |
+
+realrun11 明细（`output/20261101-180100-2d90`）：$0.15、4m40s、32 次 LLM 调用、
+返工 4 次（T2×1 / T4×1 / T5×2）、G1 拦截 1、G2 驳回 3 后全部收敛、**13 个产物 0 哈希异常**。
+
+两处 A/B 证据：
+
+- **T6（README）**：修复前三轮全驳回；修复后**第 1 轮即 approve，score 0.95，零返工**。
+- **动态子任务**：realrun11 里 `subtask_conflict` 触发 3 次、`subtask_rejected` 3 次 ——
+  被拦下的正是 `tests/test_core.py`、`tests/test_cli.py`、`docs/test-report.md`
+  这三个 T5 的契约产物。若没有这道闸，T5 会重演 realrun10 的 FAILED。
+
+> 结论：**真实模型通道可用**，历史 S3 遗留问题（"真实模型下还差最后一公里"）已不再成立。
+
+## 十二、CI 前必须知道：lint 基线不是绿的
+
+`ruff` 在 CI 里是**不钉版本**安装的（`pip install ruff mypy`），所以首次推送会拿到最新版：
+
+| 项 | 实测 |
+| --- | --- |
+| `ruff check .` | **90 个违规**（41 F401 / 24 I001 / 9 UP037 / 9 F841 / 4 B007 / 1 E741 / 1 F541 / 1 B905） |
+| 其中可自动修 | 75 个 |
+| 已修的真错误 | 1 个：`base_agent.py` 的 f-string 同引号嵌套（3.12+ 语法，**3.10/3.11 导入即 SyntaxError**，已改为单引号） |
+
+也就是说：**即使代码逻辑全对，首次 CI 的 3.10–3.13 四档也会全部红在 `ruff` 这一步**，
+而且 3.10/3.11 那两档在黑 lint 之前就已经死在 `SyntaxError`（这个已修）。
+
+建议单独一批处理，别和功能改动混在一起：
+
+```bash
+ruff check . --fix          # 75 个可自动修，修完必须跑全量测试
+ruff check .                # 剩 15 个手动（主要是 F841 未使用变量 / B007 / E741）
+```
+
+同时把 `ruff` 钉版本（例如 `ruff==<实测通过版本>`）写进 CI，否则今天绿明天红。
