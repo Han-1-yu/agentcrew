@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from agentcrew.api import http as http_transport
 from agentcrew.api.auth import APIKeyAuth, RateLimiter
 from agentcrew.models.config import PROVIDER_PRESETS as PROVIDER_PRESETS_NAMES
 
@@ -55,7 +56,7 @@ class EventBus:
 
     def publish(self, event: str, data: dict[str, Any]) -> None:
         """发布事件到所有订阅者（非阻塞）。"""
-        payload = f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
+        payload = http_transport.sse_frame(event, data)
         for queue in list(self._subscribers):
             try:
                 queue.put_nowait(payload)
@@ -78,11 +79,7 @@ class EventBus:
 
 def _clamp_int(raw: str, *, default: int, minimum: int) -> int:
     """把查询参数里的整数读出来；非法 / 缺失用 ``default``，并压到 ``minimum`` 以上。"""
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        return default
-    return max(minimum, value)
+    return http_transport.clamp_int(raw, default=default, minimum=minimum)
 
 
 class ApiServer:
@@ -195,49 +192,27 @@ class ApiServer:
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
     ) -> None:
         try:
-            request_line = await reader.readline()
-            if not request_line:
+            request = await http_transport.read_request(reader)
+            if request is None:
                 return
-            method, path, _ = request_line.decode("utf-8", errors="replace").split(" ", 2)
-            # 读请求头，存成「小写键 → 值」的字典（E-3 认证要查 Authorization /
-            # X-API-Key，限流要查 X-Forwarded-For）；顺带记住 Content-Length（无
-            # body 的 POST 不能再 read() 阻塞等客户端 —— 连接还开着等响应，会和
-            # 服务端互相死等）。
-            headers: dict[str, str] = {}
-            content_length = 0
-            while True:
-                line = await reader.readline()
-                if line in (b"\r\n", b"\n", b""):
-                    break
-                name, sep, raw_value = line.partition(b":")
-                if not sep:
-                    continue
-                key = name.strip().decode("ascii", errors="replace").lower()
-                value = raw_value.strip().decode("latin-1", errors="replace")
-                headers[key] = value
-                if key == "content-length":
-                    try:
-                        content_length = max(0, int(value))
-                    except ValueError:
-                        content_length = 0
             # E-3 中间件链（路由分发前）：先限流后认证。任一拦截直接回响应并
             # return，不再读 body / 不再分发——被拒请求不该再触发任何业务逻辑。
-            if await self._apply_middleware(path, headers, writer):
+            if await self._apply_middleware(request.path, request.headers, writer):
                 return
-            if method == "GET":
-                await self._handle_get(path, writer)
-            elif method in ("POST", "PUT"):
+            if request.method == "GET":
+                await self._handle_get(request.path, writer)
+            elif request.method in ("POST", "PUT"):
                 # 按声明长度读，但不苛求凑满：客户端少发（含调试用的坏 JSON）
                 # 都在 JSON 解析处收成 400，而不是在这里死等字节。
                 body = (
-                    await reader.read(content_length)
-                    if content_length > 0 else b"")
-                if method == "POST":
-                    await self._handle_post(path, body, writer)
+                    await reader.read(request.content_length)
+                    if request.content_length > 0 else b"")
+                if request.method == "POST":
+                    await self._handle_post(request.path, body, writer)
                 else:
-                    await self._handle_put(path, body, writer)
-            elif method == "DELETE":
-                await self._handle_delete(path, writer)
+                    await self._handle_put(request.path, body, writer)
+            elif request.method == "DELETE":
+                await self._handle_delete(request.path, writer)
             else:
                 await self._send_json(writer, 405, {"error": "Method Not Allowed"})
         except (ConnectionError, asyncio.CancelledError):
@@ -295,17 +270,8 @@ class ApiServer:
     def _client_ip(
         headers: dict[str, str], writer: asyncio.StreamWriter
     ) -> str:
-        """客户端 IP：优先 ``X-Forwarded-For`` 首地址（反代后真实客户端），否则
-        取 socket peer 地址；都取不到时记 ``unknown``。"""
-        forwarded = headers.get("x-forwarded-for", "")
-        if forwarded:
-            first = forwarded.split(",")[0].strip()
-            if first:
-                return first
-        peername = writer.get_extra_info("peername")
-        if peername:
-            return str(peername[0])
-        return "unknown"
+        """客户端 IP：优先 ``X-Forwarded-For`` 首地址，否则 socket peer 地址。"""
+        return http_transport.client_ip(headers, writer)
 
     def _record_security(self, event: str, data: dict[str, Any]) -> None:
         """追加一条服务端安全审计事件（内存；与 Ledger 事件同形：event + data）。"""
@@ -319,15 +285,10 @@ class ApiServer:
         p = parsed.path
         query = parse_qs(parsed.query)
         if p == "/" or p == "/index.html":
+            # 看板页面按需 import：dashboard 是纯字符串大常量，只有访问根路径时
+            # 才需要它，别让每个 API 请求都背着它。
             from agentcrew.api.dashboard import DASHBOARD_HTML
-            payload = DASHBOARD_HTML.encode("utf-8")
-            writer.write(
-                b"HTTP/1.1 200 OK\r\n"
-                b"Content-Type: text/html; charset=utf-8\r\n"
-                + f"Content-Length: {len(payload)}\r\n".encode()
-                + b"\r\n" + payload
-            )
-            await writer.drain()
+            await http_transport.send_html(writer, DASHBOARD_HTML)
             return
         if p == "/health":
             await self._send_json(writer, 200, {"status": "ok"})
@@ -998,22 +959,14 @@ class ApiServer:
         })
 
     async def _handle_sse(self, run_id: str, writer: asyncio.StreamWriter) -> None:
-        writer.write(
-            b"HTTP/1.1 200 OK\r\n"
-            b"Content-Type: text/event-stream\r\n"
-            b"Cache-Control: no-cache\r\n"
-            b"Connection: keep-alive\r\n"
-            b"\r\n"
-        )
-        await writer.drain()
+        await http_transport.sse_headers(writer)
         queue = self.bus.subscribe()
         try:
             # 发送初始连接事件
-            writer.write(f"event: connected\ndata: {json.dumps({'run_id': run_id})}\n\n".encode())
-            await writer.drain()
+            await http_transport.write_sse(
+                writer, http_transport.sse_frame("connected", {"run_id": run_id}))
             async for payload in self._iter_queue(queue):
-                writer.write(payload.encode())
-                await writer.drain()
+                await http_transport.write_sse(writer, payload)
         except (ConnectionError, asyncio.CancelledError):
             pass
         finally:
@@ -1037,17 +990,6 @@ class ApiServer:
         *,
         extra_headers: Mapping[str, str] | None = None,
     ) -> None:
-        payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
-        reason = {
-            200: "OK", 202: "Accepted", 400: "Bad Request", 401: "Unauthorized",
-            404: "Not Found", 405: "Method Not Allowed", 429: "Too Many Requests",
-        }.get(status, "OK")
-        header_lines = (
-            f"HTTP/1.1 {status} {reason}\r\n".encode()
-            + b"Content-Type: application/json\r\n"
-            + f"Content-Length: {len(payload)}\r\n".encode()
-        )
-        for name, value in (extra_headers or {}).items():
-            header_lines += f"{name}: {value}\r\n".encode()
-        writer.write(header_lines + b"\r\n" + payload)
-        await writer.drain()
+        """写一条 JSON 响应（实现见 :func:`agentcrew.api.http.send_json`）。"""
+        await http_transport.send_json(
+            writer, status, body, extra_headers=extra_headers)

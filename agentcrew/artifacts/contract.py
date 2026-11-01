@@ -54,7 +54,14 @@ def parse_check(kind: str, content: str) -> str | None:
     parser = KIND_PARSERS.get(kind)
     if parser is None:
         return f"未知的产物类型：{kind!r}，无法校验"
-    return parser(content)
+    try:
+        return parser(content)
+    except Exception as exc:  # noqa: BLE001 —— 兜底：校验器崩溃不得让整轮运行挂掉
+        # 各 kind 的解析器已按类型分别兜过一遍；这里是最后一层网：PyYAML 等第三方
+        # 解析器在病态输入上会抛非标准异常（如 3000 层嵌套下的 AttributeError），
+        # 与递归上限、解释器版本相关，按类型穷举不完。契约校验的语义是"给出返工
+        # 理由"，所以任何异常都要转成消息，而不是冒泡中断调度。
+        return f"校验失败：解析器异常 {type(exc).__name__}：{exc}"
 
 
 def _syntax_message(exc: Exception) -> str:
@@ -155,6 +162,8 @@ def _check_python(content: str) -> str | None:
         return _syntax_message(exc)
     except RecursionError:
         return _TOO_DEEP
+    except Exception as exc:  # noqa: BLE001 —— 见 parse_check 的兜底说明
+        return f"YAML 解析失败：{type(exc).__name__}：{exc}"
     return None
 
 

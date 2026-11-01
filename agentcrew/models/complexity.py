@@ -20,7 +20,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
-from agentcrew.task.task import Task
+from agentcrew.contracts import TaskLike
 
 
 class ComplexityLevel(str, Enum):
@@ -74,7 +74,7 @@ _LOW_THRESHOLD = 4
 _HIGH_THRESHOLD = 8
 
 
-def evaluate(task: Task) -> ComplexityLevel:
+def evaluate(task: TaskLike) -> ComplexityLevel:
     """评估一个任务的复杂度级别。
 
     纯函数、无 I/O、确定性：同一任务永远返回同一级别。
@@ -95,7 +95,7 @@ def evaluate(task: Task) -> ComplexityLevel:
 # ── P3-1：运行时复杂度校准 ──────────────────────────────────────────────────
 
 
-def _feature_key(task: Task) -> str:
+def _feature_key(task: TaskLike) -> str:
     """任务特征桶键：角色 + 描述长度档 + 交付物数量档。
 
     校准只关心「这一类任务实际好不好做」，而不是单个任务 id —— 描述长度档
@@ -155,7 +155,7 @@ class ComplexityCalibrator:
     def __init__(self) -> None:
         self._buckets: dict[str, _BucketStats] = {}
 
-    def record(self, task: Task, success: bool, attempts: int) -> None:
+    def record(self, task: TaskLike, success: bool, attempts: int) -> None:
         """记录一次任务执行的实际结局（成功 / 失败 + 尝试次数）。"""
         key = _feature_key(task)
         bucket = self._buckets.get(key)
@@ -164,7 +164,7 @@ class ComplexityCalibrator:
             self._buckets[key] = bucket
         bucket.record(success, attempts)
 
-    def calibrate(self, task: Task) -> ComplexityLevel:
+    def calibrate(self, task: TaskLike) -> ComplexityLevel:
         """基于历史统计校准复杂度；无历史时回落静态 :func:`evaluate`。"""
         original = evaluate(task)
         bucket = self._buckets.get(_feature_key(task))

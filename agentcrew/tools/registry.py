@@ -15,17 +15,12 @@ MCP 工具实例都登记进去。两层能力边界：
 
 from __future__ import annotations
 
-from typing import Any, Protocol
-
+from agentcrew.contracts import EventSink
 from agentcrew.tools.tool import Tool
 
-
-class LedgerLike(Protocol):
-    """工具权限拒绝事件的最小协议子集；用 Protocol 避免反向依赖运行时包。"""
-
-    def emit(self, event: str, **data: Any) -> object:
-        """记录一次事件。"""
-        ...
+#: 向后兼容别名：本模块原有一个私有 ``LedgerLike`` Protocol，现已并入
+#: :class:`agentcrew.contracts.EventSink`（全项目共用一份，避免各包各写一份再漂移）。
+LedgerLike = EventSink
 
 
 class ToolRegistry:

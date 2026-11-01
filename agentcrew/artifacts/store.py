@@ -9,10 +9,9 @@
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol
 
 from agentcrew.artifacts.spec import ArtifactRecord, ArtifactSpec, Manifest
-from agentcrew.task.task import Task
+from agentcrew.contracts import EventSink, TaskLike
 from agentcrew.utils.files import (
     UnsafePathError,
     atomic_write_text,
@@ -59,12 +58,9 @@ class UndeclaredArtifactError(ValueError):
         self.task_id = task_id
 
 
-class LedgerLike(Protocol):
-    """Task 14 ``Ledger`` 的结构化子集；用 ``Protocol`` 避免反向依赖运行时包。"""
-
-    def emit(self, event: str, **data: Any) -> object:
-        """记录一次事件；返回值不在本协议的契约内（``Ledger`` 会返回事件对象）。"""
-        ...
+#: 向后兼容别名：本模块原有一个私有 ``LedgerLike`` Protocol，现已并入
+#: :class:`agentcrew.contracts.EventSink`（全项目共用一份，避免各包各写一份再漂移）。
+LedgerLike = EventSink
 
 
 class ArtifactStore:
@@ -110,7 +106,7 @@ class ArtifactStore:
         return candidate
 
     def commit(
-        self, rel: str, content: str, *, spec: ArtifactSpec, task: Task
+        self, rel: str, content: str, *, spec: ArtifactSpec, task: TaskLike
     ) -> ArtifactRecord:
         """校验并原子写入一个产物，返回落盘记录。
 

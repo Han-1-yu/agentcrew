@@ -162,6 +162,23 @@ def test_deeply_nested_content_reports_instead_of_raising():
 
 
 @pytest.mark.skipif(not contract._HAS_TOMLLIB, reason="Python 3.10 无 tomllib，toml 检查跳过")
+def test_parser_crash_is_reported_not_raised(monkeypatch):
+    """解析器抛非标准异常（如 PyYAML 的 AttributeError）时，校验层必须转成消息。
+
+    回归保护：3000 层嵌套在部分环境下会让 PyYAML 抛 ``AttributeError``（与递归上限、
+    执行顺序相关），按异常类型穷举不完 —— 所以 ``parse_check`` 必须有最后一道网，
+    保证校验器崩溃不会中断整轮运行。
+    """
+    from agentcrew.artifacts import contract
+
+    def boom(_content):
+        raise AttributeError("'dict' object has no attribute 'line'")
+
+    monkeypatch.setitem(contract.KIND_PARSERS, "yaml", boom)
+    msg = contract.parse_check("yaml", "whatever")
+    assert msg is not None and "解析器异常" in msg
+
+
 def test_huge_integer_literal_reports_instead_of_raising():
     assert parse_check("json", "1" * 5000) is not None
     assert parse_check("toml", "a = " + "1" * 5000) is not None

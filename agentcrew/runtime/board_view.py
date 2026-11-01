@@ -174,19 +174,21 @@ class BoardView:
     # ---- 生命周期 ----
 
     def start(self) -> None:
-        """开始实时展示；非 TTY 或 ``enabled=False`` 时退化为无输出/行日志。
+        """开始实时展示；非 TTY / dumb 终端 / ``enabled=False`` 时退化为无输出或行日志。
 
-        ``Live`` 只在真实终端上启动：管道与 CI 里控制序列会撕裂输出。降级路径
-        每次 ``on_event`` 打印一行，人工仍看得到事件流。
+        ``Live`` 只在**能处理光标控制**的终端上启动：管道与 CI 里控制序列会撕裂输出；
+        ``TERM=dumb``（部分 CI、精简 shell）虽然 ``is_terminal`` 为真，但 rich 的
+        ``Live.refresh()`` 在 dumb 终端下不会重绘 —— 结果是看板停在首帧、事件全丢。
+        两种情况一律降级为行日志，宁可少一屏表格也不能让事件流断掉。
         """
         if not self._enabled or self._started:
             return
         self._started = True
-        if not self._console.is_terminal:
+        if not self._console.is_terminal or self._console.is_dumb_terminal:
             self._plain_logging = True
             self._console.print(
                 Text(
-                    f"AgentCrew 看板（非 TTY，降级为行日志）· "
+                    f"AgentCrew 看板（非交互终端，降级为行日志）· "
                     f"{self._run_id} · {self._goal}"
                 )
             )

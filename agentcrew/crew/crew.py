@@ -47,6 +47,7 @@ from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.config import Settings
 from agentcrew.context.context_bus import ContextBus
 from agentcrew.context.summarizer import summarizer_from_factory
+from agentcrew.crew import report
 from agentcrew.crew.scheduler import Scheduler
 from agentcrew.gate.gatekeeper import Gatekeeper, Prompter, Reviewer
 from agentcrew.knowledge.experience import Experience, ExperienceStore
@@ -1012,32 +1013,16 @@ class Crew:
     # ── 运行报告（spec §14.3）──────────────────────────────────────────────
 
     def delivery_summary(self, record: RunRecord) -> str:
-        """渲染 §14.3 的中文运行报告文本（任务统计/返工/用量/通过率/耗时/产物）。"""
-        board = self._summary_board(record)
-        tasks = board.all()
-        stats = record.stats
-        lines = [
-            f"━━━ AgentCrew 运行报告 · {record.run_id} ━━━",
-            f"任务      {stats.total_tasks} 个   成功 {stats.succeeded} · "
-            f"失败 {stats.failed} · 阻塞 {stats.blocked} · 跳过 {stats.skipped}",
-            f"返工      {_rework_line(tasks)}",
-            f"LLM 调用  {stats.llm_calls} 次   "
-            f"prompt {_format_tokens(stats.prompt_tokens)} tok · "
-            f"completion {_format_tokens(stats.completion_tokens)} tok",
-            f"估算成本  ${stats.estimated_cost_usd:.2f}",
-            f"评审通过率 {_review_line(tasks)}",
-            f"耗时      {_elapsed_line(record)}",
-            f"产物      {self._artifacts_dir(record)}",
-        ]
-        failed = [
-            task
-            for task in tasks
-            if task.status in (TaskStatus.FAILED, TaskStatus.BLOCKED)
-        ]
-        if failed:
-            lines.append("━━━ 失败任务 ━━━")
-            lines.extend(_failure_line(task) for task in failed)
-        return "\n".join(lines)
+        """渲染 §14.3 的中文运行报告文本（任务统计/返工/用量/通过率/耗时/产物）。
+
+        措辞与排版住在 :mod:`agentcrew.crew.report`（纯函数）；这里只负责提供
+        两个上下文：报告用的面板（内存态或从 run 目录重建）与产物的绝对路径。
+        """
+        return report.delivery_summary(
+            record,
+            board=self._summary_board(record),
+            artifacts_dir=self._artifacts_dir(record),
+        )
 
     def _artifacts_dir(self, record: RunRecord) -> Path:
         """产物目录的**绝对**路径（spec §7.4 要求退出时打印它）。"""
@@ -1180,63 +1165,14 @@ def _record_human_rework(board: TaskBoard, task_ids: Sequence[str]) -> None:
         )
 
 
-def _format_tokens(count: int) -> str:
-    """token 数（spec §14.3 的 ``812k`` 量级写法）；千位以下给原值。"""
-    if count >= 10_000:
-        return f"{count / 1000:.0f}k"
-    return str(count)
+# ── 报告格式化（实现已搬到 crew/report.py，此处保留旧名字）──────────────
+#
+# 兼容层：格式化逻辑现在住在 :mod:`agentcrew.crew.report`，本模块只做再导出，
+# 既有的调用点与测试不受影响。
 
-
-def _format_duration(seconds: float) -> str:
-    """耗时：``4m12s`` / ``1h02m03s`` / ``7s``。"""
-    total = max(0, int(seconds))
-    hours, remainder = divmod(total, 3600)
-    minutes, secs = divmod(remainder, 60)
-    if hours:
-        return f"{hours}h{minutes:02d}m{secs:02d}s"
-    if minutes:
-        return f"{minutes}m{secs}s"
-    return f"{secs}s"
-
-
-def _rework_line(tasks: Sequence[Task]) -> str:
-    """返工总次数与逐任务明细（``3 次（T-006 ×2, T-009 ×1）``）。"""
-    total = sum(task.rework_count for task in tasks)
-    reworked = [task for task in tasks if task.rework_count > 0]
-    if not reworked:
-        return f"{total} 次"
-    detail = ", ".join(f"{task.id} ×{task.rework_count}" for task in reworked)
-    return f"{total} 次（{detail}）"
-
-
-def _review_line(tasks: Sequence[Task]) -> str:
-    """评审通过率与各层驳回数；没有评审记录时不假装 100%。"""
-    reviews = [review for task in tasks for review in task.reviews]
-    if not reviews:
-        return "—（无评审记录）"
-    rejected = [review for review in reviews if review.verdict == "reject"]
-    rate = round(100 * (len(reviews) - len(rejected)) / len(reviews))
-    g1 = sum(1 for review in rejected if review.layer == "static")
-    g2 = sum(1 for review in rejected if review.layer == "llm")
-    human = sum(1 for review in rejected if review.layer == "human")
-    return f"{rate}%（G1 拦截 {g1} / G2 驳回 {g2} / 人工驳回 {human}）"
-
-
-def _elapsed_line(record: RunRecord) -> str:
-    """耗时：起止都取 ``record.stats``，缺失时回落到记录的创建/更新时间。"""
-    stats = record.stats
-    start = stats.started_at or record.created_at
-    end = stats.finished_at or record.updated_at
-    return _format_duration((end - start).total_seconds())
-
-
-def _failure_line(task: Task) -> str:
-    """一行失败任务：``T-011 标题  FAILED  最后一次评审：…``。"""
-    last = task.reviews[-1] if task.reviews else None
-    if last is None:
-        detail = "（无评审记录）"
-    elif last.issues:
-        detail = "；".join(last.issues)
-    else:
-        detail = "（无具体问题）"
-    return f"{task.id} {task.title}  {task.status.value.upper()}  最后一次评审：{detail}"
+_format_tokens = report.format_tokens
+_format_duration = report.format_duration
+_rework_line = report.rework_line
+_review_line = report.review_line
+_elapsed_line = report.elapsed_line
+_failure_line = report.failure_line

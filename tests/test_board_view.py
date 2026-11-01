@@ -155,15 +155,46 @@ def test_start_degrades_to_line_logging_on_non_tty():
     assert "运行开始" in stream.getvalue()
 
 
-def test_live_is_refreshed_by_events_not_by_a_timer():
+def test_start_degrades_to_line_logging_on_dumb_terminal(monkeypatch):
+    """TERM=dumb：is_terminal 为真但 rich 不重绘，必须降级为行日志。
+
+    回归保护：rich 15 的 ``Live.refresh()`` 在 dumb 终端下既不重绘也不报错，
+    若不降级，看班会停在首帧、事件全部丢失（CI 与精简 shell 上就是这种 TERM）。
+    """
+    import io
+
+    monkeypatch.setenv("TERM", "dumb")
+    stream = io.StringIO()
+    console = Console(file=stream, force_terminal=True, width=100, no_color=True)
+    assert console.is_terminal and console.is_dumb_terminal, "前置条件：dumb 终端"
+
+    v = BoardView("R", "g", console=console)
+    v.start()
+    try:
+        assert v._live is None, "dumb 终端不得启动 Live（否则画面永不刷新）"
+        v.on_event(ev("run_started", goal="g"))
+    finally:
+        v.stop()
+    out = stream.getvalue()
+    assert "降级为行日志" in out
+    assert "运行开始" in out, "降级路径仍要逐行打印事件"
+
+
+def test_live_is_refreshed_by_events_not_by_a_timer(monkeypatch):
     """spec §15.2：看板由 ledger 事件驱动刷新，不轮询。
 
     关掉 ``Live`` 的定时器（``auto_refresh=False``）之后，画面只在
     ``on_event`` 主动 ``refresh()`` 时更新 —— 这条同时钉住两件事：没有定时器，
     以及事件确实会让画面跟上（否则看板会停在启动占位图上，事件与画面脱钩）。
+
+    ``TERM`` 必须显式钉住：``TERM=dumb`` 时 rich 的 ``Live.refresh()`` 不做重绘，
+    而 ``BoardView`` 会把 dumb 终端当非交互终端降级（见
+    :func:`test_start_degrades_to_line_logging_on_dumb_terminal`），
+    那样本用例测的就不是「Live 刷新」这条路径了。
     """
     import io
 
+    monkeypatch.setenv("TERM", "xterm-256color")
     stream = io.StringIO()
     console = Console(file=stream, force_terminal=True, width=100, no_color=True)
     v = BoardView("R", "g", console=console)
