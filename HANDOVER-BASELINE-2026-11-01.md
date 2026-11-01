@@ -137,7 +137,7 @@ PYTHONPATH= ./.venv-handover/Scripts/python.exe main.py run --sample hierarchy -
 
 ## 七、Git 提交结果（已执行）
 
-原来的 168 个文件已全部落地，**工作区干净（0 项待提交）**，共 6 个 commit：
+原来的 168 个文件已全部落地，**工作区干净（0 项待提交）**，共 7 个 commit：
 
 | # | SHA | 内容 | 文件数 |
 | --- | --- | --- | ---: |
@@ -147,6 +147,7 @@ PYTHONPATH= ./.venv-handover/Scripts/python.exe main.py run --sample hierarchy -
 | 4 | `f9a52e6` | refactor(studio): 49 个 ESM 模块 + 铜色设计系统 | 约 90 |
 | 5 | `87c136d` | docs: 交接/验收/基线报告 + 数据契约参考副本 | 12 |
 | 6 | `f1a6ddf` | chore: 忽略本地调试归档与打包过程产物 | 2 |
+| 7 | `e3a41b1` | docs(baseline): 记录提交结果与 push 阻断原因 | 1 |
 
 **相对交接文档四步计划的四处修正**（照抄原计划会漏文件）：
 
@@ -155,7 +156,7 @@ PYTHONPATH= ./.venv-handover/Scripts/python.exe main.py run --sample hierarchy -
 3. `artifacts/reference-run/` 确认是 `DATA-CONTRACT-REFERENCE.md` 明确引用的数据副本，属证据材料，随批次 5 提交。
 4. `studio/probe-out/`、`_src_inventory.csv`、`zip-verify.zip` 确认为过程产物，进 `.gitignore` 而非提交。
 
-**逐提交可构建验证**：对 6 个 commit 逐个 `git worktree add` 检出并执行 `import main, agentcrew`，**全部 import-ok**（交接文档担心的「单独检出不可构建」没有发生）。
+**逐提交可构建验证**：对 7 个 commit 逐个 `git worktree add` 检出并执行 `import main, agentcrew`，**全部 import-ok**（交接文档担心的「单独检出不可构建」没有发生）。
 
 **提交后复跑全量**：`1946 passed / 1 skipped in 129.41s`，与提交前一致。
 **Studio 护栏**：`node tools/check-architecture.js` → 49 个 JS 模块 / 32 个样式分片，全合规。
@@ -178,7 +179,7 @@ curl: (7) CONNECT tunnel failed, response 502
 
 ```bash
 cd E:/agentcrew
-git push origin master        # 本地领先 139 个提交（133 + 本次 6 个）
+git push origin master        # 本地领先 140 个提交（133 + 本次 7 个）
 ```
 
 推送后到 Actions 页面看矩阵；若低版本报错，把日志发我，我按兼容性修。
@@ -201,6 +202,6 @@ git push origin master        # 本地领先 139 个提交（133 + 本次 6 个�
 | `.venv-handover/` | 新建隔离环境（自带 `.gitignore`，不污染工作区计数） |
 | `HANDOVER-BASELINE-2026-11-01.md` | 本文件（已随批次 5 提交） |
 | `output/20261101-1735*/` | 三个样例的运行证据（`output/` 已被忽略） |
-| 6 个 commit | 见 §7 |
+| 7 个 commit | 见 §7 |
 
 工作区当前 **0 项待提交**（`.venv-handover` 由 venv 自带 `.gitignore` 自我忽略）。
