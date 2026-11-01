@@ -135,45 +135,72 @@ PYTHONPATH= ./.venv-handover/Scripts/python.exe main.py run --sample hierarchy -
 
 ---
 
-## 七、待确认事项（我没有擅自执行）
+## 七、Git 提交结果（已执行）
 
-| # | 事项 | 为什么需要你点头 |
-| --- | --- | --- |
-| 1 | 按 §5.4 四步 + 我补的第 5 步提交，把 168 个文件落地 | 会改写 Git 历史；顺序错会产生「单独检出不可构建」的 commit |
-| 2 | 是否 `push origin master`（133 个提交）触发 CI 首跑 | 对外动作；会把代码推到 GitHub 公开仓库 |
-| 3 | CI 若红，是否授权直接改代码修 3.10–3.13 兼容性 | 可能改动核心代码，需明确边界 |
+原来的 168 个文件已全部落地，**工作区干净（0 项待提交）**，共 6 个 commit：
 
-建议的提交批次（在文档四步之后追加）：
+| # | SHA | 内容 | 文件数 |
+| --- | --- | --- | ---: |
+| 1 | `ef9f821` | feat(v7): 脱敏 / 路由 / 亲和性 / 配额 | 13 |
+| 2 | `46af647` | refactor(agentcrew): 拆策略模块 + 契约层断反向依赖 | 21 |
+| 3 | `adb0bde` | feat(r2): 样例补齐 / 并发基准 / 稳定性测试 | 28 |
+| 4 | `f9a52e6` | refactor(studio): 49 个 ESM 模块 + 铜色设计系统 | 约 90 |
+| 5 | `87c136d` | docs: 交接/验收/基线报告 + 数据契约参考副本 | 12 |
+| 6 | `f1a6ddf` | chore: 忽略本地调试归档与打包过程产物 | 2 |
+
+**相对交接文档四步计划的四处修正**（照抄原计划会漏文件）：
+
+1. 批次 2 补入 `artifacts/contract.py`、`runtime/board_view.py` 及其两个回归测试 —— 文档清单没有，但属 R1 的健壮性修复（解析器异常兜底、`TERM=dumb` 降级）。
+2. 批次 5 补入 `studio/zip.js` 与 `studio/probe-edge.js` —— **被 `main.js` 直接 `require`**，漏提交会直接让 Studio 起不来；另补 `AgentCrewStudio.bat`。
+3. `artifacts/reference-run/` 确认是 `DATA-CONTRACT-REFERENCE.md` 明确引用的数据副本，属证据材料，随批次 5 提交。
+4. `studio/probe-out/`、`_src_inventory.csv`、`zip-verify.zip` 确认为过程产物，进 `.gitignore` 而非提交。
+
+**逐提交可构建验证**：对 6 个 commit 逐个 `git worktree add` 检出并执行 `import main, agentcrew`，**全部 import-ok**（交接文档担心的「单独检出不可构建」没有发生）。
+
+**提交后复跑全量**：`1946 passed / 1 skipped in 129.41s`，与提交前一致。
+**Studio 护栏**：`node tools/check-architecture.js` → 49 个 JS 模块 / 32 个样式分片，全合规。
+
+---
+
+## 八、未执行项：push 被环境网络阻断
 
 ```bash
-# 5) 交付文档与证据（不含 studio 调试残留）
-git add HANDOFF-2026-11-01.md V7-HANDOFF.md AgentCrew-结项验收评审报告.md \
-        Studio-前端测试与Bug修复报告.md HANDOVER-BASELINE-2026-11-01.md
-git commit -m "docs: 补齐交接、验收与基线报告"
-
-# 6) 调试残留改为忽略（不提交）
-printf 'studio/probe-out/\nstudio/_src_inventory.csv\nstudio/zip-verify.zip\n' >> .gitignore
-git add .gitignore && git commit -m "chore: 忽略 studio 过程产物"
+$ git ls-remote --heads origin
+fatal: unable to access 'https://github.com/Han-1-yu/agentcrew.git/':
+       schannel: server closed abruptly (missing close_notify)
+$ curl -x $HTTPS_PROXY https://github.com/...
+curl: (7) CONNECT tunnel failed, response 502
 ```
 
+- 当前沙箱代理**放行 PyPI 镜像（200）、拒绝 github.com（502）**，与代码和凭据无关，是网络策略。
+- 因此 **CI 首跑尚未触发**，3.10–3.13 矩阵仍是未知数。
+- 需要你在**能访问 GitHub 的本机终端**执行：
+
+```bash
+cd E:/agentcrew
+git push origin master        # 本地领先 139 个提交（133 + 本次 6 个）
+```
+
+推送后到 Actions 页面看矩阵；若低版本报错，把日志发我，我按兼容性修。
+
 ---
 
-## 八、下一步建议顺序
+## 九、下一步建议顺序
 
 1. **轮换 DeepSeek Key** → `doctor` 转绿（唯一的外部依赖）。
-2. **确认提交方案** → 分批 commit → 本地跑一次全量确认无遗漏。
-3. **push 触发 CI** → 看 3.10–3.13 矩阵（低版本可能出现语法/API 差异，这是最有信息量的一次验证）。
-4. 清 P2 快赢四项（工具 Schema 强校验 / MCP transport 关闭 / 功能测试报告 / CI 绿）。
-5. 提交复验材料（三个 P1 已整改完，只差复验）。
+2. **在本机 push** → 触发 CI 首跑（这是最有信息量的一次验证）。
+3. 清 P2 快赢四项（工具 Schema 强校验 / MCP transport 关闭 / 功能测试报告 / CI 绿）。
+4. 提交复验材料（三个 P1 已整改完，只差复验）。
 
 ---
 
-## 九、本次新增/改动清单
+## 十、本次新增/改动清单
 
 | 文件 | 说明 |
 | --- | --- |
 | `.venv-handover/` | 新建隔离环境（自带 `.gitignore`，不污染工作区计数） |
-| `HANDOVER-BASELINE-2026-11-01.md` | 本文件 |
+| `HANDOVER-BASELINE-2026-11-01.md` | 本文件（已随批次 5 提交） |
 | `output/20261101-1735*/` | 三个样例的运行证据（`output/` 已被忽略） |
+| 6 个 commit | 见 §7 |
 
-**未改动任何受版本控制的文件**：已跟踪改动仍为 27 项（25 M + 2 D），与开工前一致；未跟踪文件因新增本报告从 141 增至 142，总数 169。
+工作区当前 **0 项待提交**（`.venv-handover` 由 venv 自带 `.gitignore` 自我忽略）。
