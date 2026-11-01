@@ -13,13 +13,17 @@ from pathlib import Path
 
 import pytest
 
-from agentcrew.agents.base_agent import BaseAgent
 from agentcrew.agents.generic import GenericAgent
+from agentcrew.agents.registry import AgentFactory
 from agentcrew.artifacts.spec import ArtifactSpec
 from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.config import Settings
 from agentcrew.context.context_bus import ContextBus
+from agentcrew.crew.scheduler import Scheduler
+from agentcrew.gate.gatekeeper import Gatekeeper, NullPrompter
+from agentcrew.gate.reviewer import Reviewer
 from agentcrew.models.factory import ModelFactory
+from agentcrew.roles.builtin import BUILTIN_ROLES
 from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.roles.spec import RoleSpec
 from agentcrew.runtime.ledger import Ledger
@@ -200,3 +204,78 @@ async def test_malformed_subtask_block_does_not_fail_task(env, tmp_path):
     assert created == []                       # 坏块没被当成合法 spec
     assert env["ledger"].count("subtask_created") == 0
     assert env["ledger"].count("subtask_malformed") == 1
+
+
+# ── 契约路径先占先得（realrun10 实测）──
+#
+# T-IMPL 声明交付 ``logstat/__init__.py``，它拆出的动态子任务又声明同一路径：
+# 子任务先写完，父任务落盘时被跨任务冲突检测拒掉，三次 attempt 烧光后 FAILED、
+# 下游全 BLOCKED。冲突检测本身是对的（防覆盖），错的是让子任务去占既有契约。
+
+
+def _scheduler(env) -> Scheduler:
+    fx = env["tmp_path"] / "fx-sched"
+    fx.mkdir(exist_ok=True)
+    models = ModelFactory(env["settings"], ledger=env["ledger"], fixtures_dir=fx)
+    catalog = RoleCatalog(BUILTIN_ROLES)
+    agents = AgentFactory(models, env["store"], env["ledger"], "目标", catalog)
+    reviewer = Reviewer(models, catalog, env["store"], env["ledger"])
+    gk = Gatekeeper(reviewer, env["store"], env["board"], gate="none",
+                    ledger=env["ledger"], prompter=NullPrompter())
+    return Scheduler(env["board"], agents, gk, env["bus"], ledger=env["ledger"])
+
+
+def test_subtask_rejects_fully_conflicting_deliverables(env):
+    """请求的交付路径全被既有契约占用时：不建任务，留一条 subtask_conflict。"""
+    scheduler = _scheduler(env)
+    child_id = scheduler._create_subtask({
+        "title": "重复写 a.py", "role": "backend_dev",
+        "deliverables": ["a.py"], "parent_id": "T-1",
+    })
+    assert child_id is None
+    assert env["ledger"].count("subtask_conflict") == 1
+    assert [t.id for t in env["board"].all() if t.dynamic] == []
+
+
+def test_subtask_prunes_only_conflicting_deliverable(env):
+    """部分冲突只剔除冲突项：子任务照样建，剩下的产物仍受契约保护。"""
+    scheduler = _scheduler(env)
+    child_id = scheduler._create_subtask({
+        "title": "补工具模块", "role": "backend_dev",
+        "deliverables": ["a.py", "utils.py"], "parent_id": "T-1",
+    })
+    assert child_id is not None
+    assert [d.path for d in env["board"].get(child_id).deliverables] == ["utils.py"]
+    assert env["ledger"].count("subtask_deliverable_pruned") == 1
+
+
+def test_subtask_without_conflict_keeps_all_deliverables(env):
+    """无冲突时行为不变（回归：动态子任务仍能正常入板）。"""
+    scheduler = _scheduler(env)
+    child_id = scheduler._create_subtask({
+        "title": "写工具模块", "role": "backend_dev",
+        "deliverables": ["utils.py", "helpers.py"], "parent_id": "T-1",
+    })
+    assert child_id is not None
+    assert [d.path for d in env["board"].get(child_id).deliverables] == [
+        "utils.py", "helpers.py"]
+    assert env["board"].get(child_id).dynamic is True
+
+
+async def test_rejected_subtask_leaves_ledger_trace(env, tmp_path):
+    """回调返回 None 时 Agent 记 subtask_rejected，不记 subtask_created。"""
+    fx = tmp_path / "fx-reject"
+    subtask_block = (
+        '<subtask>\n'
+        '{"title": "重复交付", "description": "d", "role": "backend_dev", '
+        '"deliverables": ["a.py"]}\n'
+        '</subtask>\n'
+    )
+    write_fixture(fx, subtask_block + GOOD_A)
+    models = ModelFactory(env["settings"], ledger=env["ledger"], fixtures_dir=fx)
+    agent = GenericAgent(role(), models=models, store=env["store"],
+                         ledger=env["ledger"], project_goal="目标",
+                         subtask_creator=lambda s: None)
+    await agent.execute(env["task"], env["bus"].build(env["task"]))
+    assert env["ledger"].count("subtask_rejected") == 1
+    assert env["ledger"].count("subtask_created") == 0

@@ -77,8 +77,8 @@ from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.roles.spec import RoleSpec
 from agentcrew.runtime.ledger import Ledger
 from agentcrew.task.task import Task, TaskResult
-from agentcrew.utils.files import UnsafePathError
 from agentcrew.tools import Tool, ToolRegistry
+from agentcrew.utils.files import UnsafePathError
 
 #: 默认摘要的长度上限（spec §8.1「取 notes 前 400 字符」）。
 #: P3-6 起：有产物时产物正文智能摘要优先于此额度，notes 作为补充；无产物时
@@ -305,7 +305,7 @@ class BaseAgent(ABC):
         catalog: RoleCatalog | None = None,
         tool_registry: ToolRegistry | None = None,
         max_tool_calls: int = _DEFAULT_MAX_TOOL_CALLS,
-        subtask_creator: Callable[[dict], str] | None = None,
+        subtask_creator: Callable[[dict], str | None] | None = None,
         max_self_corrections: int = 2,
         stream: bool = False,
         message_router: Callable[[str, str], str] | None = None,
@@ -360,7 +360,7 @@ class BaseAgent(ABC):
         self._max_message_rounds = max_message_rounds
 
     def set_subtask_creator(
-        self, creator: Callable[[dict], str] | None
+        self, creator: Callable[[dict], str | None] | None
     ) -> None:
         """运行时更换子任务回调（AgentFactory 在调度器换板后刷新缓存实例用）。"""
         self._subtask_creator = creator
@@ -587,7 +587,7 @@ class BaseAgent(ABC):
             props = schema.get("properties", {}) if isinstance(schema, dict) else {}
             required = schema.get("required", []) if isinstance(schema, dict) else []
             args_desc = "、".join(
-                f"{name}{"（必填）" if name in required else ""}" for name in props
+                f"{name}{'（必填）' if name in required else ''}" for name in props
             ) or "无参数"
             lines.append(f"- `{tool.name}`：{tool.description} 入参：{args_desc}")
         lines += [
@@ -823,6 +823,16 @@ class BaseAgent(ABC):
                 continue
             enriched = {**spec, "parent_id": task.id}
             child_id = self._subtask_creator(enriched)
+            if child_id is None:
+                # 回调拒绝建（目前唯一原因：请求的交付路径已被既有契约占用）。
+                # 不能静默丢弃——留痕让报告能解释「这个子任务为什么没出现」。
+                self._ledger.emit(
+                    "subtask_rejected",
+                    task_id=task.id,
+                    role=self.spec.key,
+                    title=str(spec.get("title", "")),
+                )
+                continue
             self._ledger.emit(
                 "subtask_created",
                 parent_id=task.id,

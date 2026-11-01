@@ -564,18 +564,46 @@ class Scheduler:
 
     # ---- P2-1：运行时动态子任务 ----
 
-    def _create_subtask(self, spec: dict[str, Any]) -> str:
+    def _create_subtask(self, spec: dict[str, Any]) -> str | None:
         """把 Agent 请求的子任务 spec 构造成 ``Task`` 并经 ``board.add_task`` 入板。
 
         ``spec`` 由模型产出（title/description/role/deliverables）+ Agent 注入的
         ``parent_id``。子任务无依赖、直接 ``READY``（独立调度），并打上
         ``dynamic=True``。返回新任务 id——Agent 随后记 ``subtask_created`` 事件。
+
+        **契约路径先占先得**（realrun10 实测）：T-IMPL 声明交付
+        ``logstat/__init__.py``，它拆出的动态子任务又声明同一个路径，子任务先跑
+        完写走文件，父任务落盘时被跨任务冲突检测拒掉，三次 attempt 烧光后
+        FAILED、下游全 BLOCKED。路径冲突本身必须拒绝（那是防覆盖的护栏），
+        但**不该发生在子任务与既有契约之间**——所以入板前先剔除已被任何任务
+        声明过的路径；一个都不剩就干脆不建这个子任务，返回 ``None``。
         """
         parent_id = str(spec.get("parent_id") or "")
-        task_id = self._next_subtask_id()
-        deliverables = [
+        requested = [
             _deliverable_from_spec(item) for item in (spec.get("deliverables") or [])
         ]
+        reserved = {
+            declared.path
+            for other in self._board.all()
+            for declared in other.deliverables
+        }
+        deliverables = [d for d in requested if d.path not in reserved]
+        if requested and not deliverables:
+            self._ledger.emit(
+                "subtask_conflict",
+                parent_id=parent_id,
+                title=str(spec.get("title") or ""),
+                role=str(spec.get("role") or "generic"),
+                conflicts=sorted({d.path for d in requested}),
+            )
+            return None
+        if len(deliverables) != len(requested):
+            self._ledger.emit(
+                "subtask_deliverable_pruned",
+                parent_id=parent_id,
+                pruned=[d.path for d in requested if d.path in reserved],
+            )
+        task_id = self._next_subtask_id()
         task = Task(
             id=task_id,
             title=str(spec.get("title") or "动态子任务"),

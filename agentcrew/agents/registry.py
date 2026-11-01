@@ -74,7 +74,7 @@ class AgentFactory:
         ledger: Ledger,
         project_goal: str,
         catalog: RoleCatalog,
-        subtask_creator: Callable[[dict], str] | None = None,
+        subtask_creator: Callable[[dict], str | None] | None = None,
     ) -> None:
         self._models = models
         self._store = store
@@ -87,15 +87,15 @@ class AgentFactory:
         self._agents: dict[str, BaseAgent] = {}
         #: P2-1：动态子任务回调；``setter`` 会同步刷新已缓存的 Agent 实例
         #: （调度器在交付打回后换板重入时，缓存实例仍指向旧面板的闭包）。
-        self._subtask_creator: Callable[[dict], str] | None = subtask_creator
+        self._subtask_creator: Callable[[dict], str | None] | None = subtask_creator
 
     @property
-    def subtask_creator(self) -> Callable[[dict], str] | None:
+    def subtask_creator(self) -> Callable[[dict], str | None] | None:
         """当前子任务回调（``None`` = 不启用动态子任务）。"""
         return self._subtask_creator
 
     @subtask_creator.setter
-    def subtask_creator(self, creator: Callable[[dict], str] | None) -> None:
+    def subtask_creator(self, creator: Callable[[dict], str | None] | None) -> None:
         """更换子任务回调，并把它推给所有已缓存的 Agent 实例。
 
         Agent 按 role key 缓存、跨调度器循环复用；调度器换板（交付打回重建
