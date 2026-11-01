@@ -506,6 +506,8 @@ alias 失败 → 冷却矩阵 → 同 profile 的 fallback 别名 → 仍失败 
 | 执行体 fallback 接入故障转移（优先于全局 map） | `models/agent_budget.py`、`models/factory.py` |
 | 按执行体成本统计（`stats.agent_costs` + 报告一行） | `models/factory.py`、`crew/crew.py`、`crew/report.py` |
 | HTTP 热切 `POST /runs/{id}/agents`（运行中 200 / 未运行 409） | `api/server.py` |
+| 执行体并发上限 `max_concurrency`（两级槽位：agent → provider） | `roles/binding.py`、`models/factory.py` |
+| Studio 运行期切换（Agents 页卡片底部，走了就落 `agent_switched`） | `studio/src/features/agents-page/switch.js` |
 | 16 个测试（校验/计划/权限/四种模式） | `tests/test_agent_binding.py` |
 
 验证：全量 **1973 passed / 1 skipped**；示例配置下离线 9/9 成功，
@@ -515,6 +517,6 @@ alias 失败 → 冷却矩阵 → 同 profile 的 fallback 别名 → 仍失败 
 
 | 项 | 现状 | 影响 |
 | --- | --- | --- |
-| agent 级并发上限 | 未支持（只有 provider 级 semaphore） | 单 agent 无法单独限流 |
+| agent 级 RPM 限速 | 未支持（只有 provider 级 `max_rpm`） | 单 agent 只能限并发不能限速率 |
 | `reviewer_for` 与 `duty=review` 的统一 | 两套并行 | 角色评审（G2）与 agent 复核互不影响 |
 | 成本/并发按 agent 统计 | 未拆分 | 报告仍按角色汇总 |

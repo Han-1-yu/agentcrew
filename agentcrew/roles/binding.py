@@ -46,6 +46,12 @@ class AgentProfile(BaseModel):
 
     cost_ceiling_usd: float | None = None
     max_calls_per_task: int | None = None
+    max_concurrency: int | None = Field(default=None, ge=1)
+    """本执行体同时在飞的 LLM 调用上限；``None`` = 只受 provider/全局约束。
+
+    场景：一个慢而贵的主笔不该把并发槽位占满，导致复核 agent 排队干等；
+    或者反过来，便宜 agent 想跑得比 provider 默认更保守。
+    """
     temperature: float | None = None
     max_output_tokens: int | None = None
 

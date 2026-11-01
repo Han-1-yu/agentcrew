@@ -10,6 +10,7 @@ import { S } from '../../lib/store.js';
 import { switchNav } from '../../app/router.js';
 
 import { openTaskDetail } from '../detail/panel.js';
+import { buildAgentSwitch } from './switch.js';
 function renderAgentsPage(container) {
   container.appendChild(h('div', { class: 'page-head' },
     h('h2', {}, 'Agents'),
@@ -35,6 +36,7 @@ function renderAgentsPage(container) {
       h('div', { class: 'agent-full-body' },
         h('div', { class: 'agent-full-row' }, h('span', { class: 'k' }, '当前任务'), h('span', { class: 'v' }, a.task || '—')),
         h('div', { class: 'agent-full-row' }, h('span', { class: 'k' }, '最近动作'), h('span', { class: 'v' }, a.action || '—')),
+        buildAgentSwitch(role),
         h('div', { class: 'agent-full-stats' },
           h('div', { class: 'af-stat' }, h('div', { class: 'af-stat-val' }, `${a.done || 0}`), h('div', { class: 'af-stat-label' }, '已完成')),
           h('div', { class: 'af-stat' }, h('div', { class: 'af-stat-val' }, `${a.fail || 0}`), h('div', { class: 'af-stat-label' }, '失败')),

@@ -374,3 +374,23 @@ def test_binding_overrides_roundtrip(tmp_path):
         binding=RoleAgents(agents=[BoundAgent(ref="a", duty=Duty.PRIMARY)]))
     assert other.import_bindings(exported) == 1
     assert [m.profile for m in other.plan().for_role("backend_dev")] == ["b"]
+
+
+# ── 6. 执行体治理参数一路带到 Agent ────────────────────────────────────────
+
+def test_profile_carries_budget_fallback_and_concurrency(tmp_path):
+    """配置里的预算/备用模型/并发上限必须落到 Agent 实例上，不能只停留在解析层。"""
+    from agentcrew.runtime.ledger import Ledger
+
+    ledger = Ledger(tmp_path / "l.jsonl", run_id="R")
+    factory = _factory(
+        tmp_path, ledger,
+        profiles={"a": AgentProfile(
+            key="a", cost_ceiling_usd=0.05, max_calls_per_task=7,
+            max_concurrency=2, fallback=["mock:backup"])},
+        binding=RoleAgents(agents=[BoundAgent(ref="a", duty=Duty.PRIMARY)]))
+    agent = factory.get("backend_dev", "a")
+    assert agent.cost_ceiling_usd == 0.05
+    assert agent.max_calls_per_task == 7
+    assert agent.max_concurrency == 2
+    assert agent.fallback_models == ["mock:backup"]

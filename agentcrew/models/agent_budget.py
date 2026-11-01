@@ -22,6 +22,7 @@ class BudgetState:
     profile: str
     cost_ceiling_usd: float | None
     max_calls: int | None
+    max_concurrency: int | None = None
     spent_usd: float = 0.0
     calls: int = 0
 
@@ -37,6 +38,7 @@ def bind_budget(
     profile: str,
     cost_ceiling_usd: float | None,
     max_calls: int | None,
+    max_concurrency: int | None = None,
 ) -> Token[BudgetState | None] | None:
     """给当前协程绑定一份预算上下文。
 
@@ -46,7 +48,8 @@ def bind_budget(
     if not profile:
         return None
     return _current.set(BudgetState(
-        profile=profile, cost_ceiling_usd=cost_ceiling_usd, max_calls=max_calls))
+        profile=profile, cost_ceiling_usd=cost_ceiling_usd, max_calls=max_calls,
+        max_concurrency=max_concurrency))
 
 
 def release_budget(token: Token[BudgetState | None] | None) -> None:

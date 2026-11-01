@@ -10,6 +10,7 @@ agents:
       tools: [read_file, grep, run_python]
       path_scope: ["backend/"]
       cost_ceiling_usd: 0.08
+      max_concurrency: 2          # 便宜档最多 2 个并发调用，别把槽位占满
     backend_solid:
       title: 后端-强推理
       model: anthropic:claude-sonnet-5

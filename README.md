@@ -1296,6 +1296,9 @@ roles:
   run 级硬上限，两者互不替代。
 - **备用模型**：`AgentProfile.fallback` 优先于全局 `model_failover`——某个 agent
   的备用别名只服务它自己，不会影响同别名的其他角色。
+- **执行体并发**：`max_concurrency` 限制单个 agent 同时在飞的 LLM 调用数。两级
+  槽位固定「先 agent、后 provider」，所有调用点同一取锁顺序，不会循环等待；不配
+  则完全沿用 provider / 全局并发，单 agent 路径零改动。
 - **按执行体统计**：run.json 的 `stats.agent_costs` 按 profile 拆分调用次数/成本/
   token，运行报告多一行「执行体 backend_fast 0.02/3次」。
 - **运行中切换**：三种入口，效果一致——`Crew.switch_agent(role, profile)`（进程内，
@@ -1312,7 +1315,12 @@ python main.py agents         # 执行体档案 + 绑定链
 python main.py agents --json  # 供 Studio 绑定矩阵读取
 ```
 
-Studio：设置 → 「角色与 Agent」矩阵，改完点「生成配置片段」复制回 `agentcrew.yaml`。
+Studio 两处入口：
+
+- 设置 →「角色与 Agent」矩阵：配置期用，改完点「生成配置片段」复制回 `agentcrew.yaml`；
+- Agents 页每张卡底部的「执行体 / 切换执行体」：运行期用，选完点确认即
+  `POST /runs/{id}/agents`。只在 run 仍在跑时生效；未连后端或 run 已结束时
+  就地写明原因（不弹窗、不假装成功）。
 
 示例配置见 `examples/agentcrew.multi-agent.example.yaml`。
 

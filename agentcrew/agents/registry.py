@@ -284,6 +284,7 @@ class AgentFactory:
             agent.cost_ceiling_usd = prof.cost_ceiling_usd
             agent.max_calls_per_task = prof.max_calls_per_task
             agent.fallback_models = list(prof.fallback)
+            agent.max_concurrency = prof.max_concurrency
         self._agents[cache_key] = agent
         return agent
 

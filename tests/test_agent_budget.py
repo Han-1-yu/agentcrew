@@ -140,3 +140,72 @@ def test_report_prints_agent_cost_line():
 
 
 
+
+
+# ── 执行体并发上限（AgentProfile.max_concurrency）────────────────────────────
+
+def _count_peak(factory, cap_profile: str, cap, jobs: int = 4):
+    """用 _slots 模拟并发调用，返回实际达到的并发峰值。"""
+    import asyncio
+
+    peak = {"now": 0, "max": 0}
+
+    async def work():
+        async with factory._slots(asyncio.Semaphore(jobs)):
+            peak["now"] += 1
+            peak["max"] = max(peak["max"], peak["now"])
+            await asyncio.sleep(0.01)
+            peak["now"] -= 1
+
+    async def main():
+        token = bind_budget(cap_profile, None, None, cap)
+        try:
+            await asyncio.gather(*[work() for _ in range(jobs)])
+        finally:
+            release_budget(token)
+        return peak["max"]
+
+    return asyncio_run(main())
+
+
+def test_agent_concurrency_caps_parallel_calls(tmp_path):
+    from agentcrew.config import Settings
+    from agentcrew.models.factory import ModelFactory
+
+    models = ModelFactory(Settings(mock=True, output_dir=tmp_path),
+                          ledger=None, fixtures_dir=tmp_path)
+    assert _count_peak(models, "slow", 1) == 1
+    assert _count_peak(models, "slow2", 2) == 2
+    # 未设上限：完全由 provider 信号量决定
+    assert _count_peak(models, "free", None) == 4
+
+
+def test_agent_semaphore_is_per_profile(tmp_path):
+    from agentcrew.config import Settings
+    from agentcrew.models.factory import ModelFactory
+
+    models = ModelFactory(Settings(mock=True, output_dir=tmp_path),
+                          ledger=None, fixtures_dir=tmp_path)
+    token = bind_budget("b", None, None, 3)
+    try:
+        sem_b = models._agent_semaphore()
+        inner = bind_budget("a", None, None, 1)
+        try:
+            sem_a = models._agent_semaphore()
+            assert models._agent_semaphore() is sem_a      # 同 profile 复用同一把锁
+        finally:
+            release_budget(inner)
+        assert sem_a is not sem_b
+        assert sem_b is models._agent_semaphore()          # 回来后仍是原来那把
+        assert sem_a._value == 1 and sem_b._value == 3
+    finally:
+        release_budget(token)
+
+
+def test_profile_rejects_non_positive_concurrency():
+    from pydantic import ValidationError
+
+    from agentcrew.roles.binding import AgentProfile
+
+    with pytest.raises(ValidationError):
+        AgentProfile(key="x", max_concurrency=0)

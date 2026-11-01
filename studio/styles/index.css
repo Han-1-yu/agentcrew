@@ -36,6 +36,7 @@
 @import './features/dag-page.css';
 @import './features/flow.css';
 @import './features/agents-page.css';
+@import './features/agent-switch.css';
 @import './features/gates-page.css';
 @import './features/plan.css';
 @import './features/runs.css';

@@ -60,6 +60,7 @@ import asyncio
 import random
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -308,6 +309,8 @@ class ModelFactory:
         # V6 P0.5：per-provider 并发信号量缓存（provider 名 → Semaphore）。
         # 未配置 max_concurrency 的 provider 回退到 settings.max_concurrency。
         self._provider_semaphores: dict[str, asyncio.Semaphore] = {}
+        # 多 agent：per-profile 并发信号量（仅当 profile 设了 max_concurrency）。
+        self._agent_semaphores: dict[str, asyncio.Semaphore] = {}
         # V6 P0.5：per-provider RPM 滑动窗口时间戳（provider 名 → 单调递增时间戳列表）。
         self._rpm_timestamps: dict[str, list[float]] = {}
         self._llm_calls = 0
@@ -413,6 +416,7 @@ class ModelFactory:
         self._settings = self._settings.model_copy(update={"default_model": alias})
         self._cache.clear()
         self._provider_semaphores.clear()
+        self._agent_semaphores.clear()
         self._rpm_timestamps.clear()
         self._emit_model_switched(old, alias, scope="default")
 
@@ -432,6 +436,7 @@ class ModelFactory:
             update={"role_bindings": old_bindings})
         self._cache.clear()
         self._provider_semaphores.clear()
+        self._agent_semaphores.clear()
         self._rpm_timestamps.clear()
         self._emit_model_switched(old, alias, scope=f"role:{role}")
 
@@ -857,7 +862,7 @@ class ModelFactory:
             yielded_first = False
             success = False
             try:
-                async with sem:
+                async with self._slots(sem):
                     async for chunk in provider.stream_complete(
                         masked_messages,
                         temperature=temperature,
@@ -1109,7 +1114,7 @@ class ModelFactory:
             sem = self._get_provider_semaphore(
                 provider_name, provider.binding.max_concurrency)
             await self._wait_for_rpm(provider_name, provider.binding.max_rpm)
-            async with sem:
+            async with self._slots(sem):
                 redactor = self._make_redactor()
                 masked_messages = redactor.mask_messages(messages)
                 result = await provider.complete(
@@ -1181,7 +1186,7 @@ class ModelFactory:
             provider_name = provider.binding.provider
             sem = self._get_provider_semaphore(
                 provider_name, provider.binding.max_concurrency)
-            async with sem:
+            async with self._slots(sem):
                 model = await structured.complete_structured(
                     collecting,
                     messages,
@@ -1427,6 +1432,33 @@ class ModelFactory:
             sem = asyncio.Semaphore(cap)
             self._provider_semaphores[provider] = sem
         return sem
+
+    def _agent_semaphore(self) -> asyncio.Semaphore | None:
+        """当前执行体的并发信号量；未绑定 profile 或没设上限时返回 ``None``。"""
+        state = agent_budget.current()
+        if state is None or state.max_concurrency is None:
+            return None
+        sem = self._agent_semaphores.get(state.profile)
+        if sem is None:
+            sem = asyncio.Semaphore(state.max_concurrency)
+            self._agent_semaphores[state.profile] = sem
+        return sem
+
+    @asynccontextmanager
+    async def _slots(self, provider_sem: asyncio.Semaphore) -> AsyncIterator[None]:
+        """两级调用槽位：先占**执行体**名额，再占 provider 名额。
+
+        顺序固定（agent → provider）是关键：所有调用点都按同一顺序取锁，
+        就不会出现「A 持 agent 等 provider、B 持 provider 等 agent」的循环等待。
+        两者都是纯 ``await`` 获取、内部不回调业务逻辑，因此与任务槽位不构成嵌套，
+        不会重演 ``test_scheduler_deadlock`` 防的那类自锁。
+        """
+        async with AsyncExitStack() as stack:
+            agent_sem = self._agent_semaphore()
+            if agent_sem is not None:
+                await stack.enter_async_context(agent_sem)
+            await stack.enter_async_context(provider_sem)
+            yield
 
     async def _wait_for_rpm(self, provider: str, max_rpm: int | None) -> None:
         """滑动窗口 RPM 限速（60 秒窗口）。
