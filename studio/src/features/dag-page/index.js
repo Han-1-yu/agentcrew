@@ -11,6 +11,7 @@ import { ev } from '../../app/mock.js';
 import { switchNav } from '../../app/router.js';
 
 import { computeLayers } from '../dashboard/dag.js';
+import { renderFlowView } from '../flow/index.js';
 import { openTaskDetail } from '../detail/panel.js';
 function renderDagPage(container) {
   S.taskFilter = S.taskFilter || { q: '', status: 'all' };
@@ -48,12 +49,14 @@ function renderDagPage(container) {
     });
   };
 
+  const viewBar = h('div', { class: 'seg', style: 'margin-left:4px' });
   container.appendChild(h('div', { class: 'page-head' },
     h('h2', {}, '任务依赖图'),
+    viewBar,
     h('div', { style: 'display:flex;gap:8px;align-items:center' },
       h('input', { type: 'text', placeholder: '搜索任务…', value: S.taskFilter.q,
         style: 'width:180px;padding:6px 10px;border:1px solid var(--border-input);border-radius:6px;font-size:12px;font-family:inherit',
-        oninput: (e) => { S.taskFilter.q = e.target.value; renderList(); } }),
+        oninput: (e) => { S.taskFilter.q = e.target.value; if (S.dagView === 'deps') renderList(); } }),
       h('button', { class: 'btn', onclick: () => switchNav('dashboard') }, '返回'))));
 
   // 状态筛选 chips
@@ -69,7 +72,26 @@ function renderDagPage(container) {
 
   const wrap = h('div', { class: 'dag-full-wrap' });
   container.appendChild(wrap);
-  renderList();
+
+  // 两种看法同一份数据：依赖图看"谁等谁"，协作流看"谁在干、汇到哪"
+  S.dagView = S.dagView || 'flow';
+  const viewBtns = {};
+  const setView = (v) => {
+    S.dagView = v;
+    Object.entries(viewBtns).forEach(([k, b]) => b.classList.toggle('active', k === v));
+    filterBar.style.display = v === 'deps' ? '' : 'none';
+    wrap.className = v === 'deps' ? 'dag-full-wrap' : 'flow-full-wrap';
+    if (wrap._flowDispose) { wrap._flowDispose(); wrap._flowDispose = null; }
+    wrap.innerHTML = '';
+    if (v === 'deps') renderList(); else renderFlowView(wrap);
+  };
+  ['deps', 'flow'].forEach(v => {
+    const b = h('button', { class: 'seg-btn' + (S.dagView === v ? ' active' : ''),
+      onclick: () => setView(v) }, v === 'deps' ? '依赖图' : '协作流');
+    viewBtns[v] = b;
+    viewBar.appendChild(b);
+  });
+  setView(S.dagView);
 }
 
 /* ============================================================

@@ -1,0 +1,197 @@
+/* 协作流视图：执行者 → 质量整合 → 结果去向。
+ *
+ * 卡片是普通 DOM（可换行、可长高），SVG 只画曲线——所以这块样式只管卡片，
+ * 连线的颜色与粗细在 .flow-link 里，坐标由 JS 算。
+ */
+
+.flow-wrap {
+  position: relative;
+  padding: var(--sp-4) var(--sp-3) var(--sp-5);
+  border: 1px solid var(--border-weak); border-radius: var(--r-lg);
+  background-color: var(--bg-canvas);
+  background-image:
+    radial-gradient(120% 60% at 50% 0%, var(--accent-bg-faint), transparent 70%),
+    radial-gradient(var(--ink-07) 1px, transparent 1px);
+  background-size: 100% 100%, 20px 20px;
+  overflow: hidden;
+}
+
+/* 连线层在卡片下面：卡片有底色，线只在缝隙里露出 */
+.flow-links { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; }
+
+.flow-cols {
+  position: relative; z-index: 1;
+  display: grid; grid-template-columns: minmax(240px, 1fr) minmax(280px, 1.05fr) minmax(240px, 1fr);
+  gap: var(--sp-6) 104px; align-items: start;
+}
+.flow-col { display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; }
+.flow-col.mid { align-self: center; padding-top: var(--sp-4); }
+.flow-col-head {
+  display: flex; align-items: center; gap: var(--sp-2);
+  font-size: 11px; font-weight: 600; color: var(--text-ter);
+  letter-spacing: 0.07em; text-transform: uppercase;
+}
+.flow-count {
+  font-family: var(--font-mono); font-size: 10px; font-weight: 500;
+  padding: 1px 6px; border-radius: var(--r-pill);
+  background: var(--ink-06); color: var(--text-sub); letter-spacing: 0;
+}
+
+/* ---- 左列：执行者 ---- */
+.flow-col-body { display: flex; flex-direction: column; gap: var(--sp-4); }
+.flow-group { display: flex; flex-direction: column; gap: var(--sp-2); }
+.flow-group-head {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 11px; color: var(--text-sub); padding-left: 2px;
+}
+
+.flow-card {
+  position: relative;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 10px 12px;
+  box-shadow: var(--shadow-1);
+  transition: transform var(--dur-2) var(--ease-out), box-shadow var(--dur-2) var(--ease-out),
+              border-color var(--dur-2) ease, opacity var(--dur-2) ease;
+}
+.flow-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-2); border-color: var(--accent-border-soft); }
+
+.flow-agent { cursor: pointer; }
+/* 左缘一条角色色：和连线的颜色对上，不用读完名字也知道线从哪来 */
+.flow-agent::before {
+  content: ''; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px;
+  border-radius: 0 2px 2px 0; background: var(--flow-color, var(--ink-20));
+}
+
+.flow-card-head { display: flex; align-items: flex-start; gap: var(--sp-2); }
+.flow-avatar {
+  flex: 0 0 auto; width: 26px; height: 26px; border-radius: 8px;
+  display: grid; place-items: center;
+  color: var(--on-solid); font-size: 12px; font-weight: 700;
+}
+.flow-card-id { flex: 1; min-width: 0; }
+.flow-card-name {
+  font-size: 13px; font-weight: 600; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.flow-card-sub {
+  margin-top: 2px; font-size: 11px; color: var(--text-ter);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.flow-state {
+  flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px;
+  font-size: 10px; color: var(--text-ter); padding-top: 2px;
+}
+.flow-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-ter); }
+.flow-state.running { color: var(--status-running); }
+.flow-state.running .flow-dot { background: var(--status-running); animation: flowPulse 1.6s ease-out infinite; }
+.flow-state.done { color: var(--success-text); }
+.flow-state.done .flow-dot { background: var(--success); }
+.flow-state.failed { color: var(--error-text); }
+.flow-state.failed .flow-dot { background: var(--error); }
+@keyframes flowPulse {
+  0% { box-shadow: 0 0 0 0 var(--glow-running); }
+  70% { box-shadow: 0 0 0 4px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+.flow-card-foot { display: flex; align-items: center; gap: 5px; margin-top: 8px; }
+.flow-tag {
+  font-size: 10px; padding: 1px 7px; border-radius: var(--r-pill);
+  background: var(--ink-05); color: var(--text-sub);
+  border: 1px solid var(--border-weak);
+  max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.flow-tag.muted { color: var(--text-ter); font-family: var(--font-mono); }
+.flow-card-foot.muted { font-size: 10px; color: var(--text-ter); margin-top: 8px; }
+
+/* ---- 中列：整合卡片 ---- */
+.flow-core {
+  background: var(--bg-panel);
+  border: 1px solid var(--accent-border-soft);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-2);
+  padding: var(--sp-3) var(--sp-3) var(--sp-2);
+}
+.flow-core-head { display: flex; align-items: center; gap: var(--sp-2); padding: 2px 0 var(--sp-3); }
+.flow-core-logo {
+  width: 32px; height: 32px; border-radius: 9px;
+  display: grid; place-items: center;
+  background: var(--accent-bg); color: var(--accent-text);
+  font-size: 16px;
+}
+.flow-core-name { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.flow-core-sub { margin-top: 2px; font-size: 10.5px; color: var(--text-ter); }
+
+.flow-core-label {
+  font-size: 10px; color: var(--text-ter); letter-spacing: 0.06em; text-transform: uppercase;
+  padding: var(--sp-2) 2px 4px;
+}
+.flow-core-rows { display: flex; flex-direction: column; gap: 1px; }
+.flow-row {
+  display: grid; grid-template-columns: 8px 1fr auto; align-items: center; gap: var(--sp-2);
+  padding: 6px 8px; border-radius: var(--r-sm);
+  transition: background var(--dur-1) ease;
+}
+.flow-row:hover, .flow-row.hot { background: var(--accent-bg-soft); }
+.flow-row.muted { display: block; color: var(--text-ter); font-size: 11px; }
+.flow-port-dot { width: 6px; height: 6px; border-radius: 50%; }
+.flow-row-name { font-size: 12px; color: var(--text); }
+.flow-row-state { font-size: 10px; color: var(--text-ter); }
+.flow-row-state.running { color: var(--status-running); }
+.flow-row-state.done { color: var(--success-text); }
+.flow-row-state.failed { color: var(--error-text); }
+.flow-row.out .flow-row-name { color: var(--text-sub); }
+
+.flow-core-foot {
+  margin-top: var(--sp-2); padding-top: var(--sp-2);
+  border-top: 1px dashed var(--border-weak);
+  text-align: center; font-size: 10px; color: var(--text-ter);
+}
+
+/* ---- 右列：结果卡 ---- */
+.flow-out { cursor: pointer; }
+.flow-out:hover { border-color: var(--success-bg-chip); }
+.flow-file-list { display: flex; flex-direction: column; gap: 2px; margin-top: var(--sp-2); }
+.flow-file {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2);
+  padding: 4px 6px; border-radius: var(--r-xs);
+  background: var(--bg-subtle);
+  font-size: 11px;
+}
+.flow-file.muted { background: none; color: var(--text-ter); justify-content: flex-start; }
+.flow-file-name {
+  font-family: var(--font-mono); font-size: 11px; color: var(--text-sub);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.flow-file-size { font-family: var(--font-mono); font-size: 10px; color: var(--text-ter); }
+.flow-file-mark {
+  font-size: 9.5px; padding: 0 6px; border-radius: var(--r-pill);
+  background: var(--ink-06); color: var(--text-ter);
+}
+.flow-file-mark.ok { background: var(--success-bg-chip); color: var(--success-text); }
+
+/* ---- 连线与聚焦 ---- */
+.flow-link {
+  fill: none; stroke-width: 1.6; opacity: 0.75;
+  stroke-dasharray: 6 5;
+  animation: flowDash 1.1s linear infinite;
+  transition: opacity var(--dur-2) ease, stroke-width var(--dur-1) ease;
+}
+@keyframes flowDash { to { stroke-dashoffset: -22; } }
+.flow-port { opacity: 0.9; }
+.flow-link.hot { stroke-width: 2.4; opacity: 1; }
+
+/* 悬停某个执行者：只留它那条线，其余压暗 */
+.flow-focus .flow-link:not(.hot) { opacity: 0.12; animation-play-state: paused; }
+.flow-focus .flow-card:not(.hot) { opacity: 0.55; }
+
+.flow-empty { font-size: 12px; color: var(--text-ter); padding: var(--sp-4); text-align: center; }
+
+@media (max-width: 1180px) {
+  .flow-cols { grid-template-columns: 1fr; gap: var(--sp-4); }
+  .flow-links { display: none; }
+  .flow-col.mid { padding-top: 0; }
+}
