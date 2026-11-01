@@ -51,6 +51,7 @@ from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.roles.spec import RoleSpec
 from agentcrew.runtime.ledger import Ledger
 from agentcrew.task.task import ReviewRecord, Task
+from agentcrew.utils.files import UnsafePathError
 from agentcrew.utils.tokens import estimate_tokens
 
 
@@ -114,6 +115,20 @@ _FORMAT_ERROR_ISSUE = "评审器返回格式错误，已放行"
 
 #: 产物节选被预算截断时附加在正文后的说明。
 _TRUNCATION_NOTE = "（内容超出节选预算，已截断）"
+
+#: 验收标准里可能被引用的**其他任务产物**的路径形态。
+#:
+#: 背景（realrun9 实测）：PM 会写出「README 的参数与 ``logstat/cli.py`` 实现一致」
+#: 这类跨任务标准，而 G2 过去只渲染本任务的交付物 —— 标准结构上无法核对，评审员
+#: 只能连续驳回，返工额度烧光后任务 FAILED、下游 BLOCKED。这不是评审员苛刻，是
+#: 材料不全。所以这里按标准文本里的路径把它们补进「参考材料」。
+_REFERENCE_PATH_RE = re.compile(
+    r"[A-Za-z0-9_][A-Za-z0-9_./-]*\."
+    r"(?:py|md|json|ya?ml|toml|txt|js|ts|html|css|sh|sql|ini|cfg|go|rs|java)\b"
+)
+
+#: 单次评审最多补几个参考文件：防止一条标准里塞满路径把预算吃光。
+_MAX_REFERENCE_FILES = 3
 
 
 @dataclass(frozen=True)
@@ -311,7 +326,11 @@ class Reviewer:
         else:
             parts.append("（无验收标准）")
         parts += ["", "## 返工历史", *self._render_history(task), "", "## 产物内容"]
-        parts += self._render_artifacts(task)
+        own_blocks = self._render_artifacts(task)
+        parts += own_blocks
+        references = self._render_references(task, own_blocks)
+        if references:
+            parts += ["", *references]
         return "\n".join(parts)
 
     @staticmethod
@@ -345,6 +364,63 @@ class Reviewer:
         remaining = self._excerpt_budget_tokens
         blocks: list[str] = []
         for path in paths:
+            excerpt, truncated = _truncate_lines(self._store.read(path), remaining)
+            remaining = max(0, remaining - estimate_tokens(excerpt))
+            block = f"### {path}\n{excerpt}"
+            if truncated:
+                block += f"\n{_TRUNCATION_NOTE}"
+            blocks.append(block)
+        return blocks
+
+    def _referenced_paths(self, task: Task) -> list[str]:
+        """验收标准/任务描述里点到、且确实已落盘的其他任务产物。
+
+        只认 ``store.exists`` 为真的路径：标准里出现的路径可能还没产出（上游失败）、
+        可能是举例，也可能根本不是本 run 的文件 —— 一律静默跳过，不报错、不占位。
+        """
+        own = {spec.path for spec in task.deliverables}
+        text = "\n".join([*(task.acceptance_criteria or []), task.description or ""])
+        found: list[str] = []
+        for raw in _REFERENCE_PATH_RE.findall(text):
+            rel = raw.replace("\\", "/")
+            while rel.startswith("./"):      # 只剥「当前目录」前缀，不吞掉 ".."
+                rel = rel[2:]
+            if not rel or rel in own or rel in found:
+                continue
+            if rel.startswith("/") or ".." in rel.split("/"):
+                continue                     # 绝对路径/越界路径：绝不读盘
+            try:
+                if not self._store.exists(rel):
+                    continue
+            except UnsafePathError:  # 越界路径当不存在，绝不因标准文本而读盘出错
+                continue
+            found.append(rel)
+            if len(found) >= _MAX_REFERENCE_FILES:
+                break
+        return found
+
+    def _render_references(self, task: Task, own_blocks: list[str]) -> list[str]:
+        """参考材料节选：与本任务产物**共享**同一个 token 预算，先本任务后参考。
+
+        参考材料只在验收标准真的引用了其他产物时才出现；标题里写明「不是本任务
+        交付物」，避免评审员把「没交付这些文件」当成不满足。
+        """
+        paths = self._referenced_paths(task)
+        if not paths:
+            return []
+        used = sum(estimate_tokens(block) for block in own_blocks)
+        remaining = max(0, self._excerpt_budget_tokens - used)
+        blocks = [
+            "## 参考材料（验收标准引用了以下文件：仅用于核对一致性，"
+            "**不是本任务的交付物**，不要求本任务产出）"
+        ]
+        if remaining <= 0:
+            blocks.append("（节选预算已被本任务产物用满，未能附上参考文件）")
+            return blocks
+        for path in paths:
+            if remaining <= 0:
+                blocks.append("（预算用尽，其余参考文件未附）")
+                break
             excerpt, truncated = _truncate_lines(self._store.read(path), remaining)
             remaining = max(0, remaining - estimate_tokens(excerpt))
             block = f"### {path}\n{excerpt}"
@@ -548,7 +624,8 @@ def _system_prompt(spec: RoleSpec) -> str:
         "（**从 0 起**，与材料里的编号一致）；\n"
         "2. **一条都不能漏，也不要多**：judgements 的数量必须与验收标准的条数完全相等；\n"
         "3. satisfied 为 true/false；evidence 写产物中支持该判定的具体依据"
-        "（文件名 + 关键内容）；\n"
+        "（文件名 + 关键内容）；若标准要求与「参考材料」里的文件比对，"
+        "**必须打开参考材料核对后再判定**，不得以「本次材料未提供该文件」为由判为不满足；\n"
         "4. satisfied 为 false 时，evidence 必须写清「产物里缺什么、要改成什么」，"
         "让返工方能直接照做；含糊的「不够好」不合格；\n"
         "5. **标准之外的任何意见**（可读性、健壮性、更优写法、性能、风格……）一律放进 "
