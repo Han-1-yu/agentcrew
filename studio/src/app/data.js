@@ -115,6 +115,7 @@ async function loadRealRun(dir) {
       gates: deriveGates(tasks),
       events,
     };
+    S._eventKeys = null;    // 换 run：重建事件去重索引
     S.realMode = true;
     S.watchDir = dir;
     // P3：优先 SSE，回退文件 watch

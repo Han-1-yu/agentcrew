@@ -510,6 +510,8 @@ alias 失败 → 冷却矩阵 → 同 profile 的 fallback 别名 → 仍失败 
 | Studio 运行期切换（Agents 页卡片底部，走了就落 `agent_switched`） | `studio/src/features/agents-page/switch.js` |
 | 执行体 RPM 限速 `max_rpm`（60 秒滑窗，与 provider 级同时生效） | `models/factory.py` |
 | 切换回滚：`reset_agent` + `{"reset": true}`（幂等，清空即删文件） | `agents/registry.py`、`crew/crew.py`、`api/server.py` |
+| 切换审计可视化：事件页顶部「执行体变更」卡（时间/角色/from→to/原因/duty） | `studio/src/features/events/agent-audit.js` |
+| 事件去重：文件监听重放与 SSE 重连不再重复计数 | `studio/src/app/realtime.js` |
 | 16 个测试（校验/计划/权限/四种模式） | `tests/test_agent_binding.py` |
 
 验证：全量 **1973 passed / 1 skipped**；示例配置下离线 9/9 成功，
@@ -519,7 +521,6 @@ alias 失败 → 冷却矩阵 → 同 profile 的 fallback 别名 → 仍失败 
 
 | 项 | 现状 | 影响 |
 | --- | --- | --- |
-| 切换审计的可视化 | ledger 有 `agent_switched` / `agent_binding_reset`，Studio 不展示 | 只能在事件页/ledger 里查 |
 | 覆盖粒度 | 只能按 role 覆盖 | 不能只对某一次任务临时换人 |
 | `reviewer_for` 与 `duty=review` 的统一 | 两套并行 | 角色评审（G2）与 agent 复核互不影响 |
 | 成本/并发按 agent 统计 | 未拆分 | 报告仍按角色汇总 |

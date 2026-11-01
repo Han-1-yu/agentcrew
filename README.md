@@ -1321,9 +1321,12 @@ python main.py agents --json  # 供 Studio 绑定矩阵读取
 Studio 两处入口：
 
 - 设置 →「角色与 Agent」矩阵：配置期用，改完点「生成配置片段」复制回 `agentcrew.yaml`；
-- Agents 页每张卡底部的「执行体 / 切换执行体」：运行期用，选完点确认即
+- Agents 页每张卡底部的「执行体 / 切换执行体 / 恢复默认」：运行期用，选完点确认即
   `POST /runs/{id}/agents`。只在 run 仍在跑时生效；未连后端或 run 已结束时
   就地写明原因（不弹窗、不假装成功）。
+- 事件日志页顶部「执行体变更」卡：把 `agent_switched` / `agent_binding_reset`
+  按发生顺序摊开（时间 · 角色 · from → to · 原因 · duty），回滚行标绿。
+  这类事件混在几千条日志里等于没记，所以单独置顶。
 
 示例配置见 `examples/agentcrew.multi-agent.example.yaml`。
 

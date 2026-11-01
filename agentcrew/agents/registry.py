@@ -157,6 +157,8 @@ class AgentFactory:
                 f"角色 {role_key} 没有已解析的 agent：{profile}"
                 f"（可选：{', '.join(available) or '无'}）")
 
+        previous = next(
+            (a.profile for a in plan.for_role(role_key) if a.duty is duty), "")
         kept = [a for a in plan.for_role(role_key)
                 if a.duty is not duty and a.profile != profile]
         switched = target.model_copy(update={"duty": duty})
@@ -170,7 +172,8 @@ class AgentFactory:
         for key in [k for k in self._agents if k.split("\u0000", 1)[0] == role_key]:
             self._agents.pop(key, None)
         self._ledger.emit(
-            "agent_switched", role=role_key, to=profile, duty=duty.value, reason=reason)
+            "agent_switched", role=role_key, from_profile=previous,
+            to=profile, duty=duty.value, reason=reason)
         return list(kept) + [switched]
 
     def reset_agent(self, role_key: str) -> tuple[list[ResolvedAgent], bool]:
@@ -179,13 +182,18 @@ class AgentFactory:
         幂等：本来就没覆盖时返回 ``changed=False`` 且不改任何状态——调用方
         （Studio 的「恢复默认」）不需要先查"到底切过没切过"。
         """
+        previous = ""
+        if role_key in self._binding_overrides:
+            current = (self.plan() or RunPlan(run_id=self._run_id)).for_role(role_key)
+            previous = next((a.profile for a in current if a.duty is Duty.PRIMARY), "")
         changed = self._binding_overrides.pop(role_key, None) is not None
         self._teams.pop(role_key, None)
         for key in [k for k in self._agents if k.split("\u0000", 1)[0] == role_key]:
             self._agents.pop(key, None)
         if changed:
             self._plan = None          # 重新按配置解析
-            self._ledger.emit("agent_binding_reset", role=role_key)
+            self._ledger.emit(
+                "agent_binding_reset", role=role_key, from_profile=previous)
         plan = self.plan() or RunPlan(run_id=self._run_id)
         return list(plan.for_role(role_key)), changed
 

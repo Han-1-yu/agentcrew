@@ -64,3 +64,49 @@
 .ev-pager { display: flex; align-items: center; justify-content: center; gap: 16px;
   padding: 16px; border-top: 1px solid var(--border-weak); margin-top: 8px; }
 .ev-pager-info { font-size: 12px; color: var(--text-sub); font-family: "SF Mono", Menlo, monospace; }
+
+/* ---- 执行体变更审计卡：运行中被改变的行为，单独摊开 ---- */
+
+.ev-audit {
+  border: 1px solid var(--accent-border-soft); border-radius: var(--r-md);
+  background: var(--accent-bg-soft);
+  padding: var(--sp-3); margin-bottom: var(--sp-3);
+}
+
+.ev-audit-head { display: flex; align-items: baseline; gap: var(--sp-2); margin-bottom: var(--sp-2); }
+.ev-audit-title { font-size: 12px; font-weight: 600; color: var(--accent-text); }
+.ev-audit-count {
+  font-family: var(--font-mono); font-size: 11px; color: var(--accent-text);
+  border: 1px solid var(--accent-border-soft); border-radius: 999px; padding: 0 7px;
+}
+.ev-audit-sub { margin-left: auto; font-size: 11px; color: var(--text-ter); }
+
+.ev-audit-rows { display: flex; flex-direction: column; gap: 1px; }
+
+.ev-audit-row {
+  display: grid;
+  grid-template-columns: 84px 132px 1fr 120px 52px;
+  align-items: center; gap: var(--sp-2);
+  padding: 4px 6px; border-radius: var(--r-xs);
+  font-size: 11.5px;
+  transition: background var(--dur-1) ease;
+}
+.ev-audit-row:hover { background: var(--ink-04); }
+
+.ev-audit-ts { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-ter); }
+.ev-audit-role { font-family: var(--font-mono); color: var(--text-sub); }
+.ev-audit-flow { color: var(--accent-text); font-weight: 600; }
+.ev-audit-row.reset .ev-audit-flow { color: var(--success-text); }
+.ev-audit-reason {
+  color: var(--text-ter); font-size: 11px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ev-audit-tag {
+  justify-self: end; font-size: 10px; padding: 0 6px;
+  border: 1px solid var(--border-weak); border-radius: 999px; color: var(--text-ter);
+}
+
+@media (max-width: 900px) {
+  .ev-audit-row { grid-template-columns: 70px 1fr auto; }
+  .ev-audit-role, .ev-audit-reason { display: none; }
+}

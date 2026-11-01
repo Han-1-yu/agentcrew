@@ -7,6 +7,7 @@ import { S } from '../../lib/store.js';
 
 import { switchNav } from '../../app/router.js';
 
+import { renderAgentAudit } from './agent-audit.js';
 import { exportEvents } from './export.js';
 function renderEventsPage(container) {
   container.appendChild(h('div', { class: 'page-head' },
@@ -17,6 +18,10 @@ function renderEventsPage(container) {
         oninput: () => renderEventsList() }),
       h('button', { class: 'btn', onclick: () => exportEvents() }, '导出 JSON'),
       h('button', { class: 'btn', onclick: () => switchNav('dashboard') }, '返回'))));
+
+  // 执行体变更单独置顶：它是"运行中被改变的行为"，混在几千条里等于没记
+  const audit = renderAgentAudit(S.dash.events || []);
+  if (audit) container.appendChild(audit);
 
   const filterBar = h('div', { class: 'ev-filter-bar', id: 'ev-filter-bar' });
   container.appendChild(filterBar);
@@ -90,6 +95,14 @@ function summarizeEvent(e) {
   if (e.event === 'llm_call') return `${d.role || ''} · ${d.model || ''} · ${d.tokens || 0} tok`;
   if (e.event === 'llm_failover') return `${d.from_alias || ''} → ${d.to_alias || ''}`;
   if (e.event === 'budget_exhausted') return `已用 $${d.used || 0} / 上限 $${d.limit || 0}`;
+  if (e.event === 'agent_switched') {
+    const from = d.from_profile ? `${d.from_profile} → ` : '→ ';
+    return `${d.role || ''}：${from}${d.to || ''}（${d.duty || 'primary'}）${d.reason ? ` · ${d.reason}` : ''}`;
+  }
+  if (e.event === 'agent_binding_reset') {
+    return `${d.role || ''}：${d.from_profile ? `${d.from_profile} → ` : ''}恢复默认绑定`;
+  }
+  if (e.event === 'agent_degraded') return `${d.role || ''} 复核降级：${d.reason || ''}`;
   return d.summary || Object.keys(d).join(', ');
 }
 

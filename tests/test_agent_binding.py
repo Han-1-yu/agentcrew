@@ -341,7 +341,9 @@ def test_switch_agent_replaces_primary_and_emits_event(tmp_path):
     assert [m.profile for m in members] == ["b"]
     assert members[0].duty is Duty.PRIMARY
     assert not isinstance(factory.get("backend_dev"), TeamAgent)  # 切完只剩单执行体
-    assert ledger.events("agent_switched")
+    switched_event = next(iter(ledger.events("agent_switched")))
+    assert switched_event.data["from_profile"] == "a"   # 审计要能看出从谁换到谁
+    assert switched_event.data["to"] == "b"
 
 
 def test_switch_to_unresolved_profile_is_rejected(tmp_path):
