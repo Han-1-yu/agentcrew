@@ -11,3 +11,7 @@ venv/
 *.egg-info/
 .ruff_cache/
 .mypy_cache/
+
+# 本地调试日志归档 / 工作区元数据
+logs/
+.workbuddy/

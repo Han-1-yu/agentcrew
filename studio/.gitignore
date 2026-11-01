@@ -5,3 +5,9 @@ selftest/
 e2e-out/
 logs/
 settings.json
+visual-baseline/
+
+# 本地调试/打包过程产物（非源码）
+probe-out/
+_src_inventory.csv
+zip-verify.zip
