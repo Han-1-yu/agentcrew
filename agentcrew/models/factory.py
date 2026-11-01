@@ -68,7 +68,7 @@ from pydantic import BaseModel, ValidationError
 
 from agentcrew.config import Settings
 from agentcrew.contracts import EventSink, TaskLike
-from agentcrew.models import budget, routing, structured
+from agentcrew.models import agent_budget, budget, routing, structured
 from agentcrew.models.affinity import AffinityTracker
 from agentcrew.models.cache import LLMCache
 from agentcrew.models.complexity import evaluate as evaluate_complexity
@@ -160,13 +160,13 @@ _PROVIDER_UNAVAILABLE_TYPES: tuple[type[BaseException], ...] = (
 )
 
 
-def _level_rank(level: "ComplexityLevel") -> int:
+def _level_rank(level: ComplexityLevel) -> int:
     """复杂度级别排序权重（P3-1：判断上调 / 下调）。LOW < MEDIUM < HIGH。"""
     return {"low": 0, "medium": 1, "high": 2}[level.value]
 
 
 def _estimate_request_tokens(
-    messages: Sequence["Message"],
+    messages: Sequence[Message],
     max_tokens: int | None,
 ) -> int:
     """估算请求的预计 token 用量（用于配额预扣）。
@@ -289,7 +289,7 @@ class ModelFactory:
         *,
         ledger: EventSink | None = None,
         fixtures_dir: Path | None = None,
-        cache: "LLMCache | None" = None,
+        cache: LLMCache | None = None,
     ) -> None:
         self._settings = settings
         self._ledger = ledger
@@ -673,8 +673,8 @@ class ModelFactory:
     def _emit_calibrated(
         self,
         task: TaskLike,
-        original: "ComplexityLevel",
-        calibrated: "ComplexityLevel",
+        original: ComplexityLevel,
+        calibrated: ComplexityLevel,
         reason: str,
     ) -> None:
         """记一条 ``complexity_calibrated`` 事件（P3-1：诚实留痕）。"""
@@ -781,6 +781,7 @@ class ModelFactory:
         P2 增强：若上一次记账已触发预算自动降级（``_budget_downgrade_to`` 已设），
         本次调用强制走更便宜的备别名，而不是原 alias。
         """
+        agent_budget.guard()   # 执行体级预算：先查后调，越线不再花钱
         # P2 增强：预算降级一旦触发，后续调用统一走便宜模型（仅作用一次，
         # 调用方显式请求便宜模型本身时不重复切换）。
         alias = self._maybe_apply_downgrade(alias)
@@ -834,6 +835,7 @@ class ModelFactory:
         aliases = self._failover_aliases(alias)
         last_error: BaseException | None = None
         for idx, current_alias in enumerate(aliases):
+            agent_budget.guard()
             provider = self.get(current_alias)
             started = time.perf_counter()
             parts: list[str] = []
@@ -960,6 +962,7 @@ class ModelFactory:
 
         P2 增强：与 :meth:`call` 同形，预算降级触发后本入口也走便宜备别名。
         """
+        agent_budget.guard()
         alias = self._maybe_apply_downgrade(alias)
         plan = self._plan(alias)
         return await self._run_plan(
@@ -1608,6 +1611,7 @@ class ModelFactory:
         self._total_prompt_tokens += result.prompt_tokens
         self._total_completion_tokens += result.completion_tokens
         self._total_cost_usd += cost
+        agent_budget.note_call(cost)   # 执行体级预算累加（无上下文时零开销）
         # V7-P1：usage 路由策略的使用量追踪
         if alias is not None:
             self._note_usage(alias, result.prompt_tokens, result.completion_tokens)

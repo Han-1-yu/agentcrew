@@ -309,3 +309,68 @@ def test_best_of_promotes_winner_draft(store):
     result = asyncio.run(team.execute(task, None))
     assert store.read("backend/app.py") == "better = 1\n"
     assert [r.path for r in result.artifacts] == ["backend/app.py"]
+
+
+# ── 5. 运行中切换 ──────────────────────────────────────────────────────────
+
+def _factory(tmp_path, ledger, *, profiles, binding):
+    from agentcrew.agents.registry import AgentFactory
+    from agentcrew.models.factory import ModelFactory
+    settings = Settings(default_model="mock:model", agent_profiles=profiles,
+                        role_agents={"backend_dev": binding})
+    models = ModelFactory(settings, ledger=ledger, fixtures_dir=tmp_path)
+    return AgentFactory(models, ArtifactStore(tmp_path / "art2", run_id="R", ledger=ledger),
+                        ledger, "目标", RoleCatalog(BUILTIN_ROLES),
+                        settings=settings, run_id="R")
+
+
+def test_switch_agent_replaces_primary_and_emits_event(tmp_path):
+    from agentcrew.agents.team import TeamAgent
+    from agentcrew.runtime.ledger import Ledger
+
+    ledger = Ledger(tmp_path / "l.jsonl", run_id="R")
+    factory = _factory(
+        tmp_path, ledger,
+        profiles={"a": AgentProfile(key="a"), "b": AgentProfile(key="b")},
+        binding=RoleAgents(
+            agents=[BoundAgent(ref="a", duty=Duty.PRIMARY),
+                    BoundAgent(ref="b", duty=Duty.REVIEW)],
+            aggregation=Aggregation(mode="primary_with_review")))
+    assert isinstance(factory.get("backend_dev"), TeamAgent)     # 多 agent → 团队
+    members = factory.switch_agent("backend_dev", "b")
+    assert [m.profile for m in members] == ["b"]
+    assert members[0].duty is Duty.PRIMARY
+    assert not isinstance(factory.get("backend_dev"), TeamAgent)  # 切完只剩单执行体
+    assert ledger.events("agent_switched")
+
+
+def test_switch_to_unresolved_profile_is_rejected(tmp_path):
+    from agentcrew.runtime.ledger import Ledger
+
+    ledger = Ledger(tmp_path / "l.jsonl", run_id="R")
+    factory = _factory(
+        tmp_path, ledger,
+        profiles={"a": AgentProfile(key="a")},
+        binding=RoleAgents(agents=[BoundAgent(ref="a", duty=Duty.PRIMARY)]))
+    with pytest.raises(ValueError, match="没有已解析的 agent"):
+        factory.switch_agent("backend_dev", "ghost")
+
+
+def test_binding_overrides_roundtrip(tmp_path):
+    from agentcrew.runtime.ledger import Ledger
+
+    ledger = Ledger(tmp_path / "l.jsonl", run_id="R")
+    factory = _factory(
+        tmp_path, ledger,
+        profiles={"a": AgentProfile(key="a"), "b": AgentProfile(key="b")},
+        binding=RoleAgents(agents=[BoundAgent(ref="a", duty=Duty.PRIMARY)]))
+    factory.switch_agent("backend_dev", "b")
+    exported = factory.export_bindings()
+    assert exported["backend_dev"]["agents"][0]["ref"] == "b"
+
+    other = _factory(
+        tmp_path, ledger,
+        profiles={"a": AgentProfile(key="a"), "b": AgentProfile(key="b")},
+        binding=RoleAgents(agents=[BoundAgent(ref="a", duty=Duty.PRIMARY)]))
+    assert other.import_bindings(exported) == 1
+    assert [m.profile for m in other.plan().for_role("backend_dev")] == ["b"]

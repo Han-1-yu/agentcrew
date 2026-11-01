@@ -1289,11 +1289,25 @@ roles:
 - **可复现**：池内选择用 `sha1(run_id|task_id|attempt|role)` 做种子，resume 与
   mock 回放选中同一个 agent。
 
+### 预算与切换
+
+- **执行体预算**：`cost_ceiling_usd` / `max_calls_per_task` 在**每次调用前**检查，
+  超限抛 `AgentBudgetExceeded`，任务判失败（不会再花钱）；`max_cost_usd` 仍是
+  run 级硬上限，两者互不替代。
+- **运行中切换**：`Crew.switch_agent(role, profile)` 立即对下一次派发生效（在途
+  任务不打断），结果落 `<run_dir>/binding_overrides.json`，resume 自动恢复；
+  进程外用 `python main.py switch <run_id> <role> <agent>` 写同一份文件。
+  切换目标可以是"已定义但当前没绑"的执行体。
+
 ### 查看
 
 ```bash
 python main.py roles          # 已绑定的角色会多一行「执行体 ...（汇总：...）」
+python main.py agents         # 执行体档案 + 绑定链
+python main.py agents --json  # 供 Studio 绑定矩阵读取
 ```
+
+Studio：设置 → 「角色与 Agent」矩阵，改完点「生成配置片段」复制回 `agentcrew.yaml`。
 
 示例配置见 `examples/agentcrew.multi-agent.example.yaml`。
 

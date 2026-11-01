@@ -605,6 +605,26 @@ function parseModelsPayload(json) {
 // ---------- IPC ----------
 
 function registerIpc() {
+  // 角色绑定矩阵：直接问 CLI（与执行期同一套解析），主进程不解析 YAML
+  ipcMain.handle('agents:config', async () => {
+    try {
+      const spec = pythonSpawnSpec(['agents', '--json']);
+      const stdout = await new Promise((resolve, reject) => {
+        const child = spawn(spec.cmd, spec.args, { cwd: settings.repoRoot, windowsHide: true });
+        let out = '', err = '';
+        child.stdout.on('data', (d) => { out += d.toString('utf8'); });
+        child.stderr.on('data', (d) => { err += d.toString('utf8'); });
+        child.on('error', reject);
+        child.on('close', (code) => (code === 0 ? resolve(out)
+          : reject(new Error(err || `main.py agents 退出码 ${code}`))));
+      });
+      const line = stdout.trim().split(/\r?\n/).filter(Boolean).pop() || '{}';
+      return { ok: true, data: JSON.parse(line) };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  });
+
   ipcMain.handle('settings:get', () => {
     const repoOk = fs.existsSync(path.join(settings.repoRoot, 'main.py'));
     const outOk = fs.existsSync(settings.outputDir);

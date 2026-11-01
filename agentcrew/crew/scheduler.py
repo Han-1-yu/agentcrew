@@ -62,6 +62,7 @@ from agentcrew.agents.registry import AgentFactory
 from agentcrew.artifacts.spec import ArtifactSpec
 from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.context.context_bus import ContextBus
+from agentcrew.contracts import AgentBudgetExceeded
 from agentcrew.gate.gatekeeper import GateDecision, Gatekeeper
 from agentcrew.models.complexity import get_calibrator
 from agentcrew.models.factory import BudgetExhaustedError
@@ -345,6 +346,11 @@ class Scheduler:
                     task_id=task.id, role=task.role,
                 ),
             )
+        except AgentBudgetExceeded as exc:
+            # 执行体预算耗尽：转成执行失败，走 attempts 通道；因为闸门在调用前，
+            # 重试不会再多花钱（每次都在第一次调用前被拦下）。
+            return _error_outcome(task.id, AgentExecutionError(
+                str(exc), task_id=task.id, role=task.role))
         except AgentExecutionError as exc:
             return _error_outcome(task.id, exc)
         self._board.set_result(task.id, result)

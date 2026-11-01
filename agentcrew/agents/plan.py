@@ -102,11 +102,18 @@ def alias_for(spec: RoleSpec, profile: AgentProfile | None, settings: Settings) 
     return settings.role_bindings.get(spec.key) or settings.default_model
 
 
-def resolve_plan(settings: Settings, catalog: RoleCatalog, run_id: str) -> RunPlan:
-    """把配置解析成 RunPlan；配置非法时抛 ``BindingError``（启动期 fail fast）。"""
+def resolve_plan(
+    settings: Settings, catalog: RoleCatalog, run_id: str,
+    *, overrides: dict[str, RoleAgents] | None = None,
+) -> RunPlan:
+    """把配置解析成 RunPlan；配置非法时抛 ``BindingError``（启动期 fail fast）。
+
+    ``overrides`` 是运行中切换留下的覆盖（role → 绑定），优先级高于配置文件：
+    resume 时必须按"切换后的样子"重建计划，否则切了等于没切。
+    """
     plan = RunPlan(run_id=run_id)
     for spec in catalog.all():
-        binding = binding_for(spec, settings)
+        binding = (overrides or {}).get(spec.key) or binding_for(spec, settings)
         validate_bindings(spec.key, binding, settings.agent_profiles, spec.allowed_tools)
         if not binding.agents:
             # 未绑定：维持原行为——角色直接用一个默认执行体

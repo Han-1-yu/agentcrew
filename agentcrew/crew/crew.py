@@ -33,6 +33,7 @@ carry-forward 是 load-bearing 的：``ArtifactStore.load_manifest`` 重建产�
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -136,6 +137,21 @@ def _alias_for(spec: RoleSpec, settings: Settings) -> str:
     if spec.model != _DEFAULT_ALIAS:
         return spec.model
     return settings.role_bindings.get(spec.key) or settings.default_model
+
+
+_OVERRIDE_FILE = "binding_overrides.json"
+
+
+def _load_binding_overrides(run_dir: Path) -> dict[str, dict]:
+    """读取运行中切换的落盘结果；没有/损坏都当空（不让坏文件废掉 resume）。"""
+    path = Path(run_dir) / _OVERRIDE_FILE
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def build_catalog(settings: Settings) -> RoleCatalog:
@@ -341,6 +357,21 @@ class Crew:
 
     # ── 角色注册（spec §8.3）──────────────────────────────────────────────
 
+    def switch_agent(self, role: str, profile: str, *, reason: str = "") -> list:
+        """运行中把某角色的 primary 换成另一个已解析的执行体。
+
+        生效点是**下一次派发**：在途任务继续用旧 agent 跑完（中断等于白烧 token）。
+        切换结果落 ``<run_dir>/binding_overrides.json``，resume 时自动恢复。
+        """
+        if self._run is None:
+            raise RuntimeError("当前没有进行中的 run，无法切换 agent")
+        members = self._run.agents.switch_agent(role, profile, reason=reason)
+        run_dir = self._run.checkpoint.artifacts_dir.parent
+        (run_dir / _OVERRIDE_FILE).write_text(
+            json.dumps(self._run.agents.export_bindings(), ensure_ascii=False, indent=2),
+            encoding="utf-8")
+        return members
+
     def register_role(self, spec: RoleSpec, cls: type[BaseAgent] | None = None) -> None:
         """注册一个角色：进目录，并（可选）登记专用 Agent 类。
 
@@ -450,6 +481,9 @@ class Crew:
         )
         self._run = run
         # 多 agent：启动期解析编排计划并落事件，配置错误在此 fail fast（退出码 3）。
+        # 运行中切换的落盘结果：resume 时先恢复，再解析计划（顺序不能反）
+        run.agents.import_bindings(_load_binding_overrides(
+            checkpoint.artifacts_dir.parent))
         _plan = run.agents.plan()
         if _plan is not None:
             ledger.emit("run_plan_resolved", run_id=record.run_id,

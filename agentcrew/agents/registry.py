@@ -17,7 +17,15 @@ from agentcrew.agents.base_agent import BaseAgent
 from agentcrew.agents.devops_engineer import DevopsEngineerAgent
 from agentcrew.agents.frontend_dev import FrontendDevAgent
 from agentcrew.agents.generic import GenericAgent
-from agentcrew.agents.plan import RunPlan, binding_for, profile_for, resolve_plan
+from agentcrew.agents.plan import (
+    ResolvedAgent,
+    RunPlan,
+    alias_for,
+    binding_for,
+    narrow_tools,
+    profile_for,
+    resolve_plan,
+)
 from agentcrew.agents.product_manager import ProductManagerAgent
 from agentcrew.agents.project_manager import ProjectManagerAgent
 from agentcrew.agents.qa_engineer import QaEngineerAgent
@@ -26,6 +34,7 @@ from agentcrew.agents.technical_writer import TechnicalWriterAgent
 from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.config import Settings
 from agentcrew.models.factory import ModelFactory
+from agentcrew.roles.binding import Aggregation, BoundAgent, Duty, RoleAgents
 from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.roles.spec import RoleSpec
 from agentcrew.runtime.ledger import Ledger
@@ -98,6 +107,8 @@ class AgentFactory:
         self._run_id = run_id
         self._plan: RunPlan | None = None
         self._teams: dict[str, TeamAgent] = {}
+        #: 运行中切换：role → 覆盖后的绑定（进程内生效，可整体导出持久化）。
+        self._binding_overrides: dict[str, RoleAgents] = {}
 
     @property
     def subtask_creator(self) -> Callable[[dict], str | None] | None:
@@ -115,6 +126,76 @@ class AgentFactory:
         for agent in self._agents.values():
             agent.set_subtask_creator(creator)
 
+    def switch_agent(
+        self, role_key: str, profile: str, *, duty: Duty = Duty.PRIMARY,
+        reason: str = "",
+    ) -> list[ResolvedAgent]:
+        """把某个角色的 primary 换成另一个已解析的执行体（下一次派发生效）。
+
+        只接受 **RunPlan 里已存在** 的 profile：随便写一个没解析过的名字会让
+        模型/工具/路径域全部落空，属于配置错误，直接拒绝而不是运行期兜底。
+        在途任务不受影响——中断它等于把已经花掉的 token 扔掉。
+        """
+        plan = self.plan()
+        if plan is None:
+            raise ValueError("当前 run 没有解析出编排计划，无法切换 agent")
+        target = next((a for a in plan.for_role(role_key) if a.profile == profile), None)
+        if target is None and self._settings is not None:
+            # 允许切到"已定义但当前没绑"的执行体：否则想临时换人必须改配置文件重启
+            prof = self._settings.agent_profiles.get(profile)
+            if prof is not None:
+                spec = (self._catalog.get(role_key)
+                        if self._catalog.has(role_key) else _generic_spec(role_key))
+                target = ResolvedAgent(
+                    role=role_key, profile=profile,
+                    alias=alias_for(spec, prof, self._settings), duty=duty,
+                    tools=narrow_tools(spec.allowed_tools, prof),
+                    path_scope=list(prof.path_scope))
+        if target is None:
+            available = [a.profile for a in plan.for_role(role_key)]
+            raise ValueError(
+                f"角色 {role_key} 没有已解析的 agent：{profile}"
+                f"（可选：{', '.join(available) or '无'}）")
+
+        kept = [a for a in plan.for_role(role_key)
+                if a.duty is not duty and a.profile != profile]
+        switched = target.model_copy(update={"duty": duty})
+        plan.agents = [a for a in plan.agents if a.role != role_key] + kept + [switched]
+        self._binding_overrides[role_key] = RoleAgents(
+            agents=[BoundAgent(ref=a.profile, duty=a.duty, weight=a.weight) for a in kept]
+                   + [BoundAgent(ref=profile, duty=duty)],
+            aggregation=(Aggregation(mode="primary_with_review")
+                         if any(a.duty is Duty.REVIEW for a in kept) else None))
+        self._teams.pop(role_key, None)
+        for key in [k for k in self._agents if k.split("\u0000", 1)[0] == role_key]:
+            self._agents.pop(key, None)
+        self._ledger.emit(
+            "agent_switched", role=role_key, to=profile, duty=duty.value, reason=reason)
+        return list(kept) + [switched]
+
+    def export_bindings(self) -> dict[str, dict]:
+        """导出运行中切换的结果，供落盘后 resume 复用。"""
+        return {
+            role: {"agents": [b.model_dump(mode="json") for b in binding.agents],
+                   "aggregation": (binding.aggregation.model_dump(mode="json")
+                                   if binding.aggregation else None)}
+            for role, binding in self._binding_overrides.items()
+        }
+
+    def import_bindings(self, payload: dict[str, dict]) -> int:
+        """从落盘的覆盖恢复；格式不合法就跳过并继续（不让坏文件废掉一次 resume）。"""
+        applied = 0
+        for role, raw in (payload or {}).items():
+            try:
+                self._binding_overrides[role] = RoleAgents.model_validate(raw)
+                self._teams.pop(role, None)
+                applied += 1
+            except Exception:  # noqa: BLE001 —— 单个条目坏掉不该拖垮整个 resume
+                continue
+        if applied:
+            self._plan = None   # 重新解析，让覆盖进入 RunPlan
+        return applied
+
     def register(self, role_key: str, cls: type[BaseAgent]) -> None:
         """为 ``role_key`` 指定专用 Agent 类；覆盖旧注册并丢弃已缓存实例。
 
@@ -129,7 +210,9 @@ class AgentFactory:
     def plan(self) -> RunPlan | None:
         """解析一次本次 run 的编排计划（无 Settings 时为 None）。"""
         if self._plan is None and self._settings is not None:
-            self._plan = resolve_plan(self._settings, self._catalog, self._run_id)
+            self._plan = resolve_plan(
+                self._settings, self._catalog, self._run_id,
+                overrides=self._binding_overrides)
         return self._plan
 
     def get(self, role_key: str, profile: str | None = None) -> BaseAgent | TeamAgent:
@@ -150,7 +233,8 @@ class AgentFactory:
         if profile is None and self._settings is not None:
             spec_obj = (self._catalog.get(role_key)
                         if self._catalog.has(role_key) else _generic_spec(role_key))
-            binding = binding_for(spec_obj, self._settings)
+            binding = (self._binding_overrides.get(role_key)
+                       or binding_for(spec_obj, self._settings))
             if binding.is_multi:
                 team = self._teams.get(role_key)
                 if team is None:
@@ -197,6 +281,8 @@ class AgentFactory:
         if resolved is not None:
             agent.path_scope = list(resolved.path_scope)
             agent.agent_key = resolved.profile
+            agent.cost_ceiling_usd = prof.cost_ceiling_usd
+            agent.max_calls_per_task = prof.max_calls_per_task
         self._agents[cache_key] = agent
         return agent
 

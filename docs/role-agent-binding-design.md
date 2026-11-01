@@ -499,7 +499,10 @@ alias 失败 → 冷却矩阵 → 同 profile 的 fallback 别名 → 仍失败 
 | `path_scope` 强制（`ArtifactScopeError`，落盘前拦截） | `agentcrew/artifacts/store.py` |
 | 团队执行器：`primary_with_review` / `split_by_path` / `best_of` / `merge` | `agentcrew/agents/team.py` |
 | 产物归属 `produced_by_agent` | `agentcrew/artifacts/spec.py` |
-| `roles` 命令输出绑定链 | `main.py` |
+| `roles` / `agents` 命令输出绑定链，`switch` 落盘切换 | `main.py` |
+| 执行体预算强制（调用前拦截，成本 + 次数） | `agentcrew/models/agent_budget.py` |
+| 运行中切换（`Crew.switch_agent` + `binding_overrides.json` 持久化） | `agentcrew/agents/registry.py`、`crew/crew.py` |
+| Studio 绑定矩阵（只读渲染 + 冲突自查 + YAML 片段） | `studio/src/features/settings/agents.js` |
 | 16 个测试（校验/计划/权限/四种模式） | `tests/test_agent_binding.py` |
 
 验证：全量 **1973 passed / 1 skipped**；示例配置下离线 9/9 成功，
@@ -509,9 +512,6 @@ alias 失败 → 冷却矩阵 → 同 profile 的 fallback 别名 → 仍失败 
 
 | 项 | 现状 | 影响 |
 | --- | --- | --- |
-| `cost_ceiling_usd` / `max_calls_per_task` | 只解析，未强制 | 单 agent 预算上限暂不生效 |
 | `AgentProfile.fallback` | 未并入 `model_failover` | 备用模型仍走全局 failover 配置 |
-| 运行中切换 agent（`pending_binding`） | 未实现 | 只能改配置后重启 run |
-| Studio 绑定矩阵 | 未实现 | 目前用 YAML + `roles` 命令 |
 | `reviewer_for` 与 `duty=review` 的统一 | 两套并行 | 角色评审（G2）与 agent 复核互不影响 |
 | 成本/并发按 agent 统计 | 未拆分 | 报告仍按角色汇总 |

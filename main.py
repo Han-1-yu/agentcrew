@@ -167,7 +167,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(
         dest="command",
-        metavar="{run,resume,status,roles,clean,cancel,delete,serve,doctor,diff}")
+        metavar="{run,resume,status,roles,agents,switch,clean,cancel,delete,serve,doctor,diff}")
 
     run = sub.add_parser("run", help="执行一次完整 run（规划 → 执行 → 交付）")
     run.add_argument("--goal", metavar="TEXT", help="项目目标（与 --demo 二选一）")
@@ -187,6 +187,13 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--output-dir", metavar="DIR", help="run 输出根目录")
 
     sub.add_parser("roles", help="列出 8 个内置角色（职责 / 边界 / 产出）")
+    p_agents = sub.add_parser("agents", help="列出执行体档案与角色绑定（--json 供 Studio 读取）")
+    p_agents.add_argument("--json", action="store_true", help="输出机器可读 JSON")
+    p_switch = sub.add_parser("switch", help="给一个 run 写入执行体切换（下次 resume 生效）")
+    p_switch.add_argument("run_id")
+    p_switch.add_argument("role")
+    p_switch.add_argument("agent", help="目标 agent profile（须已在 RunPlan 中）")
+    p_switch.add_argument("--output-dir", default=None)
 
     samples = sub.add_parser(
         "samples", help="列出预设 Crew 样例（串行 / 层级 / 混合并发）")
@@ -600,6 +607,105 @@ def _cmd_roles(args: argparse.Namespace) -> int:
         console,
         f"共 {len(BUILTIN_ROLES)} 个内置角色；用 --gate plan 可在执行前人工确认拆解。",
     )
+    return EXIT_CODES["ok"]
+
+
+def _cmd_switch(args: argparse.Namespace) -> int:
+    """把「某角色用哪个执行体」写进 run 目录，resume 时自动恢复。
+
+    进程外的 CLI 改不了正在跑的进程：这里落盘的是**下一次 resume** 的绑定。
+    进程内切换由 ``Crew.switch_agent`` 提供（效果相同，且立即对下一次派发生效）。
+    """
+    import json
+
+    from agentcrew.agents.plan import resolve_plan
+    from agentcrew.config import Settings
+    from agentcrew.crew.crew import build_catalog
+    from agentcrew.roles.binding import Duty
+
+    settings = Settings.load()
+    if args.output_dir:
+        settings = settings.model_copy(update={"output_dir": Path(args.output_dir).resolve()})
+    run_dir = settings.output_dir / args.run_id
+    if not run_dir.is_dir():
+        print(f"run 目录不存在：{run_dir}", file=sys.stderr)
+        return EXIT_CODES["config"]
+
+    catalog = build_catalog(settings)
+    plan = resolve_plan(settings, catalog, args.run_id)
+    members = plan.for_role(args.role)
+    target = next((a for a in members if a.profile == args.agent), None)
+    if target is None:
+        options = ", ".join(a.profile for a in members) or "无"
+        print(f"角色 {args.role} 没有已解析的 agent：{args.agent}（可选：{options}）",
+              file=sys.stderr)
+        return EXIT_CODES["config"]
+
+    path = run_dir / "binding_overrides.json"
+    payload = {}
+    if path.is_file():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            payload = {}
+    kept = [a for a in members
+            if a.duty is not Duty.PRIMARY and a.profile != args.agent]
+    payload[args.role] = {
+        "agents": [{"ref": a.profile, "duty": a.duty.value, "weight": a.weight} for a in kept]
+                  + [{"ref": args.agent, "duty": "primary", "weight": 1.0}],
+        "aggregation": ({"mode": "primary_with_review", "quorum": 1}
+                        if any(a.duty is Duty.REVIEW for a in kept) else None),
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"已写入 {path}：{args.role} → {args.agent}（下次 resume 生效）")
+    return EXIT_CODES["ok"]
+
+
+def _cmd_agents(args: argparse.Namespace) -> int:
+    """列出 agent 档案与角色绑定；``--json`` 给 Studio 的绑定矩阵用。
+
+    数据来自「Settings + RoleCatalog + RunPlan」三层，和真正跑任务时的解析
+    完全同源——UI 看到的编排必须就是执行时会用的编排。
+    """
+    from agentcrew.agents.plan import binding_for, resolve_plan
+    from agentcrew.config import Settings
+    from agentcrew.crew.crew import build_catalog
+
+    settings = Settings.load()
+    catalog = build_catalog(settings)
+    plan = resolve_plan(settings, catalog, "preview")
+
+    roles = []
+    for spec in catalog.all():
+        binding = binding_for(spec, settings)
+        roles.append({
+            "role": spec.key,
+            "title": spec.title,
+            "agents": [{"ref": b.ref, "duty": b.duty.value, "weight": b.weight}
+                       for b in binding.agents],
+            "aggregation": (binding.aggregation.model_dump(mode="json")
+                            if binding.aggregation else None),
+            "resolved": [a.model_dump(mode="json") for a in plan.for_role(spec.key)],
+        })
+    payload = {
+        "profiles": [p.model_dump(mode="json") for p in settings.agent_profiles.values()],
+        "roles": roles,
+    }
+    if args.json:
+        import json as _json
+        print(_json.dumps(payload, ensure_ascii=False))
+        return EXIT_CODES["ok"]
+
+    console = Console()
+    profiles = payload["profiles"]
+    _out(console, f"执行体档案 {len(profiles)} 个：" +
+         ("、".join(p["key"] for p in profiles) if profiles else "（未配置）"))
+    for item in roles:
+        if not item["agents"]:
+            continue
+        chain = " + ".join(f"{a['ref']}:{a['duty']}" for a in item["agents"])
+        mode = (item["aggregation"] or {}).get("mode", "single")
+        _out(console, f"  {item['role']:<18} {chain}（汇总：{mode}）")
     return EXIT_CODES["ok"]
 
 
@@ -1199,6 +1305,8 @@ _HANDLERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "resume": _cmd_resume,
     "status": _cmd_status,
     "roles": _cmd_roles,
+    "agents": _cmd_agents,
+    "switch": _cmd_switch,
     "samples": _cmd_samples,
     "clean": _cmd_clean,
     "cancel": _cmd_cancel,

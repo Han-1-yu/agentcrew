@@ -30,6 +30,7 @@
 @import './features/model-switcher.css';
 @import './features/new-run.css';
 @import './features/settings.css';
+@import './features/agents-matrix.css';
 @import './features/artifacts.css';
 @import './features/events.css';
 @import './features/dag-page.css';

@@ -77,3 +77,22 @@ class TaskLike(Protocol):
     def deliverables(self) -> list[Any]:
         """交付物契约列表（元素至少有 ``path`` 属性）。"""
         ...
+
+
+class AgentBudgetExceeded(RuntimeError):
+    """执行体在单个任务上的预算耗尽（成本或调用次数）。
+
+    定义在零依赖契约层：模型层抛出、调度层捕获，两边都不必互相 import。
+    """
+
+    def __init__(self, profile: str, *, kind: str, limit: float | int, used: float | int) -> None:
+        self.profile = profile
+        self.kind = kind
+        self.limit = limit
+        self.used = used
+        label = "成本" if kind == "cost" else "调用次数"
+        if kind == "cost":
+            detail = f"{used:.4f} / {limit:.4f} USD"
+        else:
+            detail = f"{used} / {limit} 次"
+        super().__init__(f"agent {profile} 已达{label}上限（{detail}）")

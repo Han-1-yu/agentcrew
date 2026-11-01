@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('studio', {
   getSettings: () => invoke('settings:get'),
   setSettings: (next) => invoke('settings:set', next),
   detectPython: () => invoke('python:detect'),
+  agentsConfig: () => invoke('agents:config'),
   // 运行列表 / 快照 / 事件
   listRuns: () => invoke('runs:list'),
   loadRun: (dir) => invoke('run:load', dir),

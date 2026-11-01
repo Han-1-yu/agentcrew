@@ -8,6 +8,7 @@ import { S } from '../../lib/store.js';
 import { toast } from '../../ui/toast.js';
 
 import { buildAboutGroup } from './about.js';
+import { buildAgentsGroup } from './agents.js';
 import { buildAppearanceGroup } from './appearance.js';
 import { buildConnectionGroup } from './connection.js';
 import { buildEnvironmentGroup } from './environment.js';
@@ -38,6 +39,7 @@ async function renderSettingsPage(container) {
   wrap.appendChild(buildEnvironmentGroup(cfg));
   wrap.appendChild(buildModelBudgetGroup(cfg));
   wrap.appendChild(buildGatewayGroup(cfg));
+  wrap.appendChild(buildAgentsGroup());
   wrap.appendChild(buildConnectionGroup(cfg));
   wrap.appendChild(buildAppearanceGroup(cfg));
   wrap.appendChild(buildAboutGroup());

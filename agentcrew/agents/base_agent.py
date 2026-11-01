@@ -41,6 +41,7 @@ import re
 from abc import ABC
 from collections.abc import Callable, Sequence
 from datetime import datetime
+from functools import wraps
 from typing import Any, NoReturn
 
 from agentcrew.agents.prompting import (
@@ -62,6 +63,7 @@ from agentcrew.agents.prompting import (
 )
 from agentcrew.artifacts.parser import ParsedOutput, parse_fenced_blocks
 from agentcrew.artifacts.spec import ArtifactRecord
+from agentcrew.models.agent_budget import bind_budget, release_budget
 from agentcrew.artifacts.store import (
     ArtifactConflictError,
     ArtifactScopeError,
@@ -284,6 +286,23 @@ class AgentExecutionError(RuntimeError):
         self.role = role
 
 
+def _budgeted(fn):
+    """给 ``execute`` 绑一份执行体预算上下文；没有上限时零开销。
+
+    用装饰器而不是改方法体：``execute`` 很长且多处 return，手工包 try/finally
+    容易漏路径。上下文随协程走，split 模式下多个 agent 并发互不干扰。
+    """
+    @wraps(fn)
+    async def wrapper(self, *args, **kwargs):
+        token = bind_budget(
+            self.agent_key, self.cost_ceiling_usd, self.max_calls_per_task)
+        try:
+            return await fn(self, *args, **kwargs)
+        finally:
+            release_budget(token)
+    return wrapper
+
+
 class BaseAgent(ABC):
     """所有角色的基类：模板方法（``execute``）+ 四个可覆写钩子（spec §8.1）。
 
@@ -359,6 +378,9 @@ class BaseAgent(ABC):
         #: 空列表 = 不限（单 agent 路径完全不受影响）。
         self.path_scope: list[str] = []
         self.agent_key: str = ""
+        #: 执行体级预算（来自 AgentProfile）；None = 不限制。
+        self.cost_ceiling_usd: float | None = None
+        self.max_calls_per_task: int | None = None
         self._max_self_corrections = max_self_corrections
         self._stream = stream
         self._message_router = message_router
@@ -372,6 +394,7 @@ class BaseAgent(ABC):
 
     # ── 模板方法（子类不重写）────────────────────────────────────────────
 
+    @_budgeted
     async def execute(
         self,
         task: Task,
