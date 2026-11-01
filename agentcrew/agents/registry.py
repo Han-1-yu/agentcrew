@@ -173,6 +173,22 @@ class AgentFactory:
             "agent_switched", role=role_key, to=profile, duty=duty.value, reason=reason)
         return list(kept) + [switched]
 
+    def reset_agent(self, role_key: str) -> tuple[list[ResolvedAgent], bool]:
+        """撤掉某角色的运行中覆盖，回到配置文件里的绑定。
+
+        幂等：本来就没覆盖时返回 ``changed=False`` 且不改任何状态——调用方
+        （Studio 的「恢复默认」）不需要先查"到底切过没切过"。
+        """
+        changed = self._binding_overrides.pop(role_key, None) is not None
+        self._teams.pop(role_key, None)
+        for key in [k for k in self._agents if k.split("\u0000", 1)[0] == role_key]:
+            self._agents.pop(key, None)
+        if changed:
+            self._plan = None          # 重新按配置解析
+            self._ledger.emit("agent_binding_reset", role=role_key)
+        plan = self.plan() or RunPlan(run_id=self._run_id)
+        return list(plan.for_role(role_key)), changed
+
     def export_bindings(self) -> dict[str, dict]:
         """导出运行中切换的结果，供落盘后 resume 复用。"""
         return {
@@ -285,6 +301,7 @@ class AgentFactory:
             agent.max_calls_per_task = prof.max_calls_per_task
             agent.fallback_models = list(prof.fallback)
             agent.max_concurrency = prof.max_concurrency
+            agent.max_rpm = prof.max_rpm
         self._agents[cache_key] = agent
         return agent
 

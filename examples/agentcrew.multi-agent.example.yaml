@@ -11,6 +11,7 @@ agents:
       path_scope: ["backend/"]
       cost_ceiling_usd: 0.08
       max_concurrency: 2          # 便宜档最多 2 个并发调用，别把槽位占满
+      max_rpm: 30                 # 且每分钟最多 30 次（60 秒滑动窗口）
     backend_solid:
       title: 后端-强推理
       model: anthropic:claude-sonnet-5

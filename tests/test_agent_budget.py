@@ -209,3 +209,90 @@ def test_profile_rejects_non_positive_concurrency():
 
     with pytest.raises(ValidationError):
         AgentProfile(key="x", max_concurrency=0)
+
+
+def _fake_clock(monkeypatch, models):
+    """把工厂**实例所在模块**的 time/asyncio 换成可控时钟。
+
+    必须在 ``ModelFactory(...)`` 构造之后调用：构造函数本身要用
+    ``asyncio.Semaphore``，早换会把它一起换掉。
+    """
+    from types import SimpleNamespace
+
+    from agentcrew.models import factory as mf
+
+    clock = {"t": 0.0}
+
+    async def fake_sleep(seconds):
+        clock["t"] += seconds
+
+    monkeypatch.setattr(mf, "time", SimpleNamespace(monotonic=lambda: clock["t"]))
+    monkeypatch.setattr(mf, "asyncio", SimpleNamespace(sleep=fake_sleep))
+    return clock
+
+
+def test_agent_rpm_waits_out_the_window(tmp_path, monkeypatch):
+    from agentcrew.config import Settings
+    from agentcrew.models import factory as mf
+
+    models = mf.ModelFactory(Settings(mock=True, output_dir=tmp_path),
+                             ledger=None, fixtures_dir=tmp_path)
+    clock = _fake_clock(monkeypatch, models)
+
+    async def main():
+        token = bind_budget("fast", None, None, None, 2)
+        try:
+            for _ in range(3):          # 每分钟 2 次：第 3 次必须等到窗口滑出
+                await models._wait_for_agent_rpm()
+        finally:
+            release_budget(token)
+
+    asyncio_run(main())
+    assert clock["t"] == 60.0
+
+
+def test_agent_rpm_is_noop_without_limit(tmp_path, monkeypatch):
+    from agentcrew.config import Settings
+    from agentcrew.models import factory as mf
+
+    models = mf.ModelFactory(Settings(mock=True, output_dir=tmp_path),
+                             ledger=None, fixtures_dir=tmp_path)
+    clock = _fake_clock(monkeypatch, models)
+
+    async def main():
+        token = bind_budget("fast", None, None, None, None)
+        try:
+            for _ in range(5):
+                await models._wait_for_agent_rpm()
+        finally:
+            release_budget(token)
+
+    asyncio_run(main())
+    assert clock["t"] == 0.0          # 没配上限：一次都不等
+
+
+def test_agent_rpm_buckets_are_per_profile(tmp_path, monkeypatch):
+    from agentcrew.config import Settings
+    from agentcrew.models import factory as mf
+
+    models = mf.ModelFactory(Settings(mock=True, output_dir=tmp_path),
+                             ledger=None, fixtures_dir=tmp_path)
+    clock = _fake_clock(monkeypatch, models)
+
+    async def main():
+        for profile in ("a", "b"):
+            token = bind_budget(profile, None, None, None, 1)
+            try:
+                await models._wait_for_agent_rpm()
+            finally:
+                release_budget(token)
+        # 两个 profile 各占各的桶，互不排队
+        assert clock["t"] == 0.0
+        token = bind_budget("a", None, None, None, 1)
+        try:
+            await models._wait_for_agent_rpm()   # a 的第 2 次才等
+        finally:
+            release_budget(token)
+
+    asyncio_run(main())
+    assert clock["t"] == 60.0

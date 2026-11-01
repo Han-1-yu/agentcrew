@@ -46,6 +46,13 @@ class AgentProfile(BaseModel):
 
     cost_ceiling_usd: float | None = None
     max_calls_per_task: int | None = None
+    max_rpm: int | None = Field(default=None, ge=1)
+    """本执行体每分钟最多几次调用（60 秒滑动窗口）；``None`` = 只受 provider 约束。
+
+    与 ``max_concurrency`` 互补：并发管"同时几个"，RPM 管"一分钟几个"。
+    廉价档常被上游按 RPM 计费/限流，只用并发挡不住。
+    """
+
     max_concurrency: int | None = Field(default=None, ge=1)
     """本执行体同时在飞的 LLM 调用上限；``None`` = 只受 provider/全局约束。
 

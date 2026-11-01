@@ -1299,6 +1299,9 @@ roles:
 - **执行体并发**：`max_concurrency` 限制单个 agent 同时在飞的 LLM 调用数。两级
   槽位固定「先 agent、后 provider」，所有调用点同一取锁顺序，不会循环等待；不配
   则完全沿用 provider / 全局并发，单 agent 路径零改动。
+- **执行体速率**：`max_rpm` 是 60 秒滑动窗口（与 provider 级 `max_rpm` 同时生效，
+  两者都要满足）。并发管"同时几个"，RPM 管"一分钟几个"——廉价档常被上游按 RPM
+  计费，只用并发挡不住。
 - **按执行体统计**：run.json 的 `stats.agent_costs` 按 profile 拆分调用次数/成本/
   token，运行报告多一行「执行体 backend_fast 0.02/3次」。
 - **运行中切换**：三种入口，效果一致——`Crew.switch_agent(role, profile)`（进程内，

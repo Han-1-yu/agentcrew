@@ -301,7 +301,7 @@ def _budgeted(fn):
     async def wrapper(self, *args, **kwargs):
         token = bind_budget(
             self.agent_key, self.cost_ceiling_usd, self.max_calls_per_task,
-            self.max_concurrency)
+            self.max_concurrency, self.max_rpm)
         fo_token = bind_failover(self.fallback_models)
         try:
             return await fn(self, *args, **kwargs)
@@ -393,6 +393,8 @@ class BaseAgent(ABC):
         self.fallback_models: list[str] = []
         #: 执行体级并发上限（AgentProfile.max_concurrency）；None = 不额外限制。
         self.max_concurrency: int | None = None
+        #: 执行体级每分钟调用上限（AgentProfile.max_rpm）；None = 只受 provider 约束。
+        self.max_rpm: int | None = None
         self._max_self_corrections = max_self_corrections
         self._stream = stream
         self._message_router = message_router

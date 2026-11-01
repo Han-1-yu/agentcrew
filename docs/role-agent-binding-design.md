@@ -508,6 +508,8 @@ alias 失败 → 冷却矩阵 → 同 profile 的 fallback 别名 → 仍失败 
 | HTTP 热切 `POST /runs/{id}/agents`（运行中 200 / 未运行 409） | `api/server.py` |
 | 执行体并发上限 `max_concurrency`（两级槽位：agent → provider） | `roles/binding.py`、`models/factory.py` |
 | Studio 运行期切换（Agents 页卡片底部，走了就落 `agent_switched`） | `studio/src/features/agents-page/switch.js` |
+| 执行体 RPM 限速 `max_rpm`（60 秒滑窗，与 provider 级同时生效） | `models/factory.py` |
+| 切换回滚：`reset_agent` + `{"reset": true}`（幂等，清空即删文件） | `agents/registry.py`、`crew/crew.py`、`api/server.py` |
 | 16 个测试（校验/计划/权限/四种模式） | `tests/test_agent_binding.py` |
 
 验证：全量 **1973 passed / 1 skipped**；示例配置下离线 9/9 成功，
@@ -517,6 +519,7 @@ alias 失败 → 冷却矩阵 → 同 profile 的 fallback 别名 → 仍失败 
 
 | 项 | 现状 | 影响 |
 | --- | --- | --- |
-| agent 级 RPM 限速 | 未支持（只有 provider 级 `max_rpm`） | 单 agent 只能限并发不能限速率 |
+| 切换审计的可视化 | ledger 有 `agent_switched` / `agent_binding_reset`，Studio 不展示 | 只能在事件页/ledger 里查 |
+| 覆盖粒度 | 只能按 role 覆盖 | 不能只对某一次任务临时换人 |
 | `reviewer_for` 与 `duty=review` 的统一 | 两套并行 | 角色评审（G2）与 agent 复核互不影响 |
 | 成本/并发按 agent 统计 | 未拆分 | 报告仍按角色汇总 |

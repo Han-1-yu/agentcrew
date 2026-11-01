@@ -394,3 +394,25 @@ def test_profile_carries_budget_fallback_and_concurrency(tmp_path):
     assert agent.max_calls_per_task == 7
     assert agent.max_concurrency == 2
     assert agent.fallback_models == ["mock:backup"]
+
+
+def test_reset_agent_restores_configured_binding(tmp_path):
+    """切换 → 恢复默认：回到配置里的执行体，且第二次恢复是幂等的。"""
+    from agentcrew.runtime.ledger import Ledger
+
+    ledger = Ledger(tmp_path / "l.jsonl", run_id="R")
+    factory = _factory(
+        tmp_path, ledger,
+        profiles={"a": AgentProfile(key="a"), "b": AgentProfile(key="b")},
+        binding=RoleAgents(agents=[BoundAgent(ref="a", duty=Duty.PRIMARY)]))
+    factory.switch_agent("backend_dev", "b")
+    assert [m.profile for m in factory.plan().for_role("backend_dev")] == ["b"]
+
+    members, changed = factory.reset_agent("backend_dev")
+    assert changed is True
+    assert [m.profile for m in members] == ["a"]
+    assert ledger.events("agent_binding_reset")
+
+    members, changed = factory.reset_agent("backend_dev")
+    assert changed is False                      # 幂等：没覆盖就不算改动
+    assert [m.profile for m in members] == ["a"]

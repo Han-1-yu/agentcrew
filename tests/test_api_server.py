@@ -276,6 +276,41 @@ class TestRunLifecycle:
         await asyncio.wait_for(server._run_tasks[run_id], timeout=3)
 
     @pytest.mark.asyncio
+    async def test_reset_agent_endpoint(self, server: ApiServer):
+        """POST /runs/{id}/agents 带 reset:true：撤销覆盖，幂等回报 changed。"""
+        crew = _FakeCrew(hold=True)
+        calls: list[str] = []
+
+        def _reset(role):
+            calls.append(role)
+            return [SimpleNamespace(profile="default")], role == "backend_dev"
+
+        crew.reset_agent = _reset
+        server._crew_factory = lambda goal, options: crew
+        port = server._server.sockets[0].getsockname()[1]
+        _, created = await _request(port, "POST", "/runs", {"goal": "做个 Todo"})
+        run_id = created["run_id"]
+
+        status, data = await _request(
+            port, "POST", f"/runs/{run_id}/agents",
+            {"role": "backend_dev", "reset": True})
+        assert status == 200 and data["reset"] is True and data["changed"] is True
+        assert data["members"] == ["default"]
+
+        status, data = await _request(
+            port, "POST", f"/runs/{run_id}/agents",
+            {"role": "reviewer", "reset": True})
+        assert status == 200 and data["changed"] is False   # 没切过也不报错
+        assert calls == ["backend_dev", "reviewer"]
+
+        status, _ = await _request(
+            port, "POST", f"/runs/{run_id}/agents", {"role": "backend_dev"})
+        assert status == 400                                # 既没 agent 也没 reset
+
+        crew.cancel()
+        await asyncio.wait_for(server._run_tasks[run_id], timeout=3)
+
+    @pytest.mark.asyncio
     async def test_post_runs_creates_run(self, server: ApiServer):
         crew = _FakeCrew(hold=True)
         server._crew_factory = lambda goal, options: crew

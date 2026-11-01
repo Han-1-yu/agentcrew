@@ -153,6 +153,9 @@ _HEALTH_DEGRADED_THRESHOLD_MS = 2000.0
 #: P2-11：健康探测单次超时（秒）。
 _HEALTH_CHECK_TIMEOUT_SECS = 5.0
 
+#: RPM 滑动窗口长度（秒）。provider 级与执行体级共用同一个窗口定义。
+_RPM_WINDOW_SECONDS = 60.0
+
 #: P0-2：触发故障转移的异常类型 —— Provider 内部重试耗尽后的瞬时故障。
 #: openai_compat / anthropic 抛 TransientError；cli 抛 TimeoutError / ConnectionError。
 _PROVIDER_UNAVAILABLE_TYPES: tuple[type[BaseException], ...] = (
@@ -311,6 +314,8 @@ class ModelFactory:
         self._provider_semaphores: dict[str, asyncio.Semaphore] = {}
         # 多 agent：per-profile 并发信号量（仅当 profile 设了 max_concurrency）。
         self._agent_semaphores: dict[str, asyncio.Semaphore] = {}
+        # 多 agent：per-profile RPM 时间戳（仅当 profile 设了 max_rpm）。
+        self._agent_rpm_timestamps: dict[str, list[float]] = {}
         # V6 P0.5：per-provider RPM 滑动窗口时间戳（provider 名 → 单调递增时间戳列表）。
         self._rpm_timestamps: dict[str, list[float]] = {}
         self._llm_calls = 0
@@ -417,6 +422,7 @@ class ModelFactory:
         self._cache.clear()
         self._provider_semaphores.clear()
         self._agent_semaphores.clear()
+        self._agent_rpm_timestamps.clear()
         self._rpm_timestamps.clear()
         self._emit_model_switched(old, alias, scope="default")
 
@@ -437,6 +443,7 @@ class ModelFactory:
         self._cache.clear()
         self._provider_semaphores.clear()
         self._agent_semaphores.clear()
+        self._agent_rpm_timestamps.clear()
         self._rpm_timestamps.clear()
         self._emit_model_switched(old, alias, scope=f"role:{role}")
 
@@ -859,6 +866,7 @@ class ModelFactory:
             sem = self._get_provider_semaphore(
                 provider_name, provider.binding.max_concurrency)
             await self._wait_for_rpm(provider_name, provider.binding.max_rpm)
+            await self._wait_for_agent_rpm()
             yielded_first = False
             success = False
             try:
@@ -1114,6 +1122,7 @@ class ModelFactory:
             sem = self._get_provider_semaphore(
                 provider_name, provider.binding.max_concurrency)
             await self._wait_for_rpm(provider_name, provider.binding.max_rpm)
+            await self._wait_for_agent_rpm()
             async with self._slots(sem):
                 redactor = self._make_redactor()
                 masked_messages = redactor.mask_messages(messages)
@@ -1186,6 +1195,8 @@ class ModelFactory:
             provider_name = provider.binding.provider
             sem = self._get_provider_semaphore(
                 provider_name, provider.binding.max_concurrency)
+            await self._wait_for_rpm(provider_name, provider.binding.max_rpm)
+            await self._wait_for_agent_rpm()
             async with self._slots(sem):
                 model = await structured.complete_structured(
                     collecting,
@@ -1461,7 +1472,26 @@ class ModelFactory:
             yield
 
     async def _wait_for_rpm(self, provider: str, max_rpm: int | None) -> None:
-        """滑动窗口 RPM 限速（60 秒窗口）。
+        """provider 级滑动窗口 RPM 限速（60 秒窗口）。"""
+        await self._wait_window(self._rpm_timestamps, provider, max_rpm)
+
+    async def _wait_for_agent_rpm(self) -> None:
+        """执行体级 RPM 限速；未绑定 profile 或没设上限时零开销。
+
+        与 provider 级**同时生效**（两者都要满足）：provider 管上游的硬配额，
+        agent 管"这个便宜档一分钟别打太多次"——同一 provider 下的不同执行体
+        可能有完全不同的成本结构。
+        """
+        state = agent_budget.current()
+        if state is None or state.max_rpm is None:
+            return
+        await self._wait_window(
+            self._agent_rpm_timestamps, state.profile, state.max_rpm)
+
+    async def _wait_window(
+        self, buckets: dict[str, list[float]], key: str, max_rpm: int | None
+    ) -> None:
+        """60 秒滑动窗口限速。
 
         - ``max_rpm`` 为 ``None`` 时直接返回（不限制，向后兼容）；
         - 每次调用清理 60 秒前的旧时间戳；
@@ -1470,18 +1500,18 @@ class ModelFactory:
         """
         if max_rpm is None:
             return
-        timestamps = self._rpm_timestamps.setdefault(provider, [])
+        timestamps = buckets.setdefault(key, [])
         now = time.monotonic()
-        cutoff = now - 60.0
+        cutoff = now - _RPM_WINDOW_SECONDS
         while timestamps and timestamps[0] < cutoff:
             timestamps.pop(0)
         if len(timestamps) >= max_rpm:
-            wait_time = timestamps[0] + 60.0 - now
+            wait_time = timestamps[0] + _RPM_WINDOW_SECONDS - now
             if wait_time > 0:
                 await asyncio.sleep(wait_time)
                 # 睡醒后再清一次窗口（sleep 期间可能又有其他协程入列）。
                 now = time.monotonic()
-                cutoff = now - 60.0
+                cutoff = now - _RPM_WINDOW_SECONDS
                 while timestamps and timestamps[0] < cutoff:
                     timestamps.pop(0)
         timestamps.append(time.monotonic())

@@ -498,7 +498,12 @@ class ApiServer:
         运行中的 run 立刻生效（下一次派发）；不在跑就写 ``binding_overrides.json``，
         由下一次 resume 接管。两种结果都如实回报 ``applied``，不假装成功。
 
-        body: ``{"role": "backend_dev", "agent": "backend_fast", "reason": "..."}``
+        body 两种形态：
+
+        - ``{"role": "...", "agent": "backend_fast", "reason": "..."}`` —— 切到指定执行体；
+        - ``{"role": "...", "reset": true}`` —— 撤销该角色的运行中覆盖（回到配置）。
+
+        ``reset`` 是幂等的：没切过也返回 200，``changed=false``。
         """
         try:
             payload = json.loads(body.decode("utf-8")) if body else {}
@@ -506,21 +511,28 @@ class ApiServer:
             await self._send_json(writer, 400, {"error": "invalid JSON"})
             return
         role = str(payload.get("role") or "")
+        reset = bool(payload.get("reset"))
         agent = str(payload.get("agent") or "")
-        if not role or not agent:
+        if not role or (not reset and not agent):
             await self._send_json(
-                writer, 400, {"error": "需要 role 与 agent 两个字段"})
+                writer, 400, {"error": "需要 role，以及 agent 或 reset:true"})
             return
         crew = self.active_crews.get(run_id)
         if crew is not None:
             try:
-                members = crew.switch_agent(role, agent, reason=str(payload.get("reason") or "api"))
+                if reset:
+                    members, changed = crew.reset_agent(role)
+                else:
+                    members = crew.switch_agent(
+                        role, agent, reason=str(payload.get("reason") or "api"))
+                    changed = True
             except (ValueError, RuntimeError) as exc:
                 await self._send_json(writer, 400, {"error": str(exc)})
                 return
             await self._send_json(writer, 200, {
                 "applied": True, "effective": "next-dispatch",
                 "run_id": run_id, "role": role,
+                "reset": reset, "changed": changed,
                 "members": [m.profile for m in members],
             })
             return

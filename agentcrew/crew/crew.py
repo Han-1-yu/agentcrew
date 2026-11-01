@@ -366,11 +366,33 @@ class Crew:
         if self._run is None:
             raise RuntimeError("当前没有进行中的 run，无法切换 agent")
         members = self._run.agents.switch_agent(role, profile, reason=reason)
-        run_dir = self._run.checkpoint.artifacts_dir.parent
-        (run_dir / _OVERRIDE_FILE).write_text(
-            json.dumps(self._run.agents.export_bindings(), ensure_ascii=False, indent=2),
-            encoding="utf-8")
+        self._persist_overrides()
         return members
+
+    def reset_agent(self, role: str) -> tuple[list, bool]:
+        """撤销 ``switch_agent`` 的覆盖，回到配置文件里的绑定。
+
+        幂等：没切过也返回 ``(当前成员, False)``。落盘文件在覆盖清空后删除，
+        这样 resume 时 ``_load_binding_overrides`` 读到的是"没有覆盖"。
+        """
+        if self._run is None:
+            raise RuntimeError("当前没有进行中的 run，无法恢复绑定")
+        members, changed = self._run.agents.reset_agent(role)
+        self._persist_overrides()
+        return members, changed
+
+    def _persist_overrides(self) -> None:
+        """把运行中覆盖写进 run 目录；空则删文件（避免"空对象"被当成有覆盖）。"""
+        if self._run is None:
+            return
+        run_dir = self._run.checkpoint.artifacts_dir.parent
+        path = run_dir / _OVERRIDE_FILE
+        payload = self._run.agents.export_bindings()
+        if payload:
+            path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        elif path.is_file():
+            path.unlink()
 
     def register_role(self, spec: RoleSpec, cls: type[BaseAgent] | None = None) -> None:
         """注册一个角色：进目录，并（可选）登记专用 Agent 类。
