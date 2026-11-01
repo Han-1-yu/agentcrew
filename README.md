@@ -1294,10 +1294,15 @@ roles:
 - **执行体预算**：`cost_ceiling_usd` / `max_calls_per_task` 在**每次调用前**检查，
   超限抛 `AgentBudgetExceeded`，任务判失败（不会再花钱）；`max_cost_usd` 仍是
   run 级硬上限，两者互不替代。
-- **运行中切换**：`Crew.switch_agent(role, profile)` 立即对下一次派发生效（在途
-  任务不打断），结果落 `<run_dir>/binding_overrides.json`，resume 自动恢复；
-  进程外用 `python main.py switch <run_id> <role> <agent>` 写同一份文件。
-  切换目标可以是"已定义但当前没绑"的执行体。
+- **备用模型**：`AgentProfile.fallback` 优先于全局 `model_failover`——某个 agent
+  的备用别名只服务它自己，不会影响同别名的其他角色。
+- **按执行体统计**：run.json 的 `stats.agent_costs` 按 profile 拆分调用次数/成本/
+  token，运行报告多一行「执行体 backend_fast 0.02/3次」。
+- **运行中切换**：三种入口，效果一致——`Crew.switch_agent(role, profile)`（进程内，
+  下一次派发生效，在途任务不打断）、`POST /runs/{id}/agents`（serve 模式下 HTTP
+  热切）、`python main.py switch <run_id> <role> <agent>`（写盘，下次 resume 生效）。
+  结果统一落 `<run_dir>/binding_overrides.json`；切换目标可以是"已定义但当前没绑"
+  的执行体。
 
 ### 查看
 

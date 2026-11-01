@@ -49,6 +49,7 @@ def delivery_summary(record: RunRecord, *, board: TaskBoard, artifacts_dir: Path
         f"prompt {format_tokens(stats.prompt_tokens)} tok · "
         f"completion {format_tokens(stats.completion_tokens)} tok",
         f"估算成本  ${stats.estimated_cost_usd:.2f}",
+        *([_agent_cost_line(stats.agent_costs)] if stats.agent_costs else []),
         f"评审通过率 {review_line(tasks)}",
         f"耗时      {elapsed_line(record)}",
         f"产物      {artifacts_dir}",
@@ -62,6 +63,15 @@ def delivery_summary(record: RunRecord, *, board: TaskBoard, artifacts_dir: Path
         lines.append("━━━ 失败任务 ━━━")
         lines.extend(failure_line(task) for task in failed)
     return "\n".join(lines)
+
+
+def _agent_cost_line(costs: dict[str, dict[str, float]]) -> str:
+    """按执行体拆分的用量：一眼看出"钱花在哪个 agent 上"。"""
+    parts = [
+        f"{profile} {usage.get('cost_usd', 0.0):.2f}/{int(usage.get('calls', 0))}次"
+        for profile, usage in sorted(costs.items())
+    ]
+    return "执行体    " + " · ".join(parts)
 
 
 def format_tokens(count: int) -> str:

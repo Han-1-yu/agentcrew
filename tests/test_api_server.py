@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -244,6 +245,37 @@ class TestRunLifecycle:
             await srv.stop()
 
     @pytest.mark.asyncio
+    async def test_switch_agent_endpoint(self, server: ApiServer):
+        """POST /runs/{id}/agents：运行中 → 200 applied；不在跑 → 409 不假装成功。"""
+        crew = _FakeCrew(hold=True)
+        switched: list[tuple[str, str]] = []
+
+        def _switch(role, agent, reason=""):
+            switched.append((role, agent))
+            return [SimpleNamespace(profile=agent)]
+
+        crew.switch_agent = _switch
+        server._crew_factory = lambda goal, options: crew
+        port = server._server.sockets[0].getsockname()[1]
+        _, created = await _request(port, "POST", "/runs", {"goal": "做个 Todo"})
+        run_id = created["run_id"]
+
+        status, data = await _request(
+            port, "POST", f"/runs/{run_id}/agents",
+            {"role": "backend_dev", "agent": "fast"})
+        assert status == 200 and data["applied"] is True
+        assert data["members"] == ["fast"]
+        assert switched == [("backend_dev", "fast")]
+
+        status, data = await _request(
+            port, "POST", "/runs/not-running/agents",
+            {"role": "backend_dev", "agent": "fast"})
+        assert status == 409 and data["applied"] is False
+
+        crew.cancel()
+        await asyncio.wait_for(server._run_tasks[run_id], timeout=3)
+
+    @pytest.mark.asyncio
     async def test_post_runs_creates_run(self, server: ApiServer):
         crew = _FakeCrew(hold=True)
         server._crew_factory = lambda goal, options: crew
@@ -396,7 +428,6 @@ class TestProvidersApi:
 
     @pytest.mark.asyncio
     async def test_get_providers_custom_provider(self, server: ApiServer):
-        from agentcrew.config import Settings
         settings = server._settings.model_copy(update={
             "custom_providers": {
                 "myrelay": {

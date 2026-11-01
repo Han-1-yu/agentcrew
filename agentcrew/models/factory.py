@@ -314,6 +314,7 @@ class ModelFactory:
         self._total_prompt_tokens = 0
         self._total_completion_tokens = 0
         self._total_cost_usd = 0.0
+        self._agent_usage: dict[str, dict[str, float]] = {}
         # P2-11：主动健康监控 —— 各别名的健康状态缓存与后台探测任务。
         self._health: dict[str, HealthRecord] = {}
         self._health_task: asyncio.Task | None = None
@@ -373,6 +374,11 @@ class ModelFactory:
     def total_completion_tokens(self) -> int:
         """累计输出 token。"""
         return self._total_completion_tokens
+
+    @property
+    def agent_usage(self) -> dict[str, dict[str, float]]:
+        """按执行体拆分的用量（profile → calls/cost/tokens）。单 agent 时为空。"""
+        return {k: dict(v) for k, v in self._agent_usage.items()}
 
     @property
     def total_cost_usd(self) -> float:
@@ -1303,6 +1309,10 @@ class ModelFactory:
         时保持原序（最后一搏）。细节见
         :func:`agentcrew.models.routing.failover_candidates`。
         """
+        override = agent_budget.failover_override()
+        if override:
+            # 执行体自带的备用别名优先：它们是给"这个 agent"准备的，不是全局的
+            return [alias] + [a for a in override if a != alias]
         return routing.failover_candidates(
             alias,
             failover_map=self._settings.model_failover,
@@ -1611,7 +1621,16 @@ class ModelFactory:
         self._total_prompt_tokens += result.prompt_tokens
         self._total_completion_tokens += result.completion_tokens
         self._total_cost_usd += cost
-        agent_budget.note_call(cost)   # 执行体级预算累加（无上下文时零开销）
+        agent_budget.note_call(cost)
+        state = agent_budget.current()
+        if state is not None:
+            slot = self._agent_usage.setdefault(state.profile, {
+                "calls": 0.0, "cost_usd": 0.0,
+                "prompt_tokens": 0.0, "completion_tokens": 0.0})
+            slot["calls"] += 1
+            slot["cost_usd"] += cost
+            slot["prompt_tokens"] += result.prompt_tokens
+            slot["completion_tokens"] += result.completion_tokens   # 执行体级预算累加（无上下文时零开销）
         # V7-P1：usage 路由策略的使用量追踪
         if alias is not None:
             self._note_usage(alias, result.prompt_tokens, result.completion_tokens)

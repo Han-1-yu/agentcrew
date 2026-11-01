@@ -922,6 +922,15 @@ class Crew:
         stats.estimated_cost_usd = (
             run.base_stats.estimated_cost_usd + run.models.total_cost_usd
         )
+        merged: dict[str, dict[str, float]] = {
+            k: dict(v) for k, v in run.base_stats.agent_costs.items()}
+        for profile, usage in run.models.agent_usage.items():
+            slot = merged.setdefault(profile, {
+                "calls": 0.0, "cost_usd": 0.0,
+                "prompt_tokens": 0.0, "completion_tokens": 0.0})
+            for key, value in usage.items():
+                slot[key] = slot.get(key, 0.0) + value
+        stats.agent_costs = merged
         stats.started_at = run.base_stats.started_at or run.record.created_at
         stats.finished_at = (
             datetime.now() if finished else run.record.stats.finished_at)

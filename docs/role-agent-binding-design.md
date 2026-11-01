@@ -503,6 +503,9 @@ alias 失败 → 冷却矩阵 → 同 profile 的 fallback 别名 → 仍失败 
 | 执行体预算强制（调用前拦截，成本 + 次数） | `agentcrew/models/agent_budget.py` |
 | 运行中切换（`Crew.switch_agent` + `binding_overrides.json` 持久化） | `agentcrew/agents/registry.py`、`crew/crew.py` |
 | Studio 绑定矩阵（只读渲染 + 冲突自查 + YAML 片段） | `studio/src/features/settings/agents.js` |
+| 执行体 fallback 接入故障转移（优先于全局 map） | `models/agent_budget.py`、`models/factory.py` |
+| 按执行体成本统计（`stats.agent_costs` + 报告一行） | `models/factory.py`、`crew/crew.py`、`crew/report.py` |
+| HTTP 热切 `POST /runs/{id}/agents`（运行中 200 / 未运行 409） | `api/server.py` |
 | 16 个测试（校验/计划/权限/四种模式） | `tests/test_agent_binding.py` |
 
 验证：全量 **1973 passed / 1 skipped**；示例配置下离线 9/9 成功，
@@ -512,6 +515,6 @@ alias 失败 → 冷却矩阵 → 同 profile 的 fallback 别名 → 仍失败 
 
 | 项 | 现状 | 影响 |
 | --- | --- | --- |
-| `AgentProfile.fallback` | 未并入 `model_failover` | 备用模型仍走全局 failover 配置 |
+| agent 级并发上限 | 未支持（只有 provider 级 semaphore） | 单 agent 无法单独限流 |
 | `reviewer_for` 与 `duty=review` 的统一 | 两套并行 | 角色评审（G2）与 agent 复核互不影响 |
 | 成本/并发按 agent 统计 | 未拆分 | 报告仍按角色汇总 |

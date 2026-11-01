@@ -283,6 +283,7 @@ class AgentFactory:
             agent.agent_key = resolved.profile
             agent.cost_ceiling_usd = prof.cost_ceiling_usd
             agent.max_calls_per_task = prof.max_calls_per_task
+            agent.fallback_models = list(prof.fallback)
         self._agents[cache_key] = agent
         return agent
 

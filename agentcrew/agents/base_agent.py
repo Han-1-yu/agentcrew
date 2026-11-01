@@ -63,7 +63,6 @@ from agentcrew.agents.prompting import (
 )
 from agentcrew.artifacts.parser import ParsedOutput, parse_fenced_blocks
 from agentcrew.artifacts.spec import ArtifactRecord
-from agentcrew.models.agent_budget import bind_budget, release_budget
 from agentcrew.artifacts.store import (
     ArtifactConflictError,
     ArtifactScopeError,
@@ -73,6 +72,12 @@ from agentcrew.artifacts.store import (
 )
 from agentcrew.artifacts.summarizer import summarize_records
 from agentcrew.context.context_bus import ContextPack
+from agentcrew.models.agent_budget import (
+    bind_budget,
+    bind_failover,
+    release_budget,
+    release_failover,
+)
 from agentcrew.models.factory import ModelFactory
 from agentcrew.models.providers.base import CompletionResult, Message
 from agentcrew.models.providers.mock import MockProvider, set_purpose
@@ -296,9 +301,11 @@ def _budgeted(fn):
     async def wrapper(self, *args, **kwargs):
         token = bind_budget(
             self.agent_key, self.cost_ceiling_usd, self.max_calls_per_task)
+        fo_token = bind_failover(self.fallback_models)
         try:
             return await fn(self, *args, **kwargs)
         finally:
+            release_failover(fo_token)
             release_budget(token)
     return wrapper
 
@@ -381,6 +388,8 @@ class BaseAgent(ABC):
         #: 执行体级预算（来自 AgentProfile）；None = 不限制。
         self.cost_ceiling_usd: float | None = None
         self.max_calls_per_task: int | None = None
+        #: 执行体级备用别名（AgentProfile.fallback），优先级高于全局 failover。
+        self.fallback_models: list[str] = []
         self._max_self_corrections = max_self_corrections
         self._stream = stream
         self._message_router = message_router

@@ -352,6 +352,9 @@ class ApiServer:
             if action == "resume":
                 await self._resume_run(run_id, writer)
                 return
+            if action == "agents":
+                await self._switch_agent(run_id, body, writer)
+                return
             if action == "events":
                 try:
                     data = json.loads(body.decode("utf-8")) if body else {}
@@ -486,6 +489,45 @@ class ApiServer:
             crew._on_event = forward
         except Exception:
             pass
+
+    async def _switch_agent(
+        self, run_id: str, body: bytes, writer: asyncio.StreamWriter
+    ) -> None:
+        """``POST /runs/{id}/agents``：热切换某个角色的执行体。
+
+        运行中的 run 立刻生效（下一次派发）；不在跑就写 ``binding_overrides.json``，
+        由下一次 resume 接管。两种结果都如实回报 ``applied``，不假装成功。
+
+        body: ``{"role": "backend_dev", "agent": "backend_fast", "reason": "..."}``
+        """
+        try:
+            payload = json.loads(body.decode("utf-8")) if body else {}
+        except json.JSONDecodeError:
+            await self._send_json(writer, 400, {"error": "invalid JSON"})
+            return
+        role = str(payload.get("role") or "")
+        agent = str(payload.get("agent") or "")
+        if not role or not agent:
+            await self._send_json(
+                writer, 400, {"error": "需要 role 与 agent 两个字段"})
+            return
+        crew = self.active_crews.get(run_id)
+        if crew is not None:
+            try:
+                members = crew.switch_agent(role, agent, reason=str(payload.get("reason") or "api"))
+            except (ValueError, RuntimeError) as exc:
+                await self._send_json(writer, 400, {"error": str(exc)})
+                return
+            await self._send_json(writer, 200, {
+                "applied": True, "effective": "next-dispatch",
+                "run_id": run_id, "role": role,
+                "members": [m.profile for m in members],
+            })
+            return
+        await self._send_json(writer, 409, {
+            "applied": False, "run_id": run_id,
+            "error": "该 run 未在运行中；请用 CLI `switch` 写入后 resume",
+        })
 
     async def _cancel_run(self, run_id: str, writer: asyncio.StreamWriter) -> None:
         """``POST /runs/{id}/cancel``：软取消运行中的 run（202）。"""

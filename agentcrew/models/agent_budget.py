@@ -28,14 +28,22 @@ class BudgetState:
 
 _current: ContextVar[BudgetState | None] = ContextVar("agent_budget", default=None)
 
+#: 执行体自带的备用别名（来自 ``AgentProfile.fallback``）。与全局
+#: ``model_failover`` 并存：执行体级优先，缺省回落到全局配置。
+_failover: ContextVar[tuple[str, ...] | None] = ContextVar("agent_failover", default=None)
+
 
 def bind_budget(
     profile: str,
     cost_ceiling_usd: float | None,
     max_calls: int | None,
 ) -> Token[BudgetState | None] | None:
-    """给当前协程绑定一份预算；没有任何上限时返回 ``None``（零开销）。"""
-    if cost_ceiling_usd is None and max_calls is None:
+    """给当前协程绑定一份预算上下文。
+
+    只要给了 ``profile`` 就绑定（即使没有上限）：按执行体记账要用到它。
+    没有 profile 时返回 ``None``，单 agent 老路径零开销。
+    """
+    if not profile:
         return None
     return _current.set(BudgetState(
         profile=profile, cost_ceiling_usd=cost_ceiling_usd, max_calls=max_calls))
@@ -72,3 +80,19 @@ def guard() -> None:
 
 def current() -> BudgetState | None:
     return _current.get()
+
+
+def bind_failover(aliases: list[str] | None) -> Token[tuple[str, ...] | None] | None:
+    """绑定执行体级备用别名；空列表返回 ``None``（零开销）。"""
+    if not aliases:
+        return None
+    return _failover.set(tuple(aliases))
+
+
+def release_failover(token: Token[tuple[str, ...] | None] | None) -> None:
+    if token is not None:
+        _failover.reset(token)
+
+
+def failover_override() -> tuple[str, ...]:
+    return _failover.get() or ()

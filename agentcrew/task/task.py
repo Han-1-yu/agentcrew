@@ -121,5 +121,10 @@ class RunStats(BaseModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
     estimated_cost_usd: float = 0.0
+    agent_costs: dict[str, dict[str, float]] = Field(default_factory=dict)
+    """按执行体拆分的用量（profile → calls/cost_usd/prompt_tokens/…）。
+
+    单执行体（未配置多 agent）时为空字典，与旧版 run.json 完全兼容。
+    """
     started_at: datetime | None = None
     finished_at: datetime | None = None

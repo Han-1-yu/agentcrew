@@ -12,6 +12,12 @@ from agentcrew.models.agent_budget import (
     note_call,
     release_budget,
 )
+from agentcrew.models.agent_budget import (
+    bind_failover as _bind_failover,
+)
+from agentcrew.models.agent_budget import (
+    release_failover as _release_failover,
+)
 
 
 def test_guard_is_noop_without_budget():
@@ -89,3 +95,48 @@ def test_factory_call_records_into_budget(tmp_path):
 def asyncio_run(coro):
     import asyncio
     return asyncio.new_event_loop().run_until_complete(coro)
+
+
+def test_agent_failover_overrides_global_map(tmp_path):
+    """执行体自带 fallback 时优先于全局 model_failover。"""
+    from agentcrew.config import Settings
+    from agentcrew.models.factory import ModelFactory
+
+    settings = Settings(mock=True, output_dir=tmp_path,
+                        model_failover={"mock:model": ["global:one"]})
+    models = ModelFactory(settings, ledger=None, fixtures_dir=tmp_path)
+    token = _bind_failover(["local:two", "local:three"])
+    try:
+        assert models._failover_aliases("mock:model") == [
+            "mock:model", "local:two", "local:three"]
+    finally:
+        _release_failover(token)
+    assert models._failover_aliases("mock:model") == ["mock:model", "global:one"]
+
+
+def test_agent_usage_is_recorded_per_profile(tmp_path):
+    from agentcrew.config import Settings
+    from agentcrew.models.factory import ModelFactory
+
+    settings = Settings(mock=True, output_dir=tmp_path)
+    models = ModelFactory(settings, ledger=None, fixtures_dir=tmp_path)
+    token = bind_budget("fast", None, None)     # 只有 profile，没有上限
+    try:
+        asyncio_run(models.call(
+            "mock:model", [{"role": "user", "content": "hi"}],
+            temperature=0.0, max_tokens=16, purpose="execute", role="backend_dev"))
+    finally:
+        release_budget(token)
+    usage = models.agent_usage["fast"]
+    assert usage["calls"] == 1
+    assert usage["prompt_tokens"] > 0
+
+
+def test_report_prints_agent_cost_line():
+    from agentcrew.crew.report import _agent_cost_line
+
+    line = _agent_cost_line({"backend_fast": {"cost_usd": 0.021, "calls": 3}})
+    assert "backend_fast" in line and "0.02" in line and "3次" in line
+
+
+
