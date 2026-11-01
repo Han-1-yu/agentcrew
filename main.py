@@ -582,11 +582,19 @@ def _cmd_roles(args: argparse.Namespace) -> int:
     """
     del args  # 无参数：角色表来自 BUILTIN_ROLES
     console = Console()
+    from agentcrew.agents.plan import binding_for
+    from agentcrew.config import Settings
+    settings = Settings.load()
     for spec in BUILTIN_ROLES:
         _out(console, f"[{spec.key}] {spec.title} —— {spec.goal}")
         _out(console, f"  职责  {'；'.join(spec.responsibilities)}")
         _out(console, f"  边界  {'；'.join(spec.boundaries)}")
         _out(console, f"  产出  {spec.output_contract}")
+        binding = binding_for(spec, settings)
+        if binding.agents:
+            chain = " + ".join(f"{b.ref}:{b.duty.value}" for b in binding.agents)
+            mode = binding.aggregation.mode if binding.aggregation else "single"
+            _out(console, f"  执行体  {chain}（汇总：{mode}）")
         _out(console, "")
     _out(
         console,

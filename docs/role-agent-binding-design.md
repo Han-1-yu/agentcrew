@@ -482,3 +482,36 @@ alias 失败 → 冷却矩阵 → 同 profile 的 fallback 别名 → 仍失败 
 ## 附：为什么不做"每角色一个 Python 子类"
 
 现有 `AGENT_CLASSES` 允许为角色注册专用类，但那是**行为**差异（如 PM 的拆解逻辑），不是**执行体**差异。多 agent 若靠"多写类"实现，会退化成 8×N 个类，且模型/工具/预算这些纯配置被迫写进代码。所以本方案坚持：**角色是数据，agent 是配置，类是最后手段**。
+
+---
+
+## 12. 实现状态（2026-11-01）
+
+### 已落地
+
+| 能力 | 位置 |
+| --- | --- |
+| `AgentProfile` / `BoundAgent` / `Duty` / `Aggregation` / `RoleAgents` + 启动期校验 | `agentcrew/roles/binding.py` |
+| 角色规格可内联绑定（`roles.d` 也能用） | `agentcrew/roles/spec.py` |
+| YAML `agents.profiles` + `roles.<role>.agents` 解析（profile key 自动补齐） | `agentcrew/config.py` |
+| `RunPlan` 解析 + `run_plan_resolved` 事件（写进 run 起始 ledger） | `agentcrew/agents/plan.py`、`crew/crew.py` |
+| 工厂按 `(role, profile)` 缓存，profile 覆盖模型/工具/温度/输出上限 | `agentcrew/agents/registry.py` |
+| `path_scope` 强制（`ArtifactScopeError`，落盘前拦截） | `agentcrew/artifacts/store.py` |
+| 团队执行器：`primary_with_review` / `split_by_path` / `best_of` / `merge` | `agentcrew/agents/team.py` |
+| 产物归属 `produced_by_agent` | `agentcrew/artifacts/spec.py` |
+| `roles` 命令输出绑定链 | `main.py` |
+| 16 个测试（校验/计划/权限/四种模式） | `tests/test_agent_binding.py` |
+
+验证：全量 **1973 passed / 1 skipped**；示例配置下离线 9/9 成功，
+`T-007` 的 `notes` 里出现「## 复核意见」，`MANIFEST` 记录 `produced_by_agent=writer_main`。
+
+### 尚未接线（明确列出，避免误以为已生效）
+
+| 项 | 现状 | 影响 |
+| --- | --- | --- |
+| `cost_ceiling_usd` / `max_calls_per_task` | 只解析，未强制 | 单 agent 预算上限暂不生效 |
+| `AgentProfile.fallback` | 未并入 `model_failover` | 备用模型仍走全局 failover 配置 |
+| 运行中切换 agent（`pending_binding`） | 未实现 | 只能改配置后重启 run |
+| Studio 绑定矩阵 | 未实现 | 目前用 YAML + `roles` 命令 |
+| `reviewer_for` 与 `duty=review` 的统一 | 两套并行 | 角色评审（G2）与 agent 复核互不影响 |
+| 成本/并发按 agent 统计 | 未拆分 | 报告仍按角色汇总 |

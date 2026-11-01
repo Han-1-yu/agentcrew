@@ -6,6 +6,8 @@
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from agentcrew.roles.binding import Aggregation, BoundAgent
+
 
 class RoleSpec(BaseModel):
     """一个角色的完整声明（spec §5.4）。
@@ -38,3 +40,9 @@ class RoleSpec(BaseModel):
     未授权的工具既不会出现在系统提示词里，模型若强行写出也会被 Agent 以
     「未授权」错误回灌。空列表视同 ``["*"]``（兼容既有用例）。
     """
+
+    agents: list[BoundAgent] = Field(default_factory=list)
+    """本角色绑定的执行体（多 agent）。空列表 = 沿用旧的单执行体行为。"""
+
+    aggregation: Aggregation | None = None
+    """多执行体的汇总策略；绑定多个 agent 时必填（启动期校验）。"""

@@ -1,0 +1,30 @@
+# 多 Agent 绑定示例：复制到仓库根的 agentcrew.yaml 即可生效。
+# 单角色单 agent 时删掉 agents/roles 两段即可回到旧行为。
+
+agents:
+  profiles:
+    backend_fast:
+      title: 后端-快速档
+      model: deepseek:deepseek-chat
+      fallback: [openai:gpt-4o-mini]
+      tools: [read_file, grep, run_python]
+      path_scope: ["backend/"]
+      cost_ceiling_usd: 0.08
+    backend_solid:
+      title: 后端-强推理
+      model: anthropic:claude-sonnet-5
+      path_scope: ["backend/"]
+    doc_reviewer:
+      title: 文档复核
+      model: deepseek:deepseek-chat
+
+roles:
+  backend_dev:
+    agents:
+      - ref: backend_solid
+        duty: primary
+      - ref: backend_fast
+        duty: review
+    aggregation:
+      mode: primary_with_review
+      quorum: 1

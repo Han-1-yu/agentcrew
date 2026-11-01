@@ -53,6 +53,8 @@ class ArtifactRecord(BaseModel):
     sha256: str
     produced_by_task: str
     produced_by_role: str
+    produced_by_agent: str = ""
+    """产出该文件的执行体（多 agent 时用于区分；单 agent 为空串）。"""
     written_at: datetime
 
 

@@ -7,6 +7,7 @@
 """
 
 import json
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
@@ -47,6 +48,18 @@ class ArtifactTooLargeError(ValueError):
         self.path = path
         self.size = size
         self.limit = limit
+
+
+class ArtifactScopeError(ValueError):
+    """路径不在执行体的 ``path_scope`` 内（多 agent 分工时的写保护）。"""
+
+    def __init__(self, path: str, agent: str, scope: list[str]) -> None:
+        super().__init__(
+            f"产物 {path} 不在 agent {agent} 的写入范围内"
+            f"（允许：{', '.join(scope)}）")
+        self.path = path
+        self.agent = agent
+        self.scope = tuple(scope)
 
 
 class UndeclaredArtifactError(ValueError):
@@ -106,13 +119,16 @@ class ArtifactStore:
         return candidate
 
     def commit(
-        self, rel: str, content: str, *, spec: ArtifactSpec, task: TaskLike
+        self, rel: str, content: str, *, spec: ArtifactSpec, task: TaskLike,
+        path_scope: Sequence[str] | None = None, agent: str = "",
     ) -> ArtifactRecord:
         """校验并原子写入一个产物，返回落盘记录。
 
         顺序（**先校验后写盘**，任何一步失败都不留文件、目录或记录）：
 
         1. :func:`~agentcrew.utils.files.safe_relpath` 规范化 ``rel``；
+        1.5 给定 ``path_scope`` 时先查范围（多 agent 分工的写保护），越界抛
+           :class:`ArtifactScopeError` —— 是"这个 agent 不该写这里"，不是契约问题；
         2. 规范化结果必须等于 ``spec.path``（后者构造时已规范化），否则
            :class:`UndeclaredArtifactError` —— 模型写 ``./a.py``/``a\\b.py``
            不算越界；
@@ -131,6 +147,9 @@ class ArtifactStore:
         normalized = safe_relpath(rel).as_posix()
         if normalized != spec.path:
             raise UndeclaredArtifactError(normalized, task.id)
+
+        if path_scope and not any(normalized.startswith(scope) for scope in path_scope):
+            raise ArtifactScopeError(normalized, agent or task.id, list(path_scope))
 
         target = self.resolve(normalized)
 
@@ -158,6 +177,7 @@ class ArtifactStore:
             sha256=sha256_bytes(data),
             produced_by_task=task.id,
             produced_by_role=task.role,
+            produced_by_agent=agent,
             written_at=datetime.now(),
         )
         if index is None:

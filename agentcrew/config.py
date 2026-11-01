@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from agentcrew.models.config import PROVIDER_PRESETS, ProviderPreset
+from agentcrew.roles.binding import AgentProfile, RoleAgents
 
 GateMode = Literal["both", "plan", "delivery", "none"]
 
@@ -75,6 +76,7 @@ _MAPPING_FIELDS = (
     "role_bindings", "provider_overrides", "model_tiers", "model_failover",
     "mcp_servers", "gate_config", "tool_permissions", "api_keys",
     "custom_providers",
+    "agent_profiles", "role_agents",
 )
 
 #: ``AGENTCREW_TIER_<LEVEL>`` → ``model_tiers[<level>]``（V2：按复杂度选模型）。
@@ -222,6 +224,25 @@ def _yaml_values() -> dict[str, object]:
     config_version = data.get("config_version")
     if config_version is not None:
         values["config_version"] = config_version
+    agents_cfg = data.get("agents") or {}
+    if agents_cfg:
+        if not isinstance(agents_cfg, dict):
+            raise ValueError(f"配置文件 agents 段必须是映射：{path}")
+        profiles = agents_cfg.get("profiles") or {}
+        if not isinstance(profiles, dict):
+            raise ValueError(f"配置文件 agents.profiles 段必须是映射：{path}")
+        if profiles:
+            # profile 的 key 就是映射键：补进去，省得配置文件里再抄一遍
+            values["agent_profiles"] = {
+                name: ({**cfg, "key": name} if isinstance(cfg, dict) else cfg)
+                for name, cfg in profiles.items()
+            }
+    roles_cfg = data.get("roles") or {}
+    if roles_cfg:
+        if not isinstance(roles_cfg, dict):
+            raise ValueError(f"配置文件 roles 段必须是映射：{path}")
+        values["role_agents"] = dict(roles_cfg)
+
     models = data.get("models") or {}
     if not isinstance(models, dict):
         raise ValueError(f"配置文件 models 段必须是映射：{path}")
@@ -343,6 +364,10 @@ class Settings(BaseModel):
     mock_latency_ms: int = 0
     plan_max_attempts: int = 2
     role_bindings: dict[str, str] = Field(default_factory=dict)
+    agent_profiles: dict[str, AgentProfile] = Field(default_factory=dict)
+    """执行体档案（多 agent 的"怎么干"）：key → AgentProfile。"""
+    role_agents: dict[str, RoleAgents] = Field(default_factory=dict)
+    """角色 → 执行体绑定（覆盖 roles.d 里的内联声明）：role → RoleAgents。"""
     roles_dir: Path | None = None
     provider_overrides: dict[str, dict] = Field(default_factory=dict)
     custom_providers: dict[str, dict] = Field(default_factory=dict)

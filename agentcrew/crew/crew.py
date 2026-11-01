@@ -443,10 +443,17 @@ class Crew:
             store=store,
             models=models,
             # 工厂按 run 构造：Agent 绑定 goal 与本次 run 的 store/ledger。
-            agents=AgentFactory(models, store, ledger, goal, self._catalog),
+            agents=AgentFactory(
+                models, store, ledger, goal, self._catalog,
+                settings=self._settings, run_id=record.run_id),
             base_stats=record.stats.model_copy(deep=True),
         )
         self._run = run
+        # 多 agent：启动期解析编排计划并落事件，配置错误在此 fail fast（退出码 3）。
+        _plan = run.agents.plan()
+        if _plan is not None:
+            ledger.emit("run_plan_resolved", run_id=record.run_id,
+                        agents=_plan.to_snapshot())
         if resume_board is not None:
             # carry-forward：进程重启后盘上有文件、内存里没有记录。不重建记录，
             # §9.2 的跨任务冲突检测与返工前的 discard_task 都会失明。

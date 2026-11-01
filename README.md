@@ -1235,6 +1235,68 @@ asyncio.run(main())
 
 ---
 
+## 角色绑定多 Agent
+
+一个角色可以绑定**多个执行体（agent profile）**：角色仍决定"做什么、能碰什么"，
+agent 决定"用谁做、怎么写"。单角色单 agent 时行为与旧版完全一致。
+
+### 配置
+
+```yaml
+agents:
+  profiles:
+    backend_fast:                 # key 即映射键，不用重复写
+      model: deepseek:deepseek-chat
+      fallback: [openai:gpt-4o-mini]
+      tools: [read_file, grep, run_python]   # 只能收窄角色权限，不能扩权
+      path_scope: ["backend/"]               # 只能往这些前缀下写
+      cost_ceiling_usd: 0.08
+    backend_solid:
+      model: anthropic:claude-sonnet-5
+      path_scope: ["backend/"]
+
+roles:
+  backend_dev:
+    agents:
+      - { ref: backend_solid, duty: primary }
+      - { ref: backend_fast,  duty: review  }
+    aggregation: { mode: primary_with_review, quorum: 1 }
+```
+
+### duty 与汇总模式
+
+| duty | 能写产物 | 能出裁决 | 说明 |
+|---|---|---|---|
+| `primary` | ✅ 本人 path_scope 内 | ❌ | 主笔，产出契约产物 |
+| `section` | ✅ 本人认领的路径 | ❌ | 分工，配合 `split_by_path` |
+| `review` | ❌ | ✅（意见） | 只出复核意见，进任务 notes |
+| `judge` | ❌ | ✅（择优） | `best_of` 时选一份 |
+
+| 汇总模式 | 行为 |
+|---|---|
+| `primary_with_review` | 主笔产出 → 复核意见写进 `notes`；复核失败记 `agent_degraded`，不静默放行 |
+| `split_by_path` | 按 `path_scope` 切开契约并行执行，各自落盘，产物按人归属 |
+| `best_of` | 各写一份到 `drafts/<profile>/`，judge 择优后转正，草稿留档 |
+| `merge` | 各写一份草稿，按路径拼接后统一落盘 |
+
+### 权限与可观测性
+
+- **路径**：越界写入抛 `ArtifactScopeError`，走 G1 驳回，不落盘；
+- **工具**：`agent.tools` 与角色白名单取交集，启动期校验，越界直接报错（退出码 3）；
+- **归属**：`MANIFEST.json` 的 `entries[].produced_by_agent` 记录产出者；
+- **事件**：`run_plan_resolved` / `agent_team_start` / `agent_participated` /
+  `agent_review` / `agent_aggregated` / `agent_degraded`；
+- **可复现**：池内选择用 `sha1(run_id|task_id|attempt|role)` 做种子，resume 与
+  mock 回放选中同一个 agent。
+
+### 查看
+
+```bash
+python main.py roles          # 已绑定的角色会多一行「执行体 ...（汇总：...）」
+```
+
+示例配置见 `examples/agentcrew.multi-agent.example.yaml`。
+
 ## 模型绑定
 
 模型别名格式为 `<provider>:<model>`，**只按第一个冒号切分**，因此模型名可以

@@ -64,6 +64,7 @@ from agentcrew.artifacts.parser import ParsedOutput, parse_fenced_blocks
 from agentcrew.artifacts.spec import ArtifactRecord
 from agentcrew.artifacts.store import (
     ArtifactConflictError,
+    ArtifactScopeError,
     ArtifactStore,
     ArtifactTooLargeError,
     UndeclaredArtifactError,
@@ -354,6 +355,10 @@ class BaseAgent(ABC):
         self._tool_registry = tool_registry
         self._max_tool_calls = max_tool_calls
         self._subtask_creator = subtask_creator
+        #: 多 agent 分工时的写保护：由 AgentFactory 按 profile 注入。
+        #: 空列表 = 不限（单 agent 路径完全不受影响）。
+        self.path_scope: list[str] = []
+        self.agent_key: str = ""
         self._max_self_corrections = max_self_corrections
         self._stream = stream
         self._message_router = message_router
@@ -949,10 +954,13 @@ class BaseAgent(ABC):
                 if content is None:
                     continue  # 非必需且未产出：validate_output 已放行
                 records.append(
-                    self._store.commit(spec.path, content, spec=spec, task=task)
+                    self._store.commit(
+                        spec.path, content, spec=spec, task=task,
+                        path_scope=self.path_scope or None, agent=self.agent_key)
                 )
         except (
             ArtifactConflictError,
+            ArtifactScopeError,
             ArtifactTooLargeError,
             UndeclaredArtifactError,
             UnsafePathError,

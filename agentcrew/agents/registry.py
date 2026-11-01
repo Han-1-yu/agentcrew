@@ -17,11 +17,14 @@ from agentcrew.agents.base_agent import BaseAgent
 from agentcrew.agents.devops_engineer import DevopsEngineerAgent
 from agentcrew.agents.frontend_dev import FrontendDevAgent
 from agentcrew.agents.generic import GenericAgent
+from agentcrew.agents.plan import RunPlan, binding_for, profile_for, resolve_plan
 from agentcrew.agents.product_manager import ProductManagerAgent
 from agentcrew.agents.project_manager import ProjectManagerAgent
 from agentcrew.agents.qa_engineer import QaEngineerAgent
+from agentcrew.agents.team import TeamAgent
 from agentcrew.agents.technical_writer import TechnicalWriterAgent
 from agentcrew.artifacts.store import ArtifactStore
+from agentcrew.config import Settings
 from agentcrew.models.factory import ModelFactory
 from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.roles.spec import RoleSpec
@@ -75,6 +78,8 @@ class AgentFactory:
         project_goal: str,
         catalog: RoleCatalog,
         subtask_creator: Callable[[dict], str | None] | None = None,
+        settings: Settings | None = None,
+        run_id: str = "",
     ) -> None:
         self._models = models
         self._store = store
@@ -88,6 +93,11 @@ class AgentFactory:
         #: P2-1：动态子任务回调；``setter`` 会同步刷新已缓存的 Agent 实例
         #: （调度器在交付打回后换板重入时，缓存实例仍指向旧面板的闭包）。
         self._subtask_creator: Callable[[dict], str | None] | None = subtask_creator
+        #: 多 agent：配置来自 Settings；未注入时等价于"每个角色一个默认执行体"。
+        self._settings = settings
+        self._run_id = run_id
+        self._plan: RunPlan | None = None
+        self._teams: dict[str, TeamAgent] = {}
 
     @property
     def subtask_creator(self) -> Callable[[dict], str | None] | None:
@@ -112,24 +122,67 @@ class AgentFactory:
         ``Crew.register_role``），写进全局字典会让同进程里的其他 run 受影响。
         """
         self._classes[role_key] = cls
-        self._agents.pop(role_key, None)
+        for key in [k for k in self._agents if k.split("\u0000", 1)[0] == role_key]:
+            self._agents.pop(key, None)
+        self._teams.pop(role_key, None)
 
-    def get(self, role_key: str) -> BaseAgent:
+    def plan(self) -> RunPlan | None:
+        """解析一次本次 run 的编排计划（无 Settings 时为 None）。"""
+        if self._plan is None and self._settings is not None:
+            self._plan = resolve_plan(self._settings, self._catalog, self._run_id)
+        return self._plan
+
+    def get(self, role_key: str, profile: str | None = None) -> BaseAgent | TeamAgent:
         """返回该角色的 Agent（缓存命中即复用）。
+
+        传 ``profile`` 时返回该执行体专属的实例（多 agent 路径）；
+        不传且角色绑定了多个执行体时，返回一个 ``TeamAgent`` 负责分流与汇总。
 
         类按「本工厂注册 → 模块级 ``AGENT_CLASSES`` → ``GenericAgent``」解析，
         规格按「目录里有 → 目录里的 ``RoleSpec``；没有 → 兜底规格」解析。
         每次都从 ``AGENT_CLASSES`` 现读：Task 25/29 可能在工厂构造之后才注册。
         """
-        cached = self._agents.get(role_key)
+        cache_key = f"{role_key}\u0000{profile or ''}"
+        cached = self._agents.get(cache_key)
         if cached is not None:
             return cached
+
+        if profile is None and self._settings is not None:
+            spec_obj = (self._catalog.get(role_key)
+                        if self._catalog.has(role_key) else _generic_spec(role_key))
+            binding = binding_for(spec_obj, self._settings)
+            if binding.is_multi:
+                team = self._teams.get(role_key)
+                if team is None:
+                    members = (self.plan() or RunPlan(run_id=self._run_id)).for_role(role_key)
+                    team = TeamAgent(
+                        spec_obj, binding, members,
+                        get_agent=lambda p: self.get(role_key, p),
+                        models=self._models, store=self._store, ledger=self._ledger,
+                        settings=self._settings, run_id=self._run_id)
+                    self._teams[role_key] = team
+                return team
         cls = self._classes.get(role_key) or AGENT_CLASSES.get(role_key) or GenericAgent
         spec = (
             self._catalog.get(role_key)
             if self._catalog.has(role_key)
             else _generic_spec(role_key)
         )
+        resolved = None
+        if profile and self._settings is not None:
+            resolved = next(
+                (a for a in (self.plan() or RunPlan(run_id=self._run_id)).for_role(role_key)
+                 if a.profile == profile), None)
+            if resolved is None:
+                raise ValueError(f"角色 {role_key} 没有已解析的 agent：{profile}")
+            prof = profile_for(self._settings, profile)
+            spec = spec.model_copy(update={
+                "model": resolved.alias,
+                "allowed_tools": list(resolved.tools) or ["*"],
+                **({"temperature": prof.temperature} if prof.temperature is not None else {}),
+                **({"max_output_tokens": prof.max_output_tokens}
+                   if prof.max_output_tokens is not None else {}),
+            })
         agent = cls(
             spec,
             models=self._models,
@@ -141,7 +194,10 @@ class AgentFactory:
             catalog=self._catalog,
             subtask_creator=self._subtask_creator,
         )
-        self._agents[role_key] = agent
+        if resolved is not None:
+            agent.path_scope = list(resolved.path_scope)
+            agent.agent_key = resolved.profile
+        self._agents[cache_key] = agent
         return agent
 
     def reviewer_agent_for(self, role_key: str) -> BaseAgent | None:

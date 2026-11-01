@@ -1,0 +1,311 @@
+"""角色绑定多 Agent：配置校验、计划解析、路径域与团队执行。
+
+覆盖四层：
+1. 配置层：profile/绑定校验（未知 ref、扩权、缺 aggregation、judge 参赛）；
+2. 计划层：无绑定 → 默认单执行体；有绑定 → 展开成 ResolvedAgent；
+3. 权限层：path_scope 越界在 store 落盘前就被拒；
+4. 执行层：split 分工合并、review 意见进 notes、best_of 中标草稿转正。
+"""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime
+
+import pytest
+
+from agentcrew.agents.plan import alias_for, pick_primary, resolve_plan
+from agentcrew.agents.team import TeamAgent
+from agentcrew.artifacts.spec import ArtifactSpec
+from agentcrew.artifacts.store import ArtifactScopeError, ArtifactStore
+from agentcrew.config import Settings
+from agentcrew.roles.binding import (
+    AgentProfile,
+    Aggregation,
+    BindingError,
+    BoundAgent,
+    Duty,
+    RoleAgents,
+    validate_bindings,
+)
+from agentcrew.roles.builtin import BUILTIN_ROLES
+from agentcrew.roles.catalog import RoleCatalog
+from agentcrew.task.task import Task, TaskResult
+
+BACKEND = next(r for r in BUILTIN_ROLES if r.key == "backend_dev")
+
+
+def _task(*paths: str, task_id: str = "T-1") -> Task:
+    return Task(
+        id=task_id, title="实现后端", description="写 API", role="backend_dev",
+        acceptance_criteria=["可运行"],
+        deliverables=[ArtifactSpec(path=p, kind="python", description=p) for p in paths])
+
+
+class StubAgent:
+    """只做一件事：把预设内容按契约落盘，用来观察分流与汇总。"""
+
+    def __init__(self, store, files, *, scope=None, key=""):
+        self.store, self.files, self.scope, self.key = store, files, scope, key
+
+    async def execute(self, task, pack, *, fix_hints=()):
+        now = datetime.now()
+        records = []
+        for spec in task.deliverables:
+            if spec.path in self.files:
+                records.append(self.store.commit(
+                    spec.path, self.files[spec.path], spec=spec, task=task,
+                    path_scope=self.scope, agent=self.key))
+        return TaskResult(
+            task_id=task.id, role=task.role, summary=f"{self.key} 完成",
+            artifacts=records, started_at=now, finished_at=now, duration_ms=1)
+
+
+@pytest.fixture
+def store(tmp_path):
+    return ArtifactStore(tmp_path / "art", run_id="R")
+
+
+# ── 1. 配置校验 ────────────────────────────────────────────────────────────
+
+def test_unknown_profile_is_rejected():
+    binding = RoleAgents(agents=[BoundAgent(ref="ghost")])
+    with pytest.raises(BindingError, match="未定义的 agent"):
+        validate_bindings("backend_dev", binding, {}, ["*"])
+
+
+def test_agent_cannot_widen_tool_permissions():
+    profiles = {"wide": AgentProfile(key="wide", tools=["run_python"])}
+    binding = RoleAgents(agents=[BoundAgent(ref="wide")])
+    with pytest.raises(BindingError, match="只能收窄"):
+        validate_bindings("backend_dev", binding, profiles, ["read_file"])
+
+
+def test_multi_agent_requires_aggregation():
+    profiles = {
+        "a": AgentProfile(key="a"),
+        "b": AgentProfile(key="b"),
+    }
+    binding = RoleAgents(agents=[
+        BoundAgent(ref="a", duty=Duty.PRIMARY),
+        BoundAgent(ref="b", duty=Duty.REVIEW),
+    ])
+    with pytest.raises(BindingError, match="必须声明 aggregation"):
+        validate_bindings("backend_dev", binding, profiles, ["*"])
+
+
+def test_judge_cannot_be_a_contestant():
+    profiles = {k: AgentProfile(key=k) for k in "abc"}
+    binding = RoleAgents(
+        agents=[BoundAgent(ref="a", duty=Duty.PRIMARY),
+                BoundAgent(ref="b", duty=Duty.PRIMARY),
+                BoundAgent(ref="c", duty=Duty.JUDGE)],
+        aggregation=Aggregation(mode="best_of", judge="a"))
+    with pytest.raises(BindingError, match="judge 不能同时参赛"):
+        validate_bindings("backend_dev", binding, profiles, ["*"])
+
+
+def test_split_requires_exclusive_path_scopes():
+    profiles = {
+        "a": AgentProfile(key="a", path_scope=["backend/"]),
+        "b": AgentProfile(key="b", path_scope=["backend/"]),
+    }
+    binding = RoleAgents(
+        agents=[BoundAgent(ref="a", duty=Duty.SECTION),
+                BoundAgent(ref="b", duty=Duty.SECTION)],
+        aggregation=Aggregation(mode="split_by_path"))
+    with pytest.raises(BindingError, match="路径域重叠"):
+        validate_bindings("backend_dev", binding, profiles, ["*"])
+
+
+# ── 2. 计划解析 ────────────────────────────────────────────────────────────
+
+def test_plan_defaults_to_single_agent_when_unbound():
+    settings = Settings(default_model="mock:model")
+    plan = resolve_plan(settings, RoleCatalog(BUILTIN_ROLES), "R1")
+    backend = plan.for_role("backend_dev")
+    assert len(backend) == 1
+    assert backend[0].profile == "default"
+    assert backend[0].duty is Duty.PRIMARY
+
+
+def test_plan_expands_bindings_and_narrows_tools():
+    settings = Settings(
+        default_model="mock:model",
+        agent_profiles={
+            "fast": AgentProfile(key="fast", model="deepseek:chat", tools=["read_file"]),
+            "reviewer": AgentProfile(key="reviewer", model="openai:mini"),
+        },
+        role_agents={"backend_dev": RoleAgents(
+            agents=[BoundAgent(ref="fast", duty=Duty.PRIMARY),
+                    BoundAgent(ref="reviewer", duty=Duty.REVIEW)],
+            aggregation=Aggregation(mode="primary_with_review"))},
+    )
+    plan = resolve_plan(settings, RoleCatalog(BUILTIN_ROLES), "R1")
+    backend = {a.profile: a for a in plan.for_role("backend_dev")}
+    assert set(backend) == {"fast", "reviewer"}
+    assert backend["fast"].alias == "deepseek:chat"
+    assert backend["fast"].tools == ["read_file"]      # 角色 ["*"] ∩ agent 列表
+    assert plan.reviewers("backend_dev")[0].profile == "reviewer"
+
+
+def test_alias_precedence_prefers_profile_over_role_model():
+    settings = Settings(default_model="mock:model",
+                        role_bindings={"backend_dev": "bind:model"})
+    assert alias_for(BACKEND, AgentProfile(key="x", model="profile:model"), settings) \
+        == "profile:model"
+    assert alias_for(BACKEND, AgentProfile(key="x"), settings) == "bind:model"
+    assert alias_for(BACKEND, None, Settings(default_model="mock:model")) == "mock:model"
+
+
+def test_pick_primary_is_deterministic_and_weighted():
+    from agentcrew.agents.plan import ResolvedAgent
+    pool = [
+        ResolvedAgent(role="r", profile="a", alias="m", duty=Duty.PRIMARY, weight=1),
+        ResolvedAgent(role="r", profile="b", alias="m", duty=Duty.PRIMARY, weight=1),
+    ]
+    first = pick_primary(pool, run_id="R", task_id="T", attempt=1, role="r").profile
+    again = pick_primary(pool, run_id="R", task_id="T", attempt=1, role="r").profile
+    assert first == again
+    picks = {pick_primary(pool, run_id="R", task_id=f"T{i}", attempt=1, role="r").profile
+             for i in range(30)}
+    assert picks == {"a", "b"}          # 两个候选都能被选中（不是恒定取第一个）
+
+
+# ── 3. 路径域 ──────────────────────────────────────────────────────────────
+
+def test_store_rejects_path_outside_scope(store):
+    task = _task("backend/app.py")
+    with pytest.raises(ArtifactScopeError):
+        store.commit("backend/app.py", "x = 1\n", spec=task.deliverables[0],
+                     task=task, path_scope=["frontend/"], agent="fe")
+
+
+def test_store_allows_path_inside_scope(store):
+    task = _task("backend/app.py")
+    record = store.commit("backend/app.py", "x = 1\n", spec=task.deliverables[0],
+                          task=task, path_scope=["backend/"], agent="be")
+    assert record.produced_by_agent == "be"
+
+
+# ── 4. 团队执行 ────────────────────────────────────────────────────────────
+
+def _team(store, binding, members, agents, *, mode):
+    return TeamAgent(
+        BACKEND, binding, members,
+        get_agent=lambda p: agents[p],
+        models=None, store=store, ledger=_NullLedger(), settings=Settings(),
+        run_id="R")
+
+
+class _NullLedger:
+    def __init__(self):
+        self.events = []
+
+    def emit(self, name, **data):
+        self.events.append((name, data))
+
+
+def _member(profile, duty, scope=()):
+    from agentcrew.agents.plan import ResolvedAgent
+    return ResolvedAgent(role="backend_dev", profile=profile, alias="mock:model",
+                         duty=duty, tools=["*"], path_scope=list(scope))
+
+
+def test_split_runs_sections_in_parallel_and_merges(store):
+    task = _task("backend/app.py", "tests/test_app.py")
+    members = [_member("be", Duty.SECTION, ["backend/"]),
+               _member("qa", Duty.SECTION, ["tests/"])]
+    agents = {
+        "be": StubAgent(store, {"backend/app.py": "app = 1\n"}, scope=["backend/"], key="be"),
+        "qa": StubAgent(store, {"tests/test_app.py": "def test(): pass\n"},
+                        scope=["tests/"], key="qa"),
+    }
+    binding = RoleAgents(agents=[
+        BoundAgent(ref="be", duty=Duty.SECTION), BoundAgent(ref="qa", duty=Duty.SECTION)],
+        aggregation=Aggregation(mode="split_by_path", quorum=2))
+    result = asyncio.run(_team(store, binding, members, agents, mode="split")
+                         .execute(task, None))
+    assert {r.path for r in result.artifacts} == {"backend/app.py", "tests/test_app.py"}
+    assert {r.produced_by_agent for r in result.artifacts} == {"be", "qa"}
+
+
+def test_split_below_quorum_fails(store):
+    from agentcrew.agents.base_agent import AgentExecutionError
+    task = _task("backend/app.py", "tests/test_app.py")
+    members = [_member("be", Duty.SECTION, ["backend/"]),
+               _member("qa", Duty.SECTION, ["tests/"])]
+
+    class Boom:
+        async def execute(self, task, pack, *, fix_hints=()):
+            raise RuntimeError("模型挂了")
+
+    agents = {"be": StubAgent(store, {"backend/app.py": "x=1\n"}, scope=["backend/"], key="be"),
+              "qa": Boom()}
+    binding = RoleAgents(agents=[
+        BoundAgent(ref="be", duty=Duty.SECTION), BoundAgent(ref="qa", duty=Duty.SECTION)],
+        aggregation=Aggregation(mode="split_by_path", quorum=2))
+    with pytest.raises(AgentExecutionError, match="quorum"):
+        asyncio.run(_team(store, binding, members, agents, mode="split").execute(task, None))
+
+
+def test_review_memo_is_merged_into_notes(store):
+    task = _task("backend/app.py")
+    members = [_member("be", Duty.PRIMARY), _member("rv", Duty.REVIEW)]
+    agents = {"be": StubAgent(store, {"backend/app.py": "app = 1\n"}, key="be")}
+    binding = RoleAgents(
+        agents=[BoundAgent(ref="be", duty=Duty.PRIMARY),
+                BoundAgent(ref="rv", duty=Duty.REVIEW)],
+        aggregation=Aggregation(mode="primary_with_review"))
+    team = _team(store, binding, members, agents, mode="review")
+
+    async def fake_review(reviewer, task, result):
+        return "缺少输入校验，请补 422 用例"
+
+    team._review_once = fake_review
+    result = asyncio.run(team.execute(task, None))
+    assert "缺少输入校验" in result.notes
+    assert [r.path for r in result.artifacts] == ["backend/app.py"]
+
+
+def test_review_failure_is_visible_not_silent(store):
+    task = _task("backend/app.py")
+    members = [_member("be", Duty.PRIMARY), _member("rv", Duty.REVIEW)]
+    agents = {"be": StubAgent(store, {"backend/app.py": "app = 1\n"}, key="be")}
+    binding = RoleAgents(
+        agents=[BoundAgent(ref="be", duty=Duty.PRIMARY),
+                BoundAgent(ref="rv", duty=Duty.REVIEW)],
+        aggregation=Aggregation(mode="primary_with_review"))
+    team = _team(store, binding, members, agents, mode="review")
+
+    async def boom(reviewer, task, result):
+        raise RuntimeError("复核模型不可用")
+
+    team._review_once = boom
+    result = asyncio.run(team.execute(task, None))
+    assert "复核不可用" in result.notes
+    assert any(name == "agent_degraded" for name, _ in team._ledger.events)
+
+
+def test_best_of_promotes_winner_draft(store):
+    task = _task("backend/app.py")
+    members = [_member("a", Duty.PRIMARY), _member("b", Duty.PRIMARY),
+               _member("j", Duty.JUDGE)]
+    agents = {
+        "a": StubAgent(store, {"drafts/a/backend/app.py": "better = 1\n"}, key="a"),
+        "b": StubAgent(store, {"drafts/b/backend/app.py": "worse = 1\n"}, key="b"),
+    }
+    binding = RoleAgents(
+        agents=[BoundAgent(ref="a", duty=Duty.PRIMARY),
+                BoundAgent(ref="b", duty=Duty.PRIMARY),
+                BoundAgent(ref="j", duty=Duty.JUDGE)],
+        aggregation=Aggregation(mode="best_of", judge="j"))
+    team = _team(store, binding, members, agents, mode="best_of")
+
+    async def fake_judge(task, pairs, judge_ref):
+        return "a"
+
+    team._judge = fake_judge
+    result = asyncio.run(team.execute(task, None))
+    assert store.read("backend/app.py") == "better = 1\n"
+    assert [r.path for r in result.artifacts] == ["backend/app.py"]
