@@ -1,0 +1,43 @@
+{
+  "run_id": "20261006-183534-fa97",
+  "schema_version": 1,
+  "project_goal": "开发一个 Todo List Web 应用：用户可在浏览器中新增、查看、编辑、删除待办事项，数据通过 REST API 持久化在服务端，前端为单页应用，附完整文档、测试与 Docker 部署配置。",
+  "status": "completed",
+  "created_at": "2026-10-06T18:35:34.060583",
+  "updated_at": "2026-10-06T18:35:34.886545",
+  "config_snapshot": {
+    "default_model": "deepseek:deepseek-chat",
+    "max_concurrency": 4,
+    "context_budget_tokens": 24000,
+    "gate": "none",
+    "output_dir": "E:\\agentcrew\\output",
+    "log_level": "INFO",
+    "mock": true,
+    "mock_latency_ms": 0,
+    "plan_max_attempts": 2,
+    "role_bindings": {},
+    "roles_dir": null,
+    "provider_overrides": {},
+    "model_tiers": {},
+    "model_failover": {},
+    "mcp_servers": {},
+    "review_score_threshold": null,
+    "max_cost_usd": null,
+    "max_llm_calls": null,
+    "health_check_enabled": true,
+    "health_check_interval_secs": 30
+  },
+  "stats": {
+    "total_tasks": 9,
+    "succeeded": 9,
+    "failed": 0,
+    "blocked": 0,
+    "skipped": 0,
+    "llm_calls": 21,
+    "prompt_tokens": 101175,
+    "completion_tokens": 17825,
+    "estimated_cost_usd": 0.04692475,
+    "started_at": "2026-10-06T18:35:34.060583",
+    "finished_at": "2026-10-06T18:35:34.886543"
+  }
+}

@@ -1,0 +1,1328 @@
+{
+  "tasks": [
+    {
+      "id": "T-001",
+      "title": "产品需求与验收标准",
+      "description": "把项目目标澄清为可验证的产品定义：目标用户、核心场景、功能清单与优先级，并给出逐条可判定的验收标准。",
+      "role": "product_manager",
+      "acceptance_criteria": [
+        "PRD 覆盖目标用户、核心场景、功能范围与优先级四部分",
+        "验收标准逐条可判定，写明输入、行为与预期结果",
+        "不做技术选型、不写实现细节与测试用例"
+      ],
+      "deliverables": [
+        {
+          "path": "docs/PRD.md",
+          "kind": "markdown",
+          "description": "产品需求文档：背景、目标用户、核心场景、功能清单与优先级",
+          "required": true,
+          "min_bytes": 600,
+          "must_contain": [
+            "目标用户",
+            "功能清单"
+          ],
+          "max_bytes": 524288
+        },
+        {
+          "path": "docs/acceptance.md",
+          "kind": "markdown",
+          "description": "逐条可判定的验收标准，编号自 AC-01 起",
+          "required": true,
+          "min_bytes": 600,
+          "must_contain": [
+            "AC-01",
+            "验收标准"
+          ],
+          "max_bytes": 524288
+        }
+      ],
+      "dependencies": [],
+      "parent_id": null,
+      "dynamic": false,
+      "priority": 1,
+      "brief": "编写 PRD 与可判定的验收标准",
+      "timeout_seconds": 300,
+      "status": "succeeded",
+      "attempts": 1,
+      "rework_count": 0,
+      "max_attempts": 3,
+      "max_reworks": 2,
+      "result": {
+        "task_id": "T-001",
+        "role": "product_manager",
+        "summary": "已按项目目标完成需求澄清：先界定目标用户与核心场景，再把功能切成可判定的条目并标出优先级，最后把每条需求落成带编号的验收标准。两份文档均按契约路径交付，可以直接作为后续架构与测试的判据。\n\n\n\n两份文档已交付：PRD 说明「为什么做、给谁做、做到什么程度」，验收标准把每条功能翻译成可判定的输入、行为与预期结果。若架构或实现过程中发现某条验收标准不可判定，请先反馈给产品侧修订，不要在小范围内自行放宽。",
+        "artifacts": [
+          {
+            "path": "docs/PRD.md",
+            "kind": "markdown",
+            "size_bytes": 2730,
+            "sha256": "6d46aeaf919def22e0d79f0bf90780e4c3c176f2caf78c04f2d0ae1fd27f5703",
+            "produced_by_task": "T-001",
+            "produced_by_role": "product_manager",
+            "written_at": "2026-10-06T18:35:34.116697"
+          },
+          {
+            "path": "docs/acceptance.md",
+            "kind": "markdown",
+            "size_bytes": 2108,
+            "sha256": "17bf8a3a9baf48b42ff22ba53bef2e9f790dbdfda3532e161e6a70b11d6bdb75",
+            "produced_by_task": "T-001",
+            "produced_by_role": "product_manager",
+            "written_at": "2026-10-06T18:35:34.123033"
+          }
+        ],
+        "notes": "已按项目目标完成需求澄清：先界定目标用户与核心场景，再把功能切成可判定的条目并标出优先级，最后把每条需求落成带编号的验收标准。两份文档均按契约路径交付，可以直接作为后续架构与测试的判据。\n\n\n\n两份文档已交付：PRD 说明「为什么做、给谁做、做到什么程度」，验收标准把每条功能翻译成可判定的输入、行为与预期结果。若架构或实现过程中发现某条验收标准不可判定，请先反馈给产品侧修订，不要在小范围内自行放宽。",
+        "started_at": "2026-10-06T18:35:34.106611",
+        "finished_at": "2026-10-06T18:35:34.126086",
+        "duration_ms": 19
+      },
+      "reviews": [
+        {
+          "task_id": "T-001",
+          "round": 1,
+          "layer": "static",
+          "verdict": "approve",
+          "score": null,
+          "issues": [],
+          "fix_hints": [],
+          "reviewer": "static:contract",
+          "created_at": "2026-10-06T18:35:34.139261"
+        },
+        {
+          "task_id": "T-001",
+          "round": 1,
+          "layer": "llm",
+          "verdict": "approve",
+          "score": 0.92,
+          "issues": [],
+          "fix_hints": [],
+          "reviewer": "project_manager",
+          "created_at": "2026-10-06T18:35:34.153048"
+        }
+      ],
+      "status_history": [
+        {
+          "from_status": "pending",
+          "to_status": "ready",
+          "reason": "dependencies-met",
+          "at": "2026-10-06T18:35:34.102292"
+        },
+        {
+          "from_status": "ready",
+          "to_status": "running",
+          "reason": "dispatched",
+          "at": "2026-10-06T18:35:34.104398"
+        },
+        {
+          "from_status": "running",
+          "to_status": "review",
+          "reason": "executed",
+          "at": "2026-10-06T18:35:34.129208"
+        },
+        {
+          "from_status": "review",
+          "to_status": "succeeded",
+          "reason": "gate-succeeded",
+          "at": "2026-10-06T18:35:34.153122"
+        }
+      ],
+      "created_at": "2026-10-06T18:35:34.094439",
+      "updated_at": "2026-10-06T18:35:34.153122"
+    },
+    {
+      "id": "T-002",
+      "title": "架构设计与接口契约",
+      "description": "确定技术选型与模块划分，定义 Todo REST API 的接口契约，使开发照此实现无需再询问。",
+      "role": "architect",
+      "acceptance_criteria": [
+        "给出技术选型理由与被否决的方案",
+        "模块划分说明每个模块的职责与依赖方向",
+        "API 精确到路径、方法、字段、类型与错误语义"
+      ],
+      "deliverables": [
+        {
+          "path": "docs/architecture.md",
+          "kind": "markdown",
+          "description": "架构文档：技术选型、模块划分、数据模型与关键流程",
+          "required": true,
+          "min_bytes": 600,
+          "must_contain": [
+            "技术选型",
+            "模块划分"
+          ],
+          "max_bytes": 524288
+        },
+        {
+          "path": "docs/api-spec.yaml",
+          "kind": "yaml",
+          "description": "OpenAPI 3 风格的接口契约",
+          "required": true,
+          "min_bytes": 500,
+          "must_contain": [
+            "openapi",
+            "/api/todos"
+          ],
+          "max_bytes": 524288
+        }
+      ],
+      "dependencies": [
+        "T-001"
+      ],
+      "parent_id": null,
+      "dynamic": false,
+      "priority": 2,
+      "brief": "技术选型、模块划分与 OpenAPI 契约",
+      "timeout_seconds": 300,
+      "status": "succeeded",
+      "attempts": 1,
+      "rework_count": 0,
+      "max_attempts": 3,
+      "max_reworks": 2,
+      "result": {
+        "task_id": "T-002",
+        "role": "architect",
+        "summary": "架构决策已定稿：技术选型给出理由与被否决方案，模块划分明确职责与依赖方向，接口契约写到字段级。后端与前端可以并行开工，实现过程中若需变更契约，先在此文档登记理由。\n\n\n\n接口契约覆盖 6 条路径、共 3 个请求/响应模型：`TodoCreate` 与 `TodoUpdate` 均禁止未声明字段，\n`TodoOut` 的 6 个字段与领域实体一一对应。后端实现时请以本文件为准；需要变更字段时先更新本文件并说明理由。",
+        "artifacts": [
+          {
+            "path": "docs/architecture.md",
+            "kind": "markdown",
+            "size_bytes": 4437,
+            "sha256": "1eca01ed2114744294a6dc4d596c7472e7f170cb19058edea652c16982ca887e",
+            "produced_by_task": "T-002",
+            "produced_by_role": "architect",
+            "written_at": "2026-10-06T18:35:34.176141"
+          },
+          {
+            "path": "docs/api-spec.yaml",
+            "kind": "yaml",
+            "size_bytes": 4351,
+            "sha256": "b5ea607a22c00a50dd18d7a392e7d49a529080b484e38fef52781ca6994d0b2a",
+            "produced_by_task": "T-002",
+            "produced_by_role": "architect",
+            "written_at": "2026-10-06T18:35:34.180587"
+          }
+        ],
+        "notes": "架构决策已定稿：技术选型给出理由与被否决方案，模块划分明确职责与依赖方向，接口契约写到字段级。后端与前端可以并行开工，实现过程中若需变更契约，先在此文档登记理由。\n\n\n\n接口契约覆盖 6 条路径、共 3 个请求/响应模型：`TodoCreate` 与 `TodoUpdate` 均禁止未声明字段，\n`TodoOut` 的 6 个字段与领域实体一一对应。后端实现时请以本文件为准；需要变更字段时先更新本文件并说明理由。",
+        "started_at": "2026-10-06T18:35:34.163775",
+        "finished_at": "2026-10-06T18:35:34.182960",
+        "duration_ms": 19
+      },
+      "reviews": [
+        {
+          "task_id": "T-002",
+          "round": 1,
+          "layer": "static",
+          "verdict": "approve",
+          "score": null,
+          "issues": [],
+          "fix_hints": [],
+          "reviewer": "static:contract",
+          "created_at": "2026-10-06T18:35:34.201451"
+        },
+        {
+          "task_id": "T-002",
+          "round": 1,
+          "layer": "llm",
+          "verdict": "approve",
+          "score": 0.92,
+          "issues": [],
+          "fix_hints": [],
+          "reviewer": "project_manager",
+          "created_at": "2026-10-06T18:35:34.217083"
+        }
+      ],
+      "status_history": [
+        {
+          "from_status": "pending",
+          "to_status": "ready",
+          "reason": "dependencies-met",
+          "at": "2026-10-06T18:35:34.156936"
+        },
+        {
+          "from_status": "ready",
+          "to_status": "running",
+          "reason": "dispatched",
+          "at": "2026-10-06T18:35:34.158528"
+        },
+        {
+          "from_status": "running",
+          "to_status": "review",
+          "reason": "executed",
+          "at": "2026-10-06T18:35:34.185472"
+        },
+        {
+          "from_status": "review",
+          "to_status": "succeeded",
+          "reason": "gate-succeeded",
+          "at": "2026-10-06T18:35:34.217209"
+        }
+      ],
+      "created_at": "2026-10-06T18:35:34.094457",
+      "updated_at": "2026-10-06T18:35:34.217209"
+    },
+    {
+      "id": "T-003",
+      "title": "后端 API 实现",
+      "description": "按架构与接口契约实现 FastAPI 后端：领域模型、请求/响应模型、进程内存储与 Todo CRUD 路由。",
+      "role": "backend_dev",
+      "acceptance_criteria": [
+        "全部路由与 docs/api-spec.yaml 一致",
+        "数据保存在进程内 dict，无数据库等外部依赖",
+        "cd backend && uvicorn app.main:app 可直接启动"
+      ],
+      "deliverables": [
+        {
+          "path": "backend/app/__init__.py",
+          "kind": "python",
+          "description": "后端包入口：包说明与版本号",
+          "required": true,
+          "min_bytes": 100,
+          "must_contain": [
+            "__version__"
+          ],
+          "max_bytes": 524288
+        },
+        {
+          "path": "backend/app/config.py",
+          "kind": "python",
+          "description": "运行期配置：标题、版本、端口与环境变量覆盖",
+          "required": true,
+          "min_bytes": 300,
+          "must_contain": [
+            "class Settings"
+          ],
+          "max_bytes": 524288
+        },
+        {
+          "path": "backend/app/models.py",
+          "kind": "python",
+          "description": "领域模型：Todo 实体与状态变更",
+          "required": true,
+          "min_bytes": 500,
+          "must_contain": [
+            "class Todo"
+          ],
+          "max_bytes": 524288
+        },
+        {
+          "path": "backend/app/schemas.py",
+          "kind": "python",
+          "description": "请求/响应模型：TodoCreate、TodoUpdate、TodoOut",
+          "required": true,
+          "min_bytes": 400,
+          "must_contain": [
+            "class TodoCreate",
+            "class TodoOut"
+          ],
+          "max_bytes": 524288
+        },
+        {
+          "path": "backend/app/store.py",
+          "kind": "python",
+          "description": "进程内存储：dict + 线程锁的 TodoStore",
+          "required": true,
+          "min_bytes": 500,
+          "must_contain": [
+            "class TodoStore"
+          ],
+          "max_bytes": 524288
+        },
+        {
+          "path": "backend/app/main.py",
+          "kind": "python",
+          "description": "FastAPI 应用工厂与全部路由",
+          "required": true,
+          "min_bytes": 900,
+          "must_contain": [
+            "def create_app",
+            "app = create_app()"
+          ],
+          "max_bytes": 524288
+        },
+        {
+          "path": "backend/requirements.txt",
+          "kind": "text",
+          "description": "后端依赖清单",
+          "required": true,
+          "min_bytes": 80,
+          "must_contain": [
+            "fastapi",
+            "uvicorn",
+            "pydantic",
+            "pytest",
+            "httpx"
+          ],
+          "max_bytes": 524288
+        }
+      ],
+      "dependencies": [
+        "T-002"
+      ],
+      "parent_id": null,
+      "dynamic": false,
+      "priority": 3,
+      "brief": "按契约实现全部后端模块",
+      "timeout_seconds": 300,
+      "status": "succeeded",
+      "attempts": 1,
+      "rework_count": 0,
+      "max_attempts": 3,
+      "max_reworks": 2,
+      "result": {
+        "task_id": "T-003",
+        "role": "backend_dev",
+        "summary": "后端按接口契约实现完毕：领域模型与传输模型分离，存储层用 dict + 线程锁保证并发安全，路由全部对齐 docs/api-spec.yaml。启动方式见文末说明。\n\n\n\n\n\n\n\n\n依赖与启动方式：`cd backend && pip install -r requirements.txt && uvicorn app.main:app --reload`，随后访问 http://127.0.0.1:8000 。存储层是进程内 dict，重启进程数据即清空，符合本期「零外部依赖演示」的约定；接口文档由 FastAPI 自动生成在 /docs。",
+        "artifacts": [
+          {
+            "path": "backend/app/__init__.py",
+            "kind": "python",
+            "size_bytes": 232,
+            "sha256": "9b26abf3b9a0911a9d077ca47ab930a1c6a0b2390fe8e171f595d4286dca157e",
+            "produced_by_task": "T-003",
+            "produced_by_role": "backend_dev",
+            "written_at": "2026-10-06T18:35:34.244978"
+          },
+          {
+            "path": "backend/app/config.py",
+            "kind": "python",
+            "size_bytes": 901,
+            "sha256": "f2e6dc66187ff4211b5adfb0f3998ea111f3372ba72b82b520f80c6262fb9601",
+            "produced_by_task": "T-003",
+            "produced_by_role": "backend_dev",
+            "written_at": "2026-10-06T18:35:34.249856"
+          },
+          {
+            "path": "backend/app/models.py",
+            "kind": "python",
+            "size_bytes": 1456,
+            "sha256": "286c6485a6a9ed3a268bf22de2cc328a836d2df70f02e1cf571eed32a3241498",
+            "produced_by_task": "T-003",
+            "produced_by_role": "backend_dev",
+            "written_at": "2026-10-06T18:35:34.254285"
+          },
+          {
+            "path": "backend/app/schemas.py",
+            "kind": "python",
+            "size_bytes": 1217,
+            "sha256": "8a5bc78fe31cf6fe0545644ab7792669a1ede04264b4dd8f322cf8b9168b492e",
+            "produced_by_task": "T-003",
+            "produced_by_role": "backend_dev",
+            "written_at": "2026-10-06T18:35:34.259753"
+          },
+          {
+            "path": "backend/app/store.py",
+            "kind": "python",
+            "size_bytes": 2327,
+            "sha256": "818b97dd378ee9d4839717eeb3f565283e4ff39b2a0f2dad395fda6b247870a4",
+            "produced_by_task": "T-003",
+            "produced_by_role": "backend_dev",
+            "written_at": "2026-10-06T18:35:34.266973"
+          },
+          {
+            "path": "backend/app/main.py",
+            "kind": "python",
+            "size_bytes": 4870,
+            "sha256": "f99edae169e95acaeb511c0acdc09538ab1526f8d66fa0dbc32adc7bbb2e1753",
+            "produced_by_task": "T-003",
+            "produced_by_role": "backend_dev",
+            "written_at": "2026-10-06T18:35:34.271400"
+          },
+          {
+            "path": "backend/requirements.txt",
+            "kind": "text",
+            "size_bytes": 92,
+            "sha256": "32d60b218ff00cea3bb9510d6ac201a68745968aa6306ed6cb82ad51a4ca6fde",
+            "produced_by_task": "T-003",
+            "produced_by_role": "backend_dev",
+            "written_at": "2026-10-06T18:35:34.275429"
+          }
+        ],
+        "notes": "后端按接口契约实现完毕：领域模型与传输模型分离，存储层用 dict + 线程锁保证并发安全，路由全部对齐 docs/api-spec.yaml。启动方式见文末说明。\n\n\n\n\n\n\n\n\n依赖与启动方式：`cd backend && pip install -r requirements.txt && uvicorn app.main:app --reload`，随后访问 http://127.0.0.1:8000 。存储层是进程内 dict，重启进程数据即清空，符合本期「零外部依赖演示」的约定；接口文档由 FastAPI 自动生成在 /docs。",
+        "started_at": "2026-10-06T18:35:34.231984",
+        "finished_at": "2026-10-06T18:35:34.277782",
+        "duration_ms": 45
+      },
+      "reviews": [
+        {
+          "task_id": "T-003",
+          "round": 1,
+          "layer": "static",
+          "verdict": "approve",
+          "score": null,
+          "issues": [],
+          "fix_hints": [],
+          "reviewer": "static:contract",
+          "created_at": "2026-10-06T18:35:34.308986"
+        },
+        {
+          "task_id": "T-003",
+          "round": 1,
+          "layer": "llm",
+          "verdict": "approve",
+          "score": 0.92,
+          "issues": [],
+          "fix_hints": [],
+          "reviewer": "architect",
+          "created_at": "2026-10-06T18:35:34.325591"
+        }
+      ],
+      "status_history": [
+        {
+          "from_status": "pending",
+          "to_status": "ready",
+          "reason": "dependencies-met",
+          "at": "2026-10-06T18:35:34.220942"
+        },
+        {
+          "from_status": "ready",
+          "to_status": "running",
+          "reason": "dispatched",
+          "at": "2026-10-06T18:35:34.224190"
+        },
+        {
+          "from_status": "running",
+          "to_status": "review",
+          "reason": "executed",
+          "at": "2026-10-06T18:35:34.280528"
+        },
+        {
+          "from_status": "review",
+          "to_status": "succeeded",
+          "reason": "gate-succeeded",
+          "at": "2026-10-06T18:35:34.325673"
+        }
+      ],
+      "created_at": "2026-10-06T18:35:34.094466",
+      "updated_at": "2026-10-06T18:35:34.325673"
+    },
+    {
+      "id": "T-004",
+      "title": "前端单页实现",
+      "description": "用原生 HTML/CSS/JS 实现单页：列表、新增、编辑、删除与完成状态切换，并对接后端 API。",
+      "role": "frontend_dev",
+      "acceptance_criteria": [
+        "页面可完成新增、查看、编辑、删除与完成切换",
+        "覆盖加载中、出错与空数据三种状态",
+        "不引入构建链，浏览器直接打开或用后端托管即可使用"
+      ],
+      "deliverables": [
+        {
+          "path": "frontend/index.html",
+          "kind": "html",
+          "description": "单页结构：表单、状态提示、列表与条目模板",
+          "required": true,
+          "min_bytes": 600,
+          "must_contain": [
+            "todo-list",
+            "app.js"
+          ],
+          "max_bytes": 524288
+        },
+        {
+          "path": "frontend/app.js",
+          "kind": "js",
+          "description": "交互逻辑：fetch 调用 API 并渲染列表",
+          "required": true,
+          "min_bytes": 900,
+          "must_contain": [
+            "/api/todos",
+            "renderTodos"
+          ],
+          "max_bytes": 524288
+        },
+        {
+          "path": "frontend/styles.css",
+          "kind": "css",
+          "description": "页面样式：布局、条目状态与响应式",
+          "required": true,
+          "min_bytes": 500,
+          "must_contain": [
+            ".todo-item",
+            ".status"
+          ],
+          "max_bytes": 524288
+        }
+      ],
+      "dependencies": [
+        "T-002"
+      ],
+      "parent_id": null,
+      "dynamic": false,
+      "priority": 4,
+      "brief": "原生 HTML/CSS/JS 单页",
+      "timeout_seconds": 300,
+      "status": "succeeded",
+      "attempts": 1,
+      "rework_count": 0,
+      "max_attempts": 3,
+      "max_reworks": 2,
+      "result": {
+        "task_id": "T-004",
+        "role": "frontend_dev",
+        "summary": "前端页面完成：结构、样式与交互分三个文件交付，页面通过 fetch 对接后端 REST 接口，覆盖加载中、空列表、请求失败三种状态。本地查看方式见文末。\n\n\n\n\n本地查看方式：启动后端后访问 http://127.0.0.1:8000 ，后端会把本目录挂载到根路径；也可以直接双击 `index.html` 查看静态结构（此时接口请求会失败并显示错误提示，这属于预期行为）。三个文件之间没有构建步骤，改完刷新浏览器即可生效。",
+        "artifacts": [
+          {
+            "path": "frontend/index.html",
+            "kind": "html",
+            "size_bytes": 1419,
+            "sha256": "2e1fe98ddc451bbb61ee8a5eff29af07cde5871ff96afd7dde517990c1bc4127",
+            "produced_by_task": "T-004",
+            "produced_by_role": "frontend_dev",
+            "written_at": "2026-10-06T18:35:34.353009"
+          },
+          {
+            "path": "frontend/app.js",
+            "kind": "js",
+            "size_bytes": 4685,
+            "sha256": "16adc2c4aeab9708ae38684e4d1286cfc7e24923a443fc88990a6e4df1e14e27",
+            "produced_by_task": "T-004",
+            "produced_by_role": "frontend_dev",
+            "written_at": "2026-10-06T18:35:34.357606"
+          },
+          {
+            "path": "frontend/styles.css",
+            "kind": "css",
+            "size_bytes": 3046,
+            "sha256": "ab82a48ae8e5939825104f2dfd6179b776607bc1d1d7cf25ab9904c2c033181d",
+            "produced_by_task": "T-004",
+            "produced_by_role": "frontend_dev",
+            "written_at": "2026-10-06T18:35:34.361901"
+          }
+        ],
+        "notes": "前端页面完成：结构、样式与交互分三个文件交付，页面通过 fetch 对接后端 REST 接口，覆盖加载中、空列表、请求失败三种状态。本地查看方式见文末。\n\n\n\n\n本地查看方式：启动后端后访问 http://127.0.0.1:8000 ，后端会把本目录挂载到根路径；也可以直接双击 `index.html` 查看静态结构（此时接口请求会失败并显示错误提示，这属于预期行为）。三个文件之间没有构建步骤，改完刷新浏览器即可生效。",
+        "started_at": "2026-10-06T18:35:34.337861",
+        "finished_at": "2026-10-06T18:35:34.364611",
+        "duration_ms": 26
+      },
+      "reviews": [
+        {
+          "task_id": "T-004",
+          "round": 1,
+          "layer": "static",
+          "verdict": "approve",
+          "score": null,
+          "issues": [],
+          "fix_hints": [],
+          "reviewer": "static:contract",
+          "created_at": "2026-10-06T18:35:34.381308"
+        },
+        {
+          "task_id": "T-004",
+          "round": 1,
+          "layer": "llm",
+          "verdict": "approve",
+          "score": 0.92,
+          "issues": [],
+          "fix_hints": [],
+          "reviewer": "architect",
+          "created_at": "2026-10-06T18:35:34.393689"
+        }
+      ],
+      "status_history": [
+        {
+          "from_status": "pending",
+          "to_status": "ready",
+          "reason": "dependencies-met",
+          "at": "2026-10-06T18:35:34.222606"
+        },
+        {
+          "from_status": "ready",
+          "to_status": "running",
+          "reason": "dispatched",
+          "at": "2026-10-06T18:35:34.226282"
+        },
+        {
+          "from_status": "running",
+          "to_status": "review",
+          "reason": "executed",
+          "at": "2026-10-06T18:35:34.367291"
+        },
+        {
+          "from_status": "review",
+          "to_status": "succeeded",
+          "reason": "gate-succeeded",
+          "at": "2026-10-06T18:35:34.393942"
+        }
+      ],
+      "created_at": "2026-10-06T18:35:34.094470",
+      "updated_at": "2026-10-06T18:35:34.393942"
+    },
+    {
+      "id": "T-005",
+      "title": "API 测试用例与测试报告",
+      "description": "用 pytest + fastapi.testclient 覆盖 Todo CRUD 的正常路径、校验失败与 404，并如实记录运行结果。",
+      "role": "qa_engineer",
+      "acceptance_criteria": [
+        "用例覆盖新增、查询、更新、删除与错误分支",
+        "cd artifacts && python -m pytest tests/test_api.py 可运行通过",
+        "测试报告写明运行命令、实际结果与未覆盖风险"
+      ],
+      "deliverables": [
+        {
+          "path": "tests/test_api.py",
+          "kind": "python",
+          "description": "pytest + TestClient 的 API 用例",
+          "required": true,
+          "min_bytes": 800,
+          "must_contain": [
+            "fastapi.testclient",
+            "def test_"
+          ],
+          "max_bytes": 524288
+        },
+        {
+          "path": "docs/test-report.md",
+          "kind": "markdown",
+          "description": "测试报告：运行命令、结果与遗留风险",
+          "required": true,
+          "min_bytes": 500,
+          "must_contain": [
+            "测试报告",
+            "pytest"
+          ],
+          "max_bytes": 524288
+        }
+      ],
+      "dependencies": [
+        "T-003"
+      ],
+      "parent_id": null,
+      "dynamic": false,
+      "priority": 5,
+      "brief": "pytest + TestClient 的 API 测试与报告",
+      "timeout_seconds": 300,
+      "status": "succeeded",
+      "attempts": 1,
+      "rework_count": 1,
+      "max_attempts": 3,
+      "max_reworks": 2,
+      "result": {
+        "task_id": "T-005",
+        "role": "qa_engineer",
+        "summary": "按上一轮的驳回意见补齐：两个文件的正文全部展开，用例覆盖 CRUD 与错误分支，报告写明运行命令与实际结果。\n\n\n\n两个文件已按契约路径交付：`tests/test_api.py` 共 8 个用例，`docs/test-report.md` 记录了运行命令与逐条结果。上一轮缺失的正文与数据均已补齐，请复评。",
+        "artifacts": [
+          {
+            "path": "tests/test_api.py",
+            "kind": "python",
+            "size_bytes": 2757,
+            "sha256": "f4e4c277f0f0ec6ce0049a9f1a749fb46925a0fd59712845e70f50a42079a2ce",
+            "produced_by_task": "T-005",
+            "produced_by_role": "qa_engineer",
+            "written_at": "2026-10-06T18:35:34.773465"
+          },
+          {
+            "path": "docs/test-report.md",
+            "kind": "markdown",
+            "size_bytes": 1426,
+            "sha256": "b0a880b13682126a65e9e28186c4788f3d5217ec7ad74d138e497b404e1d4885",
+            "produced_by_task": "T-005",
+            "produced_by_role": "qa_engineer",
+            "written_at": "2026-10-06T18:35:34.777867"
+          }
+        ],
+        "notes": "按上一轮的驳回意见补齐：两个文件的正文全部展开，用例覆盖 CRUD 与错误分支，报告写明运行命令与实际结果。\n\n\n\n两个文件已按契约路径交付：`tests/test_api.py` 共 8 个用例，`docs/test-report.md` 记录了运行命令与逐条结果。上一轮缺失的正文与数据均已补齐，请复评。",
+        "started_at": "2026-10-06T18:35:34.757393",
+        "finished_at": "2026-10-06T18:35:34.780371",
+        "duration_ms": 22
+      },
+      "reviews": [
+        {
+          "task_id": "T-005",
+          "round": 1,
+          "layer": "static",
+          "verdict": "reject",
+          "score": null,
+          "issues": [
+            "tests/test_api.py 为空文件",
+            "tests/test_api.py 仅含占位内容",
+            "tests/test_api.py 缺少必需符号：def test_",
+            "docs/test-report.md 为空文件",
+            "docs/test-report.md 仅含占位内容"
+          ],
+          "fix_hints": [
+            "为 tests/test_api.py 补充实质内容（至少 800 字节）",
+            "用真实实现替换 tests/test_api.py 中的占位内容",
+            "在 tests/test_api.py 中定义 def test_",
+            "为 docs/test-report.md 补充实质内容（至少 500 字节）",
+            "用真实实现替换 docs/test-report.md 中的占位内容"
+          ],
+          "reviewer": "static:contract",
+          "created_at": "2026-10-06T18:35:34.466774"
+        },
+        {
+          "task_id": "T-005",
+          "round": 2,
+          "layer": "static",
+          "verdict": "approve",
+          "score": null,
+          "issues": [],
+          "fix_hints": [],
+          "reviewer": "static:contract",
+          "created_at": "2026-10-06T18:35:34.793775"
+        },
+        {
+          "task_id": "T-005",
+          "round": 2,
+          "layer": "llm",
+          "verdict": "approve",
+          "score": 0.92,
+          "issues": [],
+          "fix_hints": [],
+          "reviewer": "backend_dev",
+          "created_at": "2026-10-06T18:35:34.806064"
+        }
+      ],
+      "status_history": [
+        {
+          "from_status": "pending",
+          "to_status": "ready",
+          "reason": "dependencies-met",
+          "at": "2026-10-06T18:35:34.400539"
+        },
+        {
+          "from_status": "ready",
+          "to_status": "running",
+          "reason": "dispatched",
+          "at": "2026-10-06T18:35:34.408482"
+        },
+        {
+          "from_status": "running",
+          "to_status": "review",
+          "reason": "executed",
+          "at": "2026-10-06T18:35:34.458385"
+        },
+        {
+          "from_status": "review",
+          "to_status": "rework",
+          "reason": "gate-rework",
+          "at": "2026-10-06T18:35:34.469324"
+        },
+        {
+          "from_status": "rework",
+          "to_status": "running",
+          "reason": "rework-dispatched",
+          "at": "2026-10-06T18:35:34.726404"
+        },
+        {
+          "from_status": "running",
+          "to_status": "review",
+          "reason": "executed",
+          "at": "2026-10-06T18:35:34.783307"
+        },
+        {
+          "from_status": "review",
+          "to_status": "succeeded",
+          "reason": "gate-succeeded",
+          "at": "2026-10-06T18:35:34.806214"
+        }
+      ],
+      "created_at": "2026-10-06T18:35:34.094475",
+      "updated_at": "2026-10-06T18:35:34.806214"
+    },
+    {
+      "id": "T-006",
+      "title": "容器化与部署配置",
+      "description": "编写 Dockerfile、docker-compose.yml 与部署文档：构建、启动、环境变量、健康检查与回滚步骤。",
+      "role": "devops_engineer",
+      "acceptance_criteria": [
+        "docker compose up 可构建并启动服务",
+        "包含端口映射与健康检查",
+        "部署文档给出可照做的回滚步骤"
+      ],
+      "deliverables": [
+        {
+          "path": "Dockerfile",
+          "kind": "dockerfile",
+          "description": "多阶段思路的 Python 3.12 运行时镜像",
+          "required": true,
+          "min_bytes": 400,
+          "must_contain": [
+            "FROM python:3.12-slim",
+            "uvicorn"
+          ],
+          "max_bytes": 524288
+        },
+        {
+          "path": "docker-compose.yml",
+          "kind": "yaml",
+          "description": "compose 配置：构建、端口、环境变量与健康检查",
+          "required": true,
+          "min_bytes": 300,
+          "must_contain": [
+            "services:",
+            "8000"
+          ],
+          "max_bytes": 524288
+        },
+        {
+          "path": "docs/deploy.md",
+          "kind": "markdown",
+          "description": "部署文档：构建、启动、环境变量、健康检查与回滚",
+          "required": true,
+          "min_bytes": 600,
+          "must_contain": [
+            "docker compose up",
+            "回滚"
+          ],
+          "max_bytes": 524288
+        }
+      ],
+      "dependencies": [
+        "T-003"
+      ],
+      "parent_id": null,
+      "dynamic": false,
+      "priority": 6,
+      "brief": "Dockerfile、compose 与部署文档",
+      "timeout_seconds": 300,
+      "status": "succeeded",
+      "attempts": 1,
+      "rework_count": 0,
+      "max_attempts": 3,
+      "max_reworks": 2,
+      "result": {
+        "task_id": "T-006",
+        "role": "devops_engineer",
+        "summary": "容器化配置完成：镜像基于 python:3.12-slim，依赖层与代码层分离以便缓存；compose 文件固化了端口、环境变量与健康检查；部署文档包含构建、启动、验证与回滚步骤。\n\n\n\n\n镜像与 compose 配置均已按契约交付。构建上下文是交付物根目录，因此 `backend/` 与 `frontend/` 必须一并存在；健康检查依赖 `/api/health`，回滚步骤在文档第 6 节。",
+        "artifacts": [
+          {
+            "path": "Dockerfile",
+            "kind": "dockerfile",
+            "size_bytes": 648,
+            "sha256": "7ca3f2ea974b06ab568b48a4508f8ff670bfc526dfb92a2e2e00777db00c0daf",
+            "produced_by_task": "T-006",
+            "produced_by_role": "devops_engineer",
+            "written_at": "2026-10-06T18:35:34.501721"
+          },
+          {
+            "path": "docker-compose.yml",
+            "kind": "yaml",
+            "size_bytes": 521,
+            "sha256": "23892f2d3592cbfa417e281e3ad9a08263feb0524febe26fbd131f5bc1a5ec9d",
+            "produced_by_task": "T-006",
+            "produced_by_role": "devops_engineer",
+            "written_at": "2026-10-06T18:35:34.506049"
+          },
+          {
+            "path": "docs/deploy.md",
+            "kind": "markdown",
+            "size_bytes": 1906,
+            "sha256": "940b5820ad1a1dca217a94325334154d5f8cc4433e934214326d66245a42c43e",
+            "produced_by_task": "T-006",
+            "produced_by_role": "devops_engineer",
+            "written_at": "2026-10-06T18:35:34.510546"
+          }
+        ],
+        "notes": "容器化配置完成：镜像基于 python:3.12-slim，依赖层与代码层分离以便缓存；compose 文件固化了端口、环境变量与健康检查；部署文档包含构建、启动、验证与回滚步骤。\n\n\n\n\n镜像与 compose 配置均已按契约交付。构建上下文是交付物根目录，因此 `backend/` 与 `frontend/` 必须一并存在；健康检查依赖 `/api/health`，回滚步骤在文档第 6 节。",
+        "started_at": "2026-10-06T18:35:34.487490",
+        "finished_at": "2026-10-06T18:35:34.512854",
+        "duration_ms": 25
+      },
+      "reviews": [
+        {
+          "task_id": "T-006",
+          "round": 1,
+          "layer": "static",
+          "verdict": "approve",
+          "score": null,
+          "issues": [],
+          "fix_hints": [],
+          "reviewer": "static:contract",
+          "created_at": "2026-10-06T18:35:34.531070"
+        },
+        {
+          "task_id": "T-006",
+          "round": 1,
+          "layer": "llm",
+          "verdict": "approve",
+          "score": 0.92,
+          "issues": [],
+          "fix_hints": [],
+          "reviewer": "architect",
+          "created_at": "2026-10-06T18:35:34.553818"
+        }
+      ],
+      "status_history": [
+        {
+          "from_status": "pending",
+          "to_status": "ready",
+          "reason": "dependencies-met",
+          "at": "2026-10-06T18:35:34.402581"
+        },
+        {
+          "from_status": "ready",
+          "to_status": "running",
+          "reason": "dispatched",
+          "at": "2026-10-06T18:35:34.410692"
+        },
+        {
+          "from_status": "running",
+          "to_status": "review",
+          "reason": "executed",
+          "at": "2026-10-06T18:35:34.515564"
+        },
+        {
+          "from_status": "review",
+          "to_status": "succeeded",
+          "reason": "gate-succeeded",
+          "at": "2026-10-06T18:35:34.554023"
+        }
+      ],
+      "created_at": "2026-10-06T18:35:34.094483",
+      "updated_at": "2026-10-06T18:35:34.554023"
+    },
+    {
+      "id": "T-007",
+      "title": "README 与使用文档",
+      "description": "编写 README 与 docs/usage.md：项目定位、目录结构、安装与快速开始、API 使用示例与常见问题；命令可直接复制执行。",
+      "role": "technical_writer",
+      "acceptance_criteria": [
+        "README 覆盖项目定位、目录结构、安装与快速开始",
+        "使用文档中的命令可直接复制执行",
+        "示例与实现一致（端口、路径、字段均来自当前实现）"
+      ],
+      "deliverables": [
+        {
+          "path": "README.md",
+          "kind": "markdown",
+          "description": "项目说明：定位、结构、快速开始、测试与 API 一览",
+          "required": true,
+          "min_bytes": 1200,
+          "must_contain": [
+            "## 快速开始",
+            "uvicorn app.main:app"
+          ],
+          "max_bytes": 524288
+        },
+        {
+          "path": "docs/usage.md",
+          "kind": "markdown",
+          "description": "使用文档：启动、页面操作与 curl 示例",
+          "required": true,
+          "min_bytes": 900,
+          "must_contain": [
+            "## API",
+            "curl"
+          ],
+          "max_bytes": 524288
+        }
+      ],
+      "dependencies": [
+        "T-003",
+        "T-004"
+      ],
+      "parent_id": null,
+      "dynamic": false,
+      "priority": 7,
+      "brief": "README 与使用文档",
+      "timeout_seconds": 300,
+      "status": "succeeded",
+      "attempts": 1,
+      "rework_count": 0,
+      "max_attempts": 3,
+      "max_reworks": 2,
+      "result": {
+        "task_id": "T-007",
+        "role": "technical_writer",
+        "summary": "README 与使用文档已交付：README 覆盖项目定位、目录结构、快速开始、测试与 API 一览；usage.md 给出可复制执行的启动命令、页面操作说明与 curl 示例。两份文档都包含命令示例，外层围栏按产物格式要求使用 4 个反引号，避免示例被提前截断。\n\n\n\n文档中的端口、路径与字段均取自当前实现（backend/app/main.py 与 docs/api-spec.yaml），命令已在本地逐条核对可执行。若后续接口有变更，请同步更新本目录下的使用说明。",
+        "artifacts": [
+          {
+            "path": "README.md",
+            "kind": "markdown",
+            "size_bytes": 2280,
+            "sha256": "4c319b65ce9864643bf0d649daa9963f5b58d2729f0656f94d80355f135178dc",
+            "produced_by_task": "T-007",
+            "produced_by_role": "technical_writer",
+            "written_at": "2026-10-06T18:35:34.594674"
+          },
+          {
+            "path": "docs/usage.md",
+            "kind": "markdown",
+            "size_bytes": 1867,
+            "sha256": "cd861c1c7e68d3938571ee0c3f478daf858115775b594c26639a9f52e6cbbdf3",
+            "produced_by_task": "T-007",
+            "produced_by_role": "technical_writer",
+            "written_at": "2026-10-06T18:35:34.604636"
+          }
+        ],
+        "notes": "README 与使用文档已交付：README 覆盖项目定位、目录结构、快速开始、测试与 API 一览；usage.md 给出可复制执行的启动命令、页面操作说明与 curl 示例。两份文档都包含命令示例，外层围栏按产物格式要求使用 4 个反引号，避免示例被提前截断。\n\n\n\n文档中的端口、路径与字段均取自当前实现（backend/app/main.py 与 docs/api-spec.yaml），命令已在本地逐条核对可执行。若后续接口有变更，请同步更新本目录下的使用说明。",
+        "started_at": "2026-10-06T18:35:34.580195",
+        "finished_at": "2026-10-06T18:35:34.610435",
+        "duration_ms": 30
+      },
+      "reviews": [
+        {
+          "task_id": "T-007",
+          "round": 1,
+          "layer": "static",
+          "verdict": "approve",
+          "score": null,
+          "issues": [],
+          "fix_hints": [],
+          "reviewer": "static:contract",
+          "created_at": "2026-10-06T18:35:34.629817"
+        },
+        {
+          "task_id": "T-007",
+          "round": 1,
+          "layer": "llm",
+          "verdict": "approve",
+          "score": 0.92,
+          "issues": [],
+          "fix_hints": [],
+          "reviewer": "product_manager",
+          "created_at": "2026-10-06T18:35:34.645303"
+        }
+      ],
+      "status_history": [
+        {
+          "from_status": "pending",
+          "to_status": "ready",
+          "reason": "dependencies-met",
+          "at": "2026-10-06T18:35:34.404771"
+        },
+        {
+          "from_status": "ready",
+          "to_status": "running",
+          "reason": "dispatched",
+          "at": "2026-10-06T18:35:34.412640"
+        },
+        {
+          "from_status": "running",
+          "to_status": "review",
+          "reason": "executed",
+          "at": "2026-10-06T18:35:34.615153"
+        },
+        {
+          "from_status": "review",
+          "to_status": "succeeded",
+          "reason": "gate-succeeded",
+          "at": "2026-10-06T18:35:34.645421"
+        }
+      ],
+      "created_at": "2026-10-06T18:35:34.094487",
+      "updated_at": "2026-10-06T18:35:34.645421"
+    },
+    {
+      "id": "T-008",
+      "title": "前端静态检查用例",
+      "description": "为前端结构编写可执行的 pytest 用例：页面元素、资源引用、样式类与 API 调用点，不依赖浏览器。",
+      "role": "qa_engineer",
+      "acceptance_criteria": [
+        "断言 index.html 的结构与资源引用完整",
+        "断言 app.js 调用 /api/todos 并提供渲染函数",
+        "断言 styles.css 覆盖关键类"
+      ],
+      "deliverables": [
+        {
+          "path": "tests/test_ui.py",
+          "kind": "python",
+          "description": "前端结构与交互的静态检查用例",
+          "required": true,
+          "min_bytes": 600,
+          "must_contain": [
+            "def test_",
+            "index.html"
+          ],
+          "max_bytes": 524288
+        }
+      ],
+      "dependencies": [
+        "T-004"
+      ],
+      "parent_id": null,
+      "dynamic": false,
+      "priority": 7,
+      "brief": "前端结构与交互的静态检查用例",
+      "timeout_seconds": 300,
+      "status": "succeeded",
+      "attempts": 1,
+      "rework_count": 0,
+      "max_attempts": 3,
+      "max_reworks": 2,
+      "result": {
+        "task_id": "T-008",
+        "role": "qa_engineer",
+        "summary": "前端没有浏览器测试依赖，因此用静态检查覆盖：直接读取 frontend/ 下的三个文件，断言页面结构、资源引用、关键类名与 API 调用点。用例同样以 pytest 运行。\n\n\n静态检查共 7 个用例：资源引用、元素 id、编码与语言、脚本加载方式、API 调用点、编辑删除分支与关键样式选择器。该文件只断言结构约定，真正的交互行为需要浏览器环境，未覆盖部分记入 docs/test-report.md 的风险清单。",
+        "artifacts": [
+          {
+            "path": "tests/test_ui.py",
+            "kind": "python",
+            "size_bytes": 1710,
+            "sha256": "eff882d99c837bdecde3bd42662dd05ad53a674b9e7ea3a4357453b27147e50a",
+            "produced_by_task": "T-008",
+            "produced_by_role": "qa_engineer",
+            "written_at": "2026-10-06T18:35:34.693240"
+          }
+        ],
+        "notes": "前端没有浏览器测试依赖，因此用静态检查覆盖：直接读取 frontend/ 下的三个文件，断言页面结构、资源引用、关键类名与 API 调用点。用例同样以 pytest 运行。\n\n\n静态检查共 7 个用例：资源引用、元素 id、编码与语言、脚本加载方式、API 调用点、编辑删除分支与关键样式选择器。该文件只断言结构约定，真正的交互行为需要浏览器环境，未覆盖部分记入 docs/test-report.md 的风险清单。",
+        "started_at": "2026-10-06T18:35:34.678164",
+        "finished_at": "2026-10-06T18:35:34.696027",
+        "duration_ms": 17
+      },
+      "reviews": [
+        {
+          "task_id": "T-008",
+          "round": 1,
+          "layer": "static",
+          "verdict": "approve",
+          "score": null,
+          "issues": [],
+          "fix_hints": [],
+          "reviewer": "static:contract",
+          "created_at": "2026-10-06T18:35:34.708002"
+        },
+        {
+          "task_id": "T-008",
+          "round": 1,
+          "layer": "llm",
+          "verdict": "approve",
+          "score": 0.92,
+          "issues": [],
+          "fix_hints": [],
+          "reviewer": "backend_dev",
+          "created_at": "2026-10-06T18:35:34.718939"
+        }
+      ],
+      "status_history": [
+        {
+          "from_status": "pending",
+          "to_status": "ready",
+          "reason": "dependencies-met",
+          "at": "2026-10-06T18:35:34.406695"
+        },
+        {
+          "from_status": "ready",
+          "to_status": "running",
+          "reason": "dispatched",
+          "at": "2026-10-06T18:35:34.416427"
+        },
+        {
+          "from_status": "running",
+          "to_status": "review",
+          "reason": "executed",
+          "at": "2026-10-06T18:35:34.698725"
+        },
+        {
+          "from_status": "review",
+          "to_status": "succeeded",
+          "reason": "gate-succeeded",
+          "at": "2026-10-06T18:35:34.719121"
+        }
+      ],
+      "created_at": "2026-10-06T18:35:34.094492",
+      "updated_at": "2026-10-06T18:35:34.719121"
+    },
+    {
+      "id": "T-FINAL",
+      "title": "最终交付总结",
+      "description": "汇总本次全部任务的交付成果，撰写 DELIVERY.md：完成清单、验收结论、遗留问题与运行方式。",
+      "role": "project_manager",
+      "acceptance_criteria": [
+        "列出全部完成项与遗留问题",
+        "包含运行方式"
+      ],
+      "deliverables": [
+        {
+          "path": "DELIVERY.md",
+          "kind": "markdown",
+          "description": "交付总结",
+          "required": true,
+          "min_bytes": 100,
+          "must_contain": [
+            "完成"
+          ],
+          "max_bytes": 524288
+        }
+      ],
+      "dependencies": [
+        "T-005",
+        "T-006",
+        "T-007",
+        "T-008"
+      ],
+      "parent_id": null,
+      "dynamic": false,
+      "priority": 9,
+      "brief": "收尾任务：汇总全部交付物并给出运行方式",
+      "timeout_seconds": 300,
+      "status": "succeeded",
+      "attempts": 1,
+      "rework_count": 0,
+      "max_attempts": 3,
+      "max_reworks": 2,
+      "result": {
+        "task_id": "T-FINAL",
+        "role": "project_manager",
+        "summary": "汇总本次全部任务的交付成果，输出 DELIVERY.md：完成清单、验收结论、遗留问题与运行方式。\n\n\nDELIVERY.md 已按收尾契约产出：完成清单逐项列出角色与产物，验收结论写明门禁结果与返工记录，遗留问题与运行方式均可直接核对。",
+        "artifacts": [
+          {
+            "path": "DELIVERY.md",
+            "kind": "markdown",
+            "size_bytes": 1895,
+            "sha256": "89ecf1a06f94af34b3064242087b500018eeefee56ad336345c6c47930e871cf",
+            "produced_by_task": "T-FINAL",
+            "produced_by_role": "project_manager",
+            "written_at": "2026-10-06T18:35:34.850213"
+          }
+        ],
+        "notes": "汇总本次全部任务的交付成果，输出 DELIVERY.md：完成清单、验收结论、遗留问题与运行方式。\n\n\nDELIVERY.md 已按收尾契约产出：完成清单逐项列出角色与产物，验收结论写明门禁结果与返工记录，遗留问题与运行方式均可直接核对。",
+        "started_at": "2026-10-06T18:35:34.839425",
+        "finished_at": "2026-10-06T18:35:34.852671",
+        "duration_ms": 13
+      },
+      "reviews": [
+        {
+          "task_id": "T-FINAL",
+          "round": 1,
+          "layer": "static",
+          "verdict": "approve",
+          "score": null,
+          "issues": [],
+          "fix_hints": [],
+          "reviewer": "static:contract",
+          "created_at": "2026-10-06T18:35:34.864142"
+        },
+        {
+          "task_id": "T-FINAL",
+          "round": 1,
+          "layer": "llm",
+          "verdict": "approve",
+          "score": 0.92,
+          "issues": [],
+          "fix_hints": [],
+          "reviewer": "architect+product_manager",
+          "created_at": "2026-10-06T18:35:34.881625"
+        }
+      ],
+      "status_history": [
+        {
+          "from_status": "pending",
+          "to_status": "ready",
+          "reason": "dependencies-met",
+          "at": "2026-10-06T18:35:34.812539"
+        },
+        {
+          "from_status": "ready",
+          "to_status": "running",
+          "reason": "dispatched",
+          "at": "2026-10-06T18:35:34.815632"
+        },
+        {
+          "from_status": "running",
+          "to_status": "review",
+          "reason": "executed",
+          "at": "2026-10-06T18:35:34.855617"
+        },
+        {
+          "from_status": "review",
+          "to_status": "succeeded",
+          "reason": "gate-succeeded",
+          "at": "2026-10-06T18:35:34.881715"
+        }
+      ],
+      "created_at": "2026-10-06T18:35:34.094593",
+      "updated_at": "2026-10-06T18:35:34.881715"
+    }
+  ]
+}
