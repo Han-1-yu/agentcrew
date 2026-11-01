@@ -9,21 +9,18 @@
 - 自我修正的 LLM 调用被记账（llm_call 事件数增加）。
 """
 
-from pathlib import Path
 
 import pytest
 
+from agentcrew.agents.base_agent import AgentExecutionError
+from agentcrew.agents.generic import GenericAgent
 from agentcrew.artifacts.spec import ArtifactSpec
 from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.config import Settings
 from agentcrew.context.context_bus import ContextBus
 from agentcrew.models.factory import ModelFactory
 from agentcrew.models.providers.base import CompletionResult
-from agentcrew.agents.base_agent import AgentExecutionError
-from agentcrew.agents.generic import GenericAgent
-from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.roles.spec import RoleSpec
-from agentcrew.roles.builtin import BUILTIN_ROLES
 from agentcrew.runtime.ledger import Ledger
 from agentcrew.task.task import Task
 
@@ -92,7 +89,7 @@ async def test_bad_then_good_self_corrects(env):
     agent = GenericAgent(role(), models=models, store=env["store"],
                          ledger=env["ledger"], project_goal="目标",
                          max_self_corrections=2)
-    result = await agent.execute(env["task"], env["bus"].build(env["task"]))
+    await agent.execute(env["task"], env["bus"].build(env["task"]))
     assert env["store"].read("a.py").startswith("def f()")
     assert provider.calls == 2  # 首次 + 一次自我修正
     events = list(env["ledger"].events("agent_self_correction"))
@@ -138,7 +135,7 @@ async def test_good_first_try_no_correction(env):
     agent = GenericAgent(role(), models=models, store=env["store"],
                          ledger=env["ledger"], project_goal="目标",
                          max_self_corrections=2)
-    result = await agent.execute(env["task"], env["bus"].build(env["task"]))
+    await agent.execute(env["task"], env["bus"].build(env["task"]))
     assert env["store"].read("a.py").startswith("def f()")
     assert provider.calls == 1
     assert env["ledger"].count("agent_self_correction") == 0

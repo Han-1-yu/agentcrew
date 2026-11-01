@@ -78,8 +78,8 @@ def summarize_artifact(
 
 
 def summarize_records(
-    records: list["ArtifactRecord"],
-    store: "ArtifactStore",
+    records: list[ArtifactRecord],
+    store: ArtifactStore,
     *,
     max_total: int = 1500,
 ) -> str:

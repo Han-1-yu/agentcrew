@@ -30,7 +30,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-
 # ── 内置敏感模式 ────────────────────────────────────────────────────────────
 
 #: API Key / Secret 类：sk-..., Bearer ..., 各种 key= 赋值

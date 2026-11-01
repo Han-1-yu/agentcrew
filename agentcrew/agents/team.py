@@ -49,7 +49,7 @@ class TeamAgent:
         binding: RoleAgents,
         members: Sequence[ResolvedAgent],
         *,
-        get_agent: Callable[[str], BaseAgent],
+        get_agent: Callable[[str], BaseAgent | TeamAgent],
         models: ModelFactory,
         store: ArtifactStore,
         ledger: EventSink,

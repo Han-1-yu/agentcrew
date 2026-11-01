@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 
 import pytest
@@ -19,7 +18,6 @@ from agentcrew.runtime.checkpoint import (
     RunStatus,
     delete_run,
 )
-
 
 # ── 辅助 ──────────────────────────────────────────────────────────────────
 

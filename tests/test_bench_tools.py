@@ -19,7 +19,6 @@ if str(REPO_ROOT / "scripts") not in sys.path:
 
 import bench  # noqa: E402
 
-
 # ── 图谱理论上限 ──────────────────────────────────────────────────────────
 
 

@@ -5,7 +5,7 @@
 """
 
 from datetime import datetime
-from typing import Literal
+from typing import Literal, cast, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -15,6 +15,21 @@ ArtifactKind = Literal[
     "python", "json", "yaml", "toml", "markdown", "text",
     "html", "css", "js", "dockerfile", "sql", "shell",
 ]
+
+ARTIFACT_KINDS: tuple[str, ...] = get_args(ArtifactKind)
+
+
+def parse_kind(value: str) -> ArtifactKind:
+    """把任意字符串收敛到 :data:`ArtifactKind`；不认识的值退回 ``"text"``。
+
+    模型/增量编辑给出的 ``kind`` 是自由文本，直接塞进 ``ArtifactSpec`` 会在
+    校验期报错。这里集中做一次收敛，好处是"猜错就降级"而不是"猜错就崩"，
+    且调用方不必到处 ``cast``。
+    """
+    normalized = (value or "").strip().lower()
+    if normalized in ARTIFACT_KINDS:
+        return cast("ArtifactKind", normalized)
+    return "text"
 
 
 class ArtifactSpec(BaseModel):

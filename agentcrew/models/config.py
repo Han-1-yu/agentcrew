@@ -4,7 +4,8 @@
 自带冒号（如 ``ollama:qwen2.5:14b``）。
 """
 
-from typing import Literal
+from collections.abc import Mapping
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -692,7 +693,7 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
 }
 
 
-def _apply_override(preset: ProviderPreset, override: dict) -> ProviderPreset:
+def _apply_override(preset: ProviderPreset, override: Mapping[str, Any]) -> ProviderPreset:
     """把 ``agentcrew.yaml`` 的单 provider 覆盖合并进预设。
 
     读取现有字段值后用 ``model_copy(update=...)`` 合并，**未指定的字段保持
@@ -711,8 +712,8 @@ class DuplicateProviderError(ValueError):
 
 def build_directory(
     *,
-    custom: dict[str, dict] | None = None,
-    overrides: dict[str, dict] | None = None,
+    custom: Mapping[str, Mapping[str, Any]] | None = None,
+    overrides: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, ProviderPreset]:
     """返回「内置预设 + 用户自定义 + provider_overrides」合并后的只读目录。
 
@@ -743,8 +744,8 @@ def build_directory(
 def parse_alias(
     alias: str,
     *,
-    overrides: dict[str, dict] | None = None,
-    custom: dict[str, dict] | None = None,
+    overrides: Mapping[str, Mapping[str, Any]] | None = None,
+    custom: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> ModelBinding:
     """把 ``"<provider>:<model>"`` 解析成 :class:`ModelBinding`。
 

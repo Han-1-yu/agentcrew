@@ -12,17 +12,15 @@
 
 import json
 from datetime import datetime
-from pathlib import Path
 
 import pytest
 
-from agentcrew.agents.project_manager import ProjectManagerAgent
 from agentcrew.config import Settings
+from agentcrew.crew.crew import Crew
 from agentcrew.knowledge.experience import Experience, ExperienceStore
 from agentcrew.models.factory import ModelFactory
 from agentcrew.runtime.checkpoint import RunStatus
 from agentcrew.runtime.ledger import Ledger
-from agentcrew.crew.crew import Crew
 
 # ── inject_context 单元测试 ────────────────────────────────────────────────
 

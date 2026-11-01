@@ -883,7 +883,7 @@ class BaseAgent(ABC):
                 role=str(spec.get("role", "")),
             )
 
-    def _guard_truncation(self, completion: object, task: Task) -> None:
+    def _guard_truncation(self, completion: CompletionResult, task: Task) -> None:
         """回复撞上输出上限时直接失败（与单次调用路径同一条病因说明）。"""
         if _is_truncated(completion):
             # 回复是**被输出上限截断**的，不是模型写完了。此时围栏必然未闭合，

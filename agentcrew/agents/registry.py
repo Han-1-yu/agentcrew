@@ -402,7 +402,7 @@ class AgentFactory:
         self._agents[cache_key] = agent
         return agent
 
-    def reviewer_agent_for(self, role_key: str) -> BaseAgent | None:
+    def reviewer_agent_for(self, role_key: str) -> BaseAgent | TeamAgent | None:
         """返回 ``role_key`` 的**首个**评审人 Agent；没有评审人时返回 ``None``。
 
         没有评审人（含未注册的角色）是合法状态：调用方据此跳过 G2，由 G1 定夺。

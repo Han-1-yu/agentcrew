@@ -342,6 +342,7 @@ class Crew:
         if self._run is None:
             raise RuntimeError("当前 run 尚未装配 ModelFactory，请在 run 开始后调用")
         models = self._run.models
+        from_alias: str | None
         if role is None:
             from_alias = models.settings.default_model
             models.set_default_alias(alias)

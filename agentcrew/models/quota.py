@@ -224,7 +224,6 @@ class QuotaTracker:
         if not self.has_quota(alias):
             return
         quota = self._quotas[alias]
-        now = time.time()
         for window, limit in (
             ("daily", quota.daily),
             ("weekly", quota.weekly),
@@ -341,7 +340,6 @@ class QuotaTracker:
         if not self.has_quota(alias):
             return
         total_tokens = prompt_tokens + completion_tokens
-        now = time.time()
         for window in ("daily", "weekly", "monthly"):
             usage = self._get_usage(alias, window)
             usage.tokens += total_tokens

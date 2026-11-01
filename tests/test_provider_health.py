@@ -21,7 +21,6 @@ from agentcrew.models.config import parse_alias
 from agentcrew.models.factory import (
     HealthRecord,
     ModelFactory,
-    _HEALTH_DEGRADED_THRESHOLD_MS,
 )
 from agentcrew.models.providers.base import (
     BaseProvider,
@@ -29,7 +28,7 @@ from agentcrew.models.providers.base import (
     Message,
     ResponseFormat,
 )
-from agentcrew.models.providers.mock import MockProvider, set_purpose
+from agentcrew.models.providers.mock import set_purpose
 from agentcrew.runtime.ledger import Ledger
 from agentcrew.utils.retry import TransientError
 

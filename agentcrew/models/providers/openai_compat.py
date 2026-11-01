@@ -249,7 +249,8 @@ class OpenAICompatProvider(BaseProvider):
             new_exc = cls(str(exc))
             match = _HTTP_STATUS_RE.search(str(exc))
             if match is not None:
-                new_exc.status_code = int(match.group(1))
+                # status_code 是运行时挂到异常实例上的（classify 的返回类型没有它）
+                new_exc.status_code = int(match.group(1))  # type: ignore[attr-defined]
             raise new_exc from exc
 
     def _prepare_messages(self, messages: Sequence[Message]) -> list[dict[str, str]]:

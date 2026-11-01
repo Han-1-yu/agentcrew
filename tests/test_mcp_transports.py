@@ -18,14 +18,13 @@ import pytest
 
 from agentcrew.mcp import (
     HTTPTransport,
-    MCPError,
     MCPClient,
+    MCPError,
     MCPTransport,
     MCPTransportError,
     SSETransport,
     StdioTransport,
 )
-
 
 # ── 本地 HTTP/SSE mock ────────────────────────────────────────────────
 

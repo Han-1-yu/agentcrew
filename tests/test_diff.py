@@ -7,10 +7,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from pathlib import Path
-
-import pytest
 
 import main as cli
 from agentcrew.artifacts.spec import ArtifactSpec

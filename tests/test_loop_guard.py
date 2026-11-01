@@ -11,7 +11,7 @@
 ``LoopDetectedError`` 并落 ``loop_detected`` 事件；默认关闭时行为不变。
 """
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator
 
 import pytest
 
@@ -22,8 +22,6 @@ from agentcrew.models.loop_guard import LoopDetectedError, LoopGuard, UnitRun
 from agentcrew.models.providers.base import (
     BaseProvider,
     CompletionResult,
-    Message,
-    ResponseFormat,
     StreamChunk,
 )
 from agentcrew.runtime.ledger import Ledger

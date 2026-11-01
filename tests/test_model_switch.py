@@ -12,14 +12,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from agentcrew.api.server import ApiServer
-from agentcrew.crew.crew import Crew
 from agentcrew.config import Settings
+from agentcrew.crew.crew import Crew
 from agentcrew.gate.cli_prompter import CliPrompter
 from agentcrew.models.factory import ModelFactory, ModelFactoryError
 from agentcrew.runtime.checkpoint import CheckpointStore

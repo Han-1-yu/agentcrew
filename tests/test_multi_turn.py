@@ -10,7 +10,6 @@
 - ledger 记录 ``agent_message`` 事件。
 """
 
-from pathlib import Path
 
 import pytest
 
@@ -22,7 +21,6 @@ from agentcrew.config import Settings
 from agentcrew.context.context_bus import ContextBus
 from agentcrew.models.factory import ModelFactory
 from agentcrew.models.providers.base import CompletionResult, Message
-from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.roles.spec import RoleSpec
 from agentcrew.runtime.ledger import Ledger
 from agentcrew.task.task import Task

@@ -160,6 +160,7 @@ def test_select_weighted_distribution(settings):
 def test_select_weighted_unavailable_weight_zero(settings):
     """unavailable 的别名权重置 0（不被选中）。"""
     from datetime import datetime
+
     from agentcrew.models.factory import HealthRecord
     f = ModelFactory(settings)
     f._health["a"] = HealthRecord(
@@ -178,6 +179,7 @@ def test_select_weighted_unavailable_weight_zero(settings):
 def test_select_weighted_degraded_weight_halved(settings):
     """degraded 的别名权重减半。"""
     from datetime import datetime
+
     from agentcrew.models.factory import HealthRecord
     f = ModelFactory(settings)
     # a degraded: weight 0.7 → 0.35；b healthy: weight 0.3
@@ -201,6 +203,7 @@ def test_select_weighted_degraded_weight_halved(settings):
 def test_select_weighted_all_zero_falls_back_to_first(settings):
     """所有权重为 0 时回退到第一个别名。"""
     from datetime import datetime
+
     from agentcrew.models.factory import HealthRecord
     f = ModelFactory(settings)
     for a in ("a", "b"):
@@ -238,7 +241,7 @@ async def test_weighted_call_selects_by_weight(settings, tmp_path, monkeypatch):
                 "openai:b": provider_b}[alias]
 
     monkeypatch.setattr(f, "_resolve", _resolve)
-    result = await f.call("openai:primary", [{"role": "user", "content": "x"}],
+    await f.call("openai:primary", [{"role": "user", "content": "x"}],
                            temperature=0, max_tokens=10,
                            purpose="execute", role="r")
     # b 权重为 0，永远不应被选中
@@ -272,7 +275,7 @@ async def test_weighted_call_rerolls_after_failure(settings, tmp_path, monkeypat
                 "openai:b": provider_b}[alias]
 
     monkeypatch.setattr(f, "_resolve", _resolve)
-    result = await f.call("openai:primary", [{"role": "user", "content": "x"}],
+    await f.call("openai:primary", [{"role": "user", "content": "x"}],
                            temperature=0, max_tokens=10,
                            purpose="execute", role="r")
     assert provider_b.calls == 1

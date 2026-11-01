@@ -10,12 +10,10 @@
 """
 
 import json
-
 from datetime import datetime, timedelta
 
 from agentcrew.artifacts.spec import ArtifactSpec
 from agentcrew.runtime.checkpoint import (
-    DELTA_COMPACTION_THRESHOLD,
     CheckpointStore,
 )
 from agentcrew.task.task import Task, TaskResult, TaskStatus

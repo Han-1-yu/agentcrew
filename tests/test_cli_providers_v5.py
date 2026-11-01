@@ -19,7 +19,6 @@ import pytest
 
 import main as cli
 
-
 # ── 辅助：跑 providers 并解析 ──────────────────────────────────────────────
 
 

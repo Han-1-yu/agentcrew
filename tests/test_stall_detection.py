@@ -19,6 +19,8 @@ from agentcrew.agents.base_agent import BaseAgent
 from agentcrew.agents.registry import AGENT_CLASSES, AgentFactory
 from agentcrew.artifacts.spec import ArtifactSpec
 from agentcrew.artifacts.store import ArtifactStore
+from agentcrew.config import Settings
+from agentcrew.context.context_bus import ContextBus
 from agentcrew.crew.crew import EXIT_CODES, Crew
 from agentcrew.crew.scheduler import Scheduler
 from agentcrew.gate.gatekeeper import Gatekeeper, NullPrompter
@@ -32,19 +34,15 @@ from agentcrew.task.task import Task
 from agentcrew.task.task import TaskStatus as S
 from agentcrew.task.task_board import TaskBoard
 
-from agentcrew.context.context_bus import ContextBus
-from agentcrew.config import Settings
-
 # 复用 test_crew 的端到端夹具（计划/评审/产物正文），避免重复一大段样板。
 from tests.test_crew import (  # noqa: E402
-    PLAN,
     DELIVERY_BODY,
     MAIN_BODY,
+    PLAN,
     PRD_BODY,
     REVIEWS,
     _ledger,
     _response,
-    _run_dir,
 )
 
 

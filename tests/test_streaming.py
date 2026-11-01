@@ -21,7 +21,6 @@ from agentcrew.config import Settings
 from agentcrew.context.context_bus import ContextBus
 from agentcrew.models.factory import ModelFactory
 from agentcrew.models.providers.mock import set_purpose
-from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.roles.spec import RoleSpec
 from agentcrew.runtime.ledger import Ledger
 from agentcrew.task.task import Task

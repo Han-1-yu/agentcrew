@@ -63,7 +63,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequenc
 from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from pydantic import BaseModel, ValidationError
 
@@ -169,6 +169,21 @@ def _level_rank(level: ComplexityLevel) -> int:
     return {"low": 0, "medium": 1, "high": 2}[level.value]
 
 
+def _message_dict(message: Any) -> dict[str, Any]:
+    """把一条消息摊成 dict 以便估算 token。
+
+    ``Message`` 是 TypedDict（本来就是 dict），但脱敏/测试路径偶尔会传
+    pydantic 对象；两种都吃，失败时退回空 dict（估算只求量级）。
+    """
+    dump = getattr(message, "model_dump", None)
+    if callable(dump):
+        return dump()
+    try:
+        return dict(message)
+    except (TypeError, ValueError):
+        return {}
+
+
 def _estimate_request_tokens(
     messages: Sequence[Message],
     max_tokens: int | None,
@@ -183,7 +198,7 @@ def _estimate_request_tokens(
     import json as _json
     try:
         body = _json.dumps(
-            [m.model_dump() if hasattr(m, "model_dump") else dict(m) for m in messages],
+            [_message_dict(m) for m in messages],
             ensure_ascii=False,
         )
         input_est = max(1, len(body) // 4)
@@ -872,7 +887,7 @@ class ModelFactory:
             try:
                 async with self._slots(sem):
                     async for chunk in provider.stream_complete(
-                        masked_messages,
+                        cast("Sequence[Message]", masked_messages),
                         temperature=temperature,
                         max_tokens=max_tokens,
                         response_format=response_format,
@@ -1109,7 +1124,7 @@ class ModelFactory:
             cache_key = (
                 self._resp_cache_key(alias, messages, temperature, max_tokens)
                 if use_cache else None)
-            if cache_key is not None:
+            if cache_key is not None and self._resp_cache is not None:
                 cached = self._resp_cache.get(cache_key)
                 if cached is not None:
                     self._emit_cache_hit(alias, cache_key)
@@ -1127,7 +1142,7 @@ class ModelFactory:
                 redactor = self._make_redactor()
                 masked_messages = redactor.mask_messages(messages)
                 result = await provider.complete(
-                    masked_messages,
+                    cast("Sequence[Message]", masked_messages),
                     temperature=temperature,
                     max_tokens=max_tokens,
                     response_format=response_format)
@@ -1141,7 +1156,7 @@ class ModelFactory:
             # V7-P3：记录亲和性（成功调用后绑定会话到当前别名）
             if session_id is not None:
                 self._affinity_tracker.remember(session_id, alias)
-            if cache_key is not None:
+            if cache_key is not None and self._resp_cache is not None:
                 self._resp_cache.set(cache_key, result)
             return result
         except _PROVIDER_UNAVAILABLE_TYPES:
@@ -1180,7 +1195,7 @@ class ModelFactory:
         cache_key = (
             self._resp_cache_key(alias, messages, temperature, max_tokens)
             if use_cache else None)
-        if cache_key is not None:
+        if cache_key is not None and self._resp_cache is not None:
             cached = self._resp_cache.get(cache_key)
             if cached is not None:
                 try:
@@ -1215,7 +1230,8 @@ class ModelFactory:
                     result, purpose=purpose, role=role,
                     binding=provider.binding, alias=alias)
         # 阶梯成功：把最后一次（产出合法 schema 的）结果文本写入响应缓存。
-        if cache_key is not None and collecting.results:
+        if (cache_key is not None and collecting.results
+                and self._resp_cache is not None):
             self._resp_cache.set(cache_key, collecting.results[-1])
         return model
 
@@ -1863,7 +1879,7 @@ class _CollectingProvider(BaseProvider):
         if self._redactor is not None and self._redactor.enabled:
             masked = self._redactor.mask_messages(messages)
             result = await self._provider.complete(
-                masked,
+                cast("Sequence[Message]", masked),
                 temperature=temperature,
                 max_tokens=max_tokens,
                 response_format=response_format)

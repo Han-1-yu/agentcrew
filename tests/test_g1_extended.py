@@ -26,9 +26,8 @@ from agentcrew.roles.builtin import BUILTIN_ROLES
 from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.runtime.ledger import Ledger
 from agentcrew.task.task import Task
-from agentcrew.task.task_board import TaskBoard
 from agentcrew.task.task import TaskStatus as S
-
+from agentcrew.task.task_board import TaskBoard
 
 # ── 纯函数 ─────────────────────────────────────────────────────────────────
 

@@ -10,19 +10,16 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-import pytest
-
 from agentcrew.agents.base_agent import BaseAgent
+from agentcrew.artifacts.spec import ArtifactSpec
+from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.artifacts.summarizer import (
     summarize_artifact,
     summarize_records,
 )
-from agentcrew.artifacts.spec import ArtifactSpec
-from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.roles.spec import RoleSpec
 from agentcrew.runtime.ledger import Ledger
 from agentcrew.task.task import Task, TaskResult
-
 
 # ── summarize_artifact：按 kind 的专项策略 ────────────────────────────
 

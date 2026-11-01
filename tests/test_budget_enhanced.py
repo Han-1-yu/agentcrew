@@ -101,7 +101,7 @@ async def test_budget_warning_emitted(settings, tmp_path, monkeypatch):
     _wire(f, {"openai:gpt-4o": expensive}, monkeypatch)
 
     # 前 3 次：$0.01 / $0.02 / $0.03，均 < 80% ($0.04)，不警告。
-    for i in range(3):
+    for _i in range(3):
         await f.call("openai:gpt-4o", [{"role": "user", "content": "x"}],
                      temperature=0, max_tokens=10,
                      purpose="execute", role="r")
@@ -135,7 +135,7 @@ async def test_budget_downgrade_to_cheaper_model(settings, tmp_path, monkeypatch
     _wire(f, {"openai:gpt-4o": expensive, "openai:gpt-4o-mini": cheap}, monkeypatch)
 
     # 前 9 次都走 gpt-4o：第 9 次后 $0.09 = 90%，触发降级。
-    for i in range(9):
+    for _i in range(9):
         await f.call("openai:gpt-4o", [{"role": "user", "content": "x"}],
                      temperature=0, max_tokens=10,
                      purpose="execute", role="r")
@@ -168,7 +168,7 @@ async def test_budget_no_downgrade_without_cheaper_option(settings, tmp_path, mo
           monkeypatch)
 
     # 前 10 次：$0.10 = 100%（未严格超过），不抛；90% 时因无更便宜选项不降级。
-    for i in range(10):
+    for _i in range(10):
         await f.call("openai:gpt-4o", [{"role": "user", "content": "x"}],
                      temperature=0, max_tokens=10,
                      purpose="execute", role="r")
@@ -189,7 +189,7 @@ async def test_no_budget_limit_means_no_warning_no_downgrade(settings, tmp_path,
     f = ModelFactory(settings, ledger=lg)
     expensive = _PricedProvider("openai:gpt-4o", "gpt-4o", **_EXPENSIVE_PRICE)
     _wire(f, {"openai:gpt-4o": expensive}, monkeypatch)
-    for i in range(20):
+    for _i in range(20):
         await f.call("openai:gpt-4o", [{"role": "user", "content": "x"}],
                      temperature=0, max_tokens=10,
                      purpose="execute", role="r")

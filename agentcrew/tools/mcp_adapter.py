@@ -29,7 +29,7 @@ class MCPToolAdapter(Tool):
     """真正发起 MCP ``tools/call`` 的回调（构造期注入，不进 dump / 提示词）。"""
 
     @classmethod
-    def from_mcp(cls, tool: MCPTool, caller: MCPCaller) -> "MCPToolAdapter":
+    def from_mcp(cls, tool: MCPTool, caller: MCPCaller) -> MCPToolAdapter:
         """从 MCP ``tools/list`` 的一条记录构造适配器。"""
         return cls(
             name=tool.name,

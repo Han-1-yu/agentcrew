@@ -185,7 +185,7 @@ class Ledger:
                 if event is None or parsed.event == event:
                     yield parsed
 
-    def count(self, event: str) -> int:
+    def count(self, event: str | None = None) -> int:
         """统计 ``event`` 的行数；与 :meth:`events` 同一套宽容规则、同样流式。"""
         return sum(1 for _ in self.events(event))
 

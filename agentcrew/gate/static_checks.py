@@ -30,10 +30,9 @@ issue 说「哪里不对」，配对的 ``fix_hint`` 说「去做什么」。检
 消息也正是路径在前的形式。
 """
 
+import ast
 from datetime import datetime
 from pathlib import Path
-
-import ast
 
 from agentcrew.artifacts.contract import has_placeholder, parse_check
 from agentcrew.artifacts.spec import ArtifactRecord, ArtifactSpec

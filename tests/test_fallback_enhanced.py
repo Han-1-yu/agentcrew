@@ -11,9 +11,7 @@
 - 无 fallback 配置时 402 原样抛出（向后兼容）。
 """
 
-from collections.abc import AsyncIterator, Sequence
 from datetime import datetime, timedelta
-from pathlib import Path
 
 import pytest
 
@@ -21,13 +19,6 @@ from agentcrew.config import Settings
 from agentcrew.models.factory import (
     ModelFactory,
     ProviderUnavailableError,
-)
-from agentcrew.models.providers.base import (
-    BaseProvider,
-    CompletionResult,
-    Message,
-    ResponseFormat,
-    StreamChunk,
 )
 from agentcrew.models.providers.mock import MockProvider, set_purpose
 from agentcrew.runtime.ledger import Ledger

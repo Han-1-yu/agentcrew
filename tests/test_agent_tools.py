@@ -12,7 +12,6 @@ from pathlib import Path
 
 import pytest
 
-from agentcrew.agents.base_agent import AgentExecutionError, BaseAgent
 from agentcrew.agents.generic import GenericAgent
 from agentcrew.artifacts.spec import ArtifactSpec
 from agentcrew.artifacts.store import ArtifactStore

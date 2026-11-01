@@ -59,7 +59,7 @@ from pydantic import BaseModel, ConfigDict
 
 from agentcrew.agents.base_agent import AgentExecutionError
 from agentcrew.agents.registry import AgentFactory
-from agentcrew.artifacts.spec import ArtifactSpec
+from agentcrew.artifacts.spec import ArtifactSpec, parse_kind
 from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.context.context_bus import ContextBus
 from agentcrew.contracts import AgentBudgetExceeded
@@ -728,7 +728,7 @@ def _deliverable_from_spec(item: Any) -> ArtifactSpec:
     """
     if isinstance(item, dict):
         path = str(item.get("path") or item.get("description") or "subtask_output.md")
-        kind = str(item.get("kind") or "text")
+        kind = parse_kind(str(item.get("kind") or "text"))
         description = str(item.get("description") or path)
         try:
             return ArtifactSpec(path=path, kind=kind, description=description)

@@ -23,7 +23,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-
 #: 亲和性模式
 AFFINITY_OFF = "off"
 AFFINITY_SESSION = "session"

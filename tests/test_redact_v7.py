@@ -13,12 +13,10 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 import pytest
 
 from agentcrew.models.redact import RedactOptions, Redactor, mask_messages
-
 
 # ── 基础开关 ────────────────────────────────────────────────────────────────
 

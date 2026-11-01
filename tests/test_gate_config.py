@@ -9,9 +9,6 @@
 """
 
 import json
-from pathlib import Path
-
-import pytest
 
 from agentcrew.artifacts.spec import ArtifactSpec
 from agentcrew.artifacts.store import ArtifactStore
@@ -23,8 +20,8 @@ from agentcrew.roles.builtin import BUILTIN_ROLES
 from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.runtime.ledger import Ledger
 from agentcrew.task.task import Task
-from agentcrew.task.task_board import TaskBoard
 from agentcrew.task.task import TaskStatus as S
+from agentcrew.task.task_board import TaskBoard
 
 GOOD = {"judgements": [{"criterion_index": 0, "satisfied": True, "evidence": "ok"}],
         "suggestions": [], "score": 0.9}

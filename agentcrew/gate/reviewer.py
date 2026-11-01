@@ -206,7 +206,9 @@ class Reviewer:
             results = await asyncio.gather(
                 *[self._opinion(key, task, material) for key in reviewer_keys]
             )
-            opinions = list(zip(reviewer_keys, results))
+            # 两边都由 reviewer_keys 派生，长度必然一致；strict 让不一致当场炸，
+            # 而不是悄悄少评一位
+            opinions = list(zip(reviewer_keys, results, strict=True))
 
         approved = all(opinion.approved for _, opinion in opinions)
         scores = [

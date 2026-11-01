@@ -312,9 +312,10 @@ def _env_values() -> dict[str, object]:
         values["model_failover"] = model_failover
     # E-3：AGENTCREW_API_KEYS 逗号分隔 → list[str]。通用循环把它当成普通标量
     # 塞进了 raw 字符串，而 pydantic 不能把 "a,b" 直接强转成 list[str]，在这里拆。
-    if isinstance(values.get("api_keys"), str):
+    raw_api_keys = values.get("api_keys")
+    if isinstance(raw_api_keys, str):
         values["api_keys"] = [
-            key.strip() for key in values["api_keys"].split(",") if key.strip()
+            key.strip() for key in raw_api_keys.split(",") if key.strip()
         ]
     # A1：AGENTCREW_CUSTOM_PROVIDERS 紧凑 JSON → dict[str, dict]。
     # 形如 '{"myrelay":{"implementation":"openai_compat","base_url":"http://h/v1",

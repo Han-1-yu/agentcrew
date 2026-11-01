@@ -38,11 +38,11 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
+from agentcrew.artifacts.spec import ArtifactKind, ArtifactSpec
 from agentcrew.gate.gatekeeper import DeliveryDecision, PlanDecision
 from agentcrew.roles.builtin import BUILTIN_ROLES
 from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.runtime.checkpoint import CheckpointStore, RunRecord
-from agentcrew.artifacts.spec import ArtifactSpec
 from agentcrew.task.planner import (
     FINAL_TASK_ID,
     PlanOutput,
@@ -242,7 +242,7 @@ class CliPrompter:
             self._console.print(Text(str(exc)), soft_wrap=True)
             return None
         rebuilt, errors = self._validate_working(candidate)
-        if errors:
+        if errors or rebuilt is None:
             self._print_errors(errors)
             return None
         return rebuilt, {"action": "add", "task_id": new_id}
@@ -262,7 +262,7 @@ class CliPrompter:
             self._console.print(Text(str(exc)), soft_wrap=True)
             return None
         rebuilt, errors = self._validate_working(candidate)
-        if errors:
+        if errors or rebuilt is None:
             self._print_errors(errors)
             return None
         return rebuilt, {"action": "remove", "task_id": task_id}
@@ -300,7 +300,7 @@ class CliPrompter:
             self._console.print(Text(str(exc)), soft_wrap=True)
             return None
         rebuilt, errors = self._validate_working(candidate)
-        if errors:
+        if errors or rebuilt is None:
             self._print_errors(errors)
             return None
         return rebuilt, {
@@ -571,7 +571,7 @@ def _draft(task: Task) -> dict[str, Any]:
     }
 
 
-def _kind_for_path(path: str) -> str:
+def _kind_for_path(path: str) -> ArtifactKind:
     """按扩展名猜交付物 ``kind``（增量添加/修改任务时用；猜不中回落 text）。"""
     lowered = path.lower()
     if lowered.endswith((".md", ".markdown")):

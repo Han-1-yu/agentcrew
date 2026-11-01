@@ -3,7 +3,6 @@ import json
 import sys
 from pathlib import Path
 
-import jsonschema
 from jsonschema import Draft202012Validator
 
 ROOT = Path(r"E:\agentcrew\artifacts\contracts\schemas")
@@ -31,8 +30,9 @@ def main():
     run = json.loads((RUN_DIR / "run.json").read_text(encoding="utf-8"))
     tasks = json.loads((RUN_DIR / "tasks.json").read_text(encoding="utf-8"))
     ledger_lines = [
-        json.loads(l) for l in (RUN_DIR / "ledger.jsonl").read_text(encoding="utf-8").splitlines()
-        if l.strip()
+        json.loads(line)
+        for line in (RUN_DIR / "ledger.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
     ]
 
     run_schema = load("run.json")

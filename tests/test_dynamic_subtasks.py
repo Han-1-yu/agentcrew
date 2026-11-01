@@ -145,7 +145,7 @@ async def test_agent_creates_subtask_from_fence(env, tmp_path):
     agent = GenericAgent(role(), models=models, store=env["store"],
                          ledger=env["ledger"], project_goal="目标",
                          subtask_creator=creator)
-    result = await agent.execute(env["task"], env["bus"].build(env["task"]))
+    await agent.execute(env["task"], env["bus"].build(env["task"]))
     # 本任务自己的产物照常落盘
     assert env["store"].read("a.py").startswith("def f()")
     # 回调被调用，且 parent_id 由 Agent 注入
@@ -170,7 +170,7 @@ async def test_no_creator_means_no_subtask_detection(env, tmp_path):
     models = ModelFactory(env["settings"], ledger=env["ledger"], fixtures_dir=fx)
     agent = GenericAgent(role(), models=models, store=env["store"],
                          ledger=env["ledger"], project_goal="目标")
-    result = await agent.execute(env["task"], env["bus"].build(env["task"]))
+    await agent.execute(env["task"], env["bus"].build(env["task"]))
     assert env["store"].read("a.py").startswith("def f()")
     assert env["ledger"].count("subtask_created") == 0
 
@@ -199,7 +199,7 @@ async def test_malformed_subtask_block_does_not_fail_task(env, tmp_path):
     agent = GenericAgent(role(), models=models, store=env["store"],
                          ledger=env["ledger"], project_goal="目标",
                          subtask_creator=lambda s: created.append(s) or "T-DYN-001")
-    result = await agent.execute(env["task"], env["bus"].build(env["task"]))
+    await agent.execute(env["task"], env["bus"].build(env["task"]))
     assert env["store"].read("a.py").startswith("def f()")
     assert created == []                       # 坏块没被当成合法 spec
     assert env["ledger"].count("subtask_created") == 0

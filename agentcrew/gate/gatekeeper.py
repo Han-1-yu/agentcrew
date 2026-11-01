@@ -40,6 +40,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -330,7 +331,7 @@ class Gatekeeper:
         做语法 / 危险导入检查，其余 kind 只做非空检查。
         """
         produced = {record.path for record in self._store.by_task(task.id)}
-        by_kind: dict[str, list[tuple[str, str]]] = {}
+        by_kind: dict[str, list[tuple[Path | str, str]]] = {}
         for spec in task.deliverables:
             if spec.path not in produced:
                 continue

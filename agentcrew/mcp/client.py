@@ -15,7 +15,6 @@ https://modelcontextprotocol.io/specification/2025-03-26/
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from typing import Any
 
@@ -72,7 +71,7 @@ class MCPClient:
         self._initialized = False
 
     @classmethod
-    def from_config(cls, server_config: dict[str, Any]) -> "MCPClient":
+    def from_config(cls, server_config: dict[str, Any]) -> MCPClient:
         """按 ``mcp_servers`` 配置构造客户端，``transport`` 字段选通道。
 
         - ``stdio``（默认）：``command`` + 可选 ``env``；

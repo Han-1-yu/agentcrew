@@ -818,7 +818,7 @@ async def test_failover_exhausted_raises_provider_unavailable(settings, tmp_path
         provider = f.get(alias)
 
         async def _raise(*a, **kw):
-            raise TransientError(f"down")
+            raise TransientError("down")
 
         provider.complete = _raise  # type: ignore[method-assign]
 

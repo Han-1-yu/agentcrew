@@ -21,8 +21,8 @@ from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.config import Settings
 from agentcrew.gate.gatekeeper import Gatekeeper
 from agentcrew.gate.reviewer import (
-    ReviewVerdict,
     Reviewer,
+    ReviewVerdict,
     deduplicate_issues,
 )
 from agentcrew.models.factory import ModelFactory
@@ -30,8 +30,8 @@ from agentcrew.roles.builtin import BUILTIN_ROLES
 from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.runtime.ledger import Ledger
 from agentcrew.task.task import Task
-from agentcrew.task.task_board import TaskBoard
 from agentcrew.task.task import TaskStatus as S
+from agentcrew.task.task_board import TaskBoard
 
 #: 唯一一条标准不满足；evidence 固定，因此每轮驳回 issues 完全相同（收敛用）。
 BAD = {"judgements": [{"criterion_index": 0, "satisfied": False,
