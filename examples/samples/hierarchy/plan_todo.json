@@ -1,0 +1,142 @@
+{
+  "tasks": [
+    {
+      "id": "T-001",
+      "title": "知识库检索的需求定义",
+      "description": "定义内部知识库检索服务的产品边界：谁来用、检索哪几类内容、返回什么、命中率如何验收。",
+      "role": "product_manager",
+      "acceptance_criteria": [
+        "写明目标用户与检索场景",
+        "定义返回结果的结构与排序依据",
+        "验收标准逐条可判定"
+      ],
+      "deliverables": [
+        {
+          "path": "docs/PRD.md",
+          "kind": "markdown",
+          "description": "产品需求：用户、检索语义、返回结构与验收标准",
+          "min_bytes": 500,
+          "must_contain": ["目标用户", "排序"]
+        }
+      ],
+      "dependencies": [],
+      "priority": 1,
+      "brief": "编写知识库检索的 PRD"
+    },
+    {
+      "id": "T-002",
+      "title": "检索架构与分层设计",
+      "description": "把检索拆成索引层与服务层：倒排索引怎么建、查询怎么解析、服务层如何暴露，两条实现路径的边界写清楚。",
+      "role": "architect",
+      "acceptance_criteria": [
+        "给出模块划分与两条并行实现路径的边界",
+        "说明倒排索引的构建与内存布局",
+        "说明查询解析支持的语法"
+      ],
+      "deliverables": [
+        {
+          "path": "docs/design.md",
+          "kind": "markdown",
+          "description": "设计文档：分层、索引结构与查询语法",
+          "min_bytes": 600,
+          "must_contain": ["模块划分", "倒排索引"]
+        }
+      ],
+      "dependencies": ["T-001"],
+      "priority": 2,
+      "brief": "检索分层与索引设计"
+    },
+    {
+      "id": "T-003",
+      "title": "检索服务接口实现",
+      "description": "实现服务层：应用工厂、查询路由与结果序列化，调用索引层的检索能力。",
+      "role": "backend_dev",
+      "acceptance_criteria": [
+        "create_app 可返回可挂载的应用对象",
+        "查询路由接受关键词并返回排序后的结果",
+        "不依赖外部服务，进程内即可运行"
+      ],
+      "deliverables": [
+        {
+          "path": "kb/api.py",
+          "kind": "python",
+          "description": "服务层：应用工厂与检索路由",
+          "min_bytes": 600,
+          "must_contain": ["def create_app"]
+        }
+      ],
+      "dependencies": ["T-002"],
+      "priority": 3,
+      "brief": "实现 create_app 与检索路由"
+    },
+    {
+      "id": "T-004",
+      "title": "倒排索引实现",
+      "description": "实现索引层：分词、倒排表构建、多关键词交集与按分数排序，纯内存无外部依赖。",
+      "role": "backend_dev",
+      "acceptance_criteria": [
+        "提供可增删条目的倒排索引类（add / remove）",
+        "支持多关键词求交并给出命中词数",
+        "索引构建不依赖第三方库"
+      ],
+      "deliverables": [
+        {
+          "path": "kb/index.py",
+          "kind": "python",
+          "description": "索引层：InvertedIndex 与打分",
+          "min_bytes": 500,
+          "must_contain": ["class InvertedIndex"]
+        }
+      ],
+      "dependencies": ["T-002"],
+      "priority": 3,
+      "brief": "实现倒排索引与打分"
+    },
+    {
+      "id": "T-005",
+      "title": "索引与检索的用例",
+      "description": "为索引层与检索链路编写 pytest 用例：分词、多词交集、空查询、增删后的一致性。",
+      "role": "qa_engineer",
+      "acceptance_criteria": [
+        "覆盖多关键词交集与空查询两类边界",
+        "覆盖条目增删后索引的一致性",
+        "用例可离线运行，不依赖网络"
+      ],
+      "deliverables": [
+        {
+          "path": "tests/test_index.py",
+          "kind": "python",
+          "description": "索引与检索链路的 pytest 用例",
+          "min_bytes": 500,
+          "must_contain": ["def test_"]
+        }
+      ],
+      "dependencies": ["T-003", "T-004"],
+      "priority": 4,
+      "brief": "编写索引与检索用例"
+    },
+    {
+      "id": "T-006",
+      "title": "接入与使用文档",
+      "description": "写 README：如何建索引、如何起服务、如何调用检索接口，附一段可复制的调用示例。",
+      "role": "technical_writer",
+      "acceptance_criteria": [
+        "覆盖建索引与起服务两条路径",
+        "给出可直接执行的调用示例",
+        "说明返回结果的字段含义"
+      ],
+      "deliverables": [
+        {
+          "path": "README.md",
+          "kind": "markdown",
+          "description": "接入文档与调用示例",
+          "min_bytes": 600,
+          "must_contain": ["## 快速开始", "命中词数"]
+        }
+      ],
+      "dependencies": ["T-003"],
+      "priority": 4,
+      "brief": "编写接入文档"
+    }
+  ]
+}

@@ -1,5 +1,37 @@
 # AgentCrew 状态
 
+## R2 验收整改（2026-11-01）
+
+针对 `AgentCrew-结项验收评审报告.md` 的三个 P1 阻塞项逐条落地，全部离线可复跑。
+
+| 验收项 | 落地方式 | 结果 |
+| --- | --- | --- |
+| 预设样例仅 1/3 | `examples/samples/` 新增 `linear`（严格串行 4 任务）与 `hierarchy`（两层并行 + 用例层汇合 6 任务）两套独立夹具；`main.py run --sample NAME` 一键 mock 运行（自动开 `--mock` 并挂夹具），新增 `main.py samples` 列举命令 | 三个样例均 0 失败、0 阻塞、产物 sha256 与清单一致；形状由 `tests/test_samples.py`（25 例）钉住 |
+| 无性能测试报告 | `scripts/bench.py`：并发 1/2/4/8 × 3 次，从 ledger 的 `task_started`/`task_finished` 还原峰值并发与平均并发，按图上关键路径算理论上限，判据用**达效率**而非"快了几倍" | `bench/report.md`：成功率 100%，峰值并发 1→2→4→4（等于图宽度），达效率 100%（上限 1.65×） |
+| 无稳定性测试报告 | `scripts/soak.py`：同进程连续 20 次 run + 两类故障注入（provider 瞬时失败 / 产物缺件被 G1 连续驳回） | `bench/stability.md`：20/20 成功，RSS −2.3%、句柄 +1、线程不增长；故障注入两项均通过（失败被隔离在受害任务与其下游） |
+
+两个脚本的结论函数（图谱上限、并发还原、达效率夹取）另有 `tests/test_bench_tools.py`（10 例）
+钉住口径，避免算错却在报告里看不出来。
+
+新增文件：`examples/samples/{__init__.py,linear/*,hierarchy/*}`、`scripts/bench.py`、
+`scripts/soak.py`、`tests/test_samples.py`、`tests/test_bench_tools.py`、`bench/`。
+后端全量 **1946 passed / 1 skipped / 0 failed**。
+
+## R1 双端重构（2026-10 / 2026-11）
+
+后端 `agentcrew/` 与桌面端 `studio/` 各做了一次「不改行为」的结构重构，验证数据如下。
+
+| 目标 | 结果 |
+| --- | --- |
+| 后端分层 | 新增零依赖契约层 `contracts.py`（EventSink / TaskLike）；`models` 不再依赖 `runtime` / `task`；`factory.py` 2040 → 1794 行，策略拆入 `models/{errors,health,routing,budget}.py` |
+| 后端护栏 | `tests/test_architecture.py`（26 例）：契约层零依赖、基础设施层不反向依赖编排层 |
+| 后端验证 | 全量 **1911 passed / 1 skipped / 0 failed**（原 board_view 失败根因是 `TERM=dumb` 下 rich 不重绘，已修复并补回归用例）；新旧实现对跑（冷却、四种路由策略、failover 顺序、HTTP 报文与 SSE 帧字节）全部一致 |
+| 前端结构 | `renderer.js` 3891 行 → `src/` 49 个 ESM 模块（最大 238 行）；`styles.css` 1503 行 → `styles/` 32 个分片 |
+| 前端护栏 | `npm run check`：分层、导入/导出完整性、逐文件语法、体量上限、入口收敛；`npm run visual`：16 张 e2e 截图的视觉回归 |
+| 前端验证 | e2e 28/28、selftest 16/16（测试文件未改一行） |
+
+细节见 `docs/refactor-agentcrew-2026-10.md` 与 `docs/studio-frontend-refactor.md`。
+
 V6 借鉴 Magpie 供应商韧性增强全部完成（P0 故障转移 + P0.5 并发/RPM + P1 元数据 + P1.5 循环检测 + P2 预算软阈值），全量测试 1810 passed / 1 skipped，新增 34 测试。
 
 V5 供应商模块深化全部完成（P1-P5），全量测试 1776 passed / 1 skipped，Studio e2e 27/27 通过。
@@ -233,3 +265,4 @@ python -m pytest -q
 
 ## 文档
 规格 `docs/superpowers/specs/2026-10-05-agentcrew-design.md` · 真实运行证据 `output/realrun{2..8}/` · V2 验证 `output/v2verify/`
+样例用法见 `README.md`「预设样例」 · 基准与稳定性 `bench/report.md` / `bench/stability.md`

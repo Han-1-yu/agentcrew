@@ -1,0 +1,103 @@
+{
+  "tasks": [
+    {
+      "id": "T-001",
+      "title": "日志统计工具的产品定义",
+      "description": "把 logstat 的目标写成可判定的产品定义：目标用户、要统计哪几类指标、命令行输入输出，以及逐条验收标准。",
+      "role": "product_manager",
+      "acceptance_criteria": [
+        "写明目标用户与典型使用场景",
+        "统计口径明确到每一列的含义",
+        "验收标准逐条可判定"
+      ],
+      "deliverables": [
+        {
+          "path": "docs/PRD.md",
+          "kind": "markdown",
+          "description": "产品需求：目标用户、统计口径、命令形态与验收标准",
+          "min_bytes": 500,
+          "must_contain": ["目标用户", "验收标准"]
+        }
+      ],
+      "dependencies": [],
+      "priority": 1,
+      "brief": "编写 logstat 的 PRD 与统计口径"
+    },
+    {
+      "id": "T-002",
+      "title": "统计口径与模块划分",
+      "description": "把 PRD 的统计口径落成可实现的算法说明，并划分模块：读取、解析、聚合、渲染四段各自职责与依赖方向。",
+      "role": "architect",
+      "acceptance_criteria": [
+        "给出模块划分与依赖方向",
+        "说明时间窗口聚合的算法",
+        "说明异常日志行的处理策略"
+      ],
+      "deliverables": [
+        {
+          "path": "docs/design.md",
+          "kind": "markdown",
+          "description": "设计文档：模块划分、聚合算法与错误行策略",
+          "min_bytes": 500,
+          "must_contain": ["模块划分"]
+        }
+      ],
+      "dependencies": ["T-001"],
+      "priority": 2,
+      "brief": "技术设计与模块划分"
+    },
+    {
+      "id": "T-003",
+      "title": "命令行统计实现",
+      "description": "按设计实现 logstat：逐行解析日志、按分钟窗口聚合、输出状态码分布与耗时分位。",
+      "role": "backend_dev",
+      "acceptance_criteria": [
+        "analyze 接受文本行并返回统计结果",
+        "无法解析的行计入 skipped 而不是抛异常",
+        "输出包含状态码分布与 p95 耗时"
+      ],
+      "deliverables": [
+        {
+          "path": "logstat/__init__.py",
+          "kind": "python",
+          "description": "包入口与版本号",
+          "min_bytes": 60,
+          "must_contain": ["__version__"]
+        },
+        {
+          "path": "logstat/core.py",
+          "kind": "python",
+          "description": "解析与聚合：analyze 与窗口统计",
+          "min_bytes": 500,
+          "must_contain": ["def analyze"]
+        }
+      ],
+      "dependencies": ["T-002"],
+      "priority": 3,
+      "brief": "实现 analyze 与聚合逻辑"
+    },
+    {
+      "id": "T-004",
+      "title": "使用文档",
+      "description": "写 README：安装、命令行用法、输出示例与统计口径解释，命令可直接复制执行。",
+      "role": "technical_writer",
+      "acceptance_criteria": [
+        "覆盖安装与用法两节",
+        "示例输出与实现字段一致",
+        "说明 skipped 行的含义"
+      ],
+      "deliverables": [
+        {
+          "path": "README.md",
+          "kind": "markdown",
+          "description": "项目说明与用法",
+          "min_bytes": 500,
+          "must_contain": ["## 用法"]
+        }
+      ],
+      "dependencies": ["T-003"],
+      "priority": 4,
+      "brief": "编写 README 与用法示例"
+    }
+  ]
+}

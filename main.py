@@ -188,6 +188,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("roles", help="列出 8 个内置角色（职责 / 边界 / 产出）")
 
+    samples = sub.add_parser(
+        "samples", help="列出预设 Crew 样例（串行 / 层级 / 混合并发）")
+    samples.add_argument("name", nargs="?", help="只显示指定样例的详情")
+    samples.add_argument("--json", action="store_true",
+                         help="以 JSON 输出（便于脚本解析）")
+
     clean_cmd = sub.add_parser(
         "clean", help="保留最近 N 个 run，删除更旧的（默认 N=5）")
     clean_cmd.add_argument("--keep", type=int, default=5, metavar="N",
@@ -265,6 +271,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _add_run_flags(parser: argparse.ArgumentParser) -> None:
     """``run`` / ``resume`` 共用的配置与看板开关。"""
+    parser.add_argument(
+        "--sample", metavar="NAME",
+        help="使用预设样例（见 `samples` 子命令）：同时设置目标与 mock 夹具，"
+             "并自动开启 --mock。run 时与 --goal / --demo 互斥。")
     parser.add_argument("--mock", action="store_true",
                         help="强制 mock provider（覆盖所有角色绑定，无需 API Key）")
     parser.add_argument("--auto", action="store_true",
@@ -339,15 +349,25 @@ def _print_bare_invocation(parser: argparse.ArgumentParser) -> None:
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
-    """``run --goal TEXT | --demo``：二选一，否则退出码 3。"""
-    if args.goal and args.demo:
-        return _fail("run：--goal 与 --demo 互斥，只能给一个。")
+    """``run --goal TEXT | --demo | --sample NAME``：三选一，否则退出码 3。"""
+    chosen = [
+        flag for flag, given in (
+            ("--goal", args.goal), ("--demo", args.demo), ("--sample", args.sample))
+        if given
+    ]
+    if len(chosen) > 1:
+        return _fail(f"run：{' 与 '.join(chosen)} 互斥，只能给一个。")
+    sample_goal, sample_error = _apply_sample(args)
+    if sample_error is not None:
+        return _fail(sample_error)
     if args.demo:
         goal: str | None = PROJECT_GOAL
+    elif sample_goal is not None:
+        goal = sample_goal
     else:
         goal = args.goal
     if not goal:
-        return _fail("run：必须给 --goal 或 --demo 之一。")
+        return _fail("run：必须给 --goal / --demo / --sample 之一。")
     invalid = _invalid_numbers(args)
     if invalid is not None:
         return _fail(invalid)
@@ -382,6 +402,11 @@ def _cmd_resume(args: argparse.Namespace) -> int:
     invalid = _invalid_numbers(args)
     if invalid is not None:
         return _fail(invalid)
+    # 续跑样例时必须挂回同一套夹具，否则「已完成的任务能读到、未完成的读不到」。
+    # 目标不参与：resume 的目标永远取 record.project_goal。
+    _, sample_error = _apply_sample(args)
+    if sample_error is not None:
+        return _fail(sample_error)
     try:
         settings = _settings_from(args)
         run_dir = _run_dir(settings, args.run_id)
@@ -567,6 +592,48 @@ def _cmd_roles(args: argparse.Namespace) -> int:
         console,
         f"共 {len(BUILTIN_ROLES)} 个内置角色；用 --gate plan 可在执行前人工确认拆解。",
     )
+    return EXIT_CODES["ok"]
+
+
+def _cmd_samples(args: argparse.Namespace) -> int:
+    """``samples [name]``：列出预设 Crew 样例。
+
+    每个样例一行：名字 / 形状 / 任务数 / 目标摘要，随后给出可直接复制的运行命令。
+    逐样例分块而不是大表格 —— 目标句很长，表格会把它压成一行省略号。
+    """
+    from examples.samples import SAMPLES, get, names
+
+    if args.name:
+        try:
+            specs = [get(args.name)]
+        except KeyError as exc:
+            return _fail(str(exc).strip("'\""))
+    else:
+        specs = [SAMPLES[name] for name in names()]
+
+    if args.json:
+        payload = [
+            {
+                "name": spec.name,
+                "title": spec.title,
+                "shape": spec.shape,
+                "goal": spec.goal,
+                "tasks": spec.expected_total_tasks,
+                "expected_task_ids": list(spec.expected_task_ids),
+                "fixtures": str(spec.fixtures),
+            }
+            for spec in specs
+        ]
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return EXIT_CODES["ok"]
+
+    console = Console()
+    for spec in specs:
+        _out(console, f"[{spec.name}] {spec.title} · {spec.shape} · {spec.expected_total_tasks} 个任务")
+        _out(console, f"  目标  {spec.goal}")
+        _out(console, f"  运行  python main.py run --sample {spec.name} --no-live")
+        _out(console, "")
+    _out(console, f"共 {len(SAMPLES)} 个样例；全部离线可跑（自动开启 --mock，无需任何 API Key）。")
     return EXIT_CODES["ok"]
 
 
@@ -1124,6 +1191,7 @@ _HANDLERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "resume": _cmd_resume,
     "status": _cmd_status,
     "roles": _cmd_roles,
+    "samples": _cmd_samples,
     "clean": _cmd_clean,
     "cancel": _cmd_cancel,
     "delete": _cmd_delete,
@@ -1137,6 +1205,32 @@ _HANDLERS: dict[str, Callable[[argparse.Namespace], int]] = {
 
 
 # ── 配置、闸门与辅助 ──────────────────────────────────────────────────────
+
+
+def _apply_sample(args: argparse.Namespace) -> tuple[str | None, str | None]:
+    """按 ``--sample`` 切换 mock 夹具并返回样例目标。
+
+    样例是一份**离线回放**：目标与 ``plan_todo.json`` / ``responses/`` 强绑定，
+    用真实 provider 跑就跑成了另一个项目。因此这里顺手把 ``mock`` 打开，
+    而不是让用户先跑一次才发现「任务与夹具对不上」。
+
+    返回 ``(goal, error)``：未给 ``--sample`` 时是 ``(None, None)``；
+    给了但登记表里没有（或缺夹具）时是 ``(None, 错误文案)``，由调用方转成退出码 3。
+    """
+    name = getattr(args, "sample", None)
+    if not name:
+        return None, None
+    try:
+        from examples.samples import activate
+    except ImportError as exc:  # 发行包可能不含 examples/，此时样例不可用
+        return None, f"--sample 需要仓库内的 examples/samples：{exc}"
+    try:
+        spec = activate(name)
+    except (KeyError, FileNotFoundError) as exc:
+        # KeyError 的 str() 带外层引号，这里统一剥掉，和 `samples` 的错误口径一致
+        return None, f"样例不可用：{str(exc).strip(chr(39) + chr(34))}"
+    args.mock = True
+    return spec.goal, None
 
 
 def _settings_from(args: argparse.Namespace) -> Settings:

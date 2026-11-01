@@ -1,0 +1,336 @@
+{
+  "meta": {
+    "generated_at": "2026-11-01 15:17:37",
+    "latency_ms": 30,
+    "python": "3.13.14",
+    "platform": "win32",
+    "thresholds": {
+      "min_success_rate": 1.0,
+      "max_rss_growth": 0.2,
+      "max_handle_growth": 20,
+      "max_wall_drift": 0.5
+    },
+    "resource_warnings": []
+  },
+  "soak": {
+    "summary": {
+      "runs": 20,
+      "success_rate": 1.0,
+      "wall_first": 1.6743780500000867,
+      "wall_last": 1.834049199999754,
+      "wall_drift": 0.09536146869559058,
+      "rss_first": 46.375,
+      "rss_last": 44.4296875,
+      "rss_growth": -0.02264111204717776,
+      "handle_first": 168,
+      "handle_last": 169,
+      "handle_growth": 1.0,
+      "thread_first": 1,
+      "thread_last": 1
+    },
+    "samples": [
+      {
+        "index": 1,
+        "wall_s": 1.6441980999998123,
+        "ok": true,
+        "total_tasks": 9,
+        "succeeded": 9,
+        "failed": 0,
+        "blocked": 0,
+        "llm_calls": 24,
+        "rss_mb": 46.375,
+        "handles": 168,
+        "threads": 1
+      },
+      {
+        "index": 2,
+        "wall_s": 1.6531289000004108,
+        "ok": true,
+        "total_tasks": 9,
+        "succeeded": 9,
+        "failed": 0,
+        "blocked": 0,
+        "llm_calls": 24,
+        "rss_mb": 46.421875,
+        "handles": 168,
+        "threads": 1
+      },
+      {
+        "index": 3,
+        "wall_s": 1.6043851000003997,
+        "ok": true,
+        "total_tasks": 9,
+        "succeeded": 9,
+        "failed": 0,
+        "blocked": 0,
+        "llm_calls": 24,
+        "rss_mb": 46.4375,
+        "handles": 168,
+        "threads": 1
+      },
+      {
+        "index": 4,
+        "wall_s": 1.795800099999724,
+        "ok": true,
+        "total_tasks": 9,
+        "succeeded": 9,
+        "failed": 0,
+        "blocked": 0,
+        "llm_calls": 24,
+        "rss_mb": 46.234375,
+        "handles": 168,
+        "threads": 1
+      },
+      {
+        "index": 5,
+        "wall_s": 1.624565000000075,
+        "ok": true,
+        "total_tasks": 9,
+        "succeeded": 9,
+        "failed": 0,
+        "blocked": 0,
+        "llm_calls": 24,
+        "rss_mb": 45.8984375,
+        "handles": 168,
+        "threads": 1
+      },
+      {
+        "index": 6,
+        "wall_s": 1.586372499999925,
+        "ok": true,
+        "total_tasks": 9,
+        "succeeded": 9,
+        "failed": 0,
+        "blocked": 0,
+        "llm_calls": 24,
+        "rss_mb": 46.1953125,
+        "handles": 168,
+        "threads": 1
+      },
+      {
+        "index": 7,
+        "wall_s": 1.5417583999997078,
+        "ok": true,
+        "total_tasks": 9,
+        "succeeded": 9,
+        "failed": 0,
+        "blocked": 0,
+        "llm_calls": 24,
+        "rss_mb": 46.26171875,
+        "handles": 168,
+        "threads": 1
+      },
+      {
+        "index": 8,
+        "wall_s": 2.6596213000002535,
+        "ok": true,
+        "total_tasks": 9,
+        "succeeded": 9,
+        "failed": 0,
+        "blocked": 0,
+        "llm_calls": 24,
+        "rss_mb": 46.23828125,
+        "handles": 168,
+        "threads": 1
+      },
+      {
+        "index": 9,
+        "wall_s": 1.709740999999667,
+        "ok": true,
+        "total_tasks": 9,
+        "succeeded": 9,
+        "failed": 0,
+        "blocked": 0,
+        "llm_calls": 24,
+        "rss_mb": 46.35546875,
+        "handles": 168,
+        "threads": 1
+      },
+      {
+        "index": 10,
+        "wall_s": 1.9365820000002714,
+        "ok": true,
+        "total_tasks": 9,
+        "succeeded": 9,
+        "failed": 0,
+        "blocked": 0,
+        "llm_calls": 24,
+        "rss_mb": 46.1640625,
+        "handles": 168,
+        "threads": 1
+      },
+      {
+        "index": 11,
+        "wall_s": 1.6007219000002806,
+        "ok": true,
+        "total_tasks": 9,
+        "succeeded": 9,
+        "failed": 0,
+        "blocked": 0,
+        "llm_calls": 24,
+        "rss_mb": 46.57421875,
+        "handles": 168,
+        "threads": 1
+      },
+      {
+        "index": 12,
+        "wall_s": 1.6281319999998232,
+        "ok": true,
+        "total_tasks": 9,
+        "succeeded": 9,
+        "failed": 0,
+        "blocked": 0,
+        "llm_calls": 24,
+        "rss_mb": 46.26953125,
+        "handles": 168,
+        "threads": 1
+      },
+      {
+        "index": 13,
+        "wall_s": 1.6443809000002148,
+        "ok": true,
+        "total_tasks": 9,
+        "succeeded": 9,
+        "failed": 0,
+        "blocked": 0,
+        "llm_calls": 24,
+        "rss_mb": 46.41015625,
+        "handles": 168,
+        "threads": 1
+      },
+      {
+        "index": 14,
+        "wall_s": 2.293607100000372,
+        "ok": true,
+        "total_tasks": 9,
+        "succeeded": 9,
+        "failed": 0,
+        "blocked": 0,
+        "llm_calls": 24,
+        "rss_mb": 46.046875,
+        "handles": 168,
+        "threads": 1
+      },
+      {
+        "index": 15,
+        "wall_s": 1.6902927000001,
+        "ok": true,
+        "total_tasks": 9,
+        "succeeded": 9,
+        "failed": 0,
+        "blocked": 0,
+        "llm_calls": 24,
+        "rss_mb": 46.23046875,
+        "handles": 168,
+        "threads": 1
+      },
+      {
+        "index": 16,
+        "wall_s": 1.942130399999769,
+        "ok": true,
+        "total_tasks": 9,
+        "succeeded": 9,
+        "failed": 0,
+        "blocked": 0,
+        "llm_calls": 24,
+        "rss_mb": 45.6953125,
+        "handles": 168,
+        "threads": 1
+      },
+      {
+        "index": 17,
+        "wall_s": 1.9757282999999006,
+        "ok": true,
+        "total_tasks": 9,
+        "succeeded": 9,
+        "failed": 0,
+        "blocked": 0,
+        "llm_calls": 24,
+        "rss_mb": 45.75390625,
+        "handles": 169,
+        "threads": 1
+      },
+      {
+        "index": 18,
+        "wall_s": 1.789697199999864,
+        "ok": true,
+        "total_tasks": 9,
+        "succeeded": 9,
+        "failed": 0,
+        "blocked": 0,
+        "llm_calls": 24,
+        "rss_mb": 45.57421875,
+        "handles": 169,
+        "threads": 1
+      },
+      {
+        "index": 19,
+        "wall_s": 1.9386710999997376,
+        "ok": true,
+        "total_tasks": 9,
+        "succeeded": 9,
+        "failed": 0,
+        "blocked": 0,
+        "llm_calls": 24,
+        "rss_mb": 45.51171875,
+        "handles": 169,
+        "threads": 1
+      },
+      {
+        "index": 20,
+        "wall_s": 1.6321001999995133,
+        "ok": true,
+        "total_tasks": 9,
+        "succeeded": 9,
+        "failed": 0,
+        "blocked": 0,
+        "llm_calls": 24,
+        "rss_mb": 44.4296875,
+        "handles": 169,
+        "threads": 1
+      }
+    ],
+    "checks": {
+      "连续 20 次全部成功": true,
+      "内存增长 ≤ 20%": true,
+      "句柄净增 ≤ 20": true,
+      "墙钟劣化 ≤ 50%": true,
+      "线程数不增长": true
+    }
+  },
+  "faults": [
+    {
+      "name": "provider-transient",
+      "description": "前 2 次模型调用抛 TransientError，期望任务重试后整轮完成",
+      "passed": true,
+      "observed": "注入 2 次 · run 完成 · 成功 9/9 · 失败 0 · 阻塞 0",
+      "details": {
+        "injected": 2,
+        "total_calls": 26,
+        "status": "RunStatus.COMPLETED",
+        "wall_s": 1.722
+      }
+    },
+    {
+      "name": "gate-reject",
+      "description": "让 T-005 的产物缺件，期望它 FAILED、收尾任务 BLOCKED、其余任务照常完成",
+      "passed": true,
+      "observed": "T-005=failed · 其余 8 个任务中 7 个成功 · run 正常收尾",
+      "details": {
+        "status_map": {
+          "T-001": "succeeded",
+          "T-002": "succeeded",
+          "T-003": "succeeded",
+          "T-004": "succeeded",
+          "T-005": "failed",
+          "T-006": "succeeded",
+          "T-007": "succeeded",
+          "T-008": "succeeded",
+          "T-FINAL": "blocked"
+        },
+        "run_status": "RunStatus.FAILED"
+      }
+    }
+  ],
+  "resource_warnings": []
+}

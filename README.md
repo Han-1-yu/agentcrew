@@ -169,6 +169,41 @@ uvicorn app.main:app --reload
 
 ---
 
+## 预设样例（串行 / 层级 / 混合并发）
+
+仓库内置三个可直接运行的 Crew 样例，覆盖三种编排形状。全部**离线可跑**：
+`--sample` 会自动开启 `--mock` 并挂上该样例的夹具，不需要任何 API Key。
+
+| 样例 | 形状 | 任务数 | 图的最大并行宽度 |
+| --- | --- | ---: | ---: |
+| `todo` | 混合并发：多条支线并行后汇入收尾任务 | 8 + 1 | 4 |
+| `linear` | 简单串行：严格一条链，每步等上一步 | 4 + 1 | 1 |
+| `hierarchy` | 层级管理：两条实现路径并行，在用例层汇合 | 6 + 1 | 2 |
+
+```bash
+python main.py samples                          # 列出样例（--json 可脚本解析）
+python main.py run --sample linear --no-live     # 简单串行
+python main.py run --sample hierarchy --no-live  # 层级管理
+python main.py run --sample todo --no-live       # 混合并发（等价于 --demo）
+```
+
+每个样例是一套独立夹具，互不干扰：
+
+```
+examples/samples/<name>/
+├── plan_todo.json              # PM 拆解的计划（任务 / 角色 / 交付物契约 / 依赖）
+├── reviews.json                # G2 评审回放：按 task_id 给逐条判定
+└── responses/<task_id>/attempt-1.md   # G1 执行回放：围栏里的产物正文
+```
+
+加一个样例只需在 `examples/samples/__init__.py` 的 `SAMPLES` 里登记一行、放好
+上述三样东西，`samples` / `--sample` / 测试会自动带上它。
+`tests/test_samples.py` 对三个样例各跑一次真实 run，断言**编排形状**（串行每层
+只有一个任务、层级必须有分叉与汇合）、依赖关系与跑出来的完全一致、以及产物
+在盘上且 sha256 对得上 —— 形状退化会直接红。
+
+---
+
 ## 命令速查
 
 六个子命令（`python main.py --help` 查看完整帮助；直接运行 `python main.py` 不带
@@ -1436,6 +1471,35 @@ python -m pytest -q
   CLI 行为、mock 夹具与 mock 无旁路，以及本文档的交付验收。
 - 本机 `pytest` 裸命令不在 PATH 上，请统一用 `python -m pytest`；只跑 README
   验收可以指定 `python -m pytest tests/test_readme.py -v`。
+
+---
+
+## 性能与稳定性基准
+
+两个脚本把「并发表现」与「长期稳定性」变成可复跑、可复核的材料，产物落在
+`bench/`（`report.md` / `stability.md` 可读，`results.json` / `stability.json` 可机读）。
+
+```bash
+python scripts/bench.py                       # 并发 1/2/4/8，各 3 次
+python scripts/bench.py --levels 1,4,8 --real # 额外做一次真实 provider 探测
+python scripts/soak.py                        # 连续 20 次 run + 2 类故障注入
+```
+
+**并发基准**测的是**引擎调度**，不是模型速度：离线模式下给每次 LLM 调用注入固定
+延迟（默认 200ms，真实调用常在 1–3 秒，已是保守取值），然后从 ledger 的
+`task_started` / `task_finished` 时间戳把并发形态还原出来。关键指标是：
+
+- **峰值并发** —— 任一时刻同时运行的任务数，直接证伪"调度器在串行派发"；
+- **图上的理论上限** —— Σ单任务耗时 / 关键路径耗时，即这张图**再并发也超不过**的加速比；
+- **达效率** —— 实测加速比 / 理论上限。判据用达效率而不是"快了几倍"：
+  `[1,1,2,4]` 形状的图上限只有 1.65×，拿它去对"并发 4 应该快 4 倍"必然不达标。
+
+**稳定性测试**分两段：连续 20 次 run 看成功率、内存与句柄是否随次数增长、墙钟是否
+劣化；再注入两类故障 —— 模型调用瞬时失败（期望任务重试后整轮仍完成）与产物缺件被
+G1 连续驳回（期望失败被隔离在该任务与其下游，其余任务照常完成、run 正常收尾）。
+
+> 离线夹具是确定性回放，因此这两份报告只代表**引擎与本地 IO** 的表现；
+> 真实模型侧的延迟与可用性见 `bench/report.md` 的第四节探测。
 
 ---
 

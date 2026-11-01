@@ -1,0 +1,64 @@
+{
+  "T-001": {
+    "judgements": [
+      {"criterion_index": 0, "satisfied": true, "evidence": "PRD 第 2 节以表格列出三类目标用户与对应检索场景"},
+      {"criterion_index": 1, "satisfied": true, "evidence": "第 3 节定义返回字段，第 4 节给出两级排序规则并说明不引入 TF-IDF 的理由"},
+      {"criterion_index": 2, "satisfied": true, "evidence": "第 5 节 AC-01 至 AC-05 均可直接转成断言"}
+    ],
+    "suggestions": [],
+    "score": 0.94
+  },
+  "T-002": {
+    "judgements": [
+      {"criterion_index": 0, "satisfied": true, "evidence": "第 1 节给出 kb/api.py 与 kb/index.py 的依赖图，并写明两条路径边界与汇合点"},
+      {"criterion_index": 1, "satisfied": true, "evidence": "第 2 节说明 dict[str, set[str]] 结构、构建流程与选集合而非列表的理由"},
+      {"criterion_index": 2, "satisfied": true, "evidence": "第 3 节明确只支持空白分隔的「与」语义，并说明不支持 OR 与通配符的原因"}
+    ],
+    "suggestions": [],
+    "score": 0.93
+  },
+  "T-003": {
+    "judgements": [
+      {"criterion_index": 0, "satisfied": true, "evidence": "create_app 返回含 index / search / routes 的应用对象，可被宿主挂载"},
+      {"criterion_index": 1, "satisfied": true, "evidence": "search 接受关键词串并委托 idx.query，返回按索引层顺序序列化的结果"},
+      {"criterion_index": 2, "satisfied": true, "evidence": "仅 import kb.index 与标准库，无外部服务依赖"}
+    ],
+    "suggestions": [],
+    "score": 0.92
+  },
+  "T-004": {
+    "judgements": [
+      {"criterion_index": 0, "satisfied": true, "evidence": "InvertedIndex 提供 add / remove / document / query 四个方法"},
+      {"criterion_index": 1, "satisfied": true, "evidence": "query 对多词求交并返回 (doc_id, 命中词数)，按词数与 id 排序"},
+      {"criterion_index": 2, "satisfied": true, "evidence": "仅 import re 与标准库，无第三方依赖"}
+    ],
+    "suggestions": [],
+    "score": 0.93
+  },
+  "T-005": {
+    "judgements": [
+      {"criterion_index": 0, "satisfied": true, "evidence": "test_multi_term_uses_and_semantics 与 test_empty_query_returns_empty_list 覆盖两类边界"},
+      {"criterion_index": 1, "satisfied": true, "evidence": "test_remove_makes_doc_unfindable 与 test_readd_clears_stale_terms 覆盖增删一致性"},
+      {"criterion_index": 2, "satisfied": true, "evidence": "用例全部为纯内存调用，无网络与外部服务"}
+    ],
+    "suggestions": [],
+    "score": 0.95
+  },
+  "T-006": {
+    "judgements": [
+      {"criterion_index": 0, "satisfied": true, "evidence": "「快速开始」三步分别覆盖建索引与起服务"},
+      {"criterion_index": 1, "satisfied": true, "evidence": "三段 python -c 示例可直接复制执行"},
+      {"criterion_index": 2, "satisfied": true, "evidence": "「返回字段」表逐项说明 doc_id / hits / title / snippet"}
+    ],
+    "suggestions": [],
+    "score": 0.92
+  },
+  "T-FINAL": {
+    "judgements": [
+      {"criterion_index": 0, "satisfied": true, "evidence": "DELIVERY.md 列出六个任务的产物与三条遗留问题"},
+      {"criterion_index": 1, "satisfied": true, "evidence": "「运行方式」给出 pytest 与 python -c 两条可执行命令"}
+    ],
+    "suggestions": [],
+    "score": 0.92
+  }
+}
