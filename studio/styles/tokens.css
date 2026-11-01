@@ -38,6 +38,9 @@
   --accent-border-med: rgba(169, 83, 31, 0.38);
   --accent-border-strong: rgba(169, 83, 31, 0.48);
   --accent-border-soft: rgba(169, 83, 31, 0.14);
+  /* 发光：只给"正在发生的事"（运行中节点、热路径连线） */
+  --glow-accent: rgba(169, 83, 31, 0.30);
+  --glow-running: rgba(47, 115, 133, 0.34);
 
   /* ── 中性墨色（hover / 分隔 / 淡填充，按透明度分档） ── */
   --ink-02: rgba(32, 28, 20, 0.02);
@@ -202,6 +205,8 @@
   --accent-border-med: rgba(217, 133, 80, 0.48);
   --accent-border-strong: rgba(217, 133, 80, 0.58);
   --accent-border-soft: rgba(217, 133, 80, 0.24);
+  --glow-accent: rgba(217, 133, 80, 0.40);
+  --glow-running: rgba(90, 160, 180, 0.42);
 
   --ink-02: rgba(240, 233, 220, 0.02);
   --ink-03: rgba(240, 233, 220, 0.03);

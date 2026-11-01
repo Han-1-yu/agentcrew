@@ -24,7 +24,12 @@ function computeLayers(tasks) {
   for (const [id,l] of layerOf){ while(layers.length<=l) layers.push([]); layers[l].push(id); }
   return { byId, layerOf, layers };
 }
-const NW=208, NH=86, COL_GAP=72, ROW_GAP=48;
+const NW=208, NH=92, COL_GAP=72, ROW_GAP=48;
+
+//: 入场动画去重：面板按轮询节奏反复重渲染，只有「本 run 第一次出现」的任务才播
+//: 入场，否则节点会每 500ms 闪一次。换 run 时清空。
+let dagAnimRun = null;
+const seenNodes = new Set();
 function layoutDAG(tasks) {
   const { byId, layerOf, layers } = computeLayers(tasks);
   // 重心启发式排序：减少层间连线交叉
@@ -63,6 +68,9 @@ function renderDAG() {
   const svg=$('#dag-svg'); if(!svg) return;
   const tasks=S.dash.tasks; const L=layoutDAG(tasks);
   svg.innerHTML='';
+  if (dagAnimRun !== (S.dash.run && S.dash.run.run_id)) {
+    dagAnimRun = S.dash.run && S.dash.run.run_id; seenNodes.clear();
+  }
   const pad=32, totalW=L.width+pad*2, totalH=L.height+pad*2;
   svg.setAttribute('viewBox',`0 0 ${totalW} ${totalH}`);
 
@@ -97,18 +105,18 @@ function renderDAG() {
       const up=L.byId.get(dep);
       const upDone=up&&up.status==='succeeded';
       const upFailed=up&&up.status==='failed';
-      let stroke, sw, marker, dash='none';
-      if(hot){ stroke='var(--accent)'; sw=2.2; marker='url(#arrow-hot)'; }
-      else if(upDone){ stroke='var(--success)'; sw=1.6; marker='url(#arrow-done)'; }
-      else if(upFailed){ stroke='var(--warn)'; sw=1.4; marker='url(#arrow-pending)'; dash='4 3'; }
-      else { stroke='var(--ink-25)'; sw=1.2; marker='url(#arrow-pending)'; }
+      // 连线配色交给 CSS（class 语义化），这样 hover/focus 才能覆盖到 stroke；
+      // 内联 style 的优先级高于类规则，改色就只能靠 !important，得不偿失。
+      const kind = hot ? 'hot' : upDone ? 'done' : upFailed ? 'failed' : 'idle';
+      const marker = hot ? 'url(#arrow-hot)' : upDone ? 'url(#arrow-done)' : 'url(#arrow-pending)';
       // 正交折线：右出 → 水平 → 垂直 → 水平 → 左入
-      vp.appendChild(s('path',{ d:`M ${x1} ${y1} H ${midX} V ${y2} H ${x2-2}`,
-        fill:'none', style:`stroke:${stroke}`, 'stroke-width':sw, 'stroke-dasharray':dash, 'marker-end':marker, opacity: hot?1:0.8 }));
+      vp.appendChild(s('path',{ class:`dag-edge ${kind}`, d:`M ${x1} ${y1} H ${midX} V ${y2} H ${x2-2}`,
+        fill:'none', 'marker-end':marker, 'data-from':dep, 'data-to':t.id }));
     }
   }
 
   // 节点
+  let nodeSeq = 0;
   for (const t of tasks){
     const p=L.pos.get(t.id); if(!p)continue;
     const meta=STATUS_META[t.status]||STATUS_META.unknown;
@@ -119,49 +127,71 @@ function renderDAG() {
     const isFailed=t.status==='failed';
     const statusKey = STATUS_META[t.status] ? t.status : 'unknown';
 
-    const node=s('g',{class:'dag-node'+(isRunning?' running':''), transform:`translate(${p.x+pad} ${p.y+pad})`, 'data-task':t.id,
-      'data-status':statusKey, 'data-role':t.role||''});
+    const fresh = !seenNodes.has(t.id);
+    const node=s('g',{class:'dag-node'+(isRunning?' running':'')+(fresh?' enter':''), transform:`translate(${p.x+pad} ${p.y+pad})`, 'data-task':t.id,
+      'data-status':statusKey, 'data-role':t.role||'', style:`--i:${nodeSeq++}`});
+    seenNodes.add(t.id);
+    // 内层分组只承载视觉变换（hover 抬升/聚焦缩放），与定位用的 translate 分离——
+    // SVG 的 CSS transform 会整体覆盖 transform 属性，混在一起会把节点挪飞。
+    const body=s('g',{class:'node-body'});
 
     // 背景（fill/stroke 由 CSS 按 data-status 主题化）
-    node.appendChild(s('rect',{class:'node-box', width:NW, height:NH, rx:6,
+    body.appendChild(s('rect',{class:'node-box', width:NW, height:NH, rx:6,
       'stroke-width':isRunning?2.4:(isDone?1.8:1.3),
       'stroke-dasharray':isRetry?'5 3':'none' }));
+    // 内嵌细描边：让卡片有"厚度"，而不是一块平色
+    body.appendChild(s('rect',{class:'node-inner',x:3,y:3,width:NW-6,height:NH-6,rx:4}));
     // 左侧状态色条
-    node.appendChild(s('rect',{class:'node-accent',x:0,y:0,width:5,height:NH,rx:2.5}));
+    body.appendChild(s('rect',{class:'node-accent',x:0,y:0,width:5,height:NH,rx:2.5}));
 
     // 顶部：task_id + 耗时
-    node.appendChild(s('text',{class:'node-meta',x:14,y:17,'font-size':9.5,'font-family':'var(--font-mono)'}, t.id));
+    body.appendChild(s('text',{class:'node-meta',x:14,y:17,'font-size':9.5,'font-family':'var(--font-mono)'}, t.id));
     if (t.result && t.result.duration_ms!=null)
-      node.appendChild(s('text',{class:'node-meta',x:NW-12,y:17,'font-size':9,'text-anchor':'end','font-family':'var(--font-mono)'}, fmtDur(t.result.duration_ms)));
+      body.appendChild(s('text',{class:'node-meta',x:NW-12,y:17,'font-size':9,'text-anchor':'end','font-family':'var(--font-mono)'}, fmtDur(t.result.duration_ms)));
 
-    // 标题
-    node.appendChild(s('text',{class:'node-title',x:14,y:38,'font-size':12.5,'font-weight':600}, trunc(t.title,13)));
+    // 标题：拆两行——单行只放得下 11 个汉字，截断太早会让整张图变成「标题猜谜」
+    const full=String(t.title||'');
+    body.appendChild(s('text',{class:'node-title',x:14,y:36,'font-size':12.5,'font-weight':600}, full.slice(0,11)));
+    if (full.length>11)
+      body.appendChild(s('text',{class:'node-title',x:14,y:51,'font-size':11.5,'font-weight':500}, full.slice(11,23)+(full.length>23?'…':'')));
 
     // 底部：角色头像 + 名称 + 状态
-    const avatarY=62;
+    const avatarY=68;
     // 角色圆形头像（fill 由 CSS 按 data-role 主题化）
-    node.appendChild(s('circle',{class:'node-avatar',cx:21,cy:avatarY,r:9,opacity:0.9}));
-    node.appendChild(s('text',{class:'node-on-solid',x:21,y:avatarY+3.5,'font-size':9,'font-weight':700,'text-anchor':'middle'}, rm.label.charAt(0)));
+    body.appendChild(s('circle',{class:'node-avatar',cx:21,cy:avatarY,r:9,opacity:0.9}));
+    body.appendChild(s('text',{class:'node-on-solid',x:21,y:avatarY+3.5,'font-size':9,'font-weight':700,'text-anchor':'middle'}, rm.label.charAt(0)));
     // 角色名
-    node.appendChild(s('text',{class:'node-role',x:34,y:avatarY+3,'font-size':10}, rm.full));
+    body.appendChild(s('text',{class:'node-role',x:34,y:avatarY+3,'font-size':10}, rm.full));
     // 状态标签（右侧，实心小 chip；fill 由 CSS 按 data-status 主题化）
     const chipW = isRetry?48:42;
-    node.appendChild(s('rect',{class:'node-chip',x:NW-chipW-10,y:avatarY-8,width:chipW,height:16,rx:3}));
-    node.appendChild(s('text',{class:'node-on-solid',x:NW-chipW/2-10,y:avatarY+3,'font-size':9,'font-weight':600,'text-anchor':'middle'}, isRetry?'重试中':meta.label));
+    body.appendChild(s('rect',{class:'node-chip',x:NW-chipW-10,y:avatarY-8,width:chipW,height:16,rx:3}));
+    body.appendChild(s('text',{class:'node-on-solid',x:NW-chipW/2-10,y:avatarY+3,'font-size':9,'font-weight':600,'text-anchor':'middle'}, isRetry?'重试中':meta.label));
 
     // 返工次数
     if ((t.rework_count||0)>0)
-      node.appendChild(s('text',{class:'node-retry',x:NW-12,y:38,'font-size':9,'text-anchor':'end'},`↻${t.rework_count}`));
+      body.appendChild(s('text',{class:'node-retry',x:NW-12,y:36,'font-size':9,'text-anchor':'end'},`↻${t.rework_count}`));
 
     // running：底部进度条
     if (isRunning){
-      node.appendChild(s('rect',{class:'node-prog-track',x:14,y:NH-10,width:NW-28,height:3,rx:1.5}));
-      node.appendChild(s('rect',{class:'node-prog-fill',x:14,y:NH-10,width:(NW-28)*(t.progress||0)/100,height:3,rx:1.5}));
+      body.appendChild(s('rect',{class:'node-prog-track',x:14,y:NH-10,width:NW-28,height:3,rx:1.5}));
+      body.appendChild(s('rect',{class:'node-prog-fill',x:14,y:NH-10,width:(NW-28)*(t.progress||0)/100,height:3,rx:1.5}));
     }
     // failed：错误摘要
     if (isFailed && t.error)
-      node.appendChild(s('text',{class:'node-error',x:14,y:NH-12,'font-size':9}, trunc(t.error,22)));
+      body.appendChild(s('text',{class:'node-error',x:14,y:NH-12,'font-size':9}, trunc(t.error,22)));
 
+    node.appendChild(body);
+    // 悬停聚焦：高亮该节点的直接上下游连线，其余节点降透明——在密集图里找关系
+    node.addEventListener('mouseenter',()=>{
+      svg.classList.add('dag-focus'); node.classList.add('is-focus');
+      vp.querySelectorAll('.dag-edge').forEach(e=>{
+        if(e.dataset.from===t.id||e.dataset.to===t.id) e.classList.add('edge-focus');
+      });
+    });
+    node.addEventListener('mouseleave',()=>{
+      svg.classList.remove('dag-focus'); node.classList.remove('is-focus');
+      vp.querySelectorAll('.dag-edge.edge-focus').forEach(e=>e.classList.remove('edge-focus'));
+    });
     node.addEventListener('click',()=>openTaskDetail(t.id));
     vp.appendChild(node);
   }
