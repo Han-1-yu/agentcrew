@@ -1,5 +1,5 @@
 /**
- * 执行体切换与回滚：把某个角色正在用的 agent 换成另一个，或撤回到配置里的绑定。
+ * 执行体切换与回滚（角色级）。
  *
  * 走 `POST /runs/{id}/agents`：
  * - `{role, agent}` 切换；`{role, reset: true}` 撤销覆盖（幂等）。
@@ -8,77 +8,40 @@
  * 懒加载：只有点了「切换执行体」才去 spawn `main.py agents --json`
  * （那是一次真实进程启动，不该在每次进页面时都付这个代价）。
  */
-import { apiFetch } from '../../lib/api.js';
 import { h } from '../../lib/dom.js';
-import { S } from '../../lib/store.js';
 
-let cache = null;
-
-function loadAgents() {
-  if (!cache) {
-    cache = (async () => {
-      if (!window.studio || !window.studio.agentsConfig) throw new Error('当前环境不支持读取绑定');
-      const res = await window.studio.agentsConfig();
-      if (!res || !res.ok) throw new Error((res && res.error) || '读取绑定失败');
-      return res.data || { profiles: [], roles: [] };
-    })().catch((e) => { cache = null; throw e; });   // 失败不缓存，允许重试
-  }
-  return cache;
-}
-
-/** 解析某角色当前的 primary 执行体名；拿不到返回空串。 */
-function currentProfile(data, role) {
-  const row = (data.roles || []).find((r) => r.role === role);
-  const primary = row && (row.agents || []).find((a) => a.duty === 'primary');
-  return (primary && primary.ref) || '';
-}
+import { currentProfile, loadAgents, postAgentChange } from '../../lib/agent-binding.js';
 
 function setMsg(el, text, kind) {
   el.textContent = text;
   el.className = 'ag-switch-msg' + (kind ? ` ${kind}` : '');
 }
 
-/** 把 HTTP 错误翻译成"用户下一步该做什么"，而不是抛原始状态码。 */
-function explain(e, profile) {
-  if (e.code === 'NO_API') return ['未连接后端：先启动 python main.py serve 并在设置里填地址', 'warn'];
-  if (e.code === 'HTTP_409') return ['该 run 不在运行中：用 CLI switch 写入后 resume', 'warn'];
-  if (e.code === 'HTTP_400') return [`后端拒绝：${profile || '该操作'} 不被接受`, 'err'];
-  return [`请求失败：${e.message}`, 'err'];
-}
-
-/** 统一发请求；返回解析后的 JSON，失败时写提示并返回 null。 */
-async function postAgents(body, msg) {
-  const run = S.dash && S.dash.run;
-  const runId = run && run.run_id;
-  if (!runId) { setMsg(msg, '当前没有加载 run', 'warn'); return null; }
+async function send(body, msg, ok) {
   try {
-    return await apiFetch(`/runs/${encodeURIComponent(runId)}/agents`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      timeoutMs: 10000,
-    });
+    const data = await postAgentChange(body, { label: body.role });
+    ok(data);
   } catch (e) {
-    const [text, kind] = explain(e, body.agent);
+    const [text, kind] = e.translated || [`请求失败：${e.message}`, 'err'];
     setMsg(msg, text, kind);
-    return null;
   }
 }
 
 async function doSwitch(role, profile, msg) {
   setMsg(msg, `正在切换 ${role} → ${profile}…`);
-  const data = await postAgents({ role, agent: profile, reason: 'studio' }, msg);
-  if (!data) return;
-  setMsg(msg, `已切换 → ${(data.members || []).join(' + ') || profile}（下次派发生效）`, 'ok');
+  await send({ role, agent: profile, reason: 'studio' }, msg, (data) => {
+    const members = (data.members || []).join(' + ') || profile;
+    setMsg(msg, `已切换 → ${members}（下次派发生效）`, 'ok');
+  });
 }
 
 async function doReset(role, msg) {
   setMsg(msg, `正在恢复 ${role} 的默认绑定…`);
-  const data = await postAgents({ role, reset: true }, msg);
-  if (!data) return;
-  const members = (data.members || []).join(' + ') || '角色默认模型';
-  if (data.changed) setMsg(msg, `已恢复默认 → ${members}`, 'ok');
-  else setMsg(msg, `本来就是默认绑定（${members}）`, 'warn');
+  await send({ role, reset: true }, msg, (data) => {
+    const members = (data.members || []).join(' + ') || '角色默认模型';
+    if (data.changed) setMsg(msg, `已恢复默认 → ${members}`, 'ok');
+    else setMsg(msg, `本来就是默认绑定（${members}）`, 'warn');
+  });
 }
 
 /**

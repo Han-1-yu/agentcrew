@@ -12,6 +12,7 @@ import { toast } from '../../ui/toast.js';
 
 import { metaCell } from '../dashboard/agents.js';
 import { renderDashboard } from '../dashboard/index.js';
+import { buildTaskAgentControl } from './task-agent.js';
 function openDetailPanel(node){
   const p=$('#detail-panel'); p.innerHTML=''; p.appendChild(node);
   $('#detail-mask').classList.remove('hidden'); $('#detail-mask').classList.add('show');
@@ -40,7 +41,9 @@ function openTaskDetail(taskId){
     h('div',{class:'dp-body'},
       sec('状态', h('span',{class:'dp-tag',style:`color:${meta.color}`},meta.label),
         h('span',{class:'dp-tag'},`阶段：${phaseLabel(S.dash.run.phase)}`)),
-      sec('负责 Agent', h('span',{class:'dp-tag'},h('span',{class:'dot',style:`background:${rm.color};display:inline-block;margin-right:4px`}),rm.full)),
+      sec('负责 Agent',
+        h('span',{class:'dp-tag'},h('span',{class:'dot',style:`background:${rm.color};display:inline-block;margin-right:4px`}),rm.full),
+        buildTaskAgentControl(t)),
       t.brief?sec('一句话摘要',h('div',{class:'dp-text dim'},t.brief)):null,
       sec('描述',h('div',{class:'dp-text dim'},t.description||'（无描述）')),
       sec('上游依赖',up.length?h('div',{class:'dep-list'},up.map(u=>h('span',{class:'dp-dep-link',onclick:()=>openTaskDetail(u.id)},`${u.id} ${trunc(u.title,10)}`))):h('div',{class:'dp-text dim'},'无')),
@@ -75,7 +78,7 @@ function openTaskDetail(taskId){
         t.status==='failed'?h('div',{class:'err'},`✗ ${t.error||'失败'}`):h('div',{},'> done')))),
     h('div',{class:'dp-actions'},
       S.realMode
-        ? h('div',{class:'dp-text dim',style:'font-size:11px'},'任务级操作需通过 CLI 或 API 执行')
+        ? h('div',{class:'dp-text dim',style:'font-size:11px'},'重试 / 跳过需通过 CLI 或 API；执行体可在上方「负责 Agent」里设置')
         : h('div',{style:'display:flex;gap:6px;flex-wrap:wrap'},
             h('button',{class:'btn btn-sm',onclick:async()=>{
               if (S.realMode && S.dash.run?.dir) { try { await window.studio.taskAction(S.dash.run.dir, t.id, 'retry'); toast('success','已重试',t.id); } catch(e){ toast('error','重试失败',String(e.message||e)); } }

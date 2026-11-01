@@ -418,3 +418,75 @@ def test_reset_agent_restores_configured_binding(tmp_path):
     members, changed = factory.reset_agent("backend_dev")
     assert changed is False                      # 幂等：没覆盖就不算改动
     assert [m.profile for m in members] == ["a"]
+
+
+# ── 7. 任务级覆盖（只影响这一次任务）──────────────────────────────────────
+
+def _task_factory(tmp_path, ledger, profiles, binding):
+    return _factory(tmp_path, ledger, profiles=profiles, binding=binding)
+
+
+def test_task_override_wins_only_for_that_task(tmp_path):
+    from agentcrew.runtime.ledger import Ledger
+
+    ledger = Ledger(tmp_path / "l.jsonl", run_id="R")
+    factory = _task_factory(
+        tmp_path, ledger,
+        profiles={"a": AgentProfile(key="a"), "b": AgentProfile(key="b")},
+        binding=RoleAgents(agents=[BoundAgent(ref="a", duty=Duty.PRIMARY)]))
+
+    factory.set_task_override("backend_dev", "T-1", "b", reason="省钱")
+    assert factory.agent_for_task("backend_dev", "T-1").agent_key == "b"
+    # 同角色的另一个任务不受影响：仍走角色绑定（单执行体 → 无 agent_key）
+    assert factory.agent_for_task("backend_dev", "T-2").agent_key == ""
+    event = next(iter(ledger.events("task_agent_switched")))
+    assert event.data["task_id"] == "T-1" and event.data["to"] == "b"
+
+
+def test_task_override_rejects_unknown_profile(tmp_path):
+    from agentcrew.runtime.ledger import Ledger
+
+    ledger = Ledger(tmp_path / "l.jsonl", run_id="R")
+    factory = _task_factory(
+        tmp_path, ledger, profiles={"a": AgentProfile(key="a")},
+        binding=RoleAgents(agents=[BoundAgent(ref="a", duty=Duty.PRIMARY)]))
+    with pytest.raises(ValueError, match="没有可用的 agent"):
+        factory.set_task_override("backend_dev", "T-1", "ghost")
+
+
+def test_task_override_reset_and_roundtrip(tmp_path):
+    from agentcrew.runtime.ledger import Ledger
+
+    ledger = Ledger(tmp_path / "l.jsonl", run_id="R")
+    factory = _task_factory(
+        tmp_path, ledger,
+        profiles={"a": AgentProfile(key="a"), "b": AgentProfile(key="b")},
+        binding=RoleAgents(agents=[BoundAgent(ref="a", duty=Duty.PRIMARY)]))
+    factory.set_task_override("backend_dev", "T-1", "b")
+    exported = factory.export_task_overrides()
+    assert exported["T-1"]["profile"] == "b" and exported["T-1"]["role"] == "backend_dev"
+
+    other = _task_factory(
+        tmp_path, ledger,
+        profiles={"a": AgentProfile(key="a"), "b": AgentProfile(key="b")},
+        binding=RoleAgents(agents=[BoundAgent(ref="a", duty=Duty.PRIMARY)]))
+    assert other.import_task_overrides(exported) == 1
+    assert other.agent_for_task("backend_dev", "T-1").agent_key == "b"
+
+    previous, changed = other.reset_task_override("T-1")
+    assert (previous, changed) == ("b", True)
+    assert other.reset_task_override("T-1") == ("", False)     # 幂等
+
+
+def test_stale_task_override_falls_back_instead_of_crashing(tmp_path):
+    """落盘的覆盖指向了已删除的 profile：丢覆盖、记事件、按默认继续。"""
+    from agentcrew.runtime.ledger import Ledger
+
+    ledger = Ledger(tmp_path / "l.jsonl", run_id="R")
+    factory = _task_factory(
+        tmp_path, ledger, profiles={"a": AgentProfile(key="a")},
+        binding=RoleAgents(agents=[BoundAgent(ref="a", duty=Duty.PRIMARY)]))
+    factory.import_task_overrides({"T-9": {"role": "backend_dev", "profile": "gone"}})
+    assert factory.agent_for_task("backend_dev", "T-9").agent_key == ""
+    assert ledger.events("task_agent_override_dropped")
+    assert factory.export_task_overrides() == {}

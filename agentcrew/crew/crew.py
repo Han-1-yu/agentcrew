@@ -140,11 +140,12 @@ def _alias_for(spec: RoleSpec, settings: Settings) -> str:
 
 
 _OVERRIDE_FILE = "binding_overrides.json"
+_TASK_OVERRIDE_FILE = "task_overrides.json"
 
 
-def _load_binding_overrides(run_dir: Path) -> dict[str, dict]:
-    """读取运行中切换的落盘结果；没有/损坏都当空（不让坏文件废掉 resume）。"""
-    path = Path(run_dir) / _OVERRIDE_FILE
+def _load_overrides(run_dir: Path, filename: str) -> dict[str, dict]:
+    """读取落盘的覆盖；没有/损坏都当空（不让坏文件废掉 resume）。"""
+    path = Path(run_dir) / filename
     if not path.is_file():
         return {}
     try:
@@ -152,6 +153,10 @@ def _load_binding_overrides(run_dir: Path) -> dict[str, dict]:
     except (OSError, json.JSONDecodeError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _load_binding_overrides(run_dir: Path) -> dict[str, dict]:
+    return _load_overrides(run_dir, _OVERRIDE_FILE)
 
 
 def build_catalog(settings: Settings) -> RoleCatalog:
@@ -381,6 +386,58 @@ class Crew:
         self._persist_overrides()
         return members, changed
 
+    def task_role(self, task_id: str) -> str:
+        """查任务所属角色；任务不在板上时返回空串。
+
+        API 的「任务级换人」需要 role 做权限/别名解析，而调用方通常只知道
+        任务 id——服务端的 RunState 只记录 ``task_transition``，不一定覆盖到
+        每个任务，所以以**板上真实任务**为准。
+        """
+        if self._board is None:
+            return ""
+        try:
+            task = self._board.get(task_id)
+        except KeyError:
+            return ""
+        return str(getattr(task, "role", "") or "")
+
+    def set_task_agent(
+        self, task_id: str, profile: str, *, role: str = "", reason: str = ""
+    ) -> Any:
+        """只给**这一个任务**换执行体；其他任务与角色绑定不受影响。
+
+        幂等覆盖：同一任务再设一次就是改目标。落盘到 ``task_overrides.json``，
+        resume 后仍生效（任务还没跑完就重启的场景）。
+        """
+        if self._run is None:
+            raise RuntimeError("当前没有进行中的 run，无法设置任务级执行体")
+        if not role:
+            raise ValueError("需要 role（任务所属角色）才能校验执行体")
+        member = self._run.agents.set_task_override(
+            role, task_id, profile, reason=reason)
+        self._persist_task_overrides()
+        return member
+
+    def reset_task_agent(self, task_id: str) -> tuple[str, bool]:
+        """撤销任务级覆盖（幂等）。"""
+        if self._run is None:
+            raise RuntimeError("当前没有进行中的 run，无法恢复任务级执行体")
+        previous, changed = self._run.agents.reset_task_override(task_id)
+        self._persist_task_overrides()
+        return previous, changed
+
+    def _persist_task_overrides(self) -> None:
+        if self._run is None:
+            return
+        run_dir = self._run.checkpoint.artifacts_dir.parent
+        path = run_dir / _TASK_OVERRIDE_FILE
+        payload = self._run.agents.export_task_overrides()
+        if payload:
+            path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        elif path.is_file():
+            path.unlink()
+
     def _persist_overrides(self) -> None:
         """把运行中覆盖写进 run 目录；空则删文件（避免"空对象"被当成有覆盖）。"""
         if self._run is None:
@@ -506,6 +563,8 @@ class Crew:
         # 运行中切换的落盘结果：resume 时先恢复，再解析计划（顺序不能反）
         run.agents.import_bindings(_load_binding_overrides(
             checkpoint.artifacts_dir.parent))
+        run.agents.import_task_overrides(_load_overrides(
+            checkpoint.artifacts_dir.parent, _TASK_OVERRIDE_FILE))
         _plan = run.agents.plan()
         if _plan is not None:
             ledger.emit("run_plan_resolved", run_id=record.run_id,

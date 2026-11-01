@@ -311,6 +311,50 @@ class TestRunLifecycle:
         await asyncio.wait_for(server._run_tasks[run_id], timeout=3)
 
     @pytest.mark.asyncio
+    async def test_task_agent_endpoint(self, server: ApiServer):
+        """POST /runs/{id}/tasks/{tid}/agent：只给一个任务换执行体 / 回滚。"""
+        crew = _FakeCrew(hold=True)
+        calls: list[tuple] = []
+
+        def _set(task_id, agent, role="", reason=""):
+            calls.append(("set", task_id, agent, role))
+            return SimpleNamespace(profile=agent)
+
+        def _reset(task_id):
+            calls.append(("reset", task_id))
+            return "fast", True
+
+        crew.set_task_agent = _set
+        crew.reset_task_agent = _reset
+        server._crew_factory = lambda goal, options: crew
+        port = server._server.sockets[0].getsockname()[1]
+        _, created = await _request(port, "POST", "/runs", {"goal": "做个 Todo"})
+        run_id = created["run_id"]
+
+        status, data = await _request(
+            port, "POST", f"/runs/{run_id}/tasks/T-1/agent",
+            {"agent": "fast", "role": "backend_dev"})
+        assert status == 200 and data["scope"] == "task" and data["changed"] is True
+        assert calls[-1] == ("set", "T-1", "fast", "backend_dev")
+
+        status, data = await _request(
+            port, "POST", f"/runs/{run_id}/tasks/T-1/agent",
+            {"reset": True, "role": "backend_dev"})
+        assert status == 200 and data["reset"] is True and data["agent"] == "fast"
+        assert calls[-1] == ("reset", "T-1")
+
+        status, _ = await _request(
+            port, "POST", f"/runs/{run_id}/tasks/T-1/agent", {})
+        assert status == 400                                     # 既没 agent 也没 reset
+
+        status, data = await _request(
+            port, "POST", "/runs/not-running/tasks/T-1/agent", {"agent": "fast"})
+        assert status == 409 and data["applied"] is False
+
+        crew.cancel()
+        await asyncio.wait_for(server._run_tasks[run_id], timeout=3)
+
+    @pytest.mark.asyncio
     async def test_post_runs_creates_run(self, server: ApiServer):
         crew = _FakeCrew(hold=True)
         server._crew_factory = lambda goal, options: crew

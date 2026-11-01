@@ -194,6 +194,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_switch.add_argument("role")
     p_switch.add_argument("agent", help="目标 agent profile（须已在 RunPlan 中）")
     p_switch.add_argument("--output-dir", default=None)
+    p_switch.add_argument("--task", default="", metavar="TASK_ID",
+                          help="只给这一个任务换（写 task_overrides.json）")
 
     samples = sub.add_parser(
         "samples", help="列出预设 Crew 样例（串行 / 层级 / 混合并发）")
@@ -635,11 +637,29 @@ def _cmd_switch(args: argparse.Namespace) -> int:
     plan = resolve_plan(settings, catalog, args.run_id)
     members = plan.for_role(args.role)
     target = next((a for a in members if a.profile == args.agent), None)
+    if target is None and args.agent in settings.agent_profiles:
+        # 与引擎一致：允许切到"已定义但当前没绑"的执行体
+        target = settings.agent_profiles[args.agent]
     if target is None:
-        options = ", ".join(a.profile for a in members) or "无"
-        print(f"角色 {args.role} 没有已解析的 agent：{args.agent}（可选：{options}）",
+        options = ", ".join(sorted(set(list(settings.agent_profiles) +
+                                       [a.profile for a in members]))) or "无"
+        print(f"角色 {args.role} 没有可用的 agent：{args.agent}（可选：{options}）",
               file=sys.stderr)
         return EXIT_CODES["config"]
+
+    if args.task:
+        # 任务级覆盖：只影响这一次任务的派发，与角色绑定互不干扰
+        path = run_dir / "task_overrides.json"
+        payload = {}
+        if path.is_file():
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                payload = {}
+        payload[args.task] = {"role": args.role, "profile": args.agent}
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"已写入 {path}：{args.task}（{args.role}）→ {args.agent}（下次 resume 生效）")
+        return EXIT_CODES["ok"]
 
     path = run_dir / "binding_overrides.json"
     payload = {}

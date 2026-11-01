@@ -12,7 +12,13 @@ async function apiFetch(path, options = {}) {
   const timer = setTimeout(() => ctrl.abort(), options.timeoutMs || 8000);
   try {
     const res = await fetch(base + path, { ...options, signal: ctrl.signal });
-    if (!res.ok) { const e = new Error('HTTP ' + res.status); e.code = 'HTTP_' + res.status; throw e; }
+    if (!res.ok) {
+      const e = new Error('HTTP ' + res.status);
+      e.code = 'HTTP_' + res.status;
+      // 后端把可读原因放在 {"error": "..."}：带上它，调用方才能说人话
+      try { const j = await res.json(); if (j && j.error) e.detail = String(j.error); } catch {}
+      throw e;
+    }
     return await res.json();
   } finally { clearTimeout(timer); }
 }

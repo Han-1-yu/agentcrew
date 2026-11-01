@@ -344,6 +344,11 @@ class ApiServer:
             mode = query.get("mode", ["completion"])[0]
             await self._provider_test(segments[1], writer, mode=mode)
             return
+        # 任务级覆盖：POST /runs/{id}/tasks/{task_id}/agent
+        if (len(segments) == 5 and segments[0] == "runs"
+                and segments[2] == "tasks" and segments[4] == "agent"):
+            await self._task_agent(segments[1], segments[3], body, writer)
+            return
         if len(segments) == 3 and segments[0] == "runs":
             run_id, action = segments[1], segments[2]
             if action == "cancel":
@@ -539,6 +544,72 @@ class ApiServer:
         await self._send_json(writer, 409, {
             "applied": False, "run_id": run_id,
             "error": "该 run 未在运行中；请用 CLI `switch` 写入后 resume",
+        })
+
+    def _task_role(self, run_id: str, task_id: str) -> str:
+        """查任务所属角色（API 调用方可以省略 role）。
+
+        优先问正在跑的 Crew 要**板上真实任务**；内存 RunState 只记录
+        ``task_transition``，在有的路径下不一定覆盖到每个任务。
+        """
+        crew = self.active_crews.get(run_id)
+        if crew is not None and hasattr(crew, "task_role"):
+            role = crew.task_role(task_id)
+            if role:
+                return role
+        run = self.runs.get(run_id)
+        task = (run.tasks or {}).get(task_id) if run is not None else None
+        return str((task or {}).get("role") or "")
+
+    async def _task_agent(
+        self, run_id: str, task_id: str, body: bytes, writer: asyncio.StreamWriter
+    ) -> None:
+        """``POST /runs/{id}/tasks/{task_id}/agent``：只给这一个任务换执行体。
+
+        与角色级切换互不干扰：任务级覆盖在派发时优先（``agent_for_task``），
+        影响该任务的每次 attempt 与返工，别的任务照旧走角色绑定。
+
+        body: ``{"agent": "backend_fast"}`` 或 ``{"reset": true}``；
+        ``role`` 可省略——能从 run 的任务状态里查到就自动补。
+        """
+        try:
+            payload = json.loads(body.decode("utf-8")) if body else {}
+        except json.JSONDecodeError:
+            await self._send_json(writer, 400, {"error": "invalid JSON"})
+            return
+        reset = bool(payload.get("reset"))
+        agent = str(payload.get("agent") or "")
+        if not reset and not agent:
+            await self._send_json(
+                writer, 400, {"error": "需要 agent，或 reset:true"})
+            return
+        crew = self.active_crews.get(run_id)
+        if crew is None:
+            await self._send_json(writer, 409, {
+                "applied": False, "run_id": run_id, "task_id": task_id,
+                "error": "该 run 未在运行中；请用 CLI switch --task 写入后 resume",
+            })
+            return
+        role = str(payload.get("role") or "") or self._task_role(run_id, task_id)
+        if not role:
+            await self._send_json(writer, 400, {
+                "error": f"查不到任务 {task_id} 的角色，请在 body 里带 role"})
+            return
+        try:
+            if reset:
+                previous, changed = crew.reset_task_agent(task_id)
+            else:
+                crew.set_task_agent(
+                    task_id, agent, role=role,
+                    reason=str(payload.get("reason") or "api"))
+                previous, changed = agent, True
+        except (ValueError, RuntimeError) as exc:
+            await self._send_json(writer, 400, {"error": str(exc)})
+            return
+        await self._send_json(writer, 200, {
+            "applied": True, "effective": "next-dispatch", "scope": "task",
+            "run_id": run_id, "task_id": task_id, "role": role,
+            "reset": reset, "changed": changed, "agent": previous,
         })
 
     async def _cancel_run(self, run_id: str, writer: asyncio.StreamWriter) -> None:

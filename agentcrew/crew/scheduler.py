@@ -332,7 +332,7 @@ class Scheduler:
                 # V2: 预取上游摘要的 LLM 压缩（未配置摘要模型时为 no-op 截断）。
                 await self._context_bus.prefetch_summaries(task)
                 pack = self._context_bus.build(task, fix_hints=fix_hints)
-                return await self._agents.get(task.role).execute(
+                return await self._agents.agent_for_task(task.role, task.id).execute(
                     task, pack, fix_hints=fix_hints
                 )
             result = await asyncio.wait_for(

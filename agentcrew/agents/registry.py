@@ -109,6 +109,9 @@ class AgentFactory:
         self._teams: dict[str, TeamAgent] = {}
         #: 运行中切换：role → 覆盖后的绑定（进程内生效，可整体导出持久化）。
         self._binding_overrides: dict[str, RoleAgents] = {}
+        #: 任务级覆盖：task_id → {"role", "profile"}。只影响这一次任务的派发，
+        #: 不写进 Plan（否则 resume 后分不清"配置"与"临时覆盖"）。
+        self._task_overrides: dict[str, dict[str, str]] = {}
 
     @property
     def subtask_creator(self) -> Callable[[dict], str | None] | None:
@@ -140,17 +143,9 @@ class AgentFactory:
         if plan is None:
             raise ValueError("当前 run 没有解析出编排计划，无法切换 agent")
         target = next((a for a in plan.for_role(role_key) if a.profile == profile), None)
-        if target is None and self._settings is not None:
+        if target is None:
             # 允许切到"已定义但当前没绑"的执行体：否则想临时换人必须改配置文件重启
-            prof = self._settings.agent_profiles.get(profile)
-            if prof is not None:
-                spec = (self._catalog.get(role_key)
-                        if self._catalog.has(role_key) else _generic_spec(role_key))
-                target = ResolvedAgent(
-                    role=role_key, profile=profile,
-                    alias=alias_for(spec, prof, self._settings), duty=duty,
-                    tools=narrow_tools(spec.allowed_tools, prof),
-                    path_scope=list(prof.path_scope))
+            target = self._member_from_settings(role_key, profile, duty)
         if target is None:
             available = [a.profile for a in plan.for_role(role_key)]
             raise ValueError(
@@ -175,6 +170,97 @@ class AgentFactory:
             "agent_switched", role=role_key, from_profile=previous,
             to=profile, duty=duty.value, reason=reason)
         return list(kept) + [switched]
+
+    def _member_from_settings(
+        self, role_key: str, profile: str, duty: Duty = Duty.PRIMARY
+    ) -> ResolvedAgent | None:
+        """把"已定义但当前没绑定"的执行体解析成成员；未定义返回 ``None``。
+
+        ``switch_agent`` 与任务级覆盖都用它，保证两条路对"能不能切到某人"
+        给出同一个答案。
+        """
+        if self._settings is None:
+            return None
+        prof = self._settings.agent_profiles.get(profile)
+        if prof is None:
+            return None
+        spec = (self._catalog.get(role_key)
+                if self._catalog.has(role_key) else _generic_spec(role_key))
+        return ResolvedAgent(
+            role=role_key, profile=profile,
+            alias=alias_for(spec, prof, self._settings), duty=duty,
+            tools=narrow_tools(spec.allowed_tools, prof),
+            path_scope=list(prof.path_scope))
+
+    def agent_for_task(self, role_key: str, task_id: str) -> BaseAgent | TeamAgent:
+        """派发入口：**任务级覆盖 > 角色绑定**。
+
+        覆盖只作用于这一个任务（含它的每次 attempt 与返工），别的任务照旧。
+        目标在执行前失效（配置被删/改名）时不静默失败也不炸掉 run：丢掉这条
+        覆盖、记 ``task_agent_override_dropped``，按角色默认继续。
+        """
+        override = self._task_overrides.get(task_id) or {}
+        profile = override.get("profile") or ""
+        if not profile:
+            return self.get(role_key)
+        try:
+            return self.get(role_key, profile)
+        except ValueError:
+            self._task_overrides.pop(task_id, None)
+            self._ledger.emit(
+                "task_agent_override_dropped", task_id=task_id,
+                role=role_key, profile=profile)
+            return self.get(role_key)
+
+    def set_task_override(
+        self, role_key: str, task_id: str, profile: str, *, reason: str = ""
+    ) -> ResolvedAgent:
+        """给单个任务指定执行体；非法 profile 当场拒绝（不在派发时才炸）。"""
+        plan = self.plan()
+        target = (
+            next((a for a in plan.for_role(role_key) if a.profile == profile), None)
+            if plan is not None else None)
+        if target is None:
+            target = self._member_from_settings(role_key, profile)
+        if target is None:
+            available = ([a.profile for a in plan.for_role(role_key)]
+                         if plan is not None else [])
+            raise ValueError(
+                f"角色 {role_key} 没有可用的 agent：{profile}"
+                f"（可选：{', '.join(available) or '无'}）")
+        previous = (self._task_overrides.get(task_id) or {}).get("profile", "")
+        self._task_overrides[task_id] = {"role": role_key, "profile": profile}
+        self._ledger.emit(
+            "task_agent_switched", task_id=task_id, role=role_key,
+            from_profile=previous, to=profile, reason=reason)
+        return target
+
+    def reset_task_override(self, task_id: str) -> tuple[str, bool]:
+        """撤销任务级覆盖（幂等）。返回被撤销的 profile 与是否真的改过。"""
+        previous = self._task_overrides.pop(task_id, None)
+        if previous is None:
+            return "", False
+        self._ledger.emit(
+            "task_agent_reset", task_id=task_id,
+            role=previous.get("role", ""), from_profile=previous.get("profile", ""))
+        return previous.get("profile", ""), True
+
+    def export_task_overrides(self) -> dict[str, dict[str, str]]:
+        return {k: dict(v) for k, v in self._task_overrides.items()}
+
+    def import_task_overrides(self, payload: dict[str, dict]) -> int:
+        """从落盘结果恢复；单条格式坏了就跳过（不让坏文件废掉一次 resume）。"""
+        applied = 0
+        for task_id, raw in (payload or {}).items():
+            if not isinstance(raw, dict):
+                continue
+            profile = str(raw.get("profile") or "")
+            if not task_id or not profile:
+                continue
+            self._task_overrides[str(task_id)] = {
+                "role": str(raw.get("role") or ""), "profile": profile}
+            applied += 1
+        return applied
 
     def reset_agent(self, role_key: str) -> tuple[list[ResolvedAgent], bool]:
         """撤掉某角色的运行中覆盖，回到配置文件里的绑定。
@@ -281,6 +367,9 @@ class AgentFactory:
             resolved = next(
                 (a for a in (self.plan() or RunPlan(run_id=self._run_id)).for_role(role_key)
                  if a.profile == profile), None)
+            if resolved is None:
+                # 任务级覆盖可能指向"已定义但当前没绑"的执行体，与 switch 一致
+                resolved = self._member_from_settings(role_key, profile)
             if resolved is None:
                 raise ValueError(f"角色 {role_key} 没有已解析的 agent：{profile}")
             prof = profile_for(self._settings, profile)

@@ -1309,6 +1309,15 @@ roles:
   热切）、`python main.py switch <run_id> <role> <agent>`（写盘，下次 resume 生效）。
   结果统一落 `<run_dir>/binding_overrides.json`；切换目标可以是"已定义但当前没绑"
   的执行体。
+- **回滚**：`Crew.reset_agent(role)` / `POST /runs/{id}/agents` 带 `reset: true`
+  撤销角色级覆盖，回到配置文件；幂等（没切过返回 `changed: false`），覆盖清空后
+  `binding_overrides.json` 会被删除。
+- **任务级覆盖**：`Crew.set_task_agent(task_id, profile, role=...)` /
+  `POST /runs/{id}/tasks/{task_id}/agent`（`{"agent": "..."}` 或 `{"reset": true}`）。
+  只影响这一个任务（含其每次 attempt 与返工），别的任务照旧走角色绑定；优先级
+  **任务级 > 角色级 > 配置**。落 `task_overrides.json`，resume 自动恢复；目标
+  profile 若在执行前消失，丢覆盖并记 `task_agent_override_dropped`，不炸 run。
+  CLI：`python main.py switch <run_id> <role> <agent> --task T-003`。
 
 ### 查看
 
@@ -1327,6 +1336,7 @@ Studio 两处入口：
 - 事件日志页顶部「执行体变更」卡：把 `agent_switched` / `agent_binding_reset`
   按发生顺序摊开（时间 · 角色 · from → to · 原因 · duty），回滚行标绿。
   这类事件混在几千条日志里等于没记，所以单独置顶。
+- 任务详情抽屉「负责 Agent」下方：`[执行体 ▾] [确认] [撤销覆盖]`，只改当前任务。
 
 示例配置见 `examples/agentcrew.multi-agent.example.yaml`。
 
