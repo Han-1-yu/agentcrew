@@ -1,0 +1,47 @@
+/* 事件时间线与筛选条。 */
+
+.events-filter { display: flex; gap: var(--sp-1); flex-wrap: wrap; }
+.fchip {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 24px; padding: 0 9px;
+  border: 1px solid var(--border-weak); border-radius: var(--r-pill);
+  background: var(--bg-panel); color: var(--text-sub);
+  font-size: var(--fs-xs); cursor: pointer;
+  transition: background var(--dur-1) ease, color var(--dur-1) ease, border-color var(--dur-1) ease;
+}
+.fchip .fdot { width: 5px; height: 5px; border-radius: 50%; background: var(--ev-color, var(--text-ter)); }
+.fchip:hover { border-color: var(--border-input); color: var(--text); }
+.fchip.on {
+  background: color-mix(in srgb, var(--ev-color, var(--accent)) 12%, transparent);
+  border-color: color-mix(in srgb, var(--ev-color, var(--accent)) 40%, transparent);
+  color: var(--text); font-weight: 500;
+}
+
+.events-list { max-height: 360px; overflow-y: auto; display: flex; flex-direction: column; }
+.event-row {
+  display: flex; gap: var(--sp-2); align-items: flex-start;
+  padding: 5px var(--sp-2);
+  border-bottom: 1px solid var(--ink-05);
+}
+.event-row:last-child { border-bottom: none; }
+.event-row:hover { background: var(--ink-03); }
+.event-row.ev-error { background: var(--error-bg-ghost); }
+
+.event-ts {
+  flex: 0 0 58px; padding-top: 1px;
+  font-family: var(--font-mono); font-size: 10px; color: var(--text-ter);
+}
+.event-type {
+  flex: 0 0 auto; padding-top: 1px;
+  font-size: 10px; font-weight: 600; color: var(--text-sub);
+}
+.event-body { flex: 1; min-width: 0; }
+.event-text { font-size: var(--fs-sm); color: var(--text); line-height: 1.45; }
+.event-payload { margin-top: var(--sp-1); }
+.event-payload pre {
+  margin: 0; padding: var(--sp-2);
+  background: var(--bg-inset); border-radius: var(--r-xs);
+  font-size: var(--fs-xs); overflow-x: auto; max-height: 200px;
+}
+.event-toggle { margin-left: 4px; font-size: var(--fs-xs); color: var(--accent-text); cursor: pointer; }
+.event-task-link { color: var(--accent-text); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }

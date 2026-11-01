@@ -1,0 +1,14 @@
+/* 模态框与遮罩。 */
+
+/* ===== 模态 ===== */
+#modal-mask { position: fixed; inset: 0; background: var(--mask-strong); z-index: 50; }
+#modal {
+  position: fixed; top: 50%; left: 50%;
+  background: var(--bg-panel); border-radius: 8px; z-index: 51; width: 420px; max-width: 92vw;
+  max-height: 84vh; overflow-y: auto; padding: 18px; box-shadow: 0 8px 32px var(--shadow-modal);
+  border: 1px solid var(--ink-10);
+}
+.modal-title { font-size: 15px; margin-bottom: 10px; }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
+.confirm-text { font-size: 13px; color: var(--text); margin: 6px 0; }
+.confirm-warn { color: var(--error-text); font-weight: 600; }

@@ -1,0 +1,285 @@
+/* 设计令牌：颜色 / 字号 / 间距 / 圆角 / 阴影 / 动效。两套主题只改本文件的变量值。
+ *
+ * 视觉方向 "Console Ink"：暖中性纸感底 + 铜色单一强调，密度靠排版层次与细分隔线，
+ * 不靠色块堆叠。状态色是页面上唯一允许的饱和色，且只出现在状态点与状态标签上。
+ */
+
+:root {
+  /* ── 背景四层：page(底) → panel(卡片) → subtle(内嵌) → float(浮层) ── */
+  --bg-page: #F3F1EB;
+  --bg-panel: #FFFFFF;
+  --bg-subtle: #F8F6F1;
+  --bg-float: #FFFFFF;
+  --bg-canvas: #FBFAF7;
+  --bg-inset: #EFECE4;
+
+  /* ── 边框：统一暖灰，靠透明度分强弱 ── */
+  --border: rgba(32, 28, 20, 0.11);
+  --border-weak: rgba(32, 28, 20, 0.07);
+  --border-input: rgba(32, 28, 20, 0.17);
+
+  /* ── 文字三级 ── */
+  --text: #1A1714;
+  --text-sub: #6B655C;
+  --text-ter: #948D81;
+  --on-solid: #FFFFFF;
+
+  /* ── 强调色：铜（只用于主操作 / 当前选中 / 焦点环） ── */
+  --accent: #A9531F;
+  --accent-hover: #8C4318;
+  --accent-text: #8A421C;
+  --accent-bg-faint: rgba(169, 83, 31, 0.02);
+  --accent-bg-soft: rgba(169, 83, 31, 0.06);
+  --accent-bg: rgba(169, 83, 31, 0.09);
+  --accent-bg-strong: rgba(169, 83, 31, 0.13);
+  --accent-focus: rgba(169, 83, 31, 0.14);
+  --accent-track: rgba(169, 83, 31, 0.22);
+  --accent-border: rgba(169, 83, 31, 0.30);
+  --accent-border-med: rgba(169, 83, 31, 0.38);
+  --accent-border-strong: rgba(169, 83, 31, 0.48);
+  --accent-border-soft: rgba(169, 83, 31, 0.14);
+
+  /* ── 中性墨色（hover / 分隔 / 淡填充，按透明度分档） ── */
+  --ink-02: rgba(32, 28, 20, 0.02);
+  --ink-03: rgba(32, 28, 20, 0.03);
+  --ink-04: rgba(32, 28, 20, 0.04);
+  --ink-05: rgba(32, 28, 20, 0.05);
+  --ink-06: rgba(32, 28, 20, 0.06);
+  --ink-07: rgba(32, 28, 20, 0.07);
+  --ink-08: rgba(32, 28, 20, 0.08);
+  --ink-10: rgba(32, 28, 20, 0.10);
+  --ink-12: rgba(32, 28, 20, 0.12);
+  --ink-14: rgba(32, 28, 20, 0.14);
+  --ink-15: rgba(32, 28, 20, 0.15);
+  --ink-18: rgba(32, 28, 20, 0.18);
+  --ink-20: rgba(32, 28, 20, 0.20);
+  --ink-22: rgba(32, 28, 20, 0.22);
+  --ink-25: rgba(32, 28, 20, 0.25);
+  --ink-28: rgba(32, 28, 20, 0.28);
+  --ink-30: rgba(32, 28, 20, 0.30);
+
+  /* ── 语义色：去饱和的"印刷油墨"版本，避免糖果色 ── */
+  --success: #2F8F57;
+  --success-text: #226B41;
+  --success-bg-quiet: rgba(47, 143, 87, 0.07);
+  --success-bg: rgba(47, 143, 87, 0.10);
+  --success-bg-chip: rgba(47, 143, 87, 0.13);
+
+  --warn: #B8761C;
+  --warn-text: #8A560F;
+  --warn-bg-soft: rgba(184, 118, 28, 0.07);
+  --warn-bg: rgba(184, 118, 28, 0.10);
+  --warn-border-soft: rgba(184, 118, 28, 0.16);
+  --warn-border: rgba(184, 118, 28, 0.24);
+
+  --error: #BE4437;
+  --error-text: #9A3125;
+  --error-bg-faint: rgba(190, 68, 55, 0.02);
+  --error-bg-ghost: rgba(190, 68, 55, 0.03);
+  --error-bg-quiet: rgba(190, 68, 55, 0.05);
+  --error-bg: rgba(190, 68, 55, 0.07);
+  --error-bg-soft: rgba(190, 68, 55, 0.09);
+  --error-bg-med: rgba(190, 68, 55, 0.11);
+  --error-bg-chip: rgba(190, 68, 55, 0.13);
+  --error-border-soft: rgba(190, 68, 55, 0.16);
+  --error-border: rgba(190, 68, 55, 0.30);
+  --error-border-strong: rgba(190, 68, 55, 0.50);
+
+  /* ── 10 种任务状态：运行中是青（区别于铜色强调），通过是绿，失败是红 ── */
+  --status-pending: #948D81;     --status-pending-bg: #EFECE4;
+  --status-ready: #2F7385;       --status-ready-bg: rgba(47, 115, 133, 0.07);
+  --status-running: #2F7385;     --status-running-bg: rgba(47, 115, 133, 0.11);
+  --status-review: #B8761C;      --status-review-bg: rgba(184, 118, 28, 0.10);
+  --status-rework: #B8761C;      --status-rework-bg: rgba(184, 118, 28, 0.14);
+  --status-blocked: #B8761C;     --status-blocked-bg: rgba(184, 118, 28, 0.08);
+  --status-succeeded: #2F8F57;   --status-succeeded-bg: rgba(47, 143, 87, 0.10);
+  --status-failed: #BE4437;      --status-failed-bg: rgba(190, 68, 55, 0.10);
+  --status-skipped: #948D81;     --status-skipped-bg: #EFECE4;
+  --status-cancelled: #948D81;   --status-cancelled-bg: #EFECE4;
+
+  /* ── 装饰色（角色标识 / 语法高亮），全部降饱和 ── */
+  --purple: #7A5AA6;
+  --pink: #A6486B;
+  --sky: #3C7C96;
+  --orange: #B4703A;
+  --indigo: #4C5AA0;
+
+  /* ── 固定深色组件（日志 / Toast，两主题一致） ── */
+  --log-bg: #1A1714;
+  --log-text: #E9E4DA;
+  --log-err: #E8897C;
+  --toast-bg: #1A1714;
+  --toast-success-bg: #1D3327;
+  --toast-error-bg: #3B211D;
+  --toast-warning-bg: #3A2D18;
+
+  /* ── 遮罩 / 阴影（暖调，避免纯黑发灰） ── */
+  --mask: rgba(26, 23, 20, 0.28);
+  --mask-strong: rgba(26, 23, 20, 0.34);
+  --shadow: rgba(40, 32, 22, 0.10);
+  --shadow-modal: rgba(40, 32, 22, 0.16);
+  --shadow-drawer: rgba(40, 32, 22, 0.08);
+  --loading-mask: rgba(243, 241, 235, 0.72);
+
+  /* ══ 字体 ══════════════════════════════════════════════════════
+     display：DIN 系窄体，用于品牌字 / 大标题 / 大数字（Windows 自带 Bahnschrift）
+     ui：正文，中文优先雅黑/苹方，拉丁用 Segoe UI Variable
+     mono：token 数、耗时、run id、代码 —— 等宽才对齐 */
+  --font-display: "Bahnschrift", "DIN Alternate", "Segoe UI Semibold", "Microsoft YaHei UI", sans-serif;
+  --font-ui: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Noto Sans SC", sans-serif;
+  --font-mono: "Cascadia Mono", "JetBrains Mono", "SF Mono", "Consolas", monospace;
+
+  /* ── 字阶（13px 基准，密度优先） ── */
+  --fs-display: 22px;
+  --fs-h1: 17px;
+  --fs-h2: 14px;
+  --fs-body: 13px;
+  --fs-sm: 12px;
+  --fs-xs: 11px;
+  --lh-tight: 1.25;
+  --lh-body: 1.55;
+  --ls-tight: -0.015em;
+  --ls-wide: 0.06em;
+
+  /* ── 间距（4 的倍数，全局只用这套） ── */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+
+  /* ── 圆角（4 / 8 / 12 三档 + 胶囊） ── */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-pill: 999px;
+
+  /* ── 阴影三级（Y 偏移 2 / 8 / 24） ── */
+  --shadow-1: 0 1px 2px rgba(40, 32, 22, 0.06);
+  --shadow-2: 0 8px 24px -12px rgba(40, 32, 22, 0.22), 0 1px 2px rgba(40, 32, 22, 0.06);
+  --shadow-3: 0 24px 56px -20px rgba(40, 32, 22, 0.30), 0 2px 6px rgba(40, 32, 22, 0.08);
+
+  /* ── 动效 ── */
+  --dur-1: 120ms;
+  --dur-2: 200ms;
+  --dur-3: 320ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ---------- 深色主题：同一套语义，换成暖黑 ---------- */
+[data-theme="dark"] {
+  --bg-page: #131211;
+  --bg-panel: #1A1917;
+  --bg-subtle: #232120;
+  --bg-float: #201E1B;
+  --bg-canvas: #151413;
+  --bg-inset: #1E1C1A;
+
+  --border: rgba(240, 233, 220, 0.11);
+  --border-weak: rgba(240, 233, 220, 0.07);
+  --border-input: rgba(240, 233, 220, 0.17);
+
+  --text: #EDE9E1;
+  --text-sub: #A8A29A;
+  --text-ter: #7E7870;
+  --on-solid: #1A1714;
+
+  --accent: #D98550;
+  --accent-hover: #E59A6B;
+  --accent-text: #E8A075;
+  --accent-bg-faint: rgba(217, 133, 80, 0.05);
+  --accent-bg-soft: rgba(217, 133, 80, 0.10);
+  --accent-bg: rgba(217, 133, 80, 0.14);
+  --accent-bg-strong: rgba(217, 133, 80, 0.18);
+  --accent-focus: rgba(217, 133, 80, 0.26);
+  --accent-track: rgba(217, 133, 80, 0.32);
+  --accent-border: rgba(217, 133, 80, 0.40);
+  --accent-border-med: rgba(217, 133, 80, 0.48);
+  --accent-border-strong: rgba(217, 133, 80, 0.58);
+  --accent-border-soft: rgba(217, 133, 80, 0.24);
+
+  --ink-02: rgba(240, 233, 220, 0.02);
+  --ink-03: rgba(240, 233, 220, 0.03);
+  --ink-04: rgba(240, 233, 220, 0.04);
+  --ink-05: rgba(240, 233, 220, 0.05);
+  --ink-06: rgba(240, 233, 220, 0.06);
+  --ink-07: rgba(240, 233, 220, 0.07);
+  --ink-08: rgba(240, 233, 220, 0.08);
+  --ink-10: rgba(240, 233, 220, 0.10);
+  --ink-12: rgba(240, 233, 220, 0.12);
+  --ink-14: rgba(240, 233, 220, 0.14);
+  --ink-15: rgba(240, 233, 220, 0.15);
+  --ink-18: rgba(240, 233, 220, 0.18);
+  --ink-20: rgba(240, 233, 220, 0.20);
+  --ink-22: rgba(240, 233, 220, 0.22);
+  --ink-25: rgba(240, 233, 220, 0.25);
+  --ink-28: rgba(240, 233, 220, 0.28);
+  --ink-30: rgba(240, 233, 220, 0.30);
+
+  --success: #55A97A;
+  --success-text: #6FC08F;
+  --success-bg-quiet: rgba(85, 169, 122, 0.10);
+  --success-bg: rgba(85, 169, 122, 0.14);
+  --success-bg-chip: rgba(85, 169, 122, 0.18);
+
+  --warn: #D3A24A;
+  --warn-text: #E0B45F;
+  --warn-bg-soft: rgba(211, 162, 74, 0.10);
+  --warn-bg: rgba(211, 162, 74, 0.14);
+  --warn-border-soft: rgba(211, 162, 74, 0.20);
+  --warn-border: rgba(211, 162, 74, 0.30);
+
+  --error: #D96B5E;
+  --error-text: #E88C80;
+  --error-bg-faint: rgba(217, 107, 94, 0.06);
+  --error-bg-ghost: rgba(217, 107, 94, 0.07);
+  --error-bg-quiet: rgba(217, 107, 94, 0.09);
+  --error-bg: rgba(217, 107, 94, 0.11);
+  --error-bg-soft: rgba(217, 107, 94, 0.14);
+  --error-bg-med: rgba(217, 107, 94, 0.17);
+  --error-bg-chip: rgba(217, 107, 94, 0.20);
+  --error-border-soft: rgba(217, 107, 94, 0.24);
+  --error-border: rgba(217, 107, 94, 0.38);
+  --error-border-strong: rgba(217, 107, 94, 0.55);
+
+  --status-pending: #7E7870;     --status-pending-bg: #232120;
+  --status-ready: #5AA0B4;       --status-ready-bg: rgba(90, 160, 180, 0.12);
+  --status-running: #5AA0B4;     --status-running-bg: rgba(90, 160, 180, 0.16);
+  --status-review: #D3A24A;      --status-review-bg: rgba(211, 162, 74, 0.14);
+  --status-rework: #D3A24A;      --status-rework-bg: rgba(211, 162, 74, 0.18);
+  --status-blocked: #D3A24A;     --status-blocked-bg: rgba(211, 162, 74, 0.12);
+  --status-succeeded: #55A97A;   --status-succeeded-bg: rgba(85, 169, 122, 0.14);
+  --status-failed: #D96B5E;      --status-failed-bg: rgba(217, 107, 94, 0.14);
+  --status-skipped: #7E7870;     --status-skipped-bg: #232120;
+  --status-cancelled: #7E7870;   --status-cancelled-bg: #232120;
+
+  --purple: #A493C4;
+  --pink: #C588A0;
+  --sky: #6FA8C0;
+  --orange: #D19A6A;
+  --indigo: #8A96C8;
+
+  --log-bg: #141312;
+  --log-text: #DDD8CE;
+  --log-err: #E8897C;
+  --toast-bg: #201E1B;
+  --toast-success-bg: #1D3327;
+  --toast-error-bg: #3B211D;
+  --toast-warning-bg: #3A2D18;
+
+  --mask: rgba(0, 0, 0, 0.50);
+  --mask-strong: rgba(0, 0, 0, 0.62);
+  --shadow: rgba(0, 0, 0, 0.40);
+  --shadow-modal: rgba(0, 0, 0, 0.55);
+  --shadow-drawer: rgba(0, 0, 0, 0.35);
+  --loading-mask: rgba(19, 18, 17, 0.72);
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.30);
+  --shadow-2: 0 8px 24px -12px rgba(0, 0, 0, 0.55), 0 1px 2px rgba(0, 0, 0, 0.30);
+  --shadow-3: 0 24px 56px -20px rgba(0, 0, 0, 0.70), 0 2px 6px rgba(0, 0, 0, 0.35);
+}

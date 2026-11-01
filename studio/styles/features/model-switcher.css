@@ -1,0 +1,58 @@
+/* 模型切换器（按供应商分组）。 */
+
+/* ===== 模型切换器（msw，借鉴 cc-switch 预设选择器分组设计） ===== */
+#modal.msw-modal { width: 680px; max-width: 94vw; padding: 16px 18px; }
+.msw-wrap { display: flex; flex-direction: column; }
+.msw-title-row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.msw-current { font-size: 11px; color: var(--accent-text); font-family: ui-monospace, Menlo, monospace; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msw-search {
+  width: 100%; box-sizing: border-box; padding: 7px 12px;
+  border: 1px solid var(--border-input); border-radius: 8px;
+  font-size: 12px; font-family: inherit; background: var(--bg-panel); color: var(--text);
+  margin-bottom: 8px;
+}
+.msw-search:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-focus); }
+.msw-cats { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.msw-groups {
+  max-height: 50vh; overflow-y: auto;
+  border: 1px solid var(--border-weak); border-radius: 8px; padding: 4px;
+  background: var(--bg-inset, transparent);
+}
+.msw-group { border-bottom: 1px solid var(--border-weak); }
+.msw-group:last-child { border-bottom: none; }
+.msw-group-head {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 7px 8px; background: transparent; border: none; cursor: pointer;
+  color: var(--text); text-align: left; border-radius: 6px;
+}
+.msw-group-head:hover { background: var(--ink-07); }
+.msw-avatar {
+  width: 22px; height: 22px; flex: 0 0 auto; border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 600;
+  background: var(--accent-bg-strong); color: var(--accent-text);
+}
+.msw-group-name { font-size: 12px; font-weight: 600; }
+.msw-group-head .prov-cat { font-size: 9px; padding: 1px 5px; }
+.msw-group-count { margin-left: auto; font-size: 10px; color: var(--text-ter); }
+.msw-chevron { font-size: 10px; color: var(--text-ter); transition: transform .15s ease; transform: rotate(-90deg); }
+.msw-chevron.open { transform: rotate(0); }
+.msw-group-body { display: flex; flex-wrap: wrap; gap: 5px; padding: 4px 8px 10px 38px; }
+.msw-group-body.hidden { display: none; }
+.msw-model {
+  font-size: 11px; padding: 4px 10px; border-radius: 6px; cursor: pointer;
+  background: var(--bg-panel); color: var(--text-sub);
+  border: 1px solid var(--border-input);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  transition: background .12s ease, color .12s ease, border-color .12s ease;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.msw-model:hover { border-color: var(--accent-border); color: var(--accent-text); background: var(--accent-bg, transparent); }
+.msw-model.active { background: var(--accent-bg-strong); color: var(--accent-text); border-color: var(--accent-border-soft); font-weight: 600; }
+.msw-empty { text-align: center; padding: 24px; font-size: 12px; color: var(--text-ter); }
+.msw-custom { display: flex; gap: 8px; margin-top: 12px; }
+.msw-custom-input {
+  flex: 1; padding: 7px 10px; border: 1px solid var(--border-input); border-radius: 6px;
+  font-size: 12px; font-family: inherit; background: var(--bg-panel); color: var(--text);
+}
+.msw-custom-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-focus); }

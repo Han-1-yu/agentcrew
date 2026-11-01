@@ -1,0 +1,34 @@
+/* Agent 协作卡片：4 列网格，卡片内为「身份 → 当前任务 → 计数」三层。 */
+
+.agents-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--sp-3); }
+.agent-card {
+  padding: var(--sp-3);
+  background: var(--bg-panel);
+  border: 1px solid var(--border); border-radius: var(--r-md);
+  cursor: pointer;
+  transition: border-color var(--dur-1) ease, background var(--dur-1) ease;
+}
+.agent-card:hover { border-color: var(--accent-border); }
+.agent-card.active { border-color: var(--accent); background: var(--accent-bg-faint); }
+
+.ac-head { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-2); }
+.ac-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
+.ac-name { font-size: var(--fs-body); font-weight: 600; color: var(--text); letter-spacing: -0.01em; }
+.ac-status { margin-left: auto; font-size: 10px; color: var(--text-ter); letter-spacing: 0.02em; }
+
+.ac-task {
+  font-size: var(--fs-sm); color: var(--text);
+  margin-bottom: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ac-action {
+  font-size: var(--fs-xs); color: var(--text-ter);
+  margin-bottom: var(--sp-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ac-meta {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 2px var(--sp-3);
+  padding-top: 6px; border-top: 1px solid var(--border-weak);
+  font-size: 10px; color: var(--text-ter);
+}
+.ac-meta b { color: var(--text-sub); font-family: var(--font-mono); font-weight: 500; }

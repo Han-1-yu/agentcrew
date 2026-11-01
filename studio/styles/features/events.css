@@ -1,0 +1,66 @@
+/* ---- 事件日志页 ---- */
+
+/* 筛选条：默认全部选中，用"淡底 + 描边"表示选中，避免一排实心块 */
+.ev-filter-bar {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  padding: var(--sp-2) var(--sp-5);
+  border-bottom: 1px solid var(--border-weak);
+  background: var(--bg-subtle);
+}
+.ev-filter-btn {
+  padding: 3px 9px;
+  border: 1px solid var(--border-weak); border-radius: var(--r-pill);
+  background: transparent; color: var(--text-ter);
+  font-family: var(--font-mono); font-size: 10.5px;
+  cursor: pointer;
+  transition: background var(--dur-1) ease, color var(--dur-1) ease, border-color var(--dur-1) ease;
+}
+.ev-filter-btn:hover { border-color: var(--border-input); color: var(--text-sub); }
+.ev-filter-btn.active {
+  background: var(--bg-panel); color: var(--text-sub);
+  border-color: var(--border-input);
+}
+
+.ev-full-list { overflow-y: auto; height: calc(100vh - 160px); padding: 2px 0; }
+.ev-full-item { border-bottom: 1px solid var(--ink-04); }
+.ev-full-main {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: 6px var(--sp-5);
+  cursor: pointer;
+  transition: background var(--dur-1) ease;
+}
+.ev-full-main:hover { background: var(--ink-03); }
+.ev-full-ts {
+  flex: 0 0 62px;
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--text-ter);
+}
+.ev-full-type {
+  flex: 0 0 128px;
+  font-family: var(--font-mono); font-size: 10.5px; font-weight: 600;
+  color: var(--text-sub);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ev-full-task {
+  flex: 0 0 56px;
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--text-ter);
+}
+.ev-full-role { flex: 0 0 104px; font-size: var(--fs-xs); color: var(--text-ter);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ev-full-summary {
+  flex: 1; min-width: 0;
+  font-size: var(--fs-sm); color: var(--text-sub);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ev-full-detail {
+  display: none; margin: 0;
+  padding: var(--sp-2) var(--sp-5) var(--sp-3) 170px;
+  background: var(--bg-subtle);
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--text-sub);
+  white-space: pre-wrap; word-break: break-all; line-height: 1.6;
+}
+.ev-full-item.expanded .ev-full-detail { display: block; }
+
+/* ---- 事件分页 ---- */
+.ev-pager { display: flex; align-items: center; justify-content: center; gap: 16px;
+  padding: 16px; border-top: 1px solid var(--border-weak); margin-top: 8px; }
+.ev-pager-info { font-size: 12px; color: var(--text-sub); font-family: "SF Mono", Menlo, monospace; }

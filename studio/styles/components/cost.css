@@ -1,0 +1,26 @@
+/* ---- 成本分析面板 ---- */
+/* 成本分析面板 */
+.cost-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+.cost-overview { padding: 12px; background: var(--ink-02); border-radius: 8px; }
+.cost-row { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.cost-big { font-size: 24px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+.cost-sub { font-size: 12px; color: var(--text-sub); }
+.cost-bar { height: 6px; background: var(--ink-10); border-radius: 3px; overflow: hidden; margin-bottom: 8px; }
+.cost-bar-fill { height: 100%; background: var(--success); border-radius: 3px; transition: width 0.3s ease; }
+.cost-bar-fill.warn { background: var(--warn); }
+.cost-bar-fill.err { background: var(--error); }
+.cost-meta { display: flex; gap: 12px; font-size: 11px; color: var(--text-ter); }
+.cost-by-agent, .cost-top-tasks { padding: 12px; }
+.cost-section-title { font-size: 11px; font-weight: 600; color: var(--text-ter); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+.cost-agent-row { display: grid; grid-template-columns: 60px 1fr 70px; align-items: center; gap: 8px; margin-bottom: 6px; }
+.cost-agent-name { font-size: 12px; font-weight: 500; }
+.cost-agent-bar { height: 4px; background: var(--ink-08); border-radius: 2px; overflow: hidden; }
+.cost-agent-fill { height: 100%; border-radius: 2px; transition: width 0.3s ease; }
+.cost-agent-val { font-size: 11px; color: var(--text-sub); text-align: right; font-variant-numeric: tabular-nums; }
+.cost-task-row { display: grid; grid-template-columns: 50px 1fr 70px; align-items: center; gap: 8px; padding: 4px 0; cursor: pointer; border-radius: 4px; transition: background 0.15s; }
+.cost-task-row:hover { background: var(--ink-04); }
+.cost-task-id { font-size: 11px; color: var(--text-ter); font-family: monospace; }
+.cost-task-title { font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cost-task-val { font-size: 11px; color: var(--text-sub); text-align: right; font-variant-numeric: tabular-nums; }
+.cost-empty { font-size: 12px; color: var(--text-ter); padding: 12px 0; text-align: center; }
+@media (max-width: 1024px) { .cost-grid { grid-template-columns: 1fr; } }

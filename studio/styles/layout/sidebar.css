@@ -1,0 +1,56 @@
+/* 左侧导航：9 个页面入口 + 底部运行元信息。 */
+
+#sidebar {
+  flex: 0 0 208px;
+  display: flex; flex-direction: column; min-height: 0;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+}
+
+.nav-items { padding: var(--sp-2) var(--sp-2) var(--sp-3); display: flex; flex-direction: column; gap: 1px; }
+
+.nav-item {
+  position: relative;
+  display: flex; align-items: center; gap: 10px;
+  height: 32px; padding: 0 10px;
+  border: none; border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-sub);
+  font-size: var(--fs-body); text-align: left;
+  transition: background var(--dur-1) ease, color var(--dur-1) ease;
+}
+.nav-item svg { width: 16px; height: 16px; flex: 0 0 auto; color: var(--text-ter); transition: color var(--dur-1) ease; }
+.nav-item:hover { background: var(--ink-05); color: var(--text); }
+.nav-item:hover svg { color: var(--text-sub); }
+
+/* 当前页：左侧铜色标尺 + 淡底，不整块反白 */
+.nav-item.active { background: var(--accent-bg-soft); color: var(--accent-text); font-weight: 600; }
+.nav-item.active svg { color: var(--accent); }
+.nav-item.active::before {
+  content: ''; position: absolute; left: -8px; top: 7px; bottom: 7px; width: 2px;
+  border-radius: 0 var(--r-pill) var(--r-pill) 0; background: var(--accent);
+}
+
+/* ---- 底部元信息：key-value 两列，数值等宽 ---- */
+.sidebar-bottom {
+  margin-top: auto;
+  padding: var(--sp-3) var(--sp-3) var(--sp-4);
+  border-top: 1px solid var(--border-weak);
+}
+.sb-meta { display: flex; flex-direction: column; gap: 5px; }
+.sb-row { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-2); font-size: var(--fs-xs); }
+.sb-label { color: var(--text-ter); flex: 0 0 auto; }
+.sb-value {
+  color: var(--text); font-family: var(--font-mono); font-weight: 500; font-size: 10.5px;
+  text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.sb-progress { height: 3px; border-radius: var(--r-pill); background: var(--ink-08); overflow: hidden; margin-top: 4px; }
+.sb-progress i { display: block; height: 100%; width: 0; background: var(--accent); transition: width var(--dur-3) var(--ease-out); }
+.sb-progress.warn i { background: var(--warn); }
+.sb-progress.err i { background: var(--error); }
+.sb-conn { gap: 6px; align-items: center; }
+.sb-conn .sb-value { font-family: var(--font-ui); font-size: var(--fs-xs); font-weight: 400; color: var(--text-sub); }
+.sb-conn .dot { width: 6px; height: 6px; }
+/* V7 高阶开关：与上面几行用虚线分开，弱化成"配置项" */
+.sb-v7 { padding-top: 5px; margin-top: 2px; border-top: 1px dashed var(--ink-08); }
+.sb-v7 .sb-value { font-size: 10px; }

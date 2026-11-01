@@ -1,0 +1,54 @@
+/* 新建运行弹窗。 */
+
+/* ===== F4+F5：新建运行弹窗升级 + 设置页分组 ===== */
+
+/* ---- 新建运行弹窗 ---- */
+.nr-form { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+.nr-row { display: flex; flex-direction: column; gap: 4px; }
+.nr-label { font-size: 12px; font-weight: 600; color: var(--text-sub); }
+.nr-hint { font-size: 12px; line-height: 1.6; color: var(--text-ter); margin-top: 2px; }
+.nr-demo-hint {
+  font-size: 11px; color: var(--accent-text); background: var(--accent-bg-soft);
+  padding: 5px 8px; border-radius: 4px; line-height: 1.4;
+}
+.nr-input, .nr-select, .nr-textarea {
+  width: 100%; padding: 7px 9px; border: 1px solid var(--border-input);
+  border-radius: 6px; font-size: 12px; font-family: inherit;
+  background: var(--bg-panel); color: var(--text); box-sizing: border-box;
+  transition: border-color .15s, box-shadow .15s;
+}
+.nr-input:focus, .nr-select:focus, .nr-textarea:focus {
+  outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-focus);
+}
+.nr-textarea { resize: vertical; min-height: 64px; }
+.nr-input:disabled, .nr-select:disabled, .nr-textarea:disabled {
+  opacity: 0.5; background: var(--bg-subtle); cursor: not-allowed;
+}
+.input-error { border-color: var(--error) !important; }
+.input-error:focus { box-shadow: 0 0 0 3px var(--error-border-soft) !important; }
+.nr-field-error { font-size: 12px; color: var(--error); line-height: 1.3; min-height: 0; }
+.nr-checks { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--text-sub); }
+.nr-checks label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+.nr-model-row { display: flex; gap: 6px; }
+.nr-model-row .nr-select { flex: 1; }
+.nr-model-row .nr-select.fixed { flex: 0 0 140px; }
+.nr-model-row .nr-input { flex: 0 0 160px; width: 160px; }
+.nr-model-preview { font-size: 11px; color: var(--text-ter); min-height: 14px; }
+.nr-slow-label {
+  display: flex; align-items: center; gap: 5px; cursor: pointer;
+  font-size: 12px; color: var(--text-sub); margin-top: 4px;
+}
+
+/* 高级选项折叠区 */
+.nr-advanced-toggle {
+  display: flex; align-items: center; gap: 6px; cursor: pointer;
+  font-size: 12px; font-weight: 600; color: var(--text-sub);
+  padding: 4px 0; user-select: none; background: none; border: none;
+  font-family: inherit; width: 100%; text-align: left;
+}
+.nr-advanced-toggle:hover { color: var(--text); }
+.nr-advanced-arrow { display: inline-block; transition: transform .2s ease; font-size: 9px; width: 10px; }
+.nr-advanced.open .nr-advanced-arrow { transform: rotate(90deg); }
+.nr-advanced-body { display: none; padding: 8px 0 2px 14px; margin-top: 4px; border-left: 2px solid var(--ink-10); }
+.nr-advanced.open .nr-advanced-body { display: flex; flex-direction: column; gap: 10px; }
+.nr-adv-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }

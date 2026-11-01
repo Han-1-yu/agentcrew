@@ -1,0 +1,80 @@
+/* 供应商卡片扩展：分类徽标、在线模型、端点测速、Key 状态。 */
+
+/* ===== 供应商卡片：在线模型拉取行 ===== */
+.prov-fetch-row { display: flex; align-items: center; gap: 8px; width: 100%; margin-bottom: 8px; }
+.prov-fetch-btn {
+  font-size: 10px; padding: 3px 9px; border-radius: 4px; cursor: pointer;
+  border: 1px dashed var(--accent-border-soft); background: transparent; color: var(--accent-text);
+  transition: background .12s ease;
+}
+.prov-fetch-btn:hover:not(:disabled) { background: var(--accent-bg-strong); }
+.prov-fetch-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.prov-fetch-status { font-size: 10px; color: var(--text-ter); }
+.prov-fetch-status.ok { color: var(--success-text); }
+.prov-fetch-status.err { color: var(--error-text); }
+
+/* ===== 在线模型多选弹窗（fm，借鉴 cc-switch FetchedModelPicker） ===== */
+.fm-list {
+  max-height: 52vh; overflow-y: auto;
+  border: 1px solid var(--border-weak); border-radius: 8px; padding: 4px;
+  background: var(--bg-inset, transparent);
+}
+.fm-row {
+  display: flex; align-items: center; gap: 9px;
+  padding: 6px 8px; border-radius: 6px; cursor: pointer;
+}
+.fm-row:hover { background: var(--ink-07); }
+.fm-row.is-added { opacity: 0.62; cursor: default; }
+.fm-check { flex: 0 0 auto; cursor: pointer; }
+.fm-row.is-added .fm-check { cursor: default; }
+.fm-id { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.fm-id-text {
+  font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text); word-break: break-all;
+}
+.fm-owned { font-size: 10px; color: var(--text-ter); }
+.fm-added-tag { flex: 0 0 auto; font-size: 10px; color: var(--text-ter); }
+
+/* ===== 多端点测速（ep，借鉴 cc-switch EndpointSpeedTest） ===== */
+.ep-results { width: 100%; margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.ep-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 9px; border-radius: 6px; border: 1px solid var(--border-weak);
+  background: var(--bg-panel); cursor: pointer;
+  transition: border-color .12s ease, background .12s ease;
+}
+.ep-row:hover { border-color: var(--accent-border); }
+.ep-row.best { border-color: var(--success-text); background: var(--success-bg-chip, transparent); }
+.ep-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-ter); flex: 0 0 auto; }
+.ep-url {
+  flex: 1; min-width: 0; font-size: 10px; color: var(--text-sub);
+  font-family: ui-monospace, Menlo, monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ep-lat { font-size: 11px; font-family: ui-monospace, Menlo, monospace; font-weight: 600; flex: 0 0 auto; }
+.ep-lat.good { color: var(--success-text); }
+.ep-lat.warn { color: var(--warn-text); }
+.ep-lat.bad { color: var(--error-text); }
+.ep-lat.fail { color: var(--text-ter); font-weight: 400; }
+.ep-pick { font-size: 9px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--accent-border-soft); background: transparent; color: var(--accent-text); cursor: pointer; flex: 0 0 auto; }
+.ep-pick:hover { background: var(--accent-bg-strong); }
+
+/* ===== 供应商卡片：分类徽标 / 获取Key / 端点 / 流式状态 ===== */
+.prov-cat {
+  font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: 500;
+}
+.prov-cat-aggregator   { background: var(--accent-bg-strong); color: var(--accent-text); }
+.prov-cat-national     { background: var(--success-bg-chip); color: var(--success-text); }
+.prov-cat-international{ background: var(--purple-bg, var(--ink-10)); color: var(--purple); }
+.prov-cat-local        { background: var(--warn-bg); color: var(--warn-text); }
+.prov-cat-specialized  { background: var(--ink-10); color: var(--text-sub); }
+.prov-getkey {
+  font-size: 10px; padding: 1px 6px; border-radius: 4px; cursor: pointer;
+  border: 1px solid var(--accent-border-soft); background: transparent; color: var(--accent-text);
+}
+.prov-getkey:hover { background: var(--accent-bg-strong); }
+.prov-ep { color: var(--text-ter); }
+.prov-stream { font-size: 10px; padding: 1px 6px; border-radius: 4px; font-weight: 500; }
+.prov-stream.ok { background: var(--success-bg-chip); color: var(--success-text); }
+.prov-stream.err { background: var(--error-bg-chip); color: var(--error-text); }
+.prov-edit-btn { /* btn-sm 基础样式 */ }

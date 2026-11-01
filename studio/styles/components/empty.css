@@ -1,0 +1,32 @@
+/* 空态 / 骨架屏 / 横幅。 */
+
+/* ===== 空态 / 加载 / 占位 ===== */
+#placeholder-view.placeholder-view {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-height: 60vh; text-align: center; padding: 40px;
+}
+.placeholder-view .ph-icon {
+  width: 56px; height: 56px; border-radius: 12px; background: var(--ink-06);
+  display: flex; align-items: center; justify-content: center; color: var(--text-ter); margin-bottom: 14px;
+}
+.placeholder-view .ph-icon svg { width: 28px; height: 28px; }
+.placeholder-view h2 { font-size: 16px; margin-bottom: 6px; }
+.placeholder-view p { color: var(--text-sub); font-size: 12px; max-width: 340px; }
+
+.skeleton { border-radius: 4px; background: linear-gradient(90deg, var(--ink-06) 25%, var(--ink-12) 50%, var(--ink-06) 75%); background-size: 200% 100%; animation: skel 1.3s infinite; }
+@keyframes skel { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+.banner { padding: 8px 12px; border-radius: 5px; font-size: 12px; margin-bottom: 10px; border: 1px solid transparent; }
+.banner.warn { background: var(--warn-bg-soft); color: var(--warn-text); border-color: var(--warn-border-soft); }
+.banner.err { background: var(--error-bg); color: var(--error-text); border-color: var(--error-border-soft); }
+.banner.info { background: var(--accent-bg-soft); color: var(--accent-text); border-color: var(--accent-border-soft); }
+
+/* ---- 加载遮罩 ---- */
+/* 加载遮罩 */
+.loading-overlay { position: fixed; inset: 0; background: var(--loading-mask);
+  backdrop-filter: blur(2px); z-index: 100; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 14px; }
+.loading-spinner { width: 28px; height: 28px; border: 2.5px solid var(--accent-track);
+  border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading-text { font-size: 13px; color: var(--text-sub); }

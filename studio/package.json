@@ -8,7 +8,10 @@
   "scripts": {
     "start": "electron .",
     "selftest": "electron . --selftest",
-    "e2e": "electron . --e2e"
+    "e2e": "electron . --e2e",
+    "check": "node tools/check-architecture.js",
+    "visual": "electron tools/visual-check.js",
+    "visual:update": "electron tools/visual-check.js --update"
   },
   "devDependencies": {
     "electron": "^39.2.0"

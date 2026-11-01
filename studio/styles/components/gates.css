@@ -1,0 +1,46 @@
+/* 三层质量门禁卡片：编号 → 名称 → 状态 → 摘要 → 操作。 */
+
+.gates-grid { display: flex; flex-direction: column; gap: var(--sp-2); }
+.gate-card {
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg-panel);
+  border: 1px solid var(--border); border-radius: var(--r-md);
+  transition: border-color var(--dur-1) ease;
+}
+.gate-card.failed { border-color: var(--error-border); background: var(--error-bg-faint); }
+.gate-card.running { border-color: var(--accent-border); }
+
+.gate-head { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.gate-num {
+  font-family: var(--font-mono); font-size: 10px; color: var(--text-ter);
+  padding: 1px 5px; border-radius: var(--r-xs); background: var(--ink-06);
+}
+.gate-name { font-size: var(--fs-body); font-weight: 600; color: var(--text); }
+
+.gate-status-chip {
+  font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
+  padding: 2px 8px; border-radius: var(--r-pill);
+}
+.gate-status-chip.passed  { background: var(--success-bg); color: var(--success-text); }
+.gate-status-chip.failed  { background: var(--error-bg-med); color: var(--error-text); }
+.gate-status-chip.running { background: var(--accent-bg-strong); color: var(--accent-text); }
+.gate-status-chip.pending { background: var(--ink-07); color: var(--text-sub); }
+.gate-status-chip.review  { background: var(--warn-bg); color: var(--warn-text); }
+
+.gate-summary { margin-top: 5px; font-size: var(--fs-sm); color: var(--text-sub); line-height: 1.5; }
+
+.gate-fail-detail {
+  margin-top: var(--sp-2); padding: var(--sp-2) 10px;
+  background: var(--error-bg-quiet);
+  border: 1px solid var(--error-border-soft); border-radius: var(--r-sm);
+  font-size: var(--fs-sm); color: var(--text);
+}
+.gate-fail-detail div { margin: 2px 0; }
+.gate-fail-detail .lbl { color: var(--error-text); font-weight: 600; margin-right: 4px; }
+
+.gate-actions { display: flex; gap: var(--sp-2); margin-top: var(--sp-2); flex-wrap: wrap; }
+.gate-tags { display: flex; gap: var(--sp-1); margin-left: auto; }
+.gate-tag {
+  font-size: 10px; color: var(--text-ter);
+  padding: 1px 6px; border-radius: var(--r-xs); background: var(--ink-05);
+}

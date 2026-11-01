@@ -1,0 +1,17 @@
+/* 应用骨架：三行布局（顶栏 / 主体行 / 主内容区）与溢出保护。 */
+
+/* ---------- 布局骨架 ---------- */
+.layout { display: flex; flex-direction: column; height: 100vh; }
+
+/* ===== 主体行 ===== */
+.body-row { flex: 1; display: flex; min-height: 0; }
+
+/* ===== 主内容区 ===== */
+#main { flex: 1; min-width: 0; overflow-y: auto; overflow-x: hidden; }
+#dashboard-view { padding: 16px 20px 28px; display: flex; flex-direction: column; gap: 12px; }
+
+/* 全局防溢出 */
+#main-content { overflow-x: hidden; }
+.art-preview-content, .dp-log, pre { max-width: 100%; overflow-x: auto; }
+table { max-width: 100%; }
+* { box-sizing: border-box; }

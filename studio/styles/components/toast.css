@@ -1,0 +1,14 @@
+/* 右下角轻提示。 */
+
+/* ===== Toast ===== */
+#toasts { position: fixed; bottom: 16px; right: 16px; z-index: 100; display: flex; flex-direction: column; gap: 6px; }
+.toast {
+  background: var(--toast-bg); color: var(--on-solid); border-radius: 6px; padding: 8px 12px;
+  min-width: 200px; max-width: 320px; box-shadow: 0 4px 16px var(--shadow);
+  font-size: 12px;
+}
+.toast-title { font-weight: 600; }
+.toast-msg { font-size: 11px; opacity: 0.8; margin-top: 2px; }
+.toast.success { background: var(--toast-success-bg); }
+.toast.error { background: var(--toast-error-bg); }
+.toast.warning { background: var(--toast-warning-bg); }

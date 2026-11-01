@@ -1,0 +1,55 @@
+/* 窄屏适配（≤1100 / ≤760）。 */
+
+/* ===== 响应式 ===== */
+@media (max-width: 1280px) {
+  #detail-panel { width: 340px; }
+}
+@media (max-width: 1100px) {
+  .agents-grid { grid-template-columns: repeat(2, 1fr); }
+}
+/* 1024px 平板横屏：侧栏折叠为图标 */
+@media (max-width: 1024px) {
+  #sidebar { flex: 0 0 56px; }
+  .nav-item span, .sidebar-bottom .sb-label, .sidebar-bottom .sb-value, .sidebar-bottom .sb-row > span:not(.dot) { display: none; }
+  .nav-item { justify-content: center; padding: 0; }
+  .sidebar-bottom { padding: 8px; }
+  .sb-progress, .sb-row.sb-conn span:last-child { display: none; }
+  .sb-conn { justify-content: center; }
+  .tb-workspace { display: none; }
+}
+/* 768px 平板：DAG 降级为列表 */
+@media (max-width: 768px) {
+  .dag-canvas-wrap { display: none; }
+  .dag-list-fallback { display: flex; }
+  .tb-budget { display: none; }
+  .agents-grid { grid-template-columns: 1fr; }
+  #dashboard-view { padding: 12px; }
+  .art-layout { flex-direction: column; }
+  .art-tree { width: 100%; max-height: 200px; border-right: none; border-bottom: 1px solid var(--border); }
+  .gate-cards { grid-template-columns: 1fr; }
+  .run-stats { grid-template-columns: repeat(3, 1fr); }
+  .run-actions { flex-wrap: wrap; }
+  .section-head h3 { font-size: 14px; }
+}
+/* 390px 手机：基础适配 */
+@media (max-width: 480px) {
+  #topbar { padding: 0 10px; gap: 6px; }
+  .brand-name em { display: none; }
+  .tb-run-status span:last-child { display: none; }
+  #detail-panel { width: 100vw; }
+  .run-stats { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .stat-cell { padding: 8px 10px; }
+  .stat-val { font-size: 15px; }
+  .stat-label { font-size: 10px; }
+  .run-status-bar { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .run-meta { flex-wrap: wrap; gap: 6px 14px; }
+  .events-list { max-height: 300px; }
+  .event-item { padding: 6px 8px; font-size: 11px; }
+  .page-head h2 { font-size: 17px; }
+  .dag-task-row { flex-wrap: wrap; gap: 4px; }
+  .dag-task-title { flex: 1 1 100%; }
+}
+
+/* 动效：状态变化轻量反馈，仅响应用户操作 */
+@keyframes pulseIn { 0% { transform: scale(0.98); opacity: 0.6; } 100% { transform: scale(1); opacity: 1; } }
+.flash-update { animation: pulseIn .25s ease; }

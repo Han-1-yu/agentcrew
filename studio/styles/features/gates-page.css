@@ -1,0 +1,34 @@
+/* ---- 门禁全屏页 ---- */
+/* 门禁全屏页 */
+.gates-full-list { padding: 16px 20px; display: flex; flex-direction: column; gap: 12px;
+  overflow-y: auto; height: calc(100vh - 100px); }
+.gate-full-card { background: var(--bg-panel); border: 1px solid var(--border-weak); border-radius: 8px;
+  padding: 16px; }
+.gate-full-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.gate-full-id { font-size: 14px; font-weight: 700; color: var(--accent); font-family: "SF Mono", Menlo, monospace; }
+.gate-full-name { font-size: 15px; font-weight: 600; color: var(--text); flex: 1; }
+.gate-full-status { font-size: 11px; padding: 3px 10px; border-radius: 10px; font-weight: 500; }
+.gate-full-stats { display: flex; gap: 24px; margin-bottom: 12px; }
+.gate-full-stat { text-align: center; }
+.gate-full-stat .n { font-size: 22px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
+.gate-full-stat.ok .n { color: var(--success); }
+.gate-full-stat.err .n { color: var(--error); }
+.gate-full-stat .l { font-size: 11px; color: var(--text-ter); margin-top: 2px; }
+.gate-full-verdict { font-size: 13px; color: var(--text-sub); padding: 8px 12px; background: var(--bg-subtle);
+  border-radius: 6px; margin-bottom: 12px; }
+.gate-full-reviews-title { font-size: 11px; font-weight: 600; color: var(--text-ter); margin-bottom: 6px;
+  text-transform: uppercase; letter-spacing: .4px; }
+.gate-review-item { display: flex; align-items: flex-start; gap: 8px; padding: 6px 0;
+  border-bottom: 1px solid var(--ink-04); font-size: 12px; }
+.gate-review-item:last-child { border-bottom: none; }
+.gate-review-verdict { font-size: 10px; padding: 1px 6px; border-radius: 8px; font-weight: 600;
+  flex: 0 0 auto; text-transform: uppercase; }
+.gate-review-verdict.approve { background: var(--success-bg-chip); color: var(--success-text); }
+.gate-review-verdict.reject { background: var(--error-bg-chip); color: var(--error-text); }
+.gate-review-task { font-family: "SF Mono", Menlo, monospace; color: var(--text-sub); flex: 0 0 55px; font-size: 11px; }
+.gate-review-text { color: var(--text); flex: 1; }
+
+/* ---- 门禁详情页操作 ---- */
+/* 门禁详情页操作 */
+.gate-full-actions { display: flex; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-weak); }
+.gate-full-readonly { font-size: 11px; color: var(--text-ter); margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-weak); }

@@ -1,0 +1,147 @@
+/* 顶栏：品牌、工作区、运行状态、用量、操作。
+   布局用 flex + order：左（品牌/工作区）· 状态胶囊 · 弹性空隙 · 用量/连接 · 图标 · 主操作（最右）。 */
+
+#topbar {
+  height: 48px; flex: 0 0 48px;
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: 0 var(--sp-4);
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  position: relative; z-index: 30;
+}
+
+/* ---- 左区：品牌 + 工作区 ---- */
+.tb-left { order: 1; display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+.brand-mark { flex: 0 0 auto; color: var(--text); opacity: 0.88; }
+.brand-name {
+  font-family: var(--font-display);
+  font-size: 13px; font-weight: 600;
+  letter-spacing: 0.09em; text-transform: uppercase;
+  color: var(--text); white-space: nowrap;
+}
+.brand-name em { font-style: normal; color: var(--text-ter); font-weight: 400; }
+.tb-sep { width: 1px; height: 14px; background: var(--border); margin: 0 var(--sp-1); }
+.tb-workspace {
+  font-size: var(--fs-sm); color: var(--text-sub);
+  max-width: 220px; padding: 4px var(--sp-2);
+  border-radius: var(--r-sm); cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: background var(--dur-1) ease, color var(--dur-1) ease;
+}
+.tb-workspace:hover { background: var(--ink-06); color: var(--text); }
+
+/* ---- 运行状态胶囊 ---- */
+.tb-run-status {
+  order: 2;
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 26px; padding: 0 10px; margin-left: var(--sp-2);
+  border: 1px solid var(--border-weak); border-radius: var(--r-pill);
+  background: var(--bg-subtle);
+  font-size: var(--fs-xs); color: var(--text-sub); white-space: nowrap;
+}
+
+/* ---- 右区：用量 / 连接 / 图标 ---- */
+.tb-right { order: 8; margin-left: auto; display: flex; align-items: center; gap: var(--sp-1); }
+
+/* 主操作固定在最右 */
+.tb-center { order: 9; display: flex; align-items: center; margin-left: var(--sp-2); }
+#btn-new-run {
+  height: 30px; padding: 0 12px; gap: 6px;
+  font-size: var(--fs-sm); font-weight: 600;
+  border-radius: var(--r-sm);
+  background: var(--accent); border-color: var(--accent); color: var(--on-solid);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
+}
+#btn-new-run:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+#btn-new-run svg { width: 13px; height: 13px; }
+
+/* ---- 顶部用量 ---- */
+.tb-budget {
+  display: flex; align-items: center; gap: 6px;
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--text-ter);
+  padding: 0 var(--sp-2) 0 0;
+}
+.tb-budget-tokens, .tb-budget-cost { color: var(--text-sub); }
+.tb-budget-sep { color: var(--border-input); }
+.tb-budget-bar {
+  width: 56px; height: 3px; border-radius: var(--r-pill);
+  background: var(--ink-10); overflow: hidden;
+}
+.tb-budget-bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width var(--dur-3) var(--ease-out); }
+.tb-budget.warn .tb-budget-bar i { background: var(--warn); }
+.tb-budget.err .tb-budget-bar i { background: var(--error); }
+.tb-budget-pct { min-width: 28px; text-align: right; }
+
+/* ---- 连接状态 ---- */
+.conn-indicator {
+  font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
+  padding: 3px 8px; border-radius: var(--r-pill);
+  border: 1px solid transparent;
+}
+.conn-indicator.live { background: var(--success-bg); color: var(--success-text); border-color: var(--success-bg-chip); }
+.conn-indicator.watch { background: var(--accent-bg-soft); color: var(--accent-text); border-color: var(--accent-border-soft); }
+.conn-indicator.demo { background: var(--ink-06); color: var(--text-ter); border-color: var(--border-weak); }
+
+/* ---- 运行切换下拉 ---- */
+.run-dropdown {
+  position: absolute; top: 44px; left: 60px; z-index: 60;
+  width: 340px; max-height: 420px;
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--bg-float);
+  border: 1px solid var(--border); border-radius: var(--r-md);
+  box-shadow: var(--shadow-3);
+}
+.rd-head {
+  padding: var(--sp-2) 14px;
+  font-size: var(--fs-xs); font-weight: 600; color: var(--text-ter);
+  letter-spacing: var(--ls-wide); text-transform: uppercase;
+  border-bottom: 1px solid var(--border-weak);
+}
+.rd-list { overflow-y: auto; flex: 1; }
+.rd-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: var(--sp-2) 14px;
+  border-bottom: 1px solid var(--ink-05);
+  cursor: pointer; transition: background var(--dur-1) ease;
+}
+.rd-item:last-child { border-bottom: none; }
+.rd-item:hover { background: var(--ink-04); }
+.rd-item.active { background: var(--accent-bg-soft); }
+.rd-item .rd-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
+.rd-item-info { flex: 1; min-width: 0; }
+.rd-item-title {
+  font-size: var(--fs-sm); font-weight: 500; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.rd-item-meta { margin-top: 1px; font-family: var(--font-mono); font-size: 10px; color: var(--text-ter); }
+.rd-empty { padding: var(--sp-6); text-align: center; font-size: var(--fs-sm); color: var(--text-ter); }
+.rd-del {
+  flex: 0 0 auto; display: flex; align-items: center; padding: 4px;
+  background: none; border: none; border-radius: var(--r-xs);
+  color: var(--text-ter); opacity: 0; transition: opacity var(--dur-1) ease;
+}
+.rd-item:hover .rd-del { opacity: 1; }
+.rd-del:hover:not(:disabled) { color: var(--error); background: var(--error-bg-soft); }
+.rd-del:disabled { opacity: 0.3; cursor: not-allowed; }
+
+/* ---- 下拉里的项目分组与筛选 ---- */
+.rd-filter {
+  display: flex; align-items: center; gap: var(--sp-1); flex-wrap: wrap;
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border-weak);
+}
+.rd-filter-label { font-size: var(--fs-xs); color: var(--text-ter); margin-right: 2px; }
+.rd-filter-chip {
+  padding: 3px 8px; border: 1px solid transparent; border-radius: var(--r-xs);
+  background: var(--ink-06); color: var(--text-sub);
+  font-size: var(--fs-xs); cursor: pointer;
+  transition: background var(--dur-1) ease, color var(--dur-1) ease;
+}
+.rd-filter-chip:hover { background: var(--accent-bg-soft); color: var(--accent-text); }
+.rd-filter-chip.on { background: var(--accent); color: var(--on-solid); }
+.rd-group-header {
+  padding: 6px var(--sp-3) 4px;
+  font-size: 10px; font-weight: 600; letter-spacing: var(--ls-wide);
+  text-transform: uppercase; color: var(--text-ter);
+  background: var(--bg-subtle);
+}

@@ -1,0 +1,95 @@
+/* 任务依赖图：画布、节点、连线、缩放控件、窄屏降级列表。 */
+
+.dag-controls { display: flex; align-items: center; gap: var(--sp-1); }
+.dag-zoom-label {
+  min-width: 40px; text-align: center;
+  font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-sub);
+}
+
+/* 画布：点阵网格打底，让空白区域也有"图纸"质感 */
+.dag-canvas-wrap {
+  position: relative; height: 440px;
+  border: 1px solid var(--border-weak); border-radius: var(--r-md);
+  overflow: hidden; cursor: grab;
+  background-color: var(--bg-canvas);
+  background-image: radial-gradient(var(--ink-10) 1px, transparent 1px);
+  background-size: 18px 18px;
+  background-position: -1px -1px;
+}
+.dag-canvas-wrap.panning { cursor: grabbing; }
+#dag-svg { width: 100%; height: 100%; display: block; }
+#dag-svg text { font-family: var(--font-ui); }
+
+/* ---- 节点 ---- */
+.dag-node { cursor: pointer; }
+.dag-node rect.node-box {
+  fill: var(--bg-panel);
+  stroke: var(--text-ter);
+  transition: stroke-width var(--dur-1) ease, filter var(--dur-2) ease;
+}
+.dag-node:hover rect.node-box { stroke-width: 2.2; }
+.dag-node.flash { animation: nodeFlash 0.5s ease; }
+@keyframes nodeFlash { 0% { filter: brightness(1.25); } 100% { filter: none; } }
+
+/* 运行中的节点：边框呼吸，是画布上唯一会动的元素 */
+.dag-node.running rect.node-box { animation: dagPulse 2.2s ease-in-out infinite; }
+@keyframes dagPulse { 0%, 100% { stroke-opacity: 1; } 50% { stroke-opacity: 0.5; } }
+
+/* ---- 节点内文字：全部走语义 token，两套主题自动适配 ---- */
+.dag-node text.node-title    { fill: var(--text); font-weight: 600; }
+.dag-node text.node-meta     { fill: var(--text-ter); }
+.dag-node text.node-role     { fill: var(--text-sub); }
+.dag-node text.node-on-solid { fill: var(--on-solid); }
+.dag-node text.node-retry    { fill: var(--warn); font-weight: 600; }
+.dag-node text.node-error    { fill: var(--error); }
+.dag-node .node-prog-track   { fill: var(--ink-10); }
+.dag-node .node-prog-fill    { fill: var(--accent); }
+.dag-node .node-check        { fill: var(--success); }
+.dag-node .node-check-mark   { stroke: var(--on-solid); stroke-width: 2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ---- 10 种状态的填充与描边 ---- */
+.dag-node[data-status="pending"]   .node-box { fill: var(--status-pending-bg);   stroke: var(--status-pending); }
+.dag-node[data-status="ready"]     .node-box { fill: var(--status-ready-bg);     stroke: var(--status-ready); }
+.dag-node[data-status="running"]   .node-box { fill: var(--status-running-bg);   stroke: var(--status-running); }
+.dag-node[data-status="review"]    .node-box { fill: var(--status-review-bg);    stroke: var(--status-review); }
+.dag-node[data-status="rework"]    .node-box { fill: var(--status-rework-bg);    stroke: var(--status-rework); }
+.dag-node[data-status="blocked"]   .node-box { fill: var(--status-blocked-bg);   stroke: var(--status-blocked); }
+.dag-node[data-status="succeeded"] .node-box { fill: var(--status-succeeded-bg); stroke: var(--status-succeeded); }
+.dag-node[data-status="failed"]    .node-box { fill: var(--status-failed-bg);    stroke: var(--status-failed); }
+.dag-node[data-status="skipped"]   .node-box { fill: var(--status-skipped-bg);   stroke: var(--status-skipped); }
+.dag-node[data-status="cancelled"] .node-box { fill: var(--status-cancelled-bg); stroke: var(--status-cancelled); }
+.dag-node[data-status="unknown"]   .node-box { fill: var(--bg-subtle);           stroke: var(--text-ter); }
+
+.dag-node[data-status="pending"]   .node-accent, .dag-node[data-status="pending"]   .node-chip { fill: var(--status-pending); }
+.dag-node[data-status="ready"]     .node-accent, .dag-node[data-status="ready"]     .node-chip { fill: var(--status-ready); }
+.dag-node[data-status="running"]   .node-accent, .dag-node[data-status="running"]   .node-chip { fill: var(--status-running); }
+.dag-node[data-status="review"]    .node-accent, .dag-node[data-status="review"]    .node-chip { fill: var(--status-review); }
+.dag-node[data-status="rework"]    .node-accent, .dag-node[data-status="rework"]    .node-chip { fill: var(--status-rework); }
+.dag-node[data-status="blocked"]   .node-accent, .dag-node[data-status="blocked"]   .node-chip { fill: var(--status-blocked); }
+.dag-node[data-status="succeeded"] .node-accent, .dag-node[data-status="succeeded"] .node-chip { fill: var(--status-succeeded); }
+.dag-node[data-status="failed"]    .node-accent, .dag-node[data-status="failed"]    .node-chip { fill: var(--status-failed); }
+.dag-node[data-status="skipped"]   .node-accent, .dag-node[data-status="skipped"]   .node-chip { fill: var(--status-skipped); }
+.dag-node[data-status="cancelled"] .node-accent, .dag-node[data-status="cancelled"] .node-chip { fill: var(--status-cancelled); }
+.dag-node[data-status="unknown"]   .node-accent, .dag-node[data-status="unknown"]   .node-chip { fill: var(--text-ter); }
+
+/* ---- 角色圆点：8 个角色各一色（低饱和装饰色） ---- */
+.dag-node[data-role="project_manager"]  .node-avatar { fill: var(--purple); }
+.dag-node[data-role="product_manager"]  .node-avatar { fill: var(--pink); }
+.dag-node[data-role="architect"]        .node-avatar { fill: var(--accent); }
+.dag-node[data-role="backend_dev"]      .node-avatar { fill: var(--success); }
+.dag-node[data-role="frontend_dev"]     .node-avatar { fill: var(--sky); }
+.dag-node[data-role="qa_engineer"]      .node-avatar { fill: var(--orange); }
+.dag-node[data-role="devops_engineer"]  .node-avatar { fill: var(--indigo); }
+.dag-node[data-role="technical_writer"] .node-avatar { fill: var(--text-ter); }
+
+/* ---- 窄屏降级列表 ---- */
+.dag-list-fallback { display: flex; flex-direction: column; gap: var(--sp-1); }
+.dag-group-title { margin: var(--sp-2) 0 2px; font-size: var(--fs-xs); font-weight: 500; color: var(--text-ter); }
+.dag-task-row {
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-2) 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-weak); border-radius: var(--r-sm);
+  cursor: pointer; transition: border-color var(--dur-1) ease;
+}
+.dag-task-row:hover { border-color: var(--accent-border); }

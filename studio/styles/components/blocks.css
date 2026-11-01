@@ -1,0 +1,40 @@
+/* 通用区块（dash-block）、块头、页面头、状态点。 */
+
+/* ---- 看板区块 ---- */
+.dash-block {
+  background: var(--bg-panel);
+  border: 1px solid var(--border); border-radius: var(--r-md);
+  padding: var(--sp-4) var(--sp-5);
+}
+.block-head {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
+  flex-wrap: wrap;
+  padding-bottom: var(--sp-2); margin-bottom: var(--sp-3);
+  border-bottom: 1px solid var(--border-weak);
+}
+.block-title {
+  font-family: var(--font-display);
+  font-size: var(--fs-h2); font-weight: 600;
+  letter-spacing: 0.01em; color: var(--text);
+}
+
+/* ---- 页面头（非看板页） ---- */
+.page-head {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-5) var(--sp-3);
+  border-bottom: 1px solid var(--border-weak);
+}
+.page-head h2 {
+  margin: 0; font-family: var(--font-display);
+  font-size: var(--fs-h1); font-weight: 600; letter-spacing: var(--ls-tight);
+}
+.ph-empty { padding: var(--sp-10) var(--sp-5); text-align: center; font-size: var(--fs-body); color: var(--text-ter); }
+
+/* ---- 状态点：克制，无发光 ---- */
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-ter); flex: 0 0 auto; }
+.dot.running { background: var(--status-running); }
+.dot.warning { background: var(--warn); }
+.dot.error { background: var(--error); }
+.dot.idle { background: var(--text-ter); }
+.dot.paused { background: var(--warn); }
+.dot.done { background: var(--success); }

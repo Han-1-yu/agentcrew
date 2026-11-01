@@ -53,29 +53,62 @@ Electron userData 目录的 `settings.json`，可在「设置」里手动修改�
 ## 自测
 
 ```bash
-npm run selftest   # electron . --selftest
+npm run check      # 结构护栏：分层、导入完整性、单文件体量、入口收敛（秒级，无需 GUI）
+npm run e2e        # 端到端：9 页导航 / 详情 / 运行切换 / 新建运行 / 成本 / 供应商全链路（28 项）
+npm run selftest   # 真实 UI 驱动一次 --mock 运行：列表 → 看板 → 事件 → 产物 → 设置 → 启动/取消（16 项）
+npm run visual     # 视觉回归：把 e2e 的 16 张截图与本机基线比对（版式/配色变了会失败）
 ```
 
-驱动真实 UI 走完：列表 → 看板（含 v2verify 失败/阻塞数据）→ 任务详情 → 事件流 → 产物预览 → 图表 →
-设置 → 启动一次 `--mock` 运行（验证运行中实时更新与结束报告）→ 取消运行（验证进程终止）。
-截图与 `results.json` 写入 `studio/selftest/`，全部通过时进程退出码为 0。
+视觉基线依赖本机 DPI 与字体，因此 `visual-baseline/` 不入库：**首次** `npm run visual:update` 建立本机基线，
+之后改样式跑 `npm run e2e && npm run visual` 即可发现"顺手改坏了别的页面"。实测：把强调色从铜换成蓝，16 张里 9 张会被拦下
+（单个 16px 分块平均差 42.4，阈值 12）。
+
+`e2e` 与 `selftest` 的截图和 `results.json` 分别写入 `studio/e2e-out/` 与 `studio/selftest/`，全部通过时退出码为 0。
 
 ## 目录
 
 ```
 studio/
-├── package.json     # 依赖只有 electron；scripts: start / selftest / e2e
-├── main.js          # 主进程：设置、Python 探测、run 扫描、CLI 子进程、ledger 轮询、IPC（含 provider:test/keyStatus）、nativeTheme、关窗保护
-├── preload.js       # contextBridge 暴露 window.studio（约 35 个通道）
-├── index.html       # 主窗口骨架（9 页侧边栏导航 + CSP 精确放行 localhost）
-├── renderer.js      # 渲染进程（原生 JS，h()/s() DOM 构建 + 全量重渲染）
-├── styles.css       # 样式（明暗双主题，95 个 CSS 变量，正文零硬编码色值）
-├── zip.js           # 纯 JS ZIP（STORE）导出
-├── e2e.js           # E2E 自动化测试（21 项检查，--e2e 时加载）
-├── selftest.js      # 自测驱动（--selftest 时加载）
-├── e2e-out/         # E2E 产物（截图 + results.json，gitignore）
-└── selftest/        # 自测产物（截图 + results.json，gitignore）
+├── package.json          # 依赖只有 electron；scripts: start / check / e2e / selftest
+├── main.js               # 主进程：设置、Python 探测、run 扫描、CLI 子进程、ledger 轮询、IPC
+├── preload.js            # contextBridge 暴露 window.studio（约 35 个通道）
+├── index.html            # 窗口骨架：只引 styles/index.css 与 src/app/boot.js
+├── src/
+│   ├── contracts/        # 契约：enums（状态/角色/事件元数据）、providers（内置供应商目录）
+│   ├── lib/              # 通用能力：dom（h/s/$/$$）、format（数字/时间/字节）、store（全局状态）、api（本机 HTTP）
+│   ├── ui/               # 原子组件：toast、modal、icons
+│   ├── app/              # 装配层：boot（启动）、router（导航）、shell（顶栏/主题/快捷键）、
+│   │   └── mock/         #   realtime（SSE + 文件监听）、data（真实数据适配）
+│   │                     #   mock.js 是对外入口，fixtures（假快照）/ simulator（状态推演）在内部分工
+│   └── features/         # 按域拆分的功能页
+│       ├── dashboard/    #   看板：index（组合）、dag（依赖图）、status-bar / agents / gates / cost / events
+│       ├── detail/       #   右侧详情抽屉（任务 / Agent）
+│       ├── providers/    #   供应商页：index、card、forms、modals、models（切换器）
+│       ├── settings/     #   设置页 + 配额弹窗
+│       ├── events/       #   事件日志页 + 导出（JSONL / 报告）
+│       ├── artifacts/  plan/  dag-page/  agents-page/  gates-page/  runs/  new-run/
+├── styles/               # 样式分片，index.css 按层叠顺序 @import
+│   ├── tokens.css        #   设计令牌：颜色/字阶/间距/圆角/阴影/动效（两套主题只改这里）
+│   ├── base.css          #   重置与全局排版
+│   ├── layout/           #   shell / topbar / sidebar
+│   ├── components/       #   按钮、区块、状态条、成本、DAG、Agent、门禁、事件、详情、模态、Toast、空态
+│   └── features/         #   各功能页样式（providers / settings / events / plan / artifacts …）
+├── tools/
+│   └── check-architecture.js  # npm run check：结构护栏
+├── zip.js                # 纯 JS ZIP（STORE）导出
+├── e2e.js / selftest.js  # 自动化测试驱动（--e2e / --selftest 时加载）
+├── e2e-out/  selftest/   # 测试产物（截图 + results.json，gitignore）
+└── design/               # （可选）视觉走查产物
 ```
+
+## 代码组织约定
+
+- **分层单向**：`contracts → lib → ui → app → features`。下层不得 import 上层；`npm run check` 会拦住。
+- **状态只在 store**：`S` 由 `lib/store.js` 导出，写入口集中在 `app/` 下的装配代码；视图函数只读、只渲染。
+- **数据映射在 app/data**：后端 `run.json` / `tasks.json` / `ledger.jsonl` 到 UI 领域模型的转换只有一处，
+  新增字段先改 `data.js`，页面不直接读原始 JSON 结构。
+- **样式归属**：组件样式进 `styles/components/`，页面私有样式进 `styles/features/`，跨页复用的只有令牌与基础层。
+- **体量上限**：单 JS 模块 ≤ 320 行、单 CSS 分片 ≤ 300 行，超过即拆（`npm run check` 校验）。
 
 ## 设计边界
 

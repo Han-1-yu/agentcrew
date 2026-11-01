@@ -1,0 +1,83 @@
+/* Agents 全屏页：角色卡片网格 + 产出统计。 */
+
+.agents-full-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: var(--sp-3); padding: var(--sp-4) var(--sp-5);
+  height: calc(100vh - 100px); overflow-y: auto;
+}
+
+.agent-full-card {
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--bg-panel);
+  border: 1px solid var(--border); border-radius: var(--r-md);
+  transition: border-color var(--dur-1) ease;
+}
+.agent-full-card:hover { border-color: var(--border-input); }
+
+.agent-full-head {
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: 10px var(--sp-4);
+  border-bottom: 1px solid var(--border-weak);
+}
+.agent-full-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
+.agent-full-name {
+  flex: 1; font-size: var(--fs-body); font-weight: 600;
+  color: var(--text); letter-spacing: -0.01em;
+}
+.agent-full-status {
+  font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
+  padding: 2px 8px; border-radius: var(--r-pill);
+  background: var(--ink-06); color: var(--text-sub);
+}
+.agent-full-status.status-executing { background: var(--status-running-bg); color: var(--status-running); }
+.agent-full-status.status-reviewing { background: var(--warn-bg); color: var(--warn-text); }
+.agent-full-status.status-queued    { background: var(--ink-06); color: var(--text-sub); }
+.agent-full-status.status-done      { background: var(--success-bg); color: var(--success-text); }
+
+.agent-full-body { padding: var(--sp-3) var(--sp-4); flex: 1; }
+.agent-full-row {
+  display: flex; justify-content: space-between; gap: var(--sp-3);
+  padding: 3px 0; font-size: var(--fs-sm);
+}
+.agent-full-row .k { color: var(--text-ter); flex: 0 0 auto; }
+.agent-full-row .v {
+  max-width: 62%; color: var(--text); text-align: right;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* 统计块：2 行 × 4 列，数值等宽，标签小字 */
+.agent-full-stats {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: var(--sp-3) var(--sp-2);
+  margin: var(--sp-3) 0;
+  padding: var(--sp-3);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-weak); border-radius: var(--r-sm);
+}
+.af-stat { text-align: left; }
+.af-stat-val {
+  font-family: var(--font-mono); font-size: 14px; font-weight: 600;
+  color: var(--text); line-height: 1.2;
+}
+.af-stat-label { margin-top: 2px; font-size: 10px; color: var(--text-ter); }
+
+.agent-full-tasks { margin-top: var(--sp-2); padding-top: var(--sp-2); border-top: 1px solid var(--border-weak); }
+.agent-full-tasks-title {
+  margin-bottom: var(--sp-1);
+  font-size: 10px; font-weight: 600; letter-spacing: var(--ls-wide);
+  text-transform: uppercase; color: var(--text-ter);
+}
+.agent-full-task-item {
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: 3px var(--sp-1); border-radius: var(--r-xs);
+  cursor: pointer; transition: background var(--dur-1) ease;
+}
+.agent-full-task-item:hover { background: var(--ink-04); }
+.agent-full-task-id {
+  flex: 0 0 52px;
+  font-family: var(--font-mono); font-size: 10px; color: var(--text-ter);
+}
+.agent-full-task-title {
+  flex: 1; font-size: var(--fs-sm); color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
