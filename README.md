@@ -1294,6 +1294,10 @@ roles:
 - **执行体预算**：`cost_ceiling_usd` / `max_calls_per_task` 在**每次调用前**检查，
   超限抛 `AgentBudgetExceeded`，任务判失败（不会再花钱）；`max_cost_usd` 仍是
   run 级硬上限，两者互不替代。
+- **整场累计成本**：`run_cost_ceiling_usd` 是同一执行体在**整次 run** 里的累计
+  上限（跨任务、跨返工、跨 resume——重启后按 `stats.agent_costs` 灌回）。
+  与任务级上限互补：一个管"这次别超支"，一个管"这一场别超支"。超限报
+  `已达本次 run 累计成本上限`，由调度器判任务失败。
 - **备用模型**：`AgentProfile.fallback` 优先于全局 `model_failover`——某个 agent
   的备用别名只服务它自己，不会影响同别名的其他角色。
 - **执行体并发**：`max_concurrency` 限制单个 agent 同时在飞的 LLM 调用数。两级

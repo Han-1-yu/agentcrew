@@ -68,7 +68,7 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 from pydantic import BaseModel, ValidationError
 
 from agentcrew.config import Settings
-from agentcrew.contracts import EventSink, TaskLike
+from agentcrew.contracts import AgentBudgetExceeded, EventSink, TaskLike
 from agentcrew.models import agent_budget, budget, routing, structured
 from agentcrew.models.affinity import AffinityTracker
 from agentcrew.models.cache import LLMCache
@@ -331,6 +331,8 @@ class ModelFactory:
         self._agent_semaphores: dict[str, asyncio.Semaphore] = {}
         # 多 agent：per-profile RPM 时间戳（仅当 profile 设了 max_rpm）。
         self._agent_rpm_timestamps: dict[str, list[float]] = {}
+        # 多 agent：per-profile 的**整次 run 累计成本**（跨任务累加）。
+        self._agent_run_cost: dict[str, float] = {}
         # V6 P0.5：per-provider RPM 滑动窗口时间戳（provider 名 → 单调递增时间戳列表）。
         self._rpm_timestamps: dict[str, list[float]] = {}
         self._llm_calls = 0
@@ -814,6 +816,7 @@ class ModelFactory:
         P2 增强：若上一次记账已触发预算自动降级（``_budget_downgrade_to`` 已设），
         本次调用强制走更便宜的备别名，而不是原 alias。
         """
+        self._guard_run_cost()  # run 级累计额度：整场共享，先于任务级判定
         agent_budget.guard()   # 执行体级预算：先查后调，越线不再花钱
         # P2 增强：预算降级一旦触发，后续调用统一走便宜模型（仅作用一次，
         # 调用方显式请求便宜模型本身时不重复切换）。
@@ -868,6 +871,7 @@ class ModelFactory:
         aliases = self._failover_aliases(alias)
         last_error: BaseException | None = None
         for idx, current_alias in enumerate(aliases):
+            self._guard_run_cost()
             agent_budget.guard()
             provider = self.get(current_alias)
             started = time.perf_counter()
@@ -996,6 +1000,7 @@ class ModelFactory:
 
         P2 增强：与 :meth:`call` 同形，预算降级触发后本入口也走便宜备别名。
         """
+        self._guard_run_cost()
         agent_budget.guard()
         alias = self._maybe_apply_downgrade(alias)
         plan = self._plan(alias)
@@ -1460,6 +1465,27 @@ class ModelFactory:
             self._provider_semaphores[provider] = sem
         return sem
 
+    def _guard_run_cost(self) -> None:
+        """整次 run 的累计成本闸门（同一 profile 跨任务共享）。
+
+        与任务级 ``cost_ceiling_usd`` 的区别：那个每次任务清零，这个只增不减；
+        resume 后由 :meth:`seed_agent_cost` 把上一次 run 的花费灌回来。
+        """
+        state = agent_budget.current()
+        if state is None or state.run_ceiling_usd is None or not state.profile:
+            return
+        spent = self._agent_run_cost.get(state.profile, 0.0)
+        if spent >= state.run_ceiling_usd:
+            raise AgentBudgetExceeded(
+                state.profile, kind="run_cost",
+                limit=state.run_ceiling_usd, used=spent)
+
+    def seed_agent_cost(self, profile: str, cost_usd: float) -> None:
+        """把历史（resume 前的）累计成本灌进本次 run，避免重启即清零。"""
+        if profile and cost_usd > 0:
+            self._agent_run_cost[profile] = (
+                self._agent_run_cost.get(profile, 0.0) + cost_usd)
+
     def _agent_semaphore(self) -> asyncio.Semaphore | None:
         """当前执行体的并发信号量；未绑定 profile 或没设上限时返回 ``None``。"""
         state = agent_budget.current()
@@ -1702,6 +1728,8 @@ class ModelFactory:
         agent_budget.note_call(cost)
         state = agent_budget.current()
         if state is not None:
+            self._agent_run_cost[state.profile] = (
+                self._agent_run_cost.get(state.profile, 0.0) + cost)
             slot = self._agent_usage.setdefault(state.profile, {
                 "calls": 0.0, "cost_usd": 0.0,
                 "prompt_tokens": 0.0, "completion_tokens": 0.0})

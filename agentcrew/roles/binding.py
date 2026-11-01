@@ -45,6 +45,15 @@ class AgentProfile(BaseModel):
     """允许写的前缀（目录以 ``/`` 结尾）。空表示不限，但仍受任务契约约束。"""
 
     cost_ceiling_usd: float | None = None
+    """单个任务上的成本上限（每次任务重新计数）。"""
+
+    run_cost_ceiling_usd: float | None = Field(default=None, gt=0)
+    """**整次 run** 内该执行体的累计成本上限（跨任务、跨返工）。
+
+    ``cost_ceiling_usd`` 管"这一次任务别超支"，这条管"这个便宜档整场别超支"：
+    同一个 profile 被多个任务复用时，只有前者会一次次重新放行。
+    """
+
     max_calls_per_task: int | None = None
     max_rpm: int | None = Field(default=None, ge=1)
     """本执行体每分钟最多几次调用（60 秒滑动窗口）；``None`` = 只受 provider 约束。

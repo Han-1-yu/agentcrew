@@ -90,9 +90,10 @@ class AgentBudgetExceeded(RuntimeError):
         self.kind = kind
         self.limit = limit
         self.used = used
-        label = "成本" if kind == "cost" else "调用次数"
-        if kind == "cost":
-            detail = f"{used:.4f} / {limit:.4f} USD"
+        if kind == "run_cost":
+            label, detail = "本次 run 累计成本", f"{used:.4f} / {limit:.4f} USD"
+        elif kind == "cost":
+            label, detail = "成本", f"{used:.4f} / {limit:.4f} USD"
         else:
-            detail = f"{used} / {limit} 次"
+            label, detail = "调用次数", f"{used} / {limit} 次"
         super().__init__(f"agent {profile} 已达{label}上限（{detail}）")

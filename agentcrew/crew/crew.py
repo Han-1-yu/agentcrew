@@ -546,6 +546,10 @@ class Crew:
             self._settings, ledger=ledger, fixtures_dir=_fixtures_dir(),
             cache=resp_cache,
         )
+        # 执行体级 run 累计成本：resume 后把上一段的花费灌回来，
+        # 否则额度在重启瞬间清零，"整场上限"就名存实亡。
+        for profile, usage in (record.stats.agent_costs or {}).items():
+            models.seed_agent_cost(profile, float(usage.get("cost_usd", 0.0)))
         run = _Run(
             goal=goal,
             record=record,

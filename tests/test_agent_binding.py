@@ -490,3 +490,15 @@ def test_stale_task_override_falls_back_instead_of_crashing(tmp_path):
     assert factory.agent_for_task("backend_dev", "T-9").agent_key == ""
     assert ledger.events("task_agent_override_dropped")
     assert factory.export_task_overrides() == {}
+
+
+def test_run_ceiling_carried_to_agent(tmp_path):
+    """配置里的整场上限必须落到 Agent 实例（与并发/预算同一通道）。"""
+    from agentcrew.runtime.ledger import Ledger
+
+    ledger = Ledger(tmp_path / "l.jsonl", run_id="R")
+    factory = _factory(
+        tmp_path, ledger,
+        profiles={"a": AgentProfile(key="a", run_cost_ceiling_usd=0.5)},
+        binding=RoleAgents(agents=[BoundAgent(ref="a", duty=Duty.PRIMARY)]))
+    assert factory.get("backend_dev", "a").run_cost_ceiling_usd == 0.5

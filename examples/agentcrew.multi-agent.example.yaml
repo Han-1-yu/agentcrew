@@ -12,6 +12,7 @@ agents:
       cost_ceiling_usd: 0.08
       max_concurrency: 2          # 便宜档最多 2 个并发调用，别把槽位占满
       max_rpm: 30                 # 且每分钟最多 30 次（60 秒滑动窗口）
+      run_cost_ceiling_usd: 1.50  # 整场 run 累计成本上限（跨任务、跨 resume）
     backend_solid:
       title: 后端-强推理
       model: anthropic:claude-sonnet-5

@@ -514,6 +514,7 @@ alias 失败 → 冷却矩阵 → 同 profile 的 fallback 别名 → 仍失败 
 | 事件去重：文件监听重放与 SSE 重连不再重复计数 | `studio/src/app/realtime.js` |
 | 任务级覆盖：`set/reset_task_agent` + `POST /runs/{id}/tasks/{tid}/agent`，优先级 任务 > 角色 > 配置 | `agents/registry.py`、`crew/scheduler.py`、`crew/crew.py`、`api/server.py` |
 | Studio 任务详情里的任务级切换（`[执行体 ▾][确认][撤销覆盖]`） | `studio/src/features/detail/task-agent.js` |
+| 整场累计成本 `run_cost_ceiling_usd`（跨任务/跨 resume，按 profile 共享） | `roles/binding.py`、`models/factory.py`、`crew/crew.py` |
 | 16 个测试（校验/计划/权限/四种模式） | `tests/test_agent_binding.py` |
 
 验证：全量 **1973 passed / 1 skipped**；示例配置下离线 9/9 成功，

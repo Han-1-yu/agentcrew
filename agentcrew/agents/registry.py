@@ -399,6 +399,7 @@ class AgentFactory:
             agent.fallback_models = list(prof.fallback)
             agent.max_concurrency = prof.max_concurrency
             agent.max_rpm = prof.max_rpm
+            agent.run_cost_ceiling_usd = prof.run_cost_ceiling_usd
         self._agents[cache_key] = agent
         return agent
 

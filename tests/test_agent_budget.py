@@ -296,3 +296,97 @@ def test_agent_rpm_buckets_are_per_profile(tmp_path, monkeypatch):
 
     asyncio_run(main())
     assert clock["t"] == 60.0
+
+
+# ── 执行体整场累计成本（AgentProfile.run_cost_ceiling_usd）─────────────────
+
+def test_run_ceiling_blocks_across_tasks(tmp_path, monkeypatch):
+    """同一 profile 跨任务累计：两次各花一半，第三次任务在第一次调用前就被拦。"""
+    from agentcrew.config import Settings
+    from agentcrew.contracts import AgentBudgetExceeded
+    from agentcrew.models.factory import ModelFactory
+
+    models = ModelFactory(Settings(mock=True, output_dir=tmp_path),
+                          ledger=None, fixtures_dir=tmp_path)
+    token1 = bind_budget("fast", None, None, run_ceiling_usd=0.01)
+    try:
+        models._guard_run_cost()          # 任务 1：空账，放行
+        models.seed_agent_cost("fast", 0.006)   # 模拟任务 1 花掉一半多
+        token2 = bind_budget("fast", None, None, run_ceiling_usd=0.01)
+        try:
+            models._guard_run_cost()      # 任务 2：还没到线
+            models.seed_agent_cost("fast", 0.006)
+            token3 = bind_budget("fast", None, None, run_ceiling_usd=0.01)
+            try:
+                with pytest.raises(AgentBudgetExceeded, match="本次 run 累计成本"):
+                    models._guard_run_cost()
+            finally:
+                release_budget(token3)
+        finally:
+            release_budget(token2)
+    finally:
+        release_budget(token1)
+
+
+def test_run_ceiling_is_per_profile(tmp_path):
+    """两个 profile 各算各的账，互不拖累。"""
+    from agentcrew.config import Settings
+    from agentcrew.models.factory import ModelFactory
+
+    models = ModelFactory(Settings(mock=True, output_dir=tmp_path),
+                          ledger=None, fixtures_dir=tmp_path)
+    token = bind_budget("a", None, None, run_ceiling_usd=0.01)
+    try:
+        models.seed_agent_cost("a", 0.02)     # a 已超限
+        models.seed_agent_cost("b", 0.0)
+        with pytest.raises(Exception, match="run 累计成本"):
+            models._guard_run_cost()
+        token_b = bind_budget("b", None, None, run_ceiling_usd=0.01)
+        try:
+            models._guard_run_cost()          # b 还是干净的
+        finally:
+            release_budget(token_b)
+    finally:
+        release_budget(token)
+
+
+def test_run_ceiling_noop_without_cap(tmp_path):
+    """没配上限：守卫零开销，记账也照常。"""
+    from agentcrew.config import Settings
+    from agentcrew.models.factory import ModelFactory
+
+    models = ModelFactory(Settings(mock=True, output_dir=tmp_path),
+                          ledger=None, fixtures_dir=tmp_path)
+    token = bind_budget("fast", None, None, run_ceiling_usd=None)
+    try:
+        models.seed_agent_cost("fast", 999.0)
+        models._guard_run_cost()              # 不抛
+    finally:
+        release_budget(token)
+
+
+def test_run_ceiling_carryover_via_seed(tmp_path):
+    """resume 场景：record.stats.agent_costs 灌回工厂，额度跨重启生效。"""
+    from agentcrew.config import Settings
+    from agentcrew.contracts import AgentBudgetExceeded
+    from agentcrew.models.factory import ModelFactory
+
+    models = ModelFactory(Settings(mock=True, output_dir=tmp_path),
+                          ledger=None, fixtures_dir=tmp_path)
+    for profile, usage in {"fast": {"cost_usd": 0.02}}.items():
+        models.seed_agent_cost(profile, float(usage.get("cost_usd", 0.0)))
+    token = bind_budget("fast", None, None, run_ceiling_usd=0.02)
+    try:
+        with pytest.raises(AgentBudgetExceeded):
+            models._guard_run_cost()          # 已花满 → 立刻拦
+    finally:
+        release_budget(token)
+
+
+def test_profile_rejects_non_positive_run_ceiling():
+    from pydantic import ValidationError
+
+    from agentcrew.roles.binding import AgentProfile
+
+    with pytest.raises(ValidationError):
+        AgentProfile(key="x", run_cost_ceiling_usd=0)
