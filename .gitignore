@@ -15,3 +15,7 @@ venv/
 # 本地调试日志归档 / 工作区元数据
 logs/
 .workbuddy/
+
+# 生成素材（体积大、非源码）
+generated-images/
+generated-videos/
