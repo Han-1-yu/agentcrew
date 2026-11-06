@@ -11,7 +11,7 @@
     "round": {"type": "integer", "minimum": 1, "description": "第几轮评审（从 1 起；每次 G1 static 出现即计一轮）。"},
     "layer": {
       "type": "string",
-      "enum": ["static", "llm", "human"],
+      "enum": ["static", "llm", "human", "supervisor"],
       "description": "G1 = static（零 token，产物存在性/语法/契约）；G2 = llm（LLM 评审，带 score）；G3 = human（人工 CLI 闸门）。"
     },
     "verdict": {

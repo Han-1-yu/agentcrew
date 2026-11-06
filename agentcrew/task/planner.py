@@ -18,6 +18,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from agentcrew.artifacts.spec import ArtifactSpec
+from agentcrew.task.conditions import normalize_outcome
 from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.task.graph import TaskGraph
 from agentcrew.task.task import Task
@@ -76,6 +77,12 @@ class TaskDraft(BaseModel):
     priority: int = Field(5, ge=1, le=9)
     brief: str = ""
     timeout_seconds: int = 300  # P1-4：PM 可指定单次执行超时（秒），默认 300
+    when_outcomes: list[str] = Field(default_factory=list)
+    """R4 条件边：只有上游 ``<outcome>`` 标签命中这里任一值时本任务才执行。
+
+    空列表（默认）= 无条件任务。字段会随 ``PlanOutput.model_json_schema()``
+    自动进入 PM 的结构化输出约束，无需手写第二份提示词里的字段清单。
+    """
 
 
 class PlanOutput(BaseModel):
@@ -111,6 +118,7 @@ def to_tasks(plan: PlanOutput) -> list[Task]:
             priority=draft.priority,
             brief=draft.brief,
             timeout_seconds=draft.timeout_seconds,
+            when_outcomes=list(draft.when_outcomes),
         )
         for draft in plan.tasks
     ]
@@ -147,8 +155,33 @@ def validate_plan(tasks: Sequence[Task], catalog: RoleCatalog) -> None:
     errors.extend(_check_artifact_paths(tasks))
     errors.extend(_check_acceptance_criteria(tasks))
     errors.extend(_check_criteria_have_deliverables(tasks))
+    errors.extend(_check_condition_edges(tasks))
     if errors:
         raise PlanValidationError(errors)
+
+
+def _check_condition_edges(tasks: Sequence[Task]) -> list[str]:
+    """R4：条件边的标签形状与「必须有上游」两条约束。
+
+    只在 PM 真的声明了 ``when_outcomes`` 时触发；既有拆解（字段缺省）不会
+    产生任何新错误，也不改变既有错误文案。
+    """
+    errors: list[str] = []
+    for task in _drafts(tasks):
+        if not task.when_outcomes:
+            continue
+        if not task.dependencies:
+            errors.append(
+                f"任务 {task.id!r} 声明了 when_outcomes 但没有 dependencies："
+                "条件边必须挂在至少一个上游任务之后"
+            )
+        for raw in task.when_outcomes:
+            if normalize_outcome(raw) is None:
+                errors.append(
+                    f"任务 {task.id!r} 的 when_outcomes 含非法标签 {raw!r}："
+                    "只允许小写字母/数字/下划线/连字符，长度 1–64"
+                )
+    return errors
 
 
 def _check_ids(tasks: Sequence[Task]) -> list[str]:

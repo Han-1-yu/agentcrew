@@ -10,6 +10,7 @@
 """
 
 from collections.abc import Callable
+from typing import Any
 
 from agentcrew.agents.architect import ArchitectAgent
 from agentcrew.agents.backend_dev import BackendDevAgent
@@ -38,6 +39,7 @@ from agentcrew.roles.binding import Aggregation, BoundAgent, Duty, RoleAgents
 from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.roles.spec import RoleSpec
 from agentcrew.runtime.ledger import Ledger
+from agentcrew.tools.registry import ToolRegistry
 
 #: role key → 专用 Agent 类。8 个内置角色在此登记（键顺序与 ``BUILTIN_ROLES``
 #: 一致）；未登记的 key 一律回落到 ``GenericAgent``。字典本身是模块级单例，
@@ -89,6 +91,7 @@ class AgentFactory:
         subtask_creator: Callable[[dict], str | None] | None = None,
         settings: Settings | None = None,
         run_id: str = "",
+        tool_registry: ToolRegistry | None = None,
     ) -> None:
         self._models = models
         self._store = store
@@ -107,6 +110,12 @@ class AgentFactory:
         self._run_id = run_id
         self._plan: RunPlan | None = None
         self._teams: dict[str, TeamAgent] = {}
+        #: R3：run 级工具注册表。``None``（默认）时所有 Agent 走「单次调用」
+        #: 的原有路径；Crew 在 ``tools_enabled`` 开启时注入一份。
+        self._tool_registry = tool_registry
+        #: R5：跨角色咨询路由。``None``（默认）时不检测 ``<message>`` 围栏，
+        #: 与改造前逐字一致；Crew 在 ``peer_dialogue_enabled`` 开启时注入。
+        self._message_router: Callable[[str, str], Any] | None = None
         #: 运行中切换：role → 覆盖后的绑定（进程内生效，可整体导出持久化）。
         self._binding_overrides: dict[str, RoleAgents] = {}
         #: 任务级覆盖：task_id → {"role", "profile"}。只影响这一次任务的派发，
@@ -117,6 +126,67 @@ class AgentFactory:
     def subtask_creator(self) -> Callable[[dict], str | None] | None:
         """当前子任务回调（``None`` = 不启用动态子任务）。"""
         return self._subtask_creator
+
+    @property
+    def message_router(self) -> Callable[[str, str], Any] | None:
+        """当前跨角色咨询路由（``None`` = 不启用 ``<message>`` 对话）。"""
+        return self._message_router
+
+    @message_router.setter
+    def message_router(self, router: Callable[[str, str], Any] | None) -> None:
+        """更换路由，并推给所有已缓存的 Agent 实例（R5）。
+
+        与 :attr:`subtask_creator` 同理：Agent 按 role key 缓存、跨调度器循环
+        复用，只改工厂字段而不刷新缓存，已经在内存里的实例会一直拿着旧的
+        ``None``，对话能力等于没开。
+
+        路由若提供 ``bind``（见 :class:`~agentcrew.agents.peer.PeerRouter`），
+        按实例所属角色重新绑定 ``from_role``——共享一个路由对象时，发问方身份
+        只能在这里补。
+        """
+        self._message_router = router
+        for cache_key, agent in self._agents.items():
+            setter = getattr(agent, "set_message_router", None)
+            if setter is not None:
+                setter(self._bind_router(cache_key.split("\u0000", 1)[0]))
+
+    def _bind_router(self, role_key: str) -> Any:
+        """把共享路由按角色绑定成二参回调；没有路由时返回 ``None``。"""
+        router = self._message_router
+        if router is None:
+            return None
+        binder = getattr(router, "bind", None)
+        return binder(role_key) if binder is not None else router
+
+    def has_role(self, role_key: str) -> bool:
+        """目录里是否有这个角色（拼错的角色名不该白花一次模型调用）。"""
+        return self._catalog.has(role_key)
+
+    async def consult(
+        self, role_key: str, question: str, *, from_role: str = "",
+        context: str = "",
+    ) -> str:
+        """让 ``role_key`` 对 ``question`` 作一次轻量作答（R5）。
+
+        ``context``（R6）是提问方的任务背景，原样透传给被问角色的
+        :meth:`~agentcrew.agents.base_agent.BaseAgent.consult`。
+
+        多执行体角色（``TeamAgent``）没有自己的提示词——取它的 primary 成员来
+        回答，而不是让整支队伍做一次聚合执行（那是任务级行为，成本高一个量级）。
+        """
+        agent = self.get(role_key)
+        if isinstance(agent, TeamAgent):
+            primary = next(
+                (m for m in agent.members
+                 if m.duty in (Duty.PRIMARY, Duty.SECTION)), None)
+            if primary is None:
+                primary = agent.members[0] if agent.members else None
+            if primary is not None:
+                agent = self.get(role_key, primary.profile)
+        consult_fn = getattr(agent, "consult", None)
+        if consult_fn is None:  # 理论上不会发生；不静默炸掉提问方
+            return "（该角色暂不支持咨询：请按最合理的默认值继续。）"
+        return await consult_fn(question, from_role=from_role, context=context)
 
     @subtask_creator.setter
     def subtask_creator(self, creator: Callable[[dict], str | None] | None) -> None:
@@ -390,6 +460,14 @@ class AgentFactory:
             # 可用角色清单（§8.3 的「角色是数据」只有在模型看得见新角色时才成立）。
             catalog=self._catalog,
             subtask_creator=self._subtask_creator,
+            # R8：子任务被拒时把原因回灌给模型（0 = 关闭，等价 R8 之前）。
+            max_subtask_corrections=(
+                self._settings.max_subtask_corrections
+                if self._settings is not None else 1),
+            # R3：工具链只在显式开启时下发；None 与改造前逐字一致。
+            tool_registry=self._tool_registry,
+            # R5：对话路由同理——None 时系统提示词里连这段能力都不会出现。
+            message_router=self._bind_router(role_key),
         )
         if resolved is not None:
             agent.path_scope = list(resolved.path_scope)

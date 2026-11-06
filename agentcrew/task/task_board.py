@@ -26,6 +26,13 @@ from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import Any
 
+from agentcrew.task.conditions import (
+    CONDITION_SKIP_PROPAGATED,
+    CONDITION_SKIP_REASON,
+    SETTLED_STATUSES,
+    condition_matches,
+    is_conditional_skip,
+)
 from agentcrew.task.graph import TaskGraph, ready_ids
 from agentcrew.task.state_machine import assert_transition
 from agentcrew.task.state_machine import is_terminal as is_terminal_status
@@ -243,18 +250,87 @@ class TaskBoard:
         故二者先后不改变本轮结果；多级传播由调度循环的下一轮调用收敛。
         """
         changed = 0
+        # R4：本轮开始时已经因条件分支跳过的任务。新产生的条件性跳过会在
+        # 下一轮 refresh 参与传播 —— 与既有「多级传播由调度循环收敛」同口径。
+        conditional_skips = {
+            task.id for task in self.all() if is_conditional_skip(task)
+        }
 
         for task_id in self._blocked_by_failed_upstream():
             self.transition(task_id, TaskStatus.BLOCKED, reason="upstream-failed")
             changed += 1
 
+        # (ii) SKIPPED 传播 + R4 条件分支判定。
+        # 默认（没有任何 when_outcomes / 条件性跳过）时，本循环与原实现逐字等价：
+        # 只有「任一依赖 SKIPPED → SKIPPED」这一条会命中。
         for task_id in self._pending_ids():
-            deps = self._tasks[task_id].dependencies
-            if any(self._status_of(dep) == TaskStatus.SKIPPED for dep in deps):
+            task = self._tasks[task_id]
+            deps = task.dependencies
+            if not deps:
+                continue
+            statuses = [self._status_of(dep) for dep in deps]
+            pairs = list(zip(deps, statuses))
+            # 非条件性 SKIPPED（上游失败 / 取消）保持原语义，优先级最高。
+            if any(
+                status == TaskStatus.SKIPPED and dep not in conditional_skips
+                for dep, status in pairs
+            ):
                 self.transition(task_id, TaskStatus.SKIPPED, reason="upstream-skipped")
                 changed += 1
+                continue
+            # 上游还有在跑的任务时不判条件，避免把分支提前判死。
+            if not all(status in SETTLED_STATUSES for status in statuses):
+                continue
+            if task.when_outcomes:
+                upstream_outcomes = [
+                    (self._tasks[dep].result.outcome
+                     if dep in self._tasks and self._tasks[dep].result is not None
+                     else None)
+                    for dep in deps
+                ]
+                if not condition_matches(task, upstream_outcomes):
+                    self.transition(
+                        task_id, TaskStatus.SKIPPED, reason=CONDITION_SKIP_REASON
+                    )
+                    # 本轮新建的条件性跳过必须立刻进集合：同一轮里排在后面的
+                    # 汇合节点/分支下游要能认出它，否则会被下面的
+                    # 「非条件性 SKIPPED」分支误判成 upstream-skipped。
+                    conditional_skips.add(task_id)
+                    changed += 1
+                    continue
+            conditional_deps = [
+                dep for dep, status in pairs
+                if status == TaskStatus.SKIPPED and dep in conditional_skips
+            ]
+            if conditional_deps and not any(
+                status == TaskStatus.SUCCEEDED for status in statuses
+            ):
+                # 整条分支都未命中：把「预期跳过」沿分支传下去。
+                self.transition(
+                    task_id, TaskStatus.SKIPPED,
+                    reason=CONDITION_SKIP_PROPAGATED,
+                )
+                conditional_skips.add(task_id)
+                changed += 1
 
-        for task_id in ready_ids(self._tasks):
+        # (iii) 就绪：原 ready_ids 的全 SUCCEEDED 语义 + R4 汇合语义
+        #（条件性 SKIPPED 的依赖视为已满足，只要还有一条分支 SUCCEEDED 就继续）。
+        ready_order = list(ready_ids(self._tasks))
+        for task_id in self._pending_ids():
+            task = self._tasks[task_id]
+            deps = task.dependencies
+            if not deps or task_id in ready_order:
+                continue
+            statuses = [self._status_of(dep) for dep in deps]
+            if not all(
+                status == TaskStatus.SUCCEEDED
+                or (status == TaskStatus.SKIPPED and dep in conditional_skips)
+                for dep, status in zip(deps, statuses)
+            ):
+                continue
+            if any(status == TaskStatus.SUCCEEDED for status in statuses):
+                ready_order.append(task_id)
+        for task_id in ready_order:
             self.transition(task_id, TaskStatus.READY, reason="dependencies-met")
             changed += 1
 

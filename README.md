@@ -206,14 +206,16 @@ examples/samples/<name>/
 
 ## 命令速查
 
-六个子命令（`python main.py --help` 查看完整帮助；直接运行 `python main.py` 不带
+常用子命令（`python main.py --help` 查看完整帮助；直接运行 `python main.py` 不带
 子命令时，打印帮助、已注册角色数与最近 3 次 run 概览）：
 
 | 子命令 | 用途 | 常用参数 |
 |---|---|---|
 | `python main.py run` | 执行一次完整 run（规划 → 执行 → 交付） | `--goal TEXT` 与 `--demo` 二选一；`--mock`；`--auto`；`--gate both\|plan\|delivery\|none`；`--max-concurrency N`；`--default-model ALIAS`；`--output-dir DIR`；`--context-budget N`；`--no-live` |
 | `python main.py resume <run_id>` | 续跑一个中断或未完成的 run | `--force`（配置快照不一致时仍继续）；以及 `run` 的全部配置参数 |
-| `python main.py status <run_id>` | 打印 run 记录、统计与任务看板 | `--output-dir DIR` |
+| `python main.py status <run_id>` | 打印 run 记录、统计、任务看板与待审批条数 | `--output-dir DIR` |
+| `python main.py approvals <run_id>` | R4：列出该 run 的持久化人工审批单 | `--output-dir DIR` |
+| `python main.py approve <run_id> <approval_id>` | R4：在另一个进程里写裁决（之后 `resume` 继续） | `--decision ACTION`；`--task-ids ID...`（rework）；`--by NAME`；`--output-dir DIR` |
 | `python main.py roles` | 列出 8 个内置角色的职责 / 边界 / 产出 | 无 |
 | `python main.py clean` | 保留最近 N 个 run，删除更旧的（默认 N=5） | `--keep N`；`--dry-run`（只列不删）；`--output-dir DIR` |
 | `python main.py cancel <run_id>` | 给离线 run 打 cancelled 标记（下次 resume 直接收尾） | `--output-dir DIR` |
@@ -230,6 +232,10 @@ examples/samples/<name>/
   `RUNNING` 的任务在 resume 时回到 `READY` 重新执行（产物可能只写了一半），
   `REWORK` 的任务保持原状、由调度器直接重新派发，`REVIEW` 的任务保持原状只重跑门禁；
   `attempts` / `rework_count` 一律不重置。
+- R4：`--approval-mode deferred` 的 run 会在人工卡点落成 `awaiting_approval` 并正常
+  退出（退出码 0）；用 `approvals` / `approve` 裁决后 `resume` 回到**原卡点**继续。
+  这与 `INTERRUPTED` 的 resume（直接重入执行、跳过规划与计划卡点）是两条不同路径。
+  审批挂起的 run 受 `clean --protect-running` 与 `delete_run` 保护。
 - `clean` 的删除范围被限制在 `--output-dir` 之下，`--dry-run` 与真删共用同一套
   边界校验。
 - `doctor` 打印一份健康报告：Python 版本、核心依赖可导入性、已配置 provider 的
@@ -494,6 +500,11 @@ registry.register(RunPythonTool(workdir=project_root))
 agent = GenericAgent(spec, models=..., store=..., ledger=...,
                      project_goal=..., tool_registry=registry)
 ```
+
+> **R3 更新**：以上示例描述的是**库层**能力。R3 之前 `ToolRegistry` 从未在真实
+> run 中被构造，因此 `tool_permissions` 是死配置；现在可用
+> `AGENTCREW_TOOLS_ENABLED=true` 让 `Crew` 自动装配 6 个内置工具并下发角色权限，
+> 也可用 `Crew(..., tool_registry=registry)` 显式注入。详见「R3 能力完善」。
 
 ### P1-2. 并行 G2 评审
 
@@ -1126,6 +1137,404 @@ Studio 不直接改 agentcrew.yaml）。
 
 ---
 
+## R3 能力完善：工具链生产化与实体记忆
+
+参考 GitHub 上同类多 Agent 框架的抽象后，对「能力层」做了一轮定点补齐：
+CrewAI 的 `BaseTool._validate_kwargs()`（执行前按 `args_schema` 强校验入参）、
+CrewAI 的 entity memory 与 MetaGPT `BrainMemory.knowledge`（跨 run 记住项目里的
+命名事实）。这一轮**不动确定性引擎**、不引入任何第三方依赖，新增开关一律默认
+关闭，强校验也只对原本就会失败的非法入参生效。
+
+### 1. 工具链真正接进生产 run
+
+P1-1 实现的 `ToolRegistry` / ReAct 循环此前**只在单测里被实例化**：`Crew` 从未构造
+注册表，`tool_permissions` 因此是死配置，上面 P1-1 描述的 ReAct 能力在真实 `run`
+中根本不会启用。R3 补上唯一装配点 `Crew._build_tool_registry()`：
+
+- `AGENTCREW_TOOLS_ENABLED=true`（或 YAML `tools_enabled: true`，或 `POST /runs`
+  的 `options.tools_enabled`）开启；**默认 `false`** —— 关闭时 `AgentFactory` 收不到
+  注册表，Agent 走「单次 LLM 调用 → 落盘」的原路径，行为逐字一致。
+- 库调用方也可以绕过配置：`Crew(settings, tool_registry=my_registry)`。
+- 开启时为本次 run 登记 6 个内置工具：`read_file` / `list_files` / `grep` /
+  `run_python` / `write_file` / `web_fetch`；`tool_permissions` 同步下发为执行期
+  白名单；装配时记一条 `tool_registry_ready` 事件（含工具清单与授权角色）。
+- 读工具以 `<run_dir>` 为根（能看上游 `artifacts/` 与 `context/`），写工具只以
+  `<run_dir>/workspace` 为根 —— 中间草稿与交付产物物理隔离，不进 `MANIFEST.json`、
+  不过 G1 契约校验。
+- `mcp_servers` 仍需异步连接与生命周期管理，本轮保持库层显式装配，不做半接线。
+
+### 2. 工具入参 JSON Schema 强校验
+
+`input_schema` 过去只渲染进系统提示词，模型写错参数只能靠工具自己兜底。现在
+`tools/schema.py` 在**执行前**做确定性校验（零第三方依赖，实现 `type` / `required`
+/ `enum` / `const` / 数值边界 / 长度 / `pattern` / `items` / `additionalProperties`
+子集）：
+
+- 校验失败 → 工具**绝不执行**，错误文本连同 `schema_hint()` 给出的「正确形状」
+  一起回灌，让模型在下一轮 ReAct 里自己写对；
+- 仍记 `tool_call`（`success=false`），并额外记 `tool_schema_invalid`（含错误列表）；
+- 空 schema、非对象 schema、无 `properties` 的自由形状一律放行 —— 自定义工具与
+  外部 MCP 的 `inputSchema` 向后兼容；不做隐式类型转换，`"10"` 不会被悄悄变成 `10`。
+
+### 3. 两个新内置工具
+
+| 工具 | 能力 | 边界 |
+|---|---|---|
+| `write_file` | 往 run 私有工作区写文本草稿，供后续工具读回 | `safe_relpath` + 逐段链接检查 + 64 KiB 上限 + 原子写；不碰产物目录 |
+| `web_fetch` | 只读抓取公网页面文本 | 仅 http/https、仅 80/443；拒绝私网 / 回环 / 链路本地 / 保留 IP 与本地主机名；请求前解析 DNS 防 rebinding；不跟随重定向；只收文本类型，响应上限 256 KiB，默认 10s 超时 |
+
+`web_search` 依赖外部搜索 API 与密钥，与「密钥绝不落盘」和离线可测的口径冲突，
+本轮不引入。`WebFetchTool` 支持注入同步 `fetcher`，因此相关测试完全离线。
+
+### 4. 实体记忆
+
+`agentcrew/knowledge/entity.py` 在经验库之外补一层「这个项目里出现的名字」：
+从成功经验的任务描述、方案摘要、关键决策与产物路径里，用纯规则抽取
+`file` / `technology` / `role` / `concept` / `acronym` 五类实体，追加到全局
+`output/knowledge/entities.jsonl`（不在任何 run 目录下，`clean` 后仍在）。
+读取时按名字归并（`mentions` 累加、`sources` 去重、上下文取最近一次），检索按
+「名字命中 +3、上下文每命中一个 token +1」排序并设降噪阈值。
+
+- `AGENTCREW_ENTITY_MEMORY_ENABLED=true`（或 YAML / `POST /runs` options）开启，
+  **默认 `false`**；也可 `Crew(settings, entity_memory_enabled=True)`。
+- 开启后：经验沉淀时同步写实体库并记 `entity_memory_updated`；规划阶段把相关实体
+  渲染成参考块拼进 PM 的 `context_hint` 并记 `entity_memory_reused`。
+- 与 `reuse_knowledge` 相互独立：只开经验复用时，PM 收到的上下文与 R3 之前逐字一致。
+- 实体来自同一批成功经验，因此 `capture_experiences=False` 时不会产生新实体。
+
+### 配置速查
+
+```yaml
+# agentcrew.yaml（两个开关都是顶层标量，默认均为 false）
+tools_enabled: true
+entity_memory_enabled: true
+tool_permissions:
+  backend_dev: [read_file, grep, write_file, run_python]
+  qa_engineer: [read_file, list_files, grep]
+```
+
+```bash
+AGENTCREW_TOOLS_ENABLED=true python main.py run --sample linear --no-live --auto
+```
+
+### 红线遵守
+
+- 确定性引擎不变：两个开关默认关闭；关闭时不发新事件、不改提示词、不建目录。
+- 配置合并顺序不变：新字段走既有 `_YAML_SCALAR_KEYS` / `_ENV_TO_FIELD` 通道；
+  `config export` 只在开启态输出这两个键，默认导出文档不变。
+- 密钥绝不落盘：两个开关是布尔值，不含密钥；`web_fetch` 不接收凭据。
+- 测试只增不减：新增 4 个测试文件覆盖纯函数、工具边界、装配链路与端到端样例。
+
+---
+
+## R4 工作流运行时：条件分支 + 可恢复的人工审批
+
+R3 补的是能力插件；R4 改的是**编排内核本身**。此前 AgentCrew 只能跑「PM 一次拆完的
+静态 AND 依赖 DAG」，人工闸门是一次同步 `input()`（非 TTY 直接降级为全自动，HTTP API
+更是硬编码 `gate="none"`）。对照需求原文列为调研参考的 LangGraph 状态图、MAF durable
+checkpoint、AutoGen `human_input_mode`，以及 Studio 前端早已预留却从未被后端写入的
+`awaiting_approval` 状态，本轮把两件事做成一等能力。
+
+### 1. 按上游结果走不同分支（Outcome Routing）
+
+- Agent 在回复里用 `<outcome>标签</outcome>` 声明结果标签，落进 `TaskResult.outcome`。
+  标签是受约束的小写 slug，不是表达式 —— **调度决策依旧全程无 LLM、无 eval**。
+- PM 拆解时可给任务声明 `when_outcomes: [...]`，只有上游标签命中才执行。
+- 未命中分支以 `condition-not-met` 进入 `SKIPPED` 并沿分支传播
+  `conditional-skip-propagated`。这两种 reason 是**预期跳过**，不会被
+  `Crew._final_status` 判成 FAILED；上游真失败导致的 `upstream-skipped` 仍判失败。
+- 依赖多条互斥分支的汇合任务（如 `T-FINAL`）只要有一条分支 `SUCCEEDED` 就继续，
+  条件性 SKIPPED 的依赖视为已满足。
+- 条件语义集中在新模块 `task/conditions.py`；`TaskGraph` 继续只回答「谁依赖谁」。
+
+### 2. 可跨进程恢复的人工审批（Durable HITL）
+
+新增 `gate/deferred.py::DeferredPrompter`，实现**同一个** `Prompter` Protocol：
+
+1. 卡点创建 `pending` 审批单 → run 以 `awaiting_approval` **正常退出**（不是失败、
+   不是取消，不发 `run_finished`），面板与产物照常落盘；
+2. 人在**另一个进程**（CLI / HTTP API / Studio）写裁决；
+3. `resume` 回到**原卡点**：`decided` → 消费裁决并继续；仍 `pending` → 复用同一张单
+   再次挂起。审批单缺失时直接报错，绝不悄悄绕过人工审批。
+
+审批单是 `<run_dir>/approvals.jsonl` 里的追加事件（`create` / `decide` / `consume`），
+读取按 id 归并成 `pending → decided → consumed` 三态；`consume` 保证同一裁决不会被
+重复执行。`awaiting_approval` 在 `clean` / `delete_run` 守卫里与 `running` 同等保护。
+
+### 3. 完整用法（CLI 跨进程）
+
+```bash
+# 进程 A：跑到计划卡点挂起
+python main.py run --sample linear --no-live --gate plan --approval-mode deferred
+
+# 另一个终端：看审批单、批准
+python main.py approvals <run_id>
+python main.py approve <run_id> <approval_id> --decision approve --by 张三
+
+# 进程 B：从原卡点继续（样例续跑必须挂回同一套夹具）
+python main.py resume <run_id> --sample linear --force --gate plan --approval-mode deferred
+```
+
+`--decision` 取值：计划卡点 `approve` / `cancel` / `save_exit`；交付卡点
+`accept` / `abort` / `rework`（`rework` 需 `--task-ids`）。
+
+### 4. HTTP API 与 Studio
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| GET | `/runs/{id}/approvals` | 列出审批单（服务重启后仍可读） |
+| POST | `/runs/{id}/approvals` | body `{"request_id": "...", "decision": {"action": "approve"}, "decided_by": "web"}` |
+
+`POST /runs` 的 `options.approval_mode="deferred"` 会打开 API 通道的人工卡点（此前
+恒被覆写为 `gate="none"`）。Studio 第 5 页「质量门禁」顶部新增真实审批单区块，
+`run_paused` / `approval_requested` / `approval_decided` 进入 SSE 与事件日志。
+
+### 5. 兼容性与红线
+
+- 默认 `approval_mode=interactive`：仍走 `CliPrompter`，非 TTY 仍降级为 `none`；
+  `interrupted` 的 resume 语义（跳过规划与计划卡点）逐字不变。
+- 默认无 `<outcome>` / 无 `when_outcomes`：`TaskBoard.refresh()` 的四步结果、
+  `Crew._final_status` 判定与 R4 之前完全一致；TaskStatus 仍是 10 态、状态机跃迁表
+  一行未改。
+- `EXIT_CODES` 字典不变（挂起复用 `ok=0`）；`schema_version` 仍为 1，新增字段均为
+  可选；密钥绝不落盘；调度决策全程无 LLM。
+
+---
+
+## R5 真实协作：Agent 间咨询走真调用
+
+R4 让工作流能分支、能挂起等人；R5 修的是另一半——**Agent 之间其实没有真的协作**。
+`<message to="…">` 围栏、路由回调、ledger 事件全都写好了，但 `Crew._route_message`
+从头到尾只回一句「来自某角色的说明：<goal>」，而且这个方法**从未被注入任何 Agent**。
+一个自称 multi-agent 的平台，队友之间交换的是角色职责描述而不是答案。
+
+### 1. 一行围栏换来一次真回答
+
+- 新增 `BaseAgent.consult()`：被点名咨询时发**一次**模型调用，系统提示词换成
+  「咨询模式」（保留角色身份、去掉产物协议与长度预算），回复压到 1k token 以内。
+- 它**不**解析产物围栏、**不**落盘、**不**改任务状态、**不**进看板——咨询是「问一句
+  拿一句」，不是一次任务执行；否则队友的答复会被误当成交付物提交。
+- 路由回调同时支持同步函数与协程（`inspect.isawaitable`），既有同步夹具一行不用改。
+
+### 2. 三条边界（都返回文案，不抛错）
+
+| 边界 | 行为 | 原因 |
+|---|---|---|
+| 问自己 / 未知角色 | 直接给占位文案，**不花调用** | 拼错角色名是最常见的浪费 |
+| 配额 `max_peer_messages`（默认 8） | 超出后回「配额已用尽，按已掌握信息继续」 | 互相求证会指数级膨胀预算 |
+| 同一 `(提问方, 目标, 问题)` | 第二次直接复用答案 | 模型拿到答复后常原样再问一遍 |
+
+递归天然只有一层：`consult` 走单次调用、不解析 `<message>`，不会 A 问 B、B 又问 A。
+
+### 3. 装配
+
+```bash
+AGENTCREW_PEER_DIALOGUE_ENABLED=true AGENTCREW_MAX_PEER_MESSAGES=4 \
+  python main.py run --demo
+```
+
+或 YAML 顶层 `peer_dialogue_enabled: true` / `max_peer_messages: 4`，或 `POST /runs`
+的 `options` 同名键（服务端白名单已登记，非布尔/负数当场 400）。
+
+`Crew` 在开关打开时构造一个 `PeerRouter` 交给 `AgentFactory`；工厂在 `get()` 里按
+角色 `bind(from_role)` 后下发——**路由是共享对象，身份必须按角色绑定**，否则所有发问
+都会被记到同一个 `from_role` 上。`AgentFactory.message_router` 的 setter 会同步刷新
+已缓存实例（与 `subtask_creator` 同一个坑：缓存实例拿着旧值，能力等于没开）。
+
+### 4. 兼容性与红线
+
+- 默认关闭：不注入路由 → 系统提示词里连这段能力都不出现，`<message>` 围栏不检测，
+  行为与 R5 之前逐字一致；三个离线样例照旧 9/9、5/5、7/7。
+- 离线 mock 通道没有 consult 夹具（`MockProvider` 只认 plan/review/execute），
+  `consult` 检测到 mock 直接返回占位说明——演示 run 不会因为「模型答不出咨询」而失败。
+- Provider 异常不抛给提问方：记 `agent_consult_failed` 后返回可继续的文案；路由失败
+  不该打断在跑的任务。咨询消耗的 token 计入**提问方**的任务预算。
+- 调度决策仍全程无 LLM：咨询只影响某个 Agent 拿到的信息，不影响谁先跑、谁可跑。
+
+---
+
+## R6 协作深化：委派治理 + 咨询带上下文 + 咨询沉淀
+
+R5 让队友之间真能对话，但三处遗留都指向同一个问题：**「谁能做什么、知道多少」没有
+约束**。这一轮按 §7 的 ROI 顺序把它们补上。
+
+### 1. 动态委派治理（四道闸）
+
+此前 `Scheduler._create_subtask` 直接 `role=str(spec.get("role") or "generic")` ——
+模型写什么就是什么。拼错角色名会静默落到通用兜底：任务跑完、产物看着也在，质量却
+塌一档，还不报错。委派链也没有任何上限。
+
+| 闸 | 规则 | 不通过时 |
+|---|---|---|
+| 角色存在 | 必须在角色目录里，或显式写 `generic` | `subtask_role_unknown` + 可用角色清单 |
+| 权限 | `delegation_mode=manager_only` 时只有 `project_manager` / `product_manager` 能派 | `subtask_unauthorized` |
+| 层数 | 新任务深度 ≤ `max_delegation_depth`（默认 2） | `subtask_depth_exceeded` |
+| 总数 | 动态子任务 ≤ `max_dynamic_tasks`（默认 20） | `subtask_quota_exceeded` |
+
+拒绝一律**返回可继续的文案 + 留一条带原因的 `subtask_rejected_by_policy`**，run 不停。
+判断「谁在派」看的是**父任务的角色**，不是 Agent 自述。新增 `Task.delegated_by` 留痕
+派发者——父任务可能被返工丢弃，角色不会。
+
+```yaml
+delegation_mode: manager_only   # 默认 any（= P2-1 以来行为）
+max_delegation_depth: 2
+max_dynamic_tasks: 20
+```
+
+### 2. 咨询带上提问方的任务背景
+
+`consult` 此前只发一句孤立问题，队友只能反问「你们在做什么、要交什么文件」。
+现在发问前把提问方的**任务标题 / 目标 / 交付契约**放进 contextvar，由 `PeerRouter`
+透传，被问方第一次就能问到点上。
+
+用 contextvar 而不是改回调签名：`message_router` 的 `(目标角色, 问题)` 二参形式
+一行没动，既有同步夹具完全不受影响。背景只带三样、目标截断到 300 字——咨询是补充
+信息，把上游全部产物摘要塞过去等于把一次咨询变成一次全量执行。
+
+### 3. 咨询结果沉淀进经验库
+
+```bash
+AGENTCREW_PEER_CONSULT_CAPTURE_ENABLED=true AGENTCREW_PEER_DIALOGUE_ENABLED=true \
+  python main.py run --demo
+```
+
+开启后每次**真实**咨询写成一条 `Experience`（`task_description` = 「谁问谁问了什么」，
+`solution_summary` = 答复）。下次同类问题走经验库关键词检索能直接命中，省掉一次咨询。
+
+三条边界：占位答复（离线降级、「对方未能作答」）**不落库**——那不是知识；去重命中
+不算新咨询，不重复沉淀；沉淀失败只记 `consult_capture_failed`，**不影响**这次咨询的
+返回值。默认关闭：咨询是高频低价值事件，默认全收会把经验库淹没。
+
+**分层说明**：`agents` 层被 `test_architecture.py` 禁止 import `knowledge`，所以
+写经验库的动作由 Crew 以 `on_consult` 回调注入，`PeerRouter` 只管调用。
+
+### 4. 兼容性
+
+- 四项新配置默认值 = R6 之前的行为：`delegation_mode=any`、深度 2 / 总数 20 只在
+  **超限时**才生效、`peer_consult_capture_enabled=false`。
+- `Scheduler` 新增的 `catalog` / `settings` 都是可选参数；不传（库层直接构造、
+  R6 之前写的测试）时四道闸全部跳过。
+- 契约 `schemas/task.json` 新增可选 `delegated_by`；`schema_version` 仍为 1。
+
+---
+
+## R7 主管审核：谁派的活谁验收
+
+R6 的四道闸只回答了「谁能派」，没回答「派出去的活谁验收」。`manager_only` 模式下
+经理把活派给下属后，下属的产出仍然只由目录里静态配置的 G2 评审人把关——**经理本人
+对结果没有任何发言权**，这不是 hierarchical，只是加了个权限开关。
+
+这一层补那条回路：动态委派任务的产出，在 G1/G2 都放行之后，**先由派活的人过一遍**。
+
+### 1. 它是怎么接进去的
+
+`Gatekeeper.evaluate` 的裁决顺序变成：
+
+```
+G1 静态校验 → G2 LLM 评审 → [主管审核] → 状态跃迁
+```
+
+主管审核复用同一个 `Reviewer`（只是换了评审人来源与层名），所以返工额度、`fix_hints`
+回灌、`ContextBus` 决策记录、ledger 审计全部沿用既有通道，没有第二条返工路径。
+
+```bash
+AGENTCREW_SUPERVISOR_REVIEW_ENABLED=true python main.py run --demo
+```
+
+### 2. 三条刻意的边界
+
+| 边界 | 行为 | 原因 |
+|---|---|---|
+| 只对委派任务生效 | `Task.delegated_by` 为空 → 返回 `None`，一次调用都不发 | 规划阶段的任务没有主管，行为与 R7 之前逐字一致 |
+| 自己派给自己 | 跳过，记 `supervisor_review_skipped(self_delegated)` | 换个身份再看一遍只会白烧调用和返工额度 |
+| 主管不在目录里 | 跳过，记 `unknown_supervisor` | 父任务角色可能是 `generic` 之类，没有可用的评审提示词 |
+
+**主管驳回不受 score / 收敛旁路保护**。那两个旁路是对「机器评审意见」的容错（分数
+够高 / 意见收敛就放行），派活的人说不行就是不行——插入点因此在旁路**之后**。
+
+### 3. 审计
+
+主管的裁决是 `ReviewRecord(layer="supervisor")`，与 `static` / `llm` / `human` 区分开：
+按层统计驳回数时不会和 G2 混在一起。Studio 门禁页在**出现过 supervisor 记录时**
+追加一张「主管复核」卡片——默认（开关关闭）仍然是三层，既有布局与断言不受影响。
+
+离线 mock 通道没有 supervisor 夹具，开启后会被明确跳过并记
+`supervisor_review_skipped(mock_channel)`：宁可说「没审」，不要装作审过。
+
+### 4. 兼容性
+
+- 默认 `supervisor_review_enabled=false`：`supervisor=None`，`evaluate` 的代码路径
+  与 R7 之前逐字一致。
+- `Reviewer.review` 新增的 `reviewer_keys` / `layer` 都是可选参数，不传时评审人仍由
+  `catalog.reviewer_for(task.role)` 决定、层名仍是 `llm`。
+- `ReviewRecord.layer` 枚举扩为 `static / llm / human / supervisor`（纯新增值）。
+- `schema_version` 仍为 1；`TaskStatus` 仍 10 态；`ALLOWED_TRANSITIONS` 未改。
+
+---
+
+## R8 被拒之后：把原因回灌给模型
+
+R6 的四道闸会把拒绝原因写进 ledger，R7 让派活的人能验收——但**模型自己仍然看不见
+原因**。它只拿到「没建成」，于是下一轮往往换个同样错的名字继续试，或者干脆把这件活
+丢掉。四道闸做了正确的拒绝，却没人告诉被拒的一方错在哪。
+
+这一轮把那条反馈接上。
+
+### 1. 一次额外的纠正机会
+
+```
+模型回复 → 解析 <subtask> → 建子任务
+                              ├─ 成功 → 继续
+                              └─ 被拒 → 原因回灌 + 重问一次 → 用新回复继续
+```
+
+回灌的内容是**具体原因**，不是「失败了」：
+
+```
+你请求的子任务没有被接受，原因如下：
+- 团队里没有 'ghost_dev' 这个角色（可用：project_manager、product_manager、…）
+
+请据此调整后重新输出本任务的完整最终回复：换一个真实存在的角色、改为自己完成，
+或减少拆分。仍然必须包含本任务自己的 file= 交付物围栏。
+```
+
+只纠正**一轮**。给一次改的机会足够——模型要么换对角色名，要么接受「自己完成」；
+继续追问只会把预算花在同一件事上。本任务自己的交付物才是主体，子任务拆不成不该把
+任务本身拖垮。
+
+### 2. 原因是怎么传过去的
+
+`subtask_creator` 的签名始终是 `(spec) -> str | None`，没有改。Crew 传给 Agent 的
+不再是裸闭包，而是一个 `SubtaskDispatcher` 对象，它在拒绝后暴露 `last_rejection`：
+
+```python
+child_id = creator(enriched)
+if child_id is None:
+    reason = getattr(creator, "last_rejection", None)   # 裸 lambda → None
+```
+
+**没有这个属性就不回灌**。这一条是刻意留的：既有测试与库层直连用法传的都是
+`lambda spec: None`，它们不该因为一个没声明的属性而凭空多出一次模型调用。于是
+默认行为逐字不变，只有 Crew 装配的路径会真正回灌。
+
+### 3. 配置
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `max_subtask_corrections` | `1` | 回灌次数上限；`0` = 关闭（回到 R8 之前） |
+
+也支持 `AGENTCREW_MAX_SUBTASK_CORRECTIONS`、`POST /runs` 的 `options`（负数当场 400）。
+
+### 4. 兼容性
+
+- 裸闭包（无 `last_rejection`）→ 不回灌，调用次数与 R8 之前一致。
+- 子任务**建成**时不回灌、不记拒绝（`test_accepted_subtask_is_silent`）。
+- 自我修正轮（parse/validate 失败后的重试）里再出现的子任务请求照建但不追问——
+  那层已有自己的轮次上限，再套一层只会成倍放大成本。
+- mock 样例不含 `<subtask>` 围栏，因此不会触发额外调用；三套样例照旧 9/9、5/5、7/7。
+
+---
+
 ## 自定义角色 / 团队开发指南
 
 「角色是数据，不是代码」不是口号：一个新角色的全部差异（提示词、输出契约、
@@ -1478,6 +1887,17 @@ models:
 | `AGENTCREW_API_KEYS` | 空 | 有效 API Key 白名单（逗号分隔；只参与认证比对，不落盘） |
 | `AGENTCREW_API_RATE_LIMIT_ENABLED` | `false` | REST API 的 IP 速率限制总开关（E-3） |
 | `AGENTCREW_API_RATE_LIMIT_MAX` | `100` | 滑动窗口内每 IP 最大请求数 |
+| `AGENTCREW_TOOLS_ENABLED` | `false` | R3：把 6 个内置工具接进真实 run 的 ReAct 循环（见「R3 能力完善」） |
+| `AGENTCREW_ENTITY_MEMORY_ENABLED` | `false` | R3：跨 run 实体记忆的沉淀与规划注入 |
+| `AGENTCREW_APPROVAL_MODE` | `interactive` | R4：人工卡点实现方式 `interactive`（TTY 问答）/ `deferred`（审批单挂起，跨进程恢复） |
+| `AGENTCREW_PEER_DIALOGUE_ENABLED` | `false` | R5：Agent 间真实咨询（`<message to="…">` 走真模型调用） |
+| `AGENTCREW_MAX_PEER_MESSAGES` | `8` | R5：一次 run 内真实跨角色咨询的次数上限（`0` = 全禁） |
+| `AGENTCREW_PEER_CONSULT_CAPTURE_ENABLED` | `false` | R6：把真实咨询的问答沉淀进经验库 |
+| `AGENTCREW_DELEGATION_MODE` | `any` | R6：`any`（谁都能派活）/ `manager_only`（只有经理能派） |
+| `AGENTCREW_MAX_DELEGATION_DEPTH` | `2` | R6：动态委派的层数上限（根任务算第 0 层） |
+| `AGENTCREW_MAX_DYNAMIC_TASKS` | `20` | R6：一次 run 内动态子任务总数上限 |
+| `AGENTCREW_SUPERVISOR_REVIEW_ENABLED` | `false` | R7：动态委派任务的产出先由派活的人验收 |
+| `AGENTCREW_MAX_SUBTASK_CORRECTIONS` | `1` | R8：子任务被拒时把原因回灌给模型的次数上限（`0` = 关闭） |
 
 > 注意：`OLLAMA_BASE_URL` **不参与端点解析** —— provider 的 `base_url` 只来自
 > 内置预设或 `agentcrew.yaml` 的 `models.providers.<provider>.base_url`。把远程
@@ -1496,6 +1916,18 @@ YAML 只识别以下键；`output_dir` / `mock` / `log_level` 等请用环境变
 | `context_budget_tokens` | 上下文预算（tokens） |
 | `gate` | 人工闸门模式 |
 | `roles_dir` | 自定义角色目录（见「自定义角色」） |
+| `tools_enabled` | R3：工具链生产化开关，默认 `false`（等价 `AGENTCREW_TOOLS_ENABLED`） |
+| `entity_memory_enabled` | R3：实体记忆开关，默认 `false`（等价 `AGENTCREW_ENTITY_MEMORY_ENABLED`） |
+| `approval_mode` | R4：人工审批模式，默认 `interactive`（等价 `AGENTCREW_APPROVAL_MODE`） |
+| `peer_dialogue_enabled` | R5：Agent 间真实咨询开关，默认 `false`（等价 `AGENTCREW_PEER_DIALOGUE_ENABLED`） |
+| `max_peer_messages` | R5：跨角色咨询次数上限，默认 `8`（等价 `AGENTCREW_MAX_PEER_MESSAGES`） |
+| `peer_consult_capture_enabled` | R6：咨询沉淀开关，默认 `false` |
+| `delegation_mode` | R6：动态委派权限模式，默认 `any` |
+| `max_delegation_depth` | R6：委派层数上限，默认 `2` |
+| `max_dynamic_tasks` | R6：动态子任务总数上限，默认 `20` |
+| `supervisor_review_enabled` | R7：主管审核开关，默认 `false` |
+| `max_subtask_corrections` | R8：委派拒绝原因回灌次数上限，默认 `1` |
+| `tool_permissions` | R3 生效：角色 → 工具白名单，开启 `tools_enabled` 后由 Crew 下发 |
 | `models.default` | 默认模型别名（等价 `AGENTCREW_DEFAULT_MODEL`） |
 | `models.role_bindings.<role_key>` | 按角色覆盖模型 |
 | `models.providers.<provider>` | 覆盖内置 provider 预设：`base_url` / `capabilities`（逐位合并） / `implementation` |

@@ -61,11 +61,13 @@ from agentcrew.agents.base_agent import AgentExecutionError
 from agentcrew.agents.registry import AgentFactory
 from agentcrew.artifacts.spec import ArtifactSpec, parse_kind
 from agentcrew.artifacts.store import ArtifactStore
+from agentcrew.config import Settings
 from agentcrew.context.context_bus import ContextBus
 from agentcrew.contracts import AgentBudgetExceeded
 from agentcrew.gate.gatekeeper import GateDecision, Gatekeeper
 from agentcrew.models.complexity import ComplexityCalibrator, get_calibrator
 from agentcrew.models.factory import BudgetExhaustedError
+from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.runtime.checkpoint import CheckpointStore
 from agentcrew.runtime.ledger import Ledger
 from agentcrew.task.task import Task, TaskResult, TaskStatus
@@ -108,6 +110,31 @@ class WorkerOutcome(BaseModel):
     error_type: str | None = None
 
 
+class SubtaskDispatcher:
+    """R8：可调用的子任务入口，额外暴露**最近一次拒绝的原因**。
+
+    P2-1 起 Agent 只能拿到 ``str | None``：``None`` 表示「没建成」，但不知道为什么。
+    模型下一轮往往换个同样错的名字继续试，或者干脆把这件事丢掉。这里把 Scheduler
+    的拒绝原因挂到可调用对象上，:class:`~agentcrew.agents.base_agent.BaseAgent`
+    据此做一次自我纠正。
+
+    用对象而不是闭包/绑定方法，是因为绑定方法挂不上实例状态。既有的测试与库层用法
+    传的是裸 ``lambda``，没有 ``last_rejection`` 属性 —— ``BaseAgent`` 视为「无原因
+    可回灌」，行为与 R8 之前逐字一致。
+    """
+
+    def __init__(self, scheduler: Scheduler) -> None:
+        self._scheduler = scheduler
+
+    @property
+    def last_rejection(self) -> str | None:
+        """最近一次 ``__call__`` 的拒绝原因；成功时为 ``None``。"""
+        return self._scheduler._last_subtask_rejection
+
+    def __call__(self, spec: dict[str, Any]) -> str | None:
+        return self._scheduler._create_subtask(spec)
+
+
 class Scheduler:
     """就绪队列调度器：派发、回流、状态跃迁与取消（spec §7.3）。
 
@@ -129,6 +156,8 @@ class Scheduler:
         on_event: Callable[[str, dict], None] | None = None,
         on_checkpoint: Callable[[], None] | None = None,
         calibrator: ComplexityCalibrator | None = None,
+        catalog: RoleCatalog | None = None,
+        settings: Settings | None = None,
     ) -> None:
         if max_concurrency < 1:
             raise ValueError(f"max_concurrency 必须 >= 1：{max_concurrency}")
@@ -138,6 +167,10 @@ class Scheduler:
         self._context_bus = context_bus
         self._ledger = ledger
         self._checkpoint = checkpoint
+        #: R6：委派治理用。两者任一为 ``None``（直连 Scheduler 的库层用法与旧
+        #: 测试）时四道闸全部跳过，行为与 R6 之前逐字一致。
+        self._catalog = catalog
+        self._settings = settings
         # 2026-11 会话隔离改造：run 级校准器由 Crew 显式注入；未注入时
         # _record_calibration 回退读全局（直连 Scheduler 的旧测试行为不变）。
         self._calibrator = calibrator
@@ -163,10 +196,16 @@ class Scheduler:
         self._budget_exhausted: BudgetExhaustedError | None = None
         #: P2-1：动态子任务 id 序号（``T-DYN-001`` …），保证 run 内唯一。
         self._subtask_seq = 0
+        #: R8：最近一次建子任务被拒的**人类可读原因**（成功时清空）。
+        #: ``SubtaskDispatcher`` 把它转给 Agent，让模型知道自己错在哪，
+        #: 而不是只看到「没建成」。
+        self._last_subtask_rejection: str | None = None
         # P2-1：把「在本面板上创建动态子任务」的闭包注入 Agent 工厂——
         # worker 里 Agent 检测到 <subtask> 围栏时回调它。工厂 setter 会同步刷新
         # 已缓存的 Agent 实例；在任何 get() 之前设置，首轮构造即带上回调。
-        self._agents.subtask_creator = self._create_subtask
+        # R8：换成可调用对象而不是绑定方法——它需要额外暴露 ``last_rejection``，
+        # 绑定方法挂不上实例状态。
+        self._agents.subtask_creator = SubtaskDispatcher(self)
         # P2-2：运行时停滞检测。``stall_timeout_seconds`` 是「有任务在跑却长时间
         # 无任何状态进展」的阈值（默认 5 分钟）；``_last_progress_at`` 记录最近一次
         # 派发/完成/跃迁的时刻（monotonic 时钟，不受系统时间回拨影响）。
@@ -602,12 +641,121 @@ class Scheduler:
 
     # ---- P2-1：运行时动态子任务 ----
 
+    #: R6：``manager_only`` 模式下允许派活的角色（对标 CrewAI hierarchical 的 manager）。
+    _DELEGATION_MANAGERS = frozenset({"project_manager", "product_manager"})
+
+    def _delegation_depth(self, task_id: str) -> int:
+        """``task_id`` 的委派层数：根任务 ``0``，它的子任务 ``1``，依此类推。
+
+        沿 ``parent_id`` 链回溯，并用 ``seen`` 兜住环（坏数据不该把调度器转死）。
+        任务不在板上（父任务已被返工丢弃）时按已走过的层数返回。
+        """
+        depth = 0
+        seen: set[str] = set()
+        current = task_id
+        known = set(self._board.ids())
+        while current and current not in seen:
+            seen.add(current)
+            if current not in known:
+                break
+            parent = getattr(self._board.get(current), "parent_id", None) or ""
+            if parent:
+                depth += 1
+            current = parent
+        return depth
+
+    def _delegation_rejection(
+        self, spec: dict[str, Any], parent_id: str
+    ) -> str | None:
+        """R6：委派四道闸——通过返回 ``None``，拒绝返回一句人类可读的原因。
+
+        顺序刻意从「最便宜的判断」到「最贵的」：角色名（一次集合查询）→ 权限
+        （一次角色比较）→ 深度（走父链）→ 配额（扫全板）。每个拒绝分支都自己发
+        一条带原因的事件，调用方只管返回 ``None``，不重复记账。
+
+        ``settings`` 未注入时**全部跳过**——库层直接构造 Scheduler 的用法（以及
+        R6 之前写下的测试）行为逐字不变。
+        """
+        if self._settings is None:
+            return None
+        role = str(spec.get("role") or "generic")
+
+        # ① 角色必须真实存在。拼错的角色名会静默落到通用兜底（没有专长提示词），
+        #    任务照样跑完、产物看着也在，质量却塌了一档——这是最隐蔽的一种坏。
+        if (self._catalog is not None
+                and role != "generic"
+                and not self._catalog.has(role)):
+            self._ledger.emit(
+                "subtask_role_unknown",
+                parent_id=parent_id,
+                role=role,
+                available=list(self._catalog.keys()),
+            )
+            return (
+                f"团队里没有 {role!r} 这个角色"
+                f"（可用：{'、'.join(self._catalog.keys())}）"
+            )
+
+        # ② manager_only：只有经理能派活。判断依据是父任务的角色——它才是
+        #    「谁在派」的权威来源（Agent 自己说自己是不是经理不算数）。
+        if self._settings.delegation_mode == "manager_only":
+            parent = (self._board.get(parent_id)
+                      if parent_id and parent_id in set(self._board.ids()) else None)
+            parent_role = getattr(parent, "role", "") or ""
+            if parent_role not in self._DELEGATION_MANAGERS:
+                self._ledger.emit(
+                    "subtask_unauthorized",
+                    parent_id=parent_id,
+                    role=parent_role,
+                    requested_role=role,
+                )
+                return (
+                    f"当前 delegation_mode=manager_only："
+                    f"只有 {'/'.join(sorted(self._DELEGATION_MANAGERS))} "
+                    f"可以派发子任务，{parent_role or '未知角色'} 不能"
+                )
+
+        # ③ 层数：新任务的深度 = 父任务深度 + 1。
+        parent_depth = self._delegation_depth(parent_id) if parent_id else 0
+        new_depth = parent_depth + 1
+        if new_depth > self._settings.max_delegation_depth:
+            self._ledger.emit(
+                "subtask_depth_exceeded",
+                parent_id=parent_id,
+                depth=new_depth,
+                max_depth=self._settings.max_delegation_depth,
+            )
+            return (
+                f"委派层数已达上限（本任务将是第 {new_depth} 层，"
+                f"上限 {self._settings.max_delegation_depth}）：请自己完成"
+            )
+
+        # ④ 总数配额：深度管「能套多深」，这条管「总共能裂变多少个」。
+        used = sum(1 for task in self._board.all() if task.dynamic)
+        if used >= self._settings.max_dynamic_tasks:
+            self._ledger.emit(
+                "subtask_quota_exceeded",
+                parent_id=parent_id,
+                used=used,
+                max_tasks=self._settings.max_dynamic_tasks,
+            )
+            return (
+                f"本次 run 的动态子任务已达上限（{self._settings.max_dynamic_tasks} 个）"
+                f"：请自己完成剩余工作"
+            )
+        return None
+
     def _create_subtask(self, spec: dict[str, Any]) -> str | None:
         """把 Agent 请求的子任务 spec 构造成 ``Task`` 并经 ``board.add_task`` 入板。
 
         ``spec`` 由模型产出（title/description/role/deliverables）+ Agent 注入的
         ``parent_id``。子任务无依赖、直接 ``READY``（独立调度），并打上
         ``dynamic=True``。返回新任务 id——Agent 随后记 ``subtask_created`` 事件。
+
+        **R6 委派治理**先过四道闸（详见 :meth:`_delegation_rejection`）：角色必须
+        真实存在、``manager_only`` 模式下只有经理能派、层数不超
+        ``max_delegation_depth``、总数不超 ``max_dynamic_tasks``。任一道不过就
+        返回 ``None`` 并记一条带原因的事件——不静默降级，也不拖垮 run。
 
         **契约路径先占先得**（realrun10 实测）：T-IMPL 声明交付
         ``logstat/__init__.py``，它拆出的动态子任务又声明同一个路径，子任务先跑
@@ -617,6 +765,20 @@ class Scheduler:
         声明过的路径；一个都不剩就干脆不建这个子任务，返回 ``None``。
         """
         parent_id = str(spec.get("parent_id") or "")
+        # R8：每次进入先清空——成功时它必须为 None，否则 Agent 会把上一次的
+        # 旧原因当成这一次的（循环里连建多个子任务时尤其容易串）。
+        self._last_subtask_rejection = None
+        rejection = self._delegation_rejection(spec, parent_id)
+        if rejection is not None:
+            self._last_subtask_rejection = rejection
+            self._ledger.emit(
+                "subtask_rejected_by_policy",
+                parent_id=parent_id,
+                role=str(spec.get("role") or "generic"),
+                title=str(spec.get("title") or ""),
+                reason=rejection,
+            )
+            return None
         requested = [
             _deliverable_from_spec(item) for item in (spec.get("deliverables") or [])
         ]
@@ -627,12 +789,17 @@ class Scheduler:
         }
         deliverables = [d for d in requested if d.path not in reserved]
         if requested and not deliverables:
+            conflicts = sorted({d.path for d in requested})
+            self._last_subtask_rejection = (
+                f"请求交付的路径已被其他任务占用：{'、'.join(conflicts)}"
+                f"——请另选路径，或改为自己完成"
+            )
             self._ledger.emit(
                 "subtask_conflict",
                 parent_id=parent_id,
                 title=str(spec.get("title") or ""),
                 role=str(spec.get("role") or "generic"),
-                conflicts=sorted({d.path for d in requested}),
+                conflicts=conflicts,
             )
             return None
         if len(deliverables) != len(requested):
@@ -642,6 +809,9 @@ class Scheduler:
                 pruned=[d.path for d in requested if d.path in reserved],
             )
         task_id = self._next_subtask_id()
+        known = set(self._board.ids())
+        parent_task = (
+            self._board.get(parent_id) if parent_id and parent_id in known else None)
         task = Task(
             id=task_id,
             title=str(spec.get("title") or "动态子任务"),
@@ -652,6 +822,8 @@ class Scheduler:
             dependencies=[],
             parent_id=parent_id or None,
             dynamic=True,
+            # R6：留痕「谁派的」——父任务可能被返工丢弃，角色不会。
+            delegated_by=(getattr(parent_task, "role", "") or ""),
         )
         self._board.add_task(task)
         return task_id

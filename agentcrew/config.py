@@ -63,13 +63,34 @@ _ENV_TO_FIELD: dict[str, str] = {
     "AGENTCREW_REDACT_CREDENTIALS": "redact_credentials",
     "AGENTCREW_ROUTING_STRATEGY": "routing_strategy",
     "AGENTCREW_AFFINITY_MODE": "affinity_mode",
+    "AGENTCREW_TOOLS_ENABLED": "tools_enabled",
+    "AGENTCREW_ENTITY_MEMORY_ENABLED": "entity_memory_enabled",
+    "AGENTCREW_APPROVAL_MODE": "approval_mode",
+    "AGENTCREW_PEER_DIALOGUE_ENABLED": "peer_dialogue_enabled",
+    "AGENTCREW_MAX_PEER_MESSAGES": "max_peer_messages",
+    "AGENTCREW_DELEGATION_MODE": "delegation_mode",
+    "AGENTCREW_MAX_DELEGATION_DEPTH": "max_delegation_depth",
+    "AGENTCREW_MAX_DYNAMIC_TASKS": "max_dynamic_tasks",
+    "AGENTCREW_PEER_CONSULT_CAPTURE_ENABLED": "peer_consult_capture_enabled",
+    "AGENTCREW_SUPERVISOR_REVIEW_ENABLED": "supervisor_review_enabled",
+    "AGENTCREW_MAX_SUBTASK_CORRECTIONS": "max_subtask_corrections",
 }
 
 #: ``AGENTCREW_MODEL_<ROLE>`` → ``role_bindings[<role 小写>]``（spec §17.2）。
 _ROLE_MODEL_ENV_PREFIX = "AGENTCREW_MODEL_"
 
 #: ``agentcrew.yaml`` 顶层标量字段（spec §17.3）。
-_YAML_SCALAR_KEYS = ("max_concurrency", "context_budget_tokens", "gate", "roles_dir")
+_YAML_SCALAR_KEYS = (
+    "max_concurrency", "context_budget_tokens", "gate", "roles_dir",
+    # R3：两个能力开关都是顶层标量，走与 max_concurrency 同一条读取/合并路径。
+    "tools_enabled", "entity_memory_enabled", "approval_mode",
+    # R5：跨角色咨询的能力开关与配额。
+    "peer_dialogue_enabled", "max_peer_messages",
+    # R6：动态委派的治理参数。
+    "delegation_mode", "max_delegation_depth", "max_dynamic_tasks",
+    "peer_consult_capture_enabled", "supervisor_review_enabled",
+    "max_subtask_corrections",
+)
 
 #: 分层合并时按 key 覆盖（映射型）/ 按序合并去重（列表型）而非整体替换的字段。
 _MAPPING_FIELDS = (
@@ -589,6 +610,101 @@ class Settings(BaseModel):
     verdict="reject" 但 score >= threshold 时，Gatekeeper 改为放行，记
     ``gate_result`` 事件 verdict 标为 "approve"、issues 保留、reviewer 追加
     ``:score-bypass``。环境变量 ``AGENTCREW_REVIEW_SCORE_THRESHOLD=0.8``。
+    """
+    tools_enabled: bool = False
+    """R3：把内置工具链接进真实 run（默认**关闭**）。
+
+    关闭时 ``AgentFactory`` 不注入 ``ToolRegistry``，Agent 走「单次 LLM 调用 →
+    落盘」的原有路径，行为与 R3 之前逐字节一致（确定性引擎不变）。开启后 Crew
+    为本次 run 装配一份注册表：4 个本地沙箱工具 + ``write_file`` / ``web_fetch``，
+    Agent 进入 ReAct 循环；``tool_permissions`` 与 ``mcp_servers`` 中前者同步生效。
+    环境变量 ``AGENTCREW_TOOLS_ENABLED=true``，或 YAML 顶层 ``tools_enabled: true``。
+    """
+    approval_mode: Literal["interactive", "deferred"] = "interactive"
+    """R4：人工卡点的实现方式（默认 ``interactive``，行为与 R4 之前一致）。
+
+    - ``interactive``：``CliPrompter`` 在 TTY 里同步问答；非 TTY 按既有规则
+      降级为 ``gate=none``；HTTP API 启动的 run 仍强制 ``gate=none``。
+    - ``deferred``：换用 :class:`~agentcrew.gate.deferred.DeferredPrompter`，
+      卡点把审批请求写进 ``<run_dir>/approvals.jsonl`` 后让 run 以
+      ``awaiting_approval`` 挂起退出；人通过 CLI / HTTP API / Studio 在**另一个
+      进程**里批准或驳回，再 ``resume`` 从原卡点继续。非 TTY 不再需要降级。
+    """
+    entity_memory_enabled: bool = False
+    """R3：跨 run 实体记忆（默认**关闭**）。
+
+    开启后，成功经验的文本会被抽取成命名实体累积到
+    ``output/knowledge/entities.jsonl``，规划阶段把相关实体作为参考块注入 PM 上下文。
+    关闭时既不写实体库、也不发任何相关事件，PM 提示词与 R3 之前一致。
+    环境变量 ``AGENTCREW_ENTITY_MEMORY_ENABLED=true``，或 YAML 顶层
+    ``entity_memory_enabled: true``。
+    """
+    peer_dialogue_enabled: bool = False
+    """R5：Agent 间真实咨询（``<message to="…">``）——默认**关闭**。
+
+    关闭时不注入路由：Agent 的系统提示词里不会出现这段能力，回复里的
+    ``<message>`` 围栏也不被检测，行为与 R5 之前逐字一致。开启后一次发问会真的
+    触发目标角色的**一次轻量模型调用**（:meth:`BaseAgent.consult`，不带产物
+    协议、不落盘、不进看板），答复以 ``<message_reply from="…">`` 回灌。
+    环境变量 ``AGENTCREW_PEER_DIALOGUE_ENABLED=true``，或 YAML 同名顶层字段。
+    """
+    max_peer_messages: int = 8
+    """R5：一次 run 内真实跨角色咨询的次数上限（默认 8；``0`` = 全禁）。
+
+    跨角色问答是 token 膨胀的入口——一组互相求证的角色能把预算烧光。超出配额
+    后提问方拿到的是一句「配额已用尽，请按已掌握信息继续」，路由不会抛错。
+    """
+    delegation_mode: Literal["any", "manager_only"] = "any"
+    """R6：谁能发起动态委派（``<subtask>`` 围栏建任务），默认 ``any`` = 现状。
+
+    - ``any``：任何角色都能请求拆分子任务（P2-1 以来的既有行为，逐字不变）。
+    - ``manager_only``：只有经理类角色（``project_manager`` / ``product_manager``）
+      派出的子任务会被接受；执行角色擅自派活记 ``subtask_unauthorized`` 并拒绝。
+      对标 CrewAI ``Process.hierarchical`` 的「由经理分配工作」语义。
+    """
+    max_delegation_depth: int = 2
+    """R6：动态委派的层数上限（默认 2：根任务 → 子任务 → 孙任务）。
+
+    委派链没有上限时，一个任务可以无限拆下去，每层都真实花 token。按 ``parent_id``
+    链计算深度，超过即拒绝并记 ``subtask_depth_exceeded``。
+    """
+    max_dynamic_tasks: int = 20
+    """R6：一次 run 内动态子任务的总数上限（默认 20）。
+
+    与深度上限互补：深度控制「一层能套多深」，这个控制「总共能裂变多少个」。
+    超限记 ``subtask_quota_exceeded`` 并拒绝，run 本身继续。
+    """
+    peer_consult_capture_enabled: bool = False
+    """R6：把成功的跨角色咨询沉淀进经验库（默认**关闭**）。
+
+    开启后每次真实咨询（不含 mock 降级、不含去重命中）写成一条 ``Experience``：
+    ``task_description`` 记「谁问谁问了什么」、``solution_summary`` 记答复。
+    下次遇到同类问题，经验库的关键词检索能直接命中上一次的答案，省掉一次咨询。
+
+    默认关闭有两个理由：咨询是高频低价值事件，默认全收会把经验库淹没；且
+    是否值得沉淀很大程度上取决于项目类型，交给使用方按 run 决定更合适。
+    依赖 ``peer_dialogue_enabled``（没开咨询就没有可沉淀的东西）。
+    """
+    supervisor_review_enabled: bool = False
+    """R7：主管审核——动态委派任务的产出先由派活的人验收（默认**关闭**）。
+
+    开启后，``Task.delegated_by`` 非空的动态委派任务在 G1/G2 放行之后、状态跃迁
+    之前，再让派活的那个角色评审一次（``layer="supervisor"``）。主管驳回走与 G2
+    完全相同的返工通道（共用 ``rework_count`` 额度），但**不受** score 阈值与
+    收敛旁路保护——那两个旁路是对机器评审意见的容错，派活的人说不行就是不行。
+
+    规划阶段的任务没有 ``delegated_by``，完全不受影响。离线 mock 通道没有
+    supervisor 夹具，开启后会被明确跳过并记 ``supervisor_review_skipped``。
+    """
+    max_subtask_corrections: int = 1
+    """R8：子任务被拒时把原因回灌给模型、要一次修正后回复的次数上限（默认 1）。
+
+    ``0`` = 不回灌（行为与 R8 之前逐字一致）。只有回调对象提供了
+    ``last_rejection``（即 Crew 装配的 ``SubtaskDispatcher``）才可能触发——
+    裸闭包用法永远不回灌，不会凭空多出一次模型调用。
+
+    为什么要有上限：每次回灌都是一次真实调用。给一次改的机会足够——模型要么
+    换对角色名，要么接受「自己完成」，继续追问只会把预算花在同一件事上。
     """
     tool_permissions: dict[str, list[str]] = Field(default_factory=dict)
     """角色级工具权限白名单（P3-9）：角色 key → 允许的工具名列表。

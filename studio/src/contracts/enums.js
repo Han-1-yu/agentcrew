@@ -78,6 +78,9 @@ const EVENT_META = {
   task_timeout:     { label: '任务超时',   color: 'var(--warn)' },
   checkpoint_saved: { label: '检查点保存', color: 'var(--text-ter)' },
   human_approved:   { label: '人工批准',   color: 'var(--success)' },
+  run_paused:       { label: '审批挂起',   color: 'var(--warn)' },
+  approval_requested:{ label: '待人工审批', color: 'var(--warn)' },
+  approval_decided: { label: '审批已裁决', color: 'var(--success)' },
   run_cancelled:    { label: '运行取消',   color: 'var(--error)' },
   error:            { label: '错误',       color: 'var(--error)' },
 };

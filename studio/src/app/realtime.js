@@ -107,7 +107,9 @@ function handleRealtimeEvent(evt) {
   appendEvents([evt]);
   renderEvents();
   // 状态变更类事件触发快照刷新（防抖 500ms）
-  const stateEvents = ['task_started', 'task_finished', 'gate_result', 'run_status_changed', 'budget_warning', 'budget_exhausted'];
+  const stateEvents = ['task_started', 'task_finished', 'gate_result', 'run_status_changed', 'budget_warning', 'budget_exhausted',
+    // R4：审批挂起/裁决会改 run 状态与审批单列表，需要刷新快照。
+    'run_paused', 'approval_requested', 'approval_decided'];
   if (stateEvents.includes(evt.event)) {
     if (sseReloadTimer) clearTimeout(sseReloadTimer);
     // 记下调度那一刻的 run 目录：定时器触发期间用户可能已经切了 run，

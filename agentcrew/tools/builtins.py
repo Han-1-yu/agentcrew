@@ -24,6 +24,7 @@ from pydantic import Field
 from agentcrew.tools.tool import Tool
 from agentcrew.utils.files import (
     UnsafePathError,
+    atomic_write_text,
     is_link_like,
     read_text,
     safe_relpath,
@@ -252,3 +253,62 @@ class RunPythonTool(Tool):
             parts.append("stderr:\n" + err.rstrip())
         parts.append(f"exit_code={proc.returncode}")
         return "\n".join(parts)
+
+
+class WriteFileTool(Tool):
+    """在工作区里写一个文本文件（R3：受控写，与产物目录严格隔离）。
+
+    与 :class:`ReadFileTool` 的边界一致（``safe_relpath`` + 逐段链接检查），但
+    **只写不提交**：这里的文件不是产物，不进 ``MANIFEST.json``、不过 G1 契约校验，
+    也不参与交付。Crew 把它的 ``workdir`` 设成 ``<run_dir>/workspace``，因此模型
+    再怎么给路径也碰不到 ``artifacts/``、``tasks.json`` 或 run 目录之外的东西。
+
+    用途是 ReAct 循环里的中间草稿：模型可以先把查到的资料、生成的片段写下来，
+    下一轮再用 ``read_file`` 读回去，最终产物仍走带契约的 ``file=`` 围栏。
+    """
+
+    name: str = "write_file"
+    description: str = (
+        "把一个文本文件写入本次 run 的私有工作区，供后续工具读回（中间草稿）。"
+        "这里写的文件不是交付产物，不会进入产物清单；最终交付仍须用 file= 围栏输出。"
+    )
+    input_schema: dict[str, Any] = Field(default_factory=lambda: {
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string", "minLength": 1, "maxLength": 200,
+                "description": "工作区内的相对路径，如 notes/api.md",
+            },
+            "content": {
+                "type": "string", "maxLength": 200000,
+                "description": "要写入的 UTF-8 文本",
+            },
+        },
+        "required": ["path", "content"],
+    })
+    workdir: Path
+    """私有工作区根目录（构造期注入，对模型不可见）。"""
+    max_bytes: int = 65536
+    """单次写入的 UTF-8 字节上限，防止模型把整篇文档塞进上下文再回灌。"""
+
+    async def run(self, path: str = "", content: str = "", **kwargs: Any) -> str:
+        if not isinstance(path, str) or not path.strip():
+            return "错误：缺少必填参数 path"
+        if not isinstance(content, str):
+            return "错误：content 必须是字符串"
+        raw = content.encode("utf-8")
+        if len(raw) > self.max_bytes:
+            return (
+                f"错误：内容 {len(raw)} 字节超过上限 {self.max_bytes} 字节，"
+                "请拆成多次写入或压缩内容"
+            )
+        target = _resolve(self.workdir, path)
+        if target is None:
+            return f"错误：路径越界或非法：{path!r}（只允许工作区内的相对路径）"
+        if target == self.workdir or (target.exists() and target.is_dir()):
+            return f"错误：path 必须是文件名，不能是目录：{path}"
+        try:
+            atomic_write_text(target, content)
+        except OSError as exc:
+            return f"错误：写入失败：{exc}"
+        return f"已写入 {path}（{len(raw)} 字节）"

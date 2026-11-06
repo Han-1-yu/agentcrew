@@ -65,11 +65,13 @@ from agentcrew.crew.crew import (
     build_catalog,
 )
 from agentcrew.gate.cli_prompter import CliPrompter
+from agentcrew.gate.deferred import DeferredPrompter
 from agentcrew.gate.gatekeeper import NullPrompter, Prompter
 from agentcrew.models.config import PROVIDER_PRESETS as PROVIDER_PRESETS_NAMES
 from agentcrew.models.factory import ModelFactoryError
 from agentcrew.roles.builtin import BUILTIN_ROLES
 from agentcrew.roles.catalog import RoleCatalog
+from agentcrew.runtime.approvals import ApprovalError, ApprovalStore
 from agentcrew.runtime.board_view import BoardView
 from agentcrew.runtime.checkpoint import (
     CheckpointStore,
@@ -169,7 +171,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(
         dest="command",
-        metavar="{run,resume,status,roles,agents,switch,clean,cancel,delete,serve,doctor,diff}")
+        metavar="{run,resume,status,approvals,approve,roles,agents,switch,"
+                "clean,cancel,delete,serve,doctor,diff}")
 
     run = sub.add_parser("run", help="执行一次完整 run（规划 → 执行 → 交付）")
     run.add_argument("--goal", metavar="TEXT", help="项目目标（与 --demo 二选一）")
@@ -183,6 +186,25 @@ def build_parser() -> argparse.ArgumentParser:
     resume.add_argument(
         "--force", action="store_true", help="配置快照与当前配置不一致时仍继续")
     _add_run_flags(resume)
+
+    approvals = sub.add_parser(
+        "approvals", help="R4：列出一个 run 的审批单（含待裁决）")
+    approvals.add_argument("run_id", help="run 目录名")
+    approvals.add_argument("--output-dir", metavar="DIR", help="run 输出根目录")
+
+    approve = sub.add_parser(
+        "approve", help="R4：对审批单写裁决（可在另一个进程里执行）")
+    approve.add_argument("run_id", help="run 目录名")
+    approve.add_argument("request_id", help="审批单 id（见 approvals 输出）")
+    approve.add_argument(
+        "--decision", required=True,
+        choices=("approve", "cancel", "save_exit", "accept", "abort", "rework"),
+        help="裁决动作；plan/delivery 卡点各只接受自己的子集")
+    approve.add_argument("--task-ids", nargs="*", default=[], metavar="ID",
+                         help="rework 时要打回的任务 id")
+    approve.add_argument("--by", default="cli", metavar="NAME",
+                         help="裁决人标识（写进审批单留痕）")
+    approve.add_argument("--output-dir", metavar="DIR", help="run 输出根目录")
 
     status = sub.add_parser("status", help="打印一个 run 的记录与任务表")
     status.add_argument("run_id")
@@ -306,6 +328,10 @@ def _add_run_flags(parser: argparse.ArgumentParser) -> None:
                         help="累计 LLM 成本硬上限（USD），超限优雅收尾（P0-3）")
     parser.add_argument("--max-llm-calls", type=int, metavar="N",
                         help="累计 LLM 调用次数硬上限，超限优雅收尾（P0-3）")
+    parser.add_argument(
+        "--approval-mode", choices=("interactive", "deferred"),
+        help="R4：人工卡点实现方式。interactive（默认）= TTY 同步问答；"
+             "deferred = 审批单落盘后 run 挂起，用 approve 命令在另一个进程裁决再 resume")
     parser.add_argument("--no-live", action="store_true",
                         help="关闭实时看板，只保留结束报告（CI 友好）")
 
@@ -420,7 +446,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         return _fail(f"配置错误：{exc}")
     console = Console()
     gate, prompter, downgraded = _resolve_gate(
-        settings.gate, interactive=_stdin_isatty(), console=console, catalog=catalog)
+        settings.gate, interactive=_stdin_isatty(), console=console, catalog=catalog,
+        approval_mode=settings.approval_mode)
     if downgraded:
         print(
             "非 TTY（管道 / CI）：--gate 含人工卡点但无法交互，已显式降级为 "
@@ -464,7 +491,8 @@ def _cmd_resume(args: argparse.Namespace) -> int:
         return _fail(f"配置错误：{exc}")
     console = Console()
     gate, prompter, downgraded = _resolve_gate(
-        settings.gate, interactive=_stdin_isatty(), console=console, catalog=catalog)
+        settings.gate, interactive=_stdin_isatty(), console=console, catalog=catalog,
+        approval_mode=settings.approval_mode)
     if downgraded:
         print(
             "非 TTY（管道 / CI）：--gate 含人工卡点但无法交互，已显式降级为 "
@@ -540,6 +568,10 @@ def _run_exit_code(crew: Crew, record: RunRecord) -> int:
         return EXIT_CODES["ok"]
     if record.status in (RunStatus.CANCELLED, RunStatus.INTERRUPTED):
         return EXIT_CODES["cancelled"]
+    # R4：审批挂起是正常中间态，与 Crew._exit_code 同一口径（复用 ok=0，
+    # 不改 EXIT_CODES 字典——test_crew.py 对它做精确相等断言）。
+    if record.status is RunStatus.AWAITING_APPROVAL:
+        return EXIT_CODES["ok"]
     return EXIT_CODES["failed"]
 
 
@@ -607,6 +639,59 @@ def _cmd_status(args: argparse.Namespace) -> int:
         view = BoardView(record.run_id, record.project_goal,
                          enabled=False, console=console)
         console.print(view.render(board, record))
+    # R4：审批挂起的 run 在 status 里就能看到待办，不用先翻 ledger。
+    approvals = ApprovalStore(run_dir).all()
+    if approvals:
+        pending = sum(1 for item in approvals if item.status == "pending")
+        _out(
+            console,
+            f"审批单  {len(approvals)} 条    待裁决 {pending} 条"
+            + (f"    （python main.py approvals {record.run_id}）" if pending else ""),
+        )
+    return EXIT_CODES["ok"]
+
+
+def _cmd_approvals(args: argparse.Namespace) -> int:
+    """R4：列出一个 run 的全部审批单（跨进程可读）。"""
+    try:
+        settings = _settings_from(args)
+        run_dir = _run_dir(settings, args.run_id)
+    except (OSError, ValueError) as exc:
+        return _fail(f"无法读取 run {args.run_id}：{exc}")
+    requests = ApprovalStore(run_dir).all()
+    if not requests:
+        print(f"run {args.run_id} 没有审批单")
+        return EXIT_CODES["ok"]
+    console = Console()
+    _out(console, f"━━━ 审批单 · {args.run_id} ━━━")
+    for item in requests:
+        action = item.decision.get("action") or "-"
+        _out(
+            console,
+            f"{item.id}  {item.checkpoint:<9} {item.status:<9} "
+            f"action={action:<10} by={item.decided_by or '-'}",
+        )
+    return EXIT_CODES["ok"]
+
+
+def _cmd_approve(args: argparse.Namespace) -> int:
+    """R4：在**另一个进程**里对审批单写裁决；之后用 ``resume`` 从卡点继续。"""
+    try:
+        settings = _settings_from(args)
+        run_dir = _run_dir(settings, args.run_id)
+    except (OSError, ValueError) as exc:
+        return _fail(f"无法读取 run {args.run_id}：{exc}")
+    decision: dict[str, Any] = {"action": args.decision}
+    if args.decision == "rework":
+        decision["task_ids"] = list(args.task_ids or [])
+    try:
+        updated = ApprovalStore(run_dir).decide(
+            args.request_id, decision, decided_by=args.by
+        )
+    except ApprovalError as exc:
+        return _fail(f"裁决失败：{exc}")
+    print(f"已裁决 {updated.id}（{updated.checkpoint}）：{updated.decision}")
+    print(f"用 python main.py resume {args.run_id} 从卡点继续")
     return EXIT_CODES["ok"]
 
 
@@ -1282,6 +1367,23 @@ def _cmd_config_export(args: argparse.Namespace) -> int:
         "gate_config": snap.get("gate_config") or {},
         "tool_permissions": snap.get("tool_permissions") or {},
     }
+    # R3：两个能力开关只在显式开启时导出 —— 默认配置的导出文档与改造前一致，
+    # 也不会把「关」当成用户配置写回 agentcrew.yaml。
+    for key in ("tools_enabled", "entity_memory_enabled", "peer_dialogue_enabled",
+                "peer_consult_capture_enabled", "supervisor_review_enabled"):
+        if snap.get(key):
+            export_doc[key] = True
+    if snap.get("max_peer_messages") not in (None, 8):
+        export_doc["max_peer_messages"] = int(snap["max_peer_messages"])
+    # R6：委派治理只在偏离默认值时导出，默认配置的导出文档保持不变。
+    if snap.get("delegation_mode") and snap["delegation_mode"] != "any":
+        export_doc["delegation_mode"] = snap["delegation_mode"]
+    for key, default in (("max_delegation_depth", 2), ("max_dynamic_tasks", 20),
+                         ("max_subtask_corrections", 1)):
+        if snap.get(key) not in (None, default):
+            export_doc[key] = int(snap[key])
+    if snap.get("approval_mode") and snap["approval_mode"] != "interactive":
+        export_doc["approval_mode"] = snap["approval_mode"]
     # 去掉空段
     export_doc["models"] = {
         k: v for k, v in export_doc["models"].items() if v
@@ -1384,7 +1486,16 @@ def _cmd_config_import(args: argparse.Namespace) -> int:
             existing_models[key] = incoming_models[key]
     existing["models"] = existing_models
     # 合并顶层段
-    for key in ("mcp_servers", "gate_config", "tool_permissions"):
+    for key in (
+        "mcp_servers", "gate_config", "tool_permissions",
+        "tools_enabled", "entity_memory_enabled",  # R3 顶层能力开关
+        "approval_mode",                          # R4 人工审批模式
+        "peer_dialogue_enabled", "max_peer_messages",  # R5 跨角色咨询
+        "peer_consult_capture_enabled",               # R6 咨询沉淀
+        "delegation_mode", "max_delegation_depth", "max_dynamic_tasks",  # R6 委派治理
+        "supervisor_review_enabled",                  # R7 主管审核
+        "max_subtask_corrections",                    # R8 拒绝原因回灌
+    ):
         if key in data:
             existing[key] = data[key]
     if "config_version" in data:
@@ -1401,6 +1512,8 @@ _HANDLERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "run": _cmd_run,
     "resume": _cmd_resume,
     "status": _cmd_status,
+    "approvals": _cmd_approvals,
+    "approve": _cmd_approve,
     "roles": _cmd_roles,
     "agents": _cmd_agents,
     "switch": _cmd_switch,
@@ -1471,6 +1584,8 @@ def _settings_from(args: argparse.Namespace) -> Settings:
         overrides["max_llm_calls"] = args.max_llm_calls
     if getattr(args, "output_dir", None):
         overrides["output_dir"] = Path(args.output_dir)
+    if getattr(args, "approval_mode", None):
+        overrides["approval_mode"] = args.approval_mode
     return Settings.load(**overrides)
 
 
@@ -1491,6 +1606,7 @@ def _resolve_gate(
     interactive: bool,
     console: Console | None = None,
     catalog: RoleCatalog | None = None,
+    approval_mode: str = "interactive",
 ) -> tuple[GateMode, Prompter, bool]:
     """gate 模式 → ``(生效的 gate, prompter, 是否降级)``。
 
@@ -1502,6 +1618,10 @@ def _resolve_gate(
     ``catalog`` 透传给 :class:`CliPrompter`：计划卡点的 ``[e] 编辑后执行`` 要用
     它校验编辑结果，自定义角色才不会被误判为未注册。
     """
+    # R4：deferred 模式把「问人」外包给审批单，不需要 TTY，也不降级为全自动。
+    # run 会在卡点挂起，人用 `approve` 在另一个进程裁决后 `resume` 继续。
+    if approval_mode == "deferred" and gate in _HUMAN_GATES:
+        return gate, DeferredPrompter(), False
     if gate not in _HUMAN_GATES:
         return gate, NullPrompter(), False
     if interactive:

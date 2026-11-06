@@ -42,6 +42,7 @@ from typing import Any, cast
 from uuid import uuid4
 
 from agentcrew.agents.base_agent import BaseAgent
+from agentcrew.agents.peer import PeerRouter
 from agentcrew.agents.project_manager import ProjectManagerAgent
 from agentcrew.agents.registry import AGENT_CLASSES, AgentFactory
 from agentcrew.artifacts.store import ArtifactStore
@@ -51,6 +52,12 @@ from agentcrew.context.summarizer import summarizer_from_factory
 from agentcrew.crew import report
 from agentcrew.crew.scheduler import Scheduler
 from agentcrew.gate.gatekeeper import Gatekeeper, Prompter, Reviewer
+from agentcrew.gate.supervisor import SupervisorReviewer
+from agentcrew.knowledge.entity import (
+    EntityMemoryStore,
+    EntityRecord,
+    entities_from_experience,
+)
 from agentcrew.knowledge.experience import Experience, ExperienceStore
 from agentcrew.models import factory as model_factory
 from agentcrew.models.cache import LLMCache
@@ -65,7 +72,13 @@ from agentcrew.runtime.checkpoint import (
     RunStatus,
     repair_statuses,
 )
+from agentcrew.runtime.approvals import (
+    ApprovalPending,
+    ApprovalRequest,
+    ApprovalStore,
+)
 from agentcrew.runtime.ledger import Ledger
+from agentcrew.task.conditions import is_conditional_skip
 from agentcrew.task.planner import (
     MIN_PLAN_SCORE,
     PlanValidationError,
@@ -82,6 +95,15 @@ from agentcrew.task.task import (
     TaskStatus,
 )
 from agentcrew.task.task_board import TaskBoard
+from agentcrew.tools import (
+    GrepTool,
+    ListFilesTool,
+    ReadFileTool,
+    RunPythonTool,
+    WebFetchTool,
+    WriteFileTool,
+)
+from agentcrew.tools.registry import ToolRegistry
 from agentcrew.utils.files import atomic_write_text
 
 #: run 级退出码（spec §7.4）；Task 32 的 CLI 直接消费本表。
@@ -219,6 +241,8 @@ class Crew:
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
         capture_experiences: bool = True,
         reuse_knowledge: bool = True,
+        tool_registry: ToolRegistry | None = None,
+        entity_memory_enabled: bool | None = None,
     ) -> None:
         """``catalog`` / ``store`` 缺省由本类按需构造；``prompter`` **原样透传**。
 
@@ -241,6 +265,17 @@ class Crew:
         ``reuse_knowledge``（P3-7，默认开启）：规划阶段从全局经验库检索与项目目标
         相关的历史成功经验，注入 PM 拆解上下文；置 False（或经验库为空）时不注入，
         行为与改造前一致。
+
+        R3 新增两个**默认关闭**的能力入口：
+
+        ``tool_registry``：显式注入一份 run 级工具注册表（优先级高于配置）。不传
+        时看 ``settings.tools_enabled`` —— 关闭则 ``AgentFactory`` 收不到注册表，
+        Agent 走「单次调用」原路径；开启则 Crew 自动装配 6 个内置工具并绑定
+        ``tool_permissions``。库调用方可用这个参数绕过配置直接跑带工具的 run。
+
+        ``entity_memory_enabled``：``None``（默认）时取
+        ``settings.entity_memory_enabled``；显式传 True/False 可覆盖。开启后经验
+        沉淀时同步抽取实体、规划阶段注入实体参考块。
         """
         self._settings = settings
         self._catalog = catalog if catalog is not None else build_catalog(settings)
@@ -249,6 +284,16 @@ class Crew:
         self._injected_store = store
         self._capture_experiences_enabled = capture_experiences
         self._reuse_knowledge_enabled = reuse_knowledge
+        #: R3：显式注入的工具注册表优先于配置自动装配（None = 看配置）。
+        self._tool_registry_override = tool_registry
+        #: R4：resume 时若 run 挂在人工审批上，记住是哪个卡点（plan/delivery）。
+        #: ``None`` = 普通 resume，保持 §13.3「跳过规划与计划卡点」的原语义。
+        self._resume_checkpoint: str | None = None
+        self._entity_memory_enabled = (
+            settings.entity_memory_enabled
+            if entity_memory_enabled is None
+            else entity_memory_enabled
+        )
         self._run: _Run | None = None
         self._injected_checkpoint = checkpoint
         self._resume_board: TaskBoard | None = None
@@ -478,11 +523,21 @@ class Crew:
         ``kw`` 透传给构造函数（如 ``prompter=`` / ``store=`` / ``catalog=``）。
         """
         checkpoint = CheckpointStore(settings.output_dir / run_id)
-        checkpoint.load_record()          # schema_version 不匹配在这里就报错
+        record = checkpoint.load_record()  # schema_version 不匹配在这里就报错
         board = checkpoint.load_board()
         repair_statuses(board)
         crew = cls(settings, checkpoint=checkpoint, **kw)
         crew._resume_board = board
+        if record.status is RunStatus.AWAITING_APPROVAL:
+            # R4：审批挂起的 run 必须回到产生审批单的那个卡点继续，而不是按
+            # §13.3 的老规则直接重入执行（那样会把审批整个绕过去）。
+            resumed_at = ApprovalStore(checkpoint.run_dir).awaiting_checkpoint()
+            if resumed_at is None:
+                raise ValueError(
+                    f"run {run_id!r} 标记为 awaiting_approval，但找不到未消费的"
+                    "审批单（approvals.jsonl 缺失或损坏）；拒绝绕过人工审批续跑"
+                )
+            crew._resume_checkpoint = resumed_at
         return crew
 
     async def run(self, goal: str) -> RunRecord:
@@ -544,6 +599,8 @@ class Crew:
                 checkpoint.artifacts_dir, run_id=record.run_id, ledger=ledger
             )
         goal = record.project_goal if goal is None else goal
+        # R3：工具链装配。默认关闭时返回 None，AgentFactory 与改造前完全一致。
+        tool_registry = self._build_tool_registry(checkpoint, ledger)
         # P3-2：按配置决定是否给工厂挂响应缓存（默认 None = 不缓存，向后兼容）。
         resp_cache = LLMCache() if self._settings.llm_cache_enabled else None
         models = ModelFactory(
@@ -565,10 +622,36 @@ class Crew:
             # 工厂按 run 构造：Agent 绑定 goal 与本次 run 的 store/ledger。
             agents=AgentFactory(
                 models, store, ledger, goal, self._catalog,
-                settings=self._settings, run_id=record.run_id),
+                settings=self._settings, run_id=record.run_id,
+                tool_registry=tool_registry),
             base_stats=record.stats.model_copy(deep=True),
         )
         self._run = run
+        # R5：跨角色咨询路由。默认关闭时不注入——Agent 的系统提示词里连
+        # <message> 这一段都不会出现，行为与改造前逐字一致。开启后每个 Agent
+        # 都能真的去问队友，答复由目标角色的一次轻量模型调用产生。
+        if self._settings.peer_dialogue_enabled:
+            run.agents.message_router = PeerRouter(
+                run.agents, ledger,
+                max_messages=self._settings.max_peer_messages,
+                # R6：沉淀回调由 Crew 注入——agents 层被架构约束禁止 import
+                # knowledge，写经验库的动作必须留在上层。
+                on_consult=(
+                    self._make_consult_recorder(run)
+                    if self._settings.peer_consult_capture_enabled else None
+                ),
+            )
+            ledger.emit(
+                "peer_dialogue_enabled",
+                run_id=record.run_id,
+                max_messages=self._settings.max_peer_messages,
+                capture=self._settings.peer_consult_capture_enabled,
+            )
+        # R4：DeferredPrompter 需要 run 目录才能读写审批单；run_id 直到
+        # CheckpointStore.create 时才生成，只能在装配阶段注入。其它 Prompter
+        # 没有这个钩子，零开销（duck typing，不扩 Prompter Protocol）。
+        if hasattr(self._prompter, "bind_approvals"):
+            self._prompter.bind_approvals(checkpoint.run_dir)
         # 多 agent：启动期解析编排计划并落事件，配置错误在此 fail fast（退出码 3）。
         # 运行中切换的落盘结果：resume 时先恢复，再解析计划（顺序不能反）
         run.agents.import_bindings(_load_binding_overrides(
@@ -624,7 +707,16 @@ class Crew:
                 board = self._build_board(run, resume_board.all())
                 self._board = board
                 checkpoint.save_tasks(board)   # 修复后的状态立即落盘
+                if self._resume_checkpoint == "plan":
+                    # R4：审批挂在计划卡点 → 拿已落盘的面板重入同一个卡点，
+                    # 不再拆解、不再烧规划 token。交付卡点无需特殊分支：
+                    # _execute 的终局判定天然会再次走到 human_delivery_gate。
+                    board = await self._plan_gate(run, board, board.all())
             return await self._execute(run, board)
+        except ApprovalPending as pending:
+            # R4：人工审批挂起 —— 这是**正常退出路径**，不是失败。绝不落到
+            # 下面的 BaseException 兜底（那会把 run 封版成 FAILED）。
+            return self._suspend(run, pending.request)
         except asyncio.CancelledError:
             # Ctrl-C（spec §13.4）：落盘为 INTERRUPTED 便于 resume，再原样重抛。
             if not self._finalized:
@@ -678,8 +770,28 @@ class Crew:
         """拆解 → 校验（含 T-FINAL）→ G3 计划卡点，返回待执行的面板。"""
         tasks = await self._decompose(run)
         board = self._build_board(run, tasks)
+        return await self._plan_gate(run, board, tasks)
+
+    async def _plan_gate(
+        self, run: _Run, board: TaskBoard, tasks: Sequence[Task]
+    ) -> TaskBoard:
+        """G3 计划卡点（R4 从 ``_plan_phase`` 抽出）。
+
+        抽出的唯一目的：审批挂起后 ``resume`` 能拿**已落盘的面板**重入同一个
+        卡点，而不重新拆解、不再烧一轮规划 token。正常 run 的调用路径与改造前
+        完全一致（``_plan_phase`` → ``_plan_gate``）。
+        """
+        # 注意：**不要**在这里无条件写 ``self._board``。构造期守卫（配了人工
+        # 卡点却没 prompter）会在下一行抛 ValueError，若此时 self._board 已设置，
+        # _finalize 会顺手写 MANIFEST.json —— 那条路径的契约是「一个产物都不落盘」
+        # （test_crew.py::test_human_gate_without_prompter_raises）。只在真正挂起时
+        # 才把面板交给 _suspend 落盘。
         gatekeeper = self._build_gatekeeper(run, board, bus=None)
-        decision = await gatekeeper.human_plan_gate(tasks)
+        try:
+            decision = await gatekeeper.human_plan_gate(tasks)
+        except ApprovalPending:
+            self._board = board
+            raise
         if self._gate_enabled(_PLAN_GATES):
             run.ledger.emit(
                 "human_decision",
@@ -813,6 +925,9 @@ class Crew:
                 on_event=self._on_event,
                 on_checkpoint=lambda: self._persist_record(run),
                 calibrator=self._calibrator,
+                # R6：委派治理——角色是否存在、谁能派、能套多深、能裂变多少。
+                catalog=self._catalog,
+                settings=self._settings,
             )
             # P1-5：持有当前调度器供外部 ``cancel()`` 转发；若取消请求已在路上
             # （规划阶段到达），新装配的调度器立刻停止派发。
@@ -984,6 +1099,20 @@ class Crew:
         （全自动路径，即 ``--auto``）或显式传入 ``NullPrompter()``。
         """
         reviewer = Reviewer(run.models, self._catalog, run.store, run.ledger)
+        # R7：主管审核（谁派的活谁验收）。默认关闭；离线 mock 通道没有
+        # supervisor 夹具，强行启用只会让每次主管评审都撞 StructuredOutputError
+        # 再被当成格式错误放行——不如明确跳过并留一条可追溯的原因。
+        supervisor = None
+        if self._settings.supervisor_review_enabled:
+            if self._settings.mock:
+                run.ledger.emit(
+                    "supervisor_review_skipped",
+                    run_id=run.record.run_id,
+                    reason="mock_channel",
+                )
+            else:
+                supervisor = SupervisorReviewer(
+                    reviewer, self._catalog, run.ledger)
         return Gatekeeper(
             reviewer,
             run.store,
@@ -997,6 +1126,7 @@ class Crew:
             prompter=self._prompter,
             context_bus=bus,
             review_score_threshold=self._settings.review_score_threshold,
+            supervisor=supervisor,
         )
 
     def _validate_config(self, run: _Run) -> None:
@@ -1073,7 +1203,16 @@ class Crew:
         # 与 resume_from 的空板校验互为双保险（那里拦入口，这里拦终局判定）。
         if stats.total_tasks == 0:
             return RunStatus.FAILED
-        if stats.failed or stats.blocked or stats.skipped or not board.is_terminal():
+        # R4：条件分支未命中的 SKIPPED 是**预期结果**，不是失败；只有上游
+        # 真失败导致的 SKIPPED（upstream-skipped）才把整场判成 FAILED。
+        # 没有 when_outcomes 的 run 里 unexpected_skips == stats.skipped，
+        # 与改造前逐字一致。
+        unexpected_skips = sum(
+            1 for task in board.all()
+            if task.status is TaskStatus.SKIPPED
+            and not is_conditional_skip(task)
+        )
+        if stats.failed or stats.blocked or unexpected_skips or not board.is_terminal():
             return RunStatus.FAILED
         if any(task.status is TaskStatus.CANCELLED for task in board.all()):
             return RunStatus.CANCELLED
@@ -1087,27 +1226,136 @@ class Crew:
             return EXIT_CODES["ok"]
         if status in (RunStatus.CANCELLED, RunStatus.INTERRUPTED):
             return EXIT_CODES["cancelled"]
+        # R4：审批挂起是**正常**的中间态，不是失败。EXIT_CODES 字典本身不动
+        # （test_crew.py 对它做精确相等断言），这里复用 ok=0。
+        if status is RunStatus.AWAITING_APPROVAL:
+            return EXIT_CODES["ok"]
         return EXIT_CODES["failed"]
 
-    def _prepare_knowledge_context(self, run: _Run) -> str:
-        """P3-7：规划前从全局经验库检索与目标相关的历史经验，渲染成 PM 上下文。
+    def _build_tool_registry(
+        self, checkpoint: CheckpointStore, ledger: Ledger
+    ) -> ToolRegistry | None:
+        """R3：装配 run 级工具注册表；默认关闭时返回 ``None``（行为逐字不变）。
 
-        开关关闭（``reuse_knowledge=False``）或经验库无命中时返回空串——PM 收到
-        空 ``context_hint``，拆解提示词与改造前逐字一致（向后兼容）。有命中时记
-        一条 ``knowledge_reused`` 事件（含 goal 与命中条数），与经验沉淀对称留痕。
+        这是把「库能力」接进生产 run 的**唯一装配点**：此前 ``ToolRegistry`` 只
+        在单测里被实例化，``tool_permissions`` / ``mcp_servers`` 因此是死配置，
+        Agent 永远走单次调用。现在 ``settings.tools_enabled`` 开启时，为本次 run
+        登记 6 个内置工具并把 ``tool_permissions`` 下发成执行期白名单。
+
+        边界：读工具以 ``run_dir`` 为根（能看上游 ``artifacts/`` 与 ``context/``），
+        写工具只以 ``run_dir/workspace`` 为根（中间草稿与交付产物物理隔离，不进
+        ``MANIFEST.json``）；``mcp_servers`` 需要异步连接与生命周期管理，仍走库层
+        显式装配，不在这里半接线（见 ``PROJECT-STATE.md`` §7）。
         """
-        if not self._reuse_knowledge_enabled:
-            return ""
-        store = ExperienceStore(self._settings.output_dir)
-        matched = store.query(run.goal, limit=3)
-        if not matched:
-            return ""
-        run.ledger.emit(
-            "knowledge_reused",
-            goal=run.goal,
-            matched_experiences=len(matched),
+        override = self._tool_registry_override
+        if override is not None:
+            override.bind_ledger(ledger)
+            return override
+        if not self._settings.tools_enabled:
+            return None
+
+        run_dir = checkpoint.run_dir
+        workspace = run_dir / "workspace"
+        workspace.mkdir(parents=True, exist_ok=True)
+        registry = ToolRegistry(ledger=ledger)
+        for tool in (
+            ReadFileTool(workdir=run_dir),
+            ListFilesTool(workdir=run_dir),
+            GrepTool(workdir=run_dir),
+            RunPythonTool(workdir=run_dir),
+            WriteFileTool(workdir=workspace),
+            WebFetchTool(),
+        ):
+            registry.register(tool)
+        permissioned: list[str] = []
+        for role, allowed in self._settings.tool_permissions.items():
+            if isinstance(allowed, (list, tuple)):
+                registry.set_role_permissions(
+                    str(role), [str(name) for name in allowed]
+                )
+                permissioned.append(str(role))
+        ledger.emit(
+            "tool_registry_ready",
+            run_id=run_dir.name,
+            tools=[tool.name for tool in registry.list_tools()],
+            workspace=workspace.name,
+            permissioned_roles=sorted(permissioned),
         )
-        return store.inject_context(run.goal, limit=3)
+        return registry
+
+    def _prepare_knowledge_context(self, run: _Run) -> str:
+        """P3-7 + R3：规划前检索历史经验与实体记忆，拼成 PM 的 ``context_hint``。
+
+        两块各自有独立开关与独立留痕。``entity_memory_enabled`` 默认关闭，此时
+        返回值与改造前**逐字一致**（有经验命中就是经验块本身，无命中就是空串）——
+        不会多一个换行、也不会多发一个事件。
+        """
+        blocks: list[str] = []
+        if self._reuse_knowledge_enabled:
+            store = ExperienceStore(self._settings.output_dir)
+            matched = store.query(run.goal, limit=3)
+            if matched:
+                run.ledger.emit(
+                    "knowledge_reused",
+                    goal=run.goal,
+                    matched_experiences=len(matched),
+                )
+                blocks.append(store.inject_context(run.goal, limit=3))
+        if self._entity_memory_enabled:
+            entities = EntityMemoryStore(self._settings.output_dir)
+            matched_entities = entities.query(run.goal, limit=8)
+            if matched_entities:
+                run.ledger.emit(
+                    "entity_memory_reused",
+                    goal=run.goal,
+                    matched_entities=len(matched_entities),
+                )
+                blocks.append(entities.inject_context(run.goal, limit=8))
+        return "\n\n".join(blocks)
+
+    def _make_consult_recorder(self, run: _Run) -> Callable[..., None]:
+        """R6：把一次真实咨询的问答对写进全局经验库（默认关闭时不会构造）。
+
+        包成闭包而不是直接把方法交给 ``PeerRouter``：``PeerRouter`` 只需要一个
+        ``(提问方, 目标, 问题, 答复)`` 的四参回调，不该知道 ``_Run`` 长什么样。
+        """
+        def record(
+            from_role: str, to_role: str, question: str, answer: str
+        ) -> None:
+            self._record_consult_experience(
+                run, from_role, to_role, question, answer)
+
+        return record
+
+    def _record_consult_experience(
+        self,
+        run: _Run,
+        from_role: str,
+        to_role: str,
+        question: str,
+        answer: str,
+    ) -> None:
+        """R6：咨询问答 → 一条 ``Experience``。
+
+        字段映射刻意「可检索优先」：``task_description`` 写「谁问谁问了什么」，
+        这样下次同类问题走 :meth:`ExperienceStore.query` 的关键词匹配能命中；
+        ``solution_summary`` 存答复本身。``artifacts`` / ``key_decisions`` 留空
+        ——咨询不产物、不做决策，填进去会让经验库的语义变浑。
+        """
+        experience = _consult_experience(
+            from_role, to_role, question, answer,
+            run_id=run.record.run_id,
+        )
+        if experience is None:
+            # 占位文案不配进经验库：它描述的是「模型没答」，不是一条知识。
+            return
+        ExperienceStore(self._settings.output_dir).add(experience)
+        run.ledger.emit(
+            "consult_experience_captured",
+            from_role=from_role,
+            to_role=to_role,
+            experience_id=experience.id,
+        )
 
     def _capture_experiences(
         self, run: _Run, board: TaskBoard, bus: ContextBus
@@ -1135,6 +1383,74 @@ class Crew:
                 experience_id=exp.id,
                 role=exp.role,
             )
+        if self._entity_memory_enabled:
+            self._capture_entities(run, extracted)
+
+    def _capture_entities(
+        self, run: _Run, extracted: list[tuple[str, Experience]]
+    ) -> None:
+        """R3：把这次沉淀的经验里的命名事实追加进全局实体库。
+
+        实体来自同一批成功经验（因此依赖 ``capture_experiences`` 开启；两者任一
+        关闭都不会写盘）。追加而非覆写，读取时按名字归并，与经验库同一口径。
+        """
+        records: list[EntityRecord] = []
+        for _, exp in extracted:
+            records.extend(
+                entities_from_experience(exp, run_id=run.record.run_id)
+            )
+        if not records:
+            return
+        EntityMemoryStore(self._settings.output_dir).append(records)
+        run.ledger.emit(
+            "entity_memory_updated",
+            run_id=run.record.run_id,
+            entities=len(records),
+            distinct=len({record.name.casefold() for record in records}),
+        )
+
+    def _suspend(self, run: _Run, request: ApprovalRequest) -> RunRecord:
+        """R4：人工审批挂起 —— 写 ``awaiting_approval`` 后**正常退出，不封版**。
+
+        与 :meth:`_finalize` 的区别是三处刻意的：不发 ``run_finished``（这不是
+        终局）、不置 ``self._finalized``（resume 是另一个 Crew 实例，但同进程里
+        的状态保持诚实）、不改任务面板状态（下次 resume 从原卡点接着问）。
+        审批单本体由 ``DeferredPrompter`` 写进 ``approvals.jsonl``，这里只负责
+        让 run 状态和事件流对外可见。
+        """
+        if self._finalized:
+            return run.record
+        self._sync_stats(run, finished=False)
+        record = run.record
+        record.status = RunStatus.AWAITING_APPROVAL
+        record.updated_at = datetime.now()
+        run.checkpoint.save_record(record)
+        if self._board is not None:
+            run.checkpoint.save_tasks(self._board)
+            run.store.write_manifest()
+        payload = {
+            "run_id": record.run_id,
+            "approval_id": request.id,
+            "checkpoint": request.checkpoint,
+            "status": record.status.value,
+            "exit_code": self._exit_code(record.status),
+        }
+        run.ledger.emit("run_paused", goal=record.project_goal, **payload)
+        run.ledger.emit(
+            "approval_requested",
+            approval_id=request.id,
+            checkpoint=request.checkpoint,
+            context=request.context,
+        )
+        if self._on_event is not None:
+            self._on_event("run_paused", payload)
+            self._on_event("approval_requested", {
+                "run_id": record.run_id,
+                "approval_id": request.id,
+                "checkpoint": request.checkpoint,
+            })
+        run.ledger.close()
+        return record
 
     def _finalize(
         self, run: _Run, status: RunStatus, *, exit_code: int | None = None
@@ -1226,6 +1542,43 @@ def _fixtures_dir() -> Path:
     ``agentcrew.models.factory.DEFAULT_FIXTURES_DIR`` 注入临时夹具。
     """
     return Path(model_factory.DEFAULT_FIXTURES_DIR)
+
+
+#: R6：凡是以这些文案开头的「答复」都不是知识，是降级说明——不进经验库。
+_PLACEHOLDER_ANSWERS = (
+    "（离线演示",
+    "（对方未能作答",
+    "（对方未给出有效答复",
+    "（该角色暂不支持咨询",
+)
+
+
+def _consult_experience(
+    from_role: str,
+    to_role: str,
+    question: str,
+    answer: str,
+    *,
+    run_id: str,
+) -> Experience | None:
+    """把一次咨询的问答对转成 ``Experience``；占位答复返回 ``None``（R6 纯逻辑）。
+
+    独立成模块级函数是为了可单测：``Crew`` 那层只负责「有值就落盘 + 记事件」。
+    """
+    text = (answer or "").strip()
+    if not text or text.startswith(_PLACEHOLDER_ANSWERS):
+        return None
+    return Experience(
+        id=uuid4().hex,
+        task_description=f"{from_role} 向 {to_role} 提问：{(question or '').strip()[:200]}",
+        role=to_role,
+        solution_summary=text[:400],
+        artifacts=[],
+        key_decisions=[],
+        success=True,
+        run_id=run_id,
+        created_at=datetime.now(),
+    )
 
 
 def _extract_experiences(

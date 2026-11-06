@@ -59,10 +59,13 @@ function deriveGates(tasks) {
   };
   const g1 = summarize(byLayer('static'));
   const g2 = summarize(byLayer('llm'));
+  // R7：主管复核是第四层（谁派的活谁验收）。只有真的出现过 supervisor 记录
+  // 才追加这张卡——默认（开关关闭）时门禁列表仍是三层，既有断言不受影响。
+  const g2s = summarize(byLayer('supervisor'));
   const finalTask = tasks.find(t => t.id === 'T-FINAL');
   const g3Done = finalTask && finalTask.status === 'succeeded';
   const g3Status = g3Done ? 'passed' : (tasks.some(t => ['running','review'].includes(t.status)) ? 'running' : 'pending');
-  return [
+  const gates = [
     { id:'G1', layer:'static', name:'静态校验',
       status: g1.total ? (g1.failed ? 'failed' : 'passed') : 'running',
       checks: g1, duration_ms: null,
@@ -78,6 +81,16 @@ function deriveGates(tasks) {
       verdict: g3Done ? 'T-FINAL 已交付，等待人工确认' : '等待全部任务完成',
       rework: false, need_human: true, task_ref: 'T-FINAL' },
   ];
+  if (g2s.total) {
+    gates.splice(2, 0, {
+      id:'G2S', layer:'supervisor', name:'主管复核',
+      status: g2s.failed ? 'failed' : 'passed',
+      checks: g2s, duration_ms: null,
+      verdict: `${g2s.passed}/${g2s.total} 项通过（派活的人验收）`,
+      rework: true, need_human: false, task_ref: '—',
+    });
+  }
+  return gates;
 }
 
 /* 从 run.json 派生渲染层需要的字段 */

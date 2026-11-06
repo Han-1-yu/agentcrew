@@ -23,8 +23,8 @@
     },
     "status": {
       "type": "string",
-      "enum": ["running", "interrupted", "completed", "failed", "cancelled"],
-      "description": "RunStatus 枚举，见 state-enums.md。"
+      "enum": ["running", "interrupted", "awaiting_approval", "completed", "failed", "cancelled"],
+      "description": "RunStatus 枚举，见 state-enums.md。awaiting_approval（R4）是非终态的人工审批挂起，resume 时回到原卡点继续。"
     },
     "created_at": {
       "type": "string",
@@ -67,7 +67,10 @@
         "max_cost_usd": {"type": ["number", "null"], "description": "累计成本硬上限，USD decimal；null = 不限。"},
         "max_llm_calls": {"type": ["integer", "null"], "description": "累计 LLM 调用次数硬上限；null = 不限。"},
         "health_check_enabled": {"type": "boolean"},
-        "health_check_interval_secs": {"type": "integer", "minimum": 0}
+        "health_check_interval_secs": {"type": "integer", "minimum": 0},
+        "tools_enabled": {"type": "boolean", "description": "R3 工具链生产化开关，默认 false。非必填。"},
+        "entity_memory_enabled": {"type": "boolean", "description": "R3 实体记忆开关，默认 false。非必填。"},
+        "approval_mode": {"type": "string", "enum": ["interactive", "deferred"], "description": "R4 人工卡点实现方式，默认 interactive。非必填。"}
       }
     },
     "stats": {

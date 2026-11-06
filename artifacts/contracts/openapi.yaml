@@ -205,6 +205,78 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /runs/{run_id}/approvals:
+    get:
+      tags: [runs]
+      summary: R4 列出 run 的持久化人工审批单（跨进程可读）
+      description: >
+        从 `output_dir/<run_id>/approvals.jsonl` 按 id 归并读取审批单。
+        文件不存在 → 200 空列表；服务重启后仍可读。run_id 非法 → 400。
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: 审批单列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [run_id, approvals]
+                properties:
+                  run_id: { type: string }
+                  approvals:
+                    type: array
+                    items: { $ref: '#/components/schemas/ApprovalRequest' }
+        '400':
+          description: run_id 非法
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '503':
+          description: 服务端未配置 output_dir
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    post:
+      tags: [runs]
+      summary: R4 在另一个进程/界面里对审批单写裁决
+      description: >
+        裁决写入同一份 JSONL；引擎侧 `resume` 回到原卡点消费这张单后继续。
+        plan 卡点接受 approve / cancel / save_exit；delivery 卡点接受
+        accept / abort / rework（rework 需非空 task_ids）。
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [request_id, decision]
+              properties:
+                request_id: { type: string }
+                decision:
+                  type: object
+                  required: [action]
+                  properties:
+                    action: { type: string }
+                    task_ids:
+                      type: array
+                      items: { type: string }
+                decided_by: { type: string, default: api }
+      responses:
+        '200':
+          description: 裁决后的审批单
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApprovalRequest' }
+        '400':
+          description: body 形状非法 / run_id 非法
+        '404':
+          description: 审批单不存在
+        '409':
+          description: 审批单已裁决/已消费，或 action 不适合该卡点
+
   /runs/{run_id}/ledger:
     get:
       tags: [runs]
@@ -556,7 +628,32 @@ components:
     RunStatusEnum:
       type: string
       description: run 级状态
-      enum: [pending, running, completed, failed, cancelled, interrupted]
+      enum: [pending, running, awaiting_approval, completed, failed, cancelled, interrupted]
+      description: run 级状态；awaiting_approval 是 R4 的非终态人工审批挂起
+
+    ApprovalRequest:
+      type: object
+      description: >
+        R4 持久化人工审批单（<run_dir>/approvals.jsonl 按 id 归并后的状态）。
+        pending → decided → consumed 三态；consumed 表示引擎 resume 时已消费该裁决。
+      required: [id, run_id, checkpoint, status, created_at]
+      properties:
+        id: { type: string, example: AP-9f3c1a2b4d5e }
+        run_id: { type: string }
+        checkpoint: { type: string, enum: [plan, delivery] }
+        status: { type: string, enum: [pending, decided, consumed] }
+        context: { type: object }
+        decision:
+          type: object
+          properties:
+            action: { type: string }
+            task_ids:
+              type: array
+              items: { type: string }
+        decided_by: { type: string }
+        created_at: { type: string, format: date-time }
+        decided_at: { type: string, format: date-time, nullable: true }
+        consumed_at: { type: string, format: date-time, nullable: true }
 
     RunSummary:
       type: object

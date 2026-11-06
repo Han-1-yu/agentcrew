@@ -113,7 +113,10 @@ def review_line(tasks: Sequence[Task]) -> str:
     g1 = sum(1 for review in rejected if review.layer == "static")
     g2 = sum(1 for review in rejected if review.layer == "llm")
     human = sum(1 for review in rejected if review.layer == "human")
-    return f"{rate}%（G1 拦截 {g1} / G2 驳回 {g2} / 人工驳回 {human}）"
+    # R7：主管驳回只在真的发生过时才出现在这一行——默认输出逐字不变。
+    supervisor = sum(1 for review in rejected if review.layer == "supervisor")
+    tail = f" / 主管驳回 {supervisor}" if supervisor else ""
+    return f"{rate}%（G1 拦截 {g1} / G2 驳回 {g2} / 人工驳回 {human}{tail}）"
 
 
 def elapsed_line(record: RunRecord) -> str:

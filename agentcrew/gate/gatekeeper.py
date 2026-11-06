@@ -54,6 +54,7 @@ from agentcrew.gate.static_checks import (
     run_extended_checks,
     run_static,
 )
+from agentcrew.gate.supervisor import SupervisorReviewer
 from agentcrew.runtime.checkpoint import RunRecord
 from agentcrew.runtime.ledger import Ledger
 from agentcrew.task.task import ReviewRecord, Task, TaskStatus
@@ -149,6 +150,7 @@ class Gatekeeper:
         review_score_threshold: float | None = None,
         convergence_threshold: int | None = None,
         gate_config: dict[str, Any] | None = None,
+        supervisor: SupervisorReviewer | None = None,
     ) -> None:
         cfg = dict(gate_config or {})
         g3_enabled = bool(cfg.get("g3_enabled", True))
@@ -191,6 +193,9 @@ class Gatekeeper:
             reviewer.max_reviewers = g2_reviewers
         # task_id → 历次 LLM 驳回的规范化 issue 集合指纹（跨返工轮次的内存追踪）。
         self._convergence_history: dict[str, list[frozenset[str]]] = {}
+        #: R7：主管审核（谁派的活谁验收）。``None``（默认）= 不启用，行为与
+        #: R7 之前逐字一致；Crew 在 ``supervisor_review_enabled`` 且非 mock 时注入。
+        self._supervisor = supervisor
 
     # ---- 自动门禁 ----
 
@@ -292,6 +297,22 @@ class Gatekeeper:
                     "verdict": "approve",
                     "reviewer": converged_reviewer,
                 })
+
+        # R7：主管审核——只在 G1/G2 都放行、且这是动态委派任务时发生
+        # （``SupervisorReviewer`` 自己判断 ``delegated_by``，非委派任务返回 None）。
+        # 刻意放在 score / 收敛旁路**之后**：那两个旁路是对机器评审意见的容错，
+        # 派活的人说不行就是不行，不该被分数或「意见收敛」绕过。
+        if primary.verdict == "approve" and self._supervisor is not None:
+            supervised = await self._supervisor.review(
+                self._board.get(task_id), round_no=round_no)
+            if supervised is not None:
+                self._board.record_review(task_id, supervised)
+                records.append(supervised)
+                primary = supervised
+                # 主管驳回时它的 fix_hints 必须一起进返工提示，否则下游只会
+                # 拿到机器评审的旧意见，改不到点子上。
+                fix_hints = _dedup(
+                    hint for record in records for hint in record.fix_hints)
 
         if primary.verdict == "approve":
             next_status = self._to_succeeded(task_id)

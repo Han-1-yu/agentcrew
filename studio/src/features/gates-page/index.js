@@ -10,6 +10,7 @@ import { toast } from '../../ui/toast.js';
 
 import { switchNav } from '../../app/router.js';
 
+import { renderApprovalsSection } from './approvals.js';
 import { acceptGate, gateStatusLabel, rejectGate } from '../dashboard/gates.js';
 function renderGatesPage(container) {
   // 审批后只重渲染本页容器。此前用 container.parentElement（即 <main>），
@@ -19,6 +20,9 @@ function renderGatesPage(container) {
   container.appendChild(h('div', { class: 'page-head' },
     h('h2', {}, '质量门禁'),
     h('button', { class: 'btn', onclick: () => switchNav('dashboard') }, '返回')));
+  // R4：人工审批单区块先于门禁卡片。真实模式下走后端 REST；演示模式显示空态，
+  // 不伪造审批动作，也不影响下面 gate-full-card 的数量断言。
+  renderApprovalsSection(container);
   const list = h('div', { class: 'gates-full-list' });
   container.appendChild(list);
   const gates = S.dash.gates || [];
@@ -48,7 +52,8 @@ function renderGatesPage(container) {
         h('button', { class: 'btn btn-sm btn-primary', onclick: () => { acceptGate(g); rerender(); } }, '批准通过'),
         h('button', { class: 'btn btn-sm btn-danger', onclick: () => { rejectGate(g); rerender(); } }, '驳回返工'),
         h('button', { class: 'btn btn-sm', onclick: () => { g.status = 'running'; g.checks = { total: g.checks.total, passed: 0, failed: 0 }; toast('info', '重试门禁', g.name + ' 重新运行'); rerender(); } }, '重试'))
-        : h('div', { class: 'gate-full-readonly' }, '真实模式下门禁审批需通过 CLI 或 API 执行')));
+        : h('div', { class: 'gate-full-readonly' },
+          '自动门禁（G1/G2）只读；人工审批请在本页顶部「人工审批」区块处理，或用 CLI：main.py approvals / approve')));
   }
 }
 

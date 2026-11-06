@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal, cast
@@ -173,42 +173,57 @@ class Reviewer:
         # Gatekeeper 从 gate_config 的 g2_reviewers 写入。
         self.max_reviewers: int | None = None
 
-    async def review(self, task: Task, *, round_no: int) -> ReviewRecord:
-        """评审一个任务，返回本轮的 ``ReviewRecord``（``layer="llm"``）。
+    async def review(
+        self,
+        task: Task,
+        *,
+        round_no: int,
+        reviewer_keys: Sequence[str] | None = None,
+        layer: str = "llm",
+    ) -> ReviewRecord:
+        """评审一个任务，返回本轮的 ``ReviewRecord``（默认 ``layer="llm"``）。
 
-        评审人是 ``catalog.reviewer_for(task.role)`` 的全部角色。P1-2 起多评审人
+        评审人默认是 ``catalog.reviewer_for(task.role)`` 的全部角色。P1-2 起多评审人
         通过 ``asyncio.gather`` **并行**执行（单评审人保持原串行路径）：聚合语义
         （全 approve 才 approve）与「哪个评审人说了什么」都要求逐人拿到完整意见；
         mock 回放上下文的隔离已由 ``set_purpose`` 的 contextvar 保证（C1），评审
         调用本身也已受全局信号量限流，并行不会突破并发上限。
+
+        ``reviewer_keys``（R7）显式指定评审人，绕过目录的静态 ``reviewer_for``——
+        「谁派的活谁验收」需要按**任务实例**决定评审人（主管是动态的），目录里
+        没有这种关系。``layer`` 让这条记录在审计里与常规 G2 区分开
+        （``supervisor``），按层统计驳回数时不会混在一起。
         """
-        reviewer_keys = self._catalog.reviewer_for(task.role)
+        keys = (
+            list(reviewer_keys) if reviewer_keys is not None
+            else self._catalog.reviewer_for(task.role)
+        )
         # P2-5：gate_config.g2_reviewers 限制评审人数（取前 N，保持目录顺序）。
         if self.max_reviewers is not None:
-            reviewer_keys = list(reviewer_keys[:self.max_reviewers])
-        if not reviewer_keys:
+            keys = list(keys[:self.max_reviewers])
+        if not keys:
             return self._finish(
                 task, round_no,
                 verdict="approve", score=None,
                 issues=[_NO_REVIEWER_ISSUE], fix_hints=[],
-                reviewer=_NO_REVIEWER_KEY)
+                reviewer=_NO_REVIEWER_KEY, layer=layer)
 
         material = self._render_material(task, round_no)
         # P1-2：多评审人并行（asyncio.gather），单评审人保持原串行路径。
         # mock 的 contextvar 隔离由 set_purpose 在每个 _opinion 协程内独立设置，
         # 已安全；评审调用本身也受全局信号量限流，并行不会突破并发上限。
-        if len(reviewer_keys) == 1:
-            key = reviewer_keys[0]
+        if len(keys) == 1:
+            key = keys[0]
             opinions: list[tuple[str, _Opinion]] = [
                 (key, await self._opinion(key, task, material)),
             ]
         else:
             results = await asyncio.gather(
-                *[self._opinion(key, task, material) for key in reviewer_keys]
+                *[self._opinion(key, task, material) for key in keys]
             )
-            # 两边都由 reviewer_keys 派生，长度必然一致；strict 让不一致当场炸，
+            # 两边都由 keys 派生，长度必然一致；strict 让不一致当场炸，
             # 而不是悄悄少评一位
-            opinions = list(zip(reviewer_keys, results, strict=True))
+            opinions = list(zip(keys, results, strict=True))
 
         approved = all(opinion.approved for _, opinion in opinions)
         scores = [
@@ -239,7 +254,8 @@ class Reviewer:
                 hint for _, opinion in opinions for hint in opinion.fix_hints),
             suggestions=_dedup(
                 item for _, opinion in opinions for item in opinion.suggestions),
-            reviewer=keys[0] if len(keys) == 1 else "+".join(sorted(keys)))
+            reviewer=keys[0] if len(keys) == 1 else "+".join(sorted(keys)),
+            layer=layer)
 
     # ── 单个评审人 ────────────────────────────────────────────────────────
 
@@ -444,18 +460,22 @@ class Reviewer:
         fix_hints: list[str],
         reviewer: str,
         suggestions: list[str] | None = None,
+        layer: str = "llm",
     ) -> ReviewRecord:
         """落一条 ``gate_result`` 并组装 ``ReviewRecord``——本模块的唯一出口。
 
         ``suggestions`` 只进 ledger：评审员在标准之外的意见需要一个不阻塞的出口，
         但它们**不参与裁决、不写进 ``ReviewRecord.issues``** —— 一旦写进去，
         Task 27 的 Gatekeeper 就会把它们当成返工理由，等价于恢复到「开放式评审」。
+
+        ``layer``（R7）：默认 ``"llm"``（常规 G2）。主管审核传 ``"supervisor"``，
+        让审计与按层统计能把「机器评审驳回」和「派活的人驳回」分开。
         """
         self._ledger.emit(
             "gate_result",
             task_id=task.id,
             round=round_no,
-            layer="llm",
+            layer=layer,
             verdict=verdict,
             score=score,
             issues=issues,
@@ -465,7 +485,7 @@ class Reviewer:
         return ReviewRecord(
             task_id=task.id,
             round=round_no,
-            layer="llm",
+            layer=layer,
             verdict=verdict,
             score=score,
             issues=issues,

@@ -15,13 +15,16 @@
 |---|---|---|
 | `running` | run 正在执行（规划中或执行中）。 | `CheckpointStore.create()` 落盘初始状态；`_start()` 进入执行段时重置为 running。 |
 | `interrupted` | Ctrl-C / 计划卡点 `save_exit` 落盘后的**可恢复断点**（不是 cancelled）。 | `asyncio.CancelledError` 被捕获时 `_finalize(..., INTERRUPTED)`；G3 计划卡点选 `save_exit`。 |
+| `awaiting_approval` | R4 **非终态**：人工审批挂起，等待外部决策。 | `DeferredPrompter` 在 G3 卡点抛 `ApprovalPending` → `Crew._suspend()` 写状态、发 `run_paused` / `approval_requested`，**不封版、不发 `run_finished`**。 |
 | `completed` | 全部任务 SUCCEEDED 且交付卡点接受。 | `_final_status()` 在无 failed/blocked/skipped/cancelled 时返回 COMPLETED。退出码 0。 |
 | `failed` | 任一任务 failed/blocked/skipped，或规划失败（PlanFailedError）/ 预算耗尽 / 配置错误（ModelFactoryError）。 | `_final_status()`；异常路径见 `_start()` 的 except 分支。退出码 1（规划失败为 2、配置错误为 3、停滞为 4）。 |
 | `cancelled` | 用户主动取消（G3 `abort` / 软取消 / `cancel` 子命令打标）。 | `_finalize(..., CANCELLED)`。退出码 130。 |
 
-**RunStatus 没有显式跃迁表**——它由 `_final_status()` 在收尾时一次性判定，平时只能在 `running` ↔ 终态之间变化。
+**RunStatus 没有显式跃迁表**——终局仍由 `_final_status()` 在收尾时一次性判定。R4 之后多了一条**非终局**路径：`running → awaiting_approval → running`，由 `_suspend()` 与 `resume()` 驱动；`awaiting_approval` 在删除/清理守卫里与 `running` 同等保护（不会被 `clean(protect_running=True)` 或 `delete_run` 抹掉）。
 
-**RunPhase 不存在**：代码里没有独立的"阶段"枚举。规划/执行/交付三阶段是 `Crew._start()` 内的代码路径（`_plan_phase` / `_execute` / `human_delivery_gate`），不持久化、不枚举。
+**RunPhase 不存在**：代码里没有独立的"阶段"枚举。规划/执行/交付三阶段是 `Crew._start()` 内的代码路径（`_plan_phase` / `_execute` / `human_delivery_gate`），不枚举。但 R4 把「挂起在哪个卡点」持久化成了 `approvals.jsonl` 里审批单的 `checkpoint ∈ {plan, delivery}`，`Crew.resume_from` 据此决定重入哪个卡点 —— 这是可恢复的路标，不是阶段枚举。
+
+**resume 语义分叉**：`interrupted` / `running` 按 §13.3 直接重入执行（跳过规划与计划卡点）；`awaiting_approval` 必须回到原卡点，让 `DeferredPrompter` 消费已裁决的审批单。审批单缺失时 `resume_from` 直接报错，绝不悄悄绕过人工审批。
 
 ---
 
@@ -49,7 +52,7 @@
 |---|---|---|
 | `pending` | `ready` | 全部依赖 SUCCEEDED（reason=`dependencies-met`）。 |
 | `pending` | `blocked` | 任一传递依赖 FAILED/CANCELLED（reason=`upstream-failed`）。 |
-| `pending` | `skipped` | 任一依赖 SKIPPED（reason=`upstream-skipped`）。 |
+| `pending` | `skipped` | 任一**非条件性**依赖 SKIPPED（reason=`upstream-skipped`）；R4 条件分支未命中时 reason=`condition-not-met`，沿分支传播时 reason=`conditional-skip-propagated`——这两种是**预期跳过**，`Crew._final_status` 不把它们判成失败。 |
 | `pending` | `cancelled` | 用户取消。 |
 | `ready` | `running` | `take_ready()` 取得槽位派发，先 `attempts+=1`（reason=`dispatched`）。 |
 | `ready` | `blocked` | 派发前发现依赖已失败。 |
@@ -78,6 +81,11 @@
 | 人工重试 | `failed` → `ready` | `manual-retry` | `TaskBoard.reset_failed()` |
 | 交付卡点打回成功任务 | `succeeded` → `ready` | `delivery-rework` | `Crew._apply_rework()` |
 | 动态子任务入板 | `pending` → `ready` | `dynamic-created` | `TaskBoard.add_task()`（合成一条 PENDING→READY） |
+| R4 条件分支未命中 | `pending` → `skipped` | `condition-not-met` / `conditional-skip-propagated` | `TaskBoard.refresh()`；汇合节点把条件性 SKIPPED 的依赖视为已满足 |
+
+### 2.2b R4 条件分支（不改变十态状态机）
+
+条件性是 **reason 层的语义**，没有新增 TaskStatus 值：Agent 用 `<outcome>标签</outcome>` 把结果标签写进 `TaskResult.outcome`；下游 `Task.when_outcomes` 声明命中的标签。未命中分支以 `condition-not-met` 进入 `skipped` 并沿分支传播 `conditional-skip-propagated`；依赖多条互斥分支的汇合任务只要有一条 `succeeded` 就继续。默认无标签/无条件时 `refresh()` 的四步结果与 R4 之前逐字一致。
 
 ### 2.3 resume 修复规则（`repair_statuses`）
 
@@ -99,16 +107,16 @@
 代码中**没有** `GateStatus` 枚举。门禁裁决由两层表达：
 - 单次评审裁决：`ReviewRecord.verdict ∈ {approve, reject}`（见 schemas/gate.json）。
 - 任务离开 REVIEW 后的去向：`Task.status ∈ {succeeded, rework, failed}`（由 Gatekeeper 跃迁）。
-- 三层门禁：`ReviewRecord.layer ∈ {static (G1), llm (G2), human (G3)}`。
+- 三层门禁：`ReviewRecord.layer ∈ {static (G1), llm (G2), human (G3), supervisor (R7 主管审核)}`。
 
-G3 人工闸门的两个卡点选择：`PlanDecision.action ∈ {approve, edit, save_exit, cancel}`；`DeliveryDecision.action ∈ {accept, rework, abort}`。这些是一次性交互决策，不是持久化状态。
+G3 人工闸门的两个卡点选择：`PlanDecision.action ∈ {approve, edit, save_exit, cancel}`；`DeliveryDecision.action ∈ {accept, rework, abort}`。这些决策对象本身仍是一次性的，**但 R4 新增了持久化审批单**：`<run_dir>/approvals.jsonl` 中的 `ApprovalRequest` 有 `pending → decided → consumed` 三态，是「人在环」的可恢复实体；`CliPrompter`（interactive 模式）与 `DeferredPrompter`（deferred 模式）各自满足同一个 `Prompter` Protocol，前者不产生审批单。
 
 ---
 
 ## 5. 其他枚举（附带，非任务级状态）
 
 ### 5.1 ReviewRecord.layer / verdict
-- `layer`: `static` / `llm` / `human`
+- `layer`: `static` / `llm` / `human` / `supervisor`（R7：动态委派任务由派活的人验收，审计上与常规 G2 分开统计）
 - `verdict`: `approve` / `reject`
 
 ### 5.2 ArtifactKind（`agentcrew/artifacts/spec.py`）

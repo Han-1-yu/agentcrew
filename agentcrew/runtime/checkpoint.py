@@ -84,9 +84,25 @@ class RunStatus(str, Enum):
 
     RUNNING = "running"
     INTERRUPTED = "interrupted"  # Ctrl-C 落盘后的可恢复断点（不是 CANCELLED）
+    AWAITING_APPROVAL = "awaiting_approval"
+    """R4：人工审批挂起 —— **非终态、可跨进程恢复**。
+
+    与 INTERRUPTED 的区别：INTERRUPTED 的 resume 直接重入执行（跳过规划与卡点），
+    AWAITING_APPROVAL 的 resume 必须回到**产生审批请求的那个卡点**继续。审批
+    请求本体落在 ``<run_dir>/approvals.jsonl``，此状态只是一个可被 UI / CLI / API
+    识别的路标；删除守卫与清理逻辑把它与 RUNNING 同等保护。
+    """
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+#: 删除守卫要保护的「仍在生命周期中」的状态。R4 把审批挂起态纳进来 ——
+#: 它虽然不是 RUNNING，却是一个等待外部决策的活 run，被 clean / delete_run
+#: 删掉就等于把审批单连同产物一起抹掉。僵尸判定仍只认 RUNNING。
+_PROTECTED_RUN_STATUSES = frozenset(
+    (RunStatus.RUNNING.value, RunStatus.AWAITING_APPROVAL.value)
+)
 
 
 class RunRecord(BaseModel):
@@ -536,7 +552,7 @@ def clean(
     if protect_running:
         targets = [
             target for target in targets
-            if _deletion_guard_status(target) != RunStatus.RUNNING.value
+            if _deletion_guard_status(target) not in _PROTECTED_RUN_STATUSES
             or is_stale_running(target)
         ]
     for target in targets:
@@ -569,10 +585,15 @@ def delete_run(output_dir: Path, run_id: str) -> int:
     run_dir = output_dir / run_id
     if not run_dir.is_dir():
         raise FileNotFoundError(f"run 不存在: {run_dir}")
-    if (_deletion_guard_status(run_dir) == RunStatus.RUNNING.value
-            and not is_stale_running(run_dir)):
+    guarded = _deletion_guard_status(run_dir)
+    if guarded in _PROTECTED_RUN_STATUSES and not is_stale_running(run_dir):
+        reason = (
+            "正在等待人工审批，拒绝删除：请先 approve 或 cancel 该 run"
+            if guarded == RunStatus.AWAITING_APPROVAL.value
+            else "正在运行中，拒绝删除：请先 cancel 该 run"
+        )
         raise RuntimeError(
-            f"run {run_id!r} 正在运行中，拒绝删除：请先 cancel 该 run"
+            f"run {run_id!r} {reason}"
             f"（python main.py cancel {run_id}）")
     _assert_deletable(run_dir, output_dir.resolve())
     freed = sum(f.stat().st_size for f in run_dir.rglob("*") if f.is_file())

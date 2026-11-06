@@ -644,4 +644,7 @@ def _review_line(tasks: Sequence[Task]) -> str:
     rate = round(100 * (len(reviews) - len(rejected)) / len(reviews))
     g1 = sum(1 for review in rejected if review.layer == "static")
     g2 = sum(1 for review in rejected if review.layer == "llm")
-    return f"评审通过率：{rate}%（G1 拦截 {g1} / G2 驳回 {g2}）"
+    # R7：主管驳回只在真的发生过时才出现（默认输出逐字不变）。
+    supervisor = sum(1 for review in rejected if review.layer == "supervisor")
+    tail = f" / 主管驳回 {supervisor}" if supervisor else ""
+    return f"评审通过率：{rate}%（G1 拦截 {g1} / G2 驳回 {g2}{tail}）"

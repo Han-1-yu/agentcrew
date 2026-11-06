@@ -36,6 +36,7 @@
   截断」提示恰恰在那时最有解释力（Task 10 的裁定）。
 """
 
+import inspect
 import json
 import re
 from abc import ABC
@@ -44,6 +45,7 @@ from datetime import datetime
 from functools import wraps
 from typing import Any, NoReturn
 
+from agentcrew.agents.peer import CONSULT_CONTEXT
 from agentcrew.agents.prompting import (
     START_FENCE_RE,
     TRUNCATED_FINISH_REASONS,
@@ -84,8 +86,10 @@ from agentcrew.models.providers.mock import MockProvider, set_purpose
 from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.roles.spec import RoleSpec
 from agentcrew.runtime.ledger import Ledger
+from agentcrew.task.conditions import parse_outcome
 from agentcrew.task.task import Task, TaskResult
 from agentcrew.tools import Tool, ToolRegistry
+from agentcrew.tools.schema import schema_hint, validate_tool_args
 from agentcrew.utils.files import UnsafePathError
 from agentcrew.utils.trace import TraceContext, reset_trace, set_trace
 
@@ -186,6 +190,43 @@ _MESSAGE_SECTION = """\
 - 可以一次发多条 `<message>`；拿到回复后**不要重复问同一个问题**。
 - 对话轮次有限制，问完即继续产出本任务自己的 `file=` 围栏交付物——`<message>` 只是补充信息，不替代交付物。
 """
+
+#: R5：被咨询时的回复上限。要的是「一句能立刻用上的答复」，不是长文——
+#: 队友拿到长篇大论反而会把它当交付物模板抄。
+_CONSULT_MAX_TOKENS = 1024
+
+
+def _consult_context_hint(task: Task) -> str:
+    """R6：给被咨询方的「提问方任务背景」——短到不占预算，又够对方判断。
+
+    只带三样东西：任务标题、目标（截断）、要交付哪些文件。不带完整上下文包：
+    咨询是补充信息，把上游所有产物摘要塞过去等于把一次咨询变成一次全量执行。
+    """
+    parts = [f"任务：{task.title}"]
+    description = (task.description or "").strip()
+    if description:
+        parts.append(f"目标：{description[:300]}")
+    if task.deliverables:
+        paths = "、".join(spec.path for spec in task.deliverables[:8])
+        parts.append(f"需交付：{paths}")
+    return "\n".join(parts)
+
+
+def _consult_system_prompt(spec: RoleSpec) -> str:
+    """咨询模式的系统提示词：保留角色身份，但明确「只回答、不产出产物」。
+
+    提示词与 :meth:`BaseAgent.build_messages` 刻意分开：那边带全套产物协议
+    （``file=`` 围栏、长度预算），被咨询时带上只会让模型输出一堆围栏代码块，
+    而咨询方并不需要文件。
+    """
+    return "\n\n".join([
+        spec.system_prompt,
+        "## 咨询模式\n"
+        "队友在协作过程中向你提问。你只需要用简洁、确定的中文回答这个问题："
+        "先给结论，再给必要依据（默认值、约束、命名约定之类）。"
+        "不要输出代码围栏文件、不要声明交付物、不要反过来要求对方提交产物。"
+        "若确实无法判断，直说不确定，并给出你认为最合理的做法。",
+    ])
 
 
 class ParsedToolCall:
@@ -339,6 +380,7 @@ class BaseAgent(ABC):
         stream: bool = False,
         message_router: Callable[[str, str], str] | None = None,
         max_message_rounds: int = 5,
+        max_subtask_corrections: int = 1,
     ) -> None:
         """``catalog`` 是本 run 的角色目录（含自定义角色），可为 ``None``。
 
@@ -402,12 +444,25 @@ class BaseAgent(ABC):
         self._stream = stream
         self._message_router = message_router
         self._max_message_rounds = max_message_rounds
+        #: R8：子任务被拒时，把原因回灌并重问 LLM 的次数上限（``0`` = 不回灌，
+        #: 行为与 R8 之前逐字一致）。只有回调提供了 ``last_rejection`` 才可能触发。
+        self._max_subtask_corrections = max(0, int(max_subtask_corrections))
 
     def set_subtask_creator(
         self, creator: Callable[[dict], str | None] | None
     ) -> None:
         """运行时更换子任务回调（AgentFactory 在调度器换板后刷新缓存实例用）。"""
         self._subtask_creator = creator
+
+    def set_message_router(
+        self, router: Callable[[str, str], Any] | None
+    ) -> None:
+        """运行时更换跨角色路由（AgentFactory 刷新已缓存实例用，R5）。
+
+        ``router`` 可以是同步回调（旧行为）或返回 awaitable 的协程函数——后者
+        才能真的去问目标角色。``None`` 退回「不检测消息围栏」的原始行为。
+        """
+        self._message_router = router
 
     # ── 模板方法（子类不重写）────────────────────────────────────────────
 
@@ -459,7 +514,12 @@ class BaseAgent(ABC):
         # P2-1：检测 <subtask> 围栏并创建动态子任务（仅当注入了 creator）。
         # 在 parse 之前做：子任务请求不影响本任务自己的产物解析，且创建后立即
         # 记 ledger，子任务在下一轮调度即可被派发。
-        await self._maybe_create_subtasks(task, final_text)
+        # R8：被拒且**知道原因**时，把原因回灌给模型重新产出一次——否则它会
+        # 换个同样错的名字继续试，或者干脆把这件活丢掉。
+        rejections = await self._maybe_create_subtasks(task, final_text)
+        if rejections and self._max_subtask_corrections > 0:
+            final_text = await self._retry_after_subtask_rejection(
+                task, messages, alias, final_text, rejections)
 
         # P2-8：parse/validate 失败时在同一次 execute() 内自我重调 LLM 修正。
         parsed, notes = await self._produce_with_corrections(
@@ -474,6 +534,9 @@ class BaseAgent(ABC):
             summary="",  # 下面用 summarize 的结果替换（钩子要拿到完整的 TaskResult）
             artifacts=records,
             notes=notes,
+            # R4：结果标签来自 Agent 回复里的 <outcome> 围栏，供下游条件边判定。
+            # 没有围栏（既有 run / mock 夹具）时为 None，行为逐字不变。
+            outcome=parse_outcome(final_text),
             started_at=started_at,
             finished_at=finished_at,
             duration_ms=int((finished_at - started_at).total_seconds() * 1000),
@@ -718,6 +781,74 @@ class BaseAgent(ABC):
             finish_reason=finish_reason,
         )
 
+    async def consult(
+        self, question: str, *, from_role: str = "", context: str = ""
+    ) -> str:
+        """被其他角色点名咨询时的一次轻量作答（R5 真协作通道）。
+
+        与 :meth:`execute` 的区别是刻意的：**不**解析产物围栏、**不**落盘、
+        **不**改任务状态、**不**进看板。咨询只是「问一句话拿一句话」，不是一次
+        任务执行——所以它复用同一个 ``ModelFactory``（记账、预算、限流照旧），
+        但只发一次非流式调用，且不带产物协议，避免把队友的回复误当成交付物。
+
+        ``context``（R6）是**提问方当前任务的背景**（标题 / 目标 / 交付契约）。
+        没有它时队友只能看见一句孤立的问题，只能反问基础信息；带上之后第一次
+        就能问到点上。由 :class:`~agentcrew.agents.peer.PeerRouter` 从
+        contextvar 读出并透传，调用方不用手动拼。
+
+        离线 mock 通道没有 consult 夹具（``MockProvider`` 只认
+        plan/review/execute），此时返回一句占位说明而不是抛错：演示 run 不该
+        因为「模型答不出咨询」而失败。Provider 异常同样不抛给提问方——路由
+        失败不该打断在跑的任务，记 ``agent_consult_failed`` 后返回可继续的文案。
+        """
+        alias = self._resolve_alias(None)
+        provider = self._models.get(alias)
+        if isinstance(provider, MockProvider):
+            return (
+                f"（离线演示：{self.spec.title}未接真实模型，"
+                f"请按通用做法继续。）"
+            )
+        question_text = question.strip() or "（对方没有写明具体问题）"
+        asker = from_role or "其他角色"
+        if context.strip():
+            user_content = (
+                f"来自 {asker} 的提问。对方的任务背景如下（仅供判断，不必复述）：\n"
+                f"{context.strip()}\n\n问题：\n{question_text}"
+            )
+        else:
+            user_content = f"来自 {asker} 的提问：\n{question_text}"
+        messages: list[Message] = [
+            {"role": "system", "content": _consult_system_prompt(self.spec)},
+            {"role": "user", "content": user_content},
+        ]
+        try:
+            completion = await self._models.call(
+                alias,
+                messages,
+                temperature=self.spec.temperature,
+                # 咨询要的是能立刻用上的一句话，不是长文；压到 1k 以内。
+                max_tokens=min(_CONSULT_MAX_TOKENS, self.spec.max_output_tokens),
+                purpose="consult",
+                role=self.spec.key,
+            )
+        except Exception as exc:  # noqa: BLE001 —— 路由失败不打断提问方任务
+            self._ledger.emit(
+                "agent_consult_failed",
+                role=self.spec.key,
+                from_role=from_role,
+                error=f"{type(exc).__name__}: {exc}"[:300],
+            )
+            return "（对方未能作答：请按最合理的默认值自行决定并继续。）"
+        reply = completion.text.strip() or "（对方未给出有效答复）"
+        self._ledger.emit(
+            "agent_consult",
+            role=self.spec.key,
+            from_role=from_role,
+            question=question_text[:300],
+            reply_length=len(reply),
+        )
+        return reply
+
     async def _obtain_final_text(
         self, task: Task, messages: list[Message], alias: str
     ) -> str:
@@ -746,22 +877,32 @@ class BaseAgent(ABC):
                 break
             # 把这轮回复（含消息围栏）与每条路由回复回灌给模型，再问一次。
             messages.append({"role": "assistant", "content": text})
-            for msg in outgoing:
-                reply = self._message_router(msg.to, msg.content)
-                self._ledger.emit(
-                    "agent_message",
-                    task_id=task.id,
-                    role=self.spec.key,
-                    from_role=self.spec.key,
-                    to_role=msg.to,
-                    content=msg.content[:300],
-                )
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": f'<message_reply from="{msg.to}">\n{reply}\n</message_reply>',
-                    }
-                )
+            # R6：把「提问方在做什么」放进 contextvar，路由转发给被问角色。
+            # 用 contextvar 而不是改回调签名——同步夹具（旧测试）一行不用动。
+            context_token = CONSULT_CONTEXT.set(_consult_context_hint(task))
+            try:
+                for msg in outgoing:
+                    # R5：路由可以是同步回调（旧行为）或协程（真去问目标角色）。
+                    # 两者都支持，既有同步夹具一行不用改。
+                    reply = self._message_router(msg.to, msg.content)
+                    if inspect.isawaitable(reply):
+                        reply = await reply
+                    self._ledger.emit(
+                        "agent_message",
+                        task_id=task.id,
+                        role=self.spec.key,
+                        from_role=self.spec.key,
+                        to_role=msg.to,
+                        content=msg.content[:300],
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": f'<message_reply from="{msg.to}">\n{reply}\n</message_reply>',
+                        }
+                    )
+            finally:
+                CONSULT_CONTEXT.reset(context_token)
             text = await self._acquire_reply(task, messages, alias)
         return text
 
@@ -844,6 +985,26 @@ class BaseAgent(ABC):
                     f"{self.spec.key!r}，已拒绝执行。"
                 )
                 success = False
+            elif schema_errors := validate_tool_args(tool.input_schema, call.args):
+                # R3：执行前的 JSON Schema 强校验（对标 CrewAI _validate_kwargs）。
+                # 不抛异常、不改 <tool_result> 形状：把「错在哪 + 正确形状」一起
+                # 回灌，让模型在下一轮 ReAct 里自己写对。空 schema / 自由形状
+                # schema 一律放行（自定义工具与外部 MCP 向后兼容）。
+                hint = schema_hint(tool.input_schema)
+                result_text = (
+                    f"错误：工具 {call.name!r} 的入参不符合声明的 JSON Schema："
+                    + "；".join(schema_errors)
+                    + (f"。正确形状：{hint}" if hint else "")
+                    + "。请按正确形状重新发起 <tool_call>。"
+                )
+                success = False
+                self._ledger.emit(
+                    "tool_schema_invalid",
+                    task_id=task.id,
+                    role=self.spec.key,
+                    tool_name=call.name,
+                    errors=schema_errors,
+                )
             else:
                 try:
                     result_text = await tool.run(**call.args)
@@ -866,7 +1027,7 @@ class BaseAgent(ABC):
             )
         return "\n\n".join(blocks)
 
-    async def _maybe_create_subtasks(self, task: Task, raw: str) -> None:
+    async def _maybe_create_subtasks(self, task: Task, raw: str) -> list[str]:
         """P2-1：检测 ``<subtask>`` 围栏，经回调创建动态子任务并记 ledger。
 
         未注入 ``subtask_creator`` 时是零成本 no-op（向后兼容：原行为完全不变）。
@@ -874,9 +1035,14 @@ class BaseAgent(ABC):
         任务 id，随后记一条 ``subtask_created``（含 parent_id/child_id/title）。
         坏 JSON 块记一条 ``subtask_malformed`` 留痕后跳过——不让一个写错的
         子任务请求拖垮本任务。
+
+        R8：返回**被拒原因**列表（没有就是空列表）。原因来自回调对象上的
+        ``last_rejection`` —— 裸 ``lambda`` 没有这个属性，此处的 ``getattr``
+        会拿到 ``None``，于是既不回灌也不改变任何既有行为。
         """
         if self._subtask_creator is None:
-            return
+            return []
+        rejected: list[str] = []
         for spec in _extract_subtask_specs(raw):
             if "_malformed" in spec:
                 self._ledger.emit(
@@ -889,14 +1055,19 @@ class BaseAgent(ABC):
             enriched = {**spec, "parent_id": task.id}
             child_id = self._subtask_creator(enriched)
             if child_id is None:
-                # 回调拒绝建（目前唯一原因：请求的交付路径已被既有契约占用）。
-                # 不能静默丢弃——留痕让报告能解释「这个子任务为什么没出现」。
+                # 回调拒绝建。不能静默丢弃——留痕让报告能解释「这个子任务为什么
+                # 没出现」，有原因时还要回灌给模型让它改（见 _execute_traced）。
+                reason = getattr(
+                    self._subtask_creator, "last_rejection", None)
                 self._ledger.emit(
                     "subtask_rejected",
                     task_id=task.id,
                     role=self.spec.key,
                     title=str(spec.get("title", "")),
+                    reason=reason or "",
                 )
+                if reason:
+                    rejected.append(str(reason))
                 continue
             self._ledger.emit(
                 "subtask_created",
@@ -905,6 +1076,40 @@ class BaseAgent(ABC):
                 title=str(spec.get("title", "")),
                 role=str(spec.get("role", "")),
             )
+        return rejected
+
+    async def _retry_after_subtask_rejection(
+        self,
+        task: Task,
+        messages: list[Message],
+        alias: str,
+        raw: str,
+        reasons: Sequence[str],
+    ) -> str:
+        """R8：把子任务被拒的原因回灌给模型，要一次调整后的回复。
+
+        只做一轮。给它一次改的机会，改不好就按原样继续——**本任务自己的交付物
+        才是主体**，子任务拆不成不该把任务本身拖垮。重试后再次请求的子任务照建，
+        但再被拒也不追问（否则就成了无限套娃）。
+        """
+        joined = "\n".join(f"- {reason}" for reason in reasons)
+        messages.append({"role": "assistant", "content": raw})
+        messages.append({"role": "user", "content": (
+            "你请求的子任务没有被接受，原因如下：\n"
+            f"{joined}\n\n"
+            "请据此调整后重新输出本任务的**完整最终回复**："
+            "换一个真实存在的角色、改为自己完成，或减少拆分。"
+            "仍然必须包含本任务自己的 `file=` 交付物围栏。"
+        )})
+        self._ledger.emit(
+            "subtask_rejection_fed_back",
+            task_id=task.id,
+            role=self.spec.key,
+            reasons=list(reasons),
+        )
+        text = await self._acquire_reply(task, messages, alias)
+        await self._maybe_create_subtasks(task, text)
+        return text
 
     def _guard_truncation(self, completion: CompletionResult, task: Task) -> None:
         """回复撞上输出上限时直接失败（与单次调用路径同一条病因说明）。"""
@@ -966,6 +1171,8 @@ class BaseAgent(ABC):
                 completion = await self._invoke_model(task, messages, alias)
                 self._guard_truncation(completion, task)
                 final_text = completion.text
+                # 自我修正轮里再出现的子任务请求照建，但不再为「被拒」额外追问：
+                # 纠正循环本身已经有轮次上限，再套一层只会成倍放大成本。
                 await self._maybe_create_subtasks(task, final_text)
         raise AssertionError("unreachable")
 

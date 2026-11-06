@@ -29,6 +29,37 @@
   | `exit_code` | integer | 是 | 退出码（见 state-enums.md §5.6）。 |
   | `duration_ms` | integer | 是 | run 总耗时，毫秒。 |
 
+### `run_paused`（R4）
+- **触发时机**：`DeferredPrompter` 在 G3 卡点抛 `ApprovalPending`，`Crew._suspend()` 把 run 落成 `awaiting_approval` 后正常退出。**不是终局**，不发 `run_finished`、不封版。
+- **data**：
+  | 字段 | 类型 | 必填 | 含义 |
+  |---|---|---|---|
+  | `goal` | string | 是 | 项目目标原文。 |
+  | `run_id` | string | 是 | run 目录名。 |
+  | `approval_id` | string | 是 | 本次挂起对应的审批单 id。 |
+  | `checkpoint` | string | 是 | `plan` / `delivery`。 |
+  | `status` | string | 是 | 恒为 `awaiting_approval`。 |
+  | `exit_code` | integer | 是 | 挂起是正常中间态，复用 `ok=0`。 |
+
+### `approval_requested`（R4）
+- **触发时机**：与 `run_paused` 同一次 `_suspend()`，单独发一条便于 SSE/看板订阅待办。
+- **data**：
+  | 字段 | 类型 | 必填 | 含义 |
+  |---|---|---|---|
+  | `approval_id` | string | 是 | 审批单 id。 |
+  | `checkpoint` | string | 是 | `plan` / `delivery`。 |
+  | `context` | object | 是 | 给审批人看的上下文（任务 id、目标摘要、统计等），不含密钥。 |
+
+### `peer_dialogue_enabled`（R5）
+- **触发时机**：`Crew._start()` 在 `peer_dialogue_enabled` 打开时构造并下发 `PeerRouter` 后发一次（默认关闭时不发）。
+- **data**：
+  | 字段 | 类型 | 必填 | 含义 |
+  |---|---|---|---|
+  | `run_id` | string | 是 | run 目录名。 |
+  | `max_messages` | integer | 是 | 本次 run 的真实咨询次数上限。 |
+
+> R4 的 `approval_decided` **只走 `on_event`（SSE / 看板）**，由 `ApiServer._decide_approval` 在 HTTP 写入裁决后推送，不写 `ledger.jsonl`；裁决本身的权威记录是 `approvals.jsonl`。`run_paused` 与两条审批事件同名也会推给 `on_event`，供 `RunState.status` 更新为 `awaiting_approval`。
+
 ---
 
 ## 2. 规划阶段
@@ -126,18 +157,30 @@
 ## 4. 门禁
 
 ### `gate_result`
-- **触发时机**：每一层门禁裁决完成时——G1 static 由 Gatekeeper 发；G2 llm 由 Reviewer 发（带 `suggestions`）；G2 被 score 阈值旁路放行时 Gatekeeper 再补发一条 `verdict=approve`、`reviewer="<role>:score-bypass"` 的事件。
+- **触发时机**：每一层门禁裁决完成时——G1 static 由 Gatekeeper 发；G2 llm 由 Reviewer 发（带 `suggestions`）；G2 被 score 阈值旁路放行时 Gatekeeper 再补发一条 `verdict=approve`、`reviewer="<role>:score-bypass"` 的事件；R7 主管审核（`layer=supervisor`）同样由 Reviewer 发。
 - **data**：
   | 字段 | 类型 | 必填 | 含义 |
   |---|---|---|---|
   | `task_id` | string | 是 | |
   | `round` | integer | 是 | 评审轮次（从 1 起）。 |
-  | `layer` | string | 是 | `"static"` / `"llm"` / `"human"`。 |
+  | `layer` | string | 是 | `"static"` / `"llm"` / `"human"` / `"supervisor"`（R7：派活的人验收）。 |
   | `verdict` | string | 是 | `"approve"` / `"reject"`。 |
   | `score` | number \| null | 是 | 0..1；static 层恒为 null。 |
   | `issues` | string[] | 是 | 驳回理由。 |
   | `suggestions` | string[] | 否 | 仅 layer=llm：不阻塞的额外意见。 |
   | `reviewer` | string | 是 | `"static:contract"` / 角色 key / `"<role>:score-bypass"` / `"human:delivery"`。 |
+
+### `supervisor_review_skipped`（R7）
+- **触发时机**：`supervisor_review_enabled` 打开但没有真的审——三种原因：自己派给自己、主管角色不在目录里、离线 mock 通道无夹具。
+- **data**：
+  | 字段 | 类型 | 必填 | 含义 |
+  |---|---|---|---|
+  | `reason` | string | 是 | `self_delegated` / `unknown_supervisor` / `mock_channel`。 |
+  | `task_id` | string | 否 | 任务级跳过时有；`mock_channel` 是 run 级，没有任务。 |
+  | `supervisor` | string | 否 | 派活者的角色 key（`mock_channel` 时缺省）。 |
+  | `run_id` | string | 否 | 仅 `mock_channel`（run 装配期决定不启用）。 |
+
+> 主管审核**成功**时不会有额外事件：它就是一条 `gate_result(layer="supervisor")`，与 G2 同构，便于按层统一统计。
 
 ---
 
@@ -280,6 +323,44 @@
   | `role` | string | 是 | |
   | `max_tool_calls` | integer | 是 | 配置的最大轮数。 |
 
+### `agent_message`（P3-4 / R5）
+- **触发时机**：Agent 的回复里出现 `<message to="…">` 围栏，且注入了路由（R5 起为 `peer_dialogue_enabled`）。
+- **data**：
+  | 字段 | 类型 | 必填 | 含义 |
+  |---|---|---|---|
+  | `task_id` | string | 是 | 提问方任务。 |
+  | `role` | string | 是 | 提问方角色。 |
+  | `from_role` | string | 是 | 同 `role`（保留字段，便于统一消费）。 |
+  | `to_role` | string | 是 | 被问角色（或 `human`）。 |
+  | `content` | string | 是 | 问题正文，截断到 300 字。 |
+
+### `agent_consult`（R5）
+- **触发时机**：被咨询的角色真的完成了一次模型调用并给出答复。
+- **data**：
+  | 字段 | 类型 | 必填 | 含义 |
+  |---|---|---|---|
+  | `role` | string | 是 | 被咨询角色。 |
+  | `from_role` | string | 是 | 提问方角色。 |
+  | `question` | string | 是 | 问题正文，截断到 300 字。 |
+  | `reply_length` | integer | 是 | 答复字符数（不落全文，避免把 ledger 撑爆）。 |
+
+### `agent_consult_failed`（R5）
+- **触发时机**：被咨询方的模型调用抛异常（网络/鉴权等）。**不抛给提问方**，返回可继续的文案。
+- **data**：
+  | 字段 | 类型 | 必填 | 含义 |
+  |---|---|---|---|
+  | `role` | string | 是 | 被咨询角色。 |
+  | `from_role` | string | 是 | 提问方角色。 |
+  | `error` | string | 是 | `类型: 消息`，截断到 300 字。 |
+
+### `agent_message_deduped`（R5）
+- **触发时机**：同一 `(提问方, 目标, 问题摘要)` 第二次发问，直接复用上次答复、不花调用。
+- **data**：`from_role` / `to_role`（均为 string）。
+
+### `agent_message_exhausted`（R5）
+- **触发时机**：`max_peer_messages` 配额用尽后仍有新的发问。
+- **data**：`from_role` / `to_role` / `max_messages`（integer）。
+
 ---
 
 ## 8. 动态子任务（P2-1）
@@ -294,6 +375,25 @@
   | `title` | string | 是 | 子任务标题。 |
   | `role` | string | 是 | 子任务角色。 |
 
+### `subtask_rejected`（R8）
+- **触发时机**：`subtask_creator` 返回 `None`（没建成）。与 `subtask_rejected_by_policy` 的区别：这条是 Agent 侧的通用留痕，那条是 Scheduler 四道闸的具体原因。
+- **data**：
+  | 字段 | 类型 | 必填 | 含义 |
+  |---|---|---|---|
+  | `task_id` | string | 是 | 发起请求的任务。 |
+  | `role` | string | 是 | 发起请求的角色。 |
+  | `title` | string | 是 | 请求的子任务标题。 |
+  | `reason` | string | 是 | 拒绝原因；回调没提供时为空串（裸闭包用法）。 |
+
+### `subtask_rejection_fed_back`（R8）
+- **触发时机**：拒绝原因被回灌给模型、准备重问一次（仅在 `max_subtask_corrections > 0` 且回调提供了原因时）。
+- **data**：
+  | 字段 | 类型 | 必填 | 含义 |
+  |---|---|---|---|
+  | `task_id` | string | 是 | 发起请求的任务。 |
+  | `role` | string | 是 | 发起请求的角色。 |
+  | `reasons` | string[] | 是 | 本轮被拒的全部原因。 |
+
 ### `subtask_malformed`
 - **触发时机**：`<subtask>` 围栏 JSON 解析失败（记一条留痕后跳过，不拖垮主任务）。
 - **data**：
@@ -302,6 +402,40 @@
   | `task_id` | string | 是 | 输出坏围栏的任务。 |
   | `role` | string | 是 | |
   | `raw` | string | 是 | 原始坏 JSON 文本。 |
+
+### `subtask_rejected_by_policy`（R6）
+- **触发时机**：`Scheduler._delegation_rejection` 的四道闸任一不放行（角色不存在 / 非经理越权 / 层数超限 / 总数超限）。**与 `subtask_rejected` 的区别**：后者是 Agent 侧「回调返回 None」的通用留痕，这条带具体原因。
+- **data**：
+  | 字段 | 类型 | 必填 | 含义 |
+  |---|---|---|---|
+  | `parent_id` | string | 是 | 发起委派的任务 id。 |
+  | `role` | string | 是 | 请求派给的角色。 |
+  | `title` | string | 是 | 请求的子任务标题。 |
+  | `reason` | string | 是 | 人类可读的拒绝原因（含可用角色清单 / 上限值）。 |
+
+### `subtask_role_unknown`（R6）
+- **触发时机**：`<subtask>` 的 `role` 不在角色目录里，且不是显式的 `generic`。
+- **data**：`parent_id`（string）、`role`（string）、`available`（array of string，当前可用角色 key）。
+
+### `subtask_unauthorized`（R6）
+- **触发时机**：`delegation_mode=manager_only` 且父任务角色不是 `project_manager` / `product_manager`。
+- **data**：`parent_id`、`role`（父任务角色）、`requested_role`（请求派给谁）。
+
+### `subtask_depth_exceeded`（R6）
+- **触发时机**：新任务的委派层数超过 `max_delegation_depth`（根任务算第 0 层）。
+- **data**：`parent_id`、`depth`（新任务将会是第几层）、`max_depth`。
+
+### `subtask_quota_exceeded`（R6）
+- **触发时机**：本次 run 的动态子任务总数已达 `max_dynamic_tasks`。
+- **data**：`parent_id`、`used`、`max_tasks`。
+
+### `consult_experience_captured`（R6）
+- **触发时机**：`peer_consult_capture_enabled` 打开，且一次真实咨询给出了非占位答复，已写入 `output/knowledge/experiences.jsonl`。
+- **data**：`from_role`、`to_role`、`experience_id`。
+
+### `consult_capture_failed`（R6）
+- **触发时机**：沉淀回调抛异常（磁盘满 / 权限等）。**不影响本次咨询**，返回值照常交付。
+- **data**：`from_role`、`to_role`、`error`（`类型: 消息`，截断 300 字）。
 
 ---
 

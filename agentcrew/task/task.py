@@ -49,7 +49,7 @@ class ReviewRecord(BaseModel):
 
     task_id: str
     round: int  # 第几轮评审（从 1 起）
-    layer: Literal["static", "llm", "human"]
+    layer: Literal["static", "llm", "human", "supervisor"]
     verdict: Literal["approve", "reject"]
     score: float | None = None  # 0..1，仅 LLM 层有
     issues: list[str] = Field(default_factory=list)
@@ -68,6 +68,12 @@ class TaskResult(BaseModel):
     summary: str  # Agent 自述摘要（进上下文包）
     artifacts: list[ArtifactRecord]
     notes: str = ""  # 围栏块之外的说明文字（不落盘）
+    outcome: str | None = None
+    """R4：Agent 用 ``<outcome>标签</outcome>`` 声明的结果标签。
+
+    条件边（:attr:`Task.when_outcomes`）据此选择下游分支。``None`` = 未声明，
+    此时所有条件边任务都按「未命中」处理；既有 run 与 mock 夹具天然兼容。
+    """
     started_at: datetime
     finished_at: datetime
     duration_ms: int
@@ -90,9 +96,23 @@ class Task(BaseModel):
     dependencies: list[str] = Field(default_factory=list)  # 前置任务 id
     parent_id: str | None = None  # V2：树状拆解的父任务 id（None = 根任务）
     dynamic: bool = False  # P2-1：是否运行时由 Agent 请求动态创建（vs 规划阶段静态）
+    delegated_by: str = ""
+    """R6：派发者角色 key（动态委派留痕；空串 = 不是委派产生的任务）。
+
+    与 ``parent_id`` 的区别是「父任务可能被返工丢弃、角色不会」：事后看板想回答
+    「这个活是谁派的」，只能靠这里。规划阶段的任务与既存 run 数据一律为空串。
+    """
     priority: int = Field(default=5, ge=1, le=9)  # 数字小者优先
     brief: str = ""  # PM 写给下游的一句话摘要（供上下文压缩）
     timeout_seconds: int = 300  # P1-4：单次执行超时（秒），超时走 attempts 重试通道
+    when_outcomes: list[str] = Field(default_factory=list)
+    """R4 条件边：只有上游 ``TaskResult.outcome`` 命中这里任一标签时本任务才执行。
+
+    ``dependencies`` 仍是 AND 关系，但「条件性跳过」的上游被视为已满足 ——
+    因此依赖多条互斥分支的汇合任务只要有一条分支成功就能继续。空列表（默认）
+    = 无条件任务，行为与 R4 之前逐字一致。标签由 PM 在拆解时声明、由上游
+    Agent 在回复里用 ``<outcome>`` 围栏给出，不引入表达式引擎或外部依赖。
+    """
 
     # 运行时字段
     status: TaskStatus = TaskStatus.PENDING

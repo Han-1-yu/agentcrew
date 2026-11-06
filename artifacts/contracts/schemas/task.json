@@ -7,7 +7,7 @@
   "additionalProperties": false,
   "required": [
     "id", "title", "description", "role", "acceptance_criteria", "deliverables",
-    "dependencies", "parent_id", "dynamic", "priority", "brief",
+    "dependencies", "parent_id", "dynamic", "delegated_by", "priority", "brief",
     "timeout_seconds", "status", "attempts", "rework_count",
     "max_attempts", "max_reworks", "result", "reviews", "status_history",
     "created_at", "updated_at"
@@ -35,9 +35,18 @@
       "type": "boolean",
       "description": "true = 运行时由 Agent 请求动态创建（P2-1）；false = 规划阶段静态拆解。"
     },
+    "delegated_by": {
+      "type": "string",
+      "description": "R6 动态委派留痕：派发者角色 key；空串（默认）= 不是委派产生的任务。父任务可能被返工丢弃，角色不会，故单独留一份。非必填，旧版 tasks.json 不含此键。"
+    },
     "priority": {"type": "integer", "minimum": 1, "maximum": 9, "description": "数字小者优先，默认 5。"},
     "brief": {"type": "string", "description": "PM 写给下游的一句话摘要（供上下文压缩）。"},
     "timeout_seconds": {"type": "integer", "minimum": 1, "description": "单次执行超时秒数，默认 300；超时走 attempts 重试通道。"},
+    "when_outcomes": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "R4 条件边：上游 TaskResult.outcome 命中这里任一标签时本任务才执行；空数组（默认）= 无条件。非必填，旧版 tasks.json 不含此键。"
+    },
 
     "status": {
       "type": "string",
@@ -117,6 +126,10 @@
         "summary": {"type": "string", "description": "Agent 自述摘要（进下游上下文包）。"},
         "artifacts": {"type": "array", "items": {"$ref": "#/$defs/ArtifactRecord"}},
         "notes": {"type": "string", "description": "围栏块之外的说明文字。"},
+        "outcome": {
+          "type": ["string", "null"],
+          "description": "R4 结果标签：Agent 用 <outcome>标签</outcome> 声明，条件边据此选分支；null = 未声明。非必填，旧版结果不含此键。"
+        },
         "started_at": {"type": "string", "description": "执行开始时间，naive 本地 ISO。"},
         "finished_at": {"type": "string", "description": "执行结束时间，naive 本地 ISO。"},
         "duration_ms": {"type": "integer", "minimum": 0, "description": "执行耗时，整数毫秒。"}
@@ -130,7 +143,7 @@
       "properties": {
         "task_id": {"type": "string"},
         "round": {"type": "integer", "minimum": 1, "description": "第几轮评审，从 1 起。"},
-        "layer": {"type": "string", "enum": ["static", "llm", "human"], "description": "G1 static / G2 llm / G3 human。"},
+        "layer": {"type": "string", "enum": ["static", "llm", "human", "supervisor"], "description": "G1 static / G2 llm / G3 human / R7 supervisor（派活的人验收）。"},
         "verdict": {"type": "string", "enum": ["approve", "reject"]},
         "score": {"type": ["number", "null"], "minimum": 0, "maximum": 1, "description": "0..1；仅 llm 层有值，static 层恒为 null。"},
         "issues": {"type": "array", "items": {"type": "string"}},
@@ -154,7 +167,7 @@
           "succeeded", "failed", "blocked", "cancelled", "skipped"]},
         "reason": {
           "type": "string",
-          "description": "跃迁原因。常见值：dispatched / rework-dispatched / executed / gate-succeeded / gate-rework / gate-failed / upstream-failed / upstream-skipped / dependencies-met / dependencies-recovered / resume-repair / manual-retry / delivery-rework / hard-cancel / attempts-exhausted / gate-error / retry: <错误串> / dynamic-created。"
+          "description": "跃迁原因。常见值：dispatched / rework-dispatched / executed / gate-succeeded / gate-rework / gate-failed / upstream-failed / upstream-skipped / dependencies-met / dependencies-recovered / resume-repair / manual-retry / delivery-rework / hard-cancel / attempts-exhausted / gate-error / retry: <错误串> / dynamic-created / condition-not-met / conditional-skip-propagated（R4 条件分支，视为预期跳过而非失败）。"
         },
         "at": {"type": "string", "description": "跃迁时间，naive 本地 ISO。"}
       }

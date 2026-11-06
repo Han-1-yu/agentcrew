@@ -55,6 +55,17 @@ def _validate_run_options(options: Mapping[str, Any]) -> str | None:
     allowed = {
         "mock", "default_model", "max_concurrency", "context_budget_tokens",
         "max_cost_usd", "max_llm_calls", "model_tiers", "gate_config",
+        # R3：两个默认关闭的能力开关，允许按 run 显式打开。
+        "tools_enabled", "entity_memory_enabled",
+        # R4：允许按 run 打开「审批单挂起」模式。
+        "approval_mode",
+        # R5：允许按 run 打开跨角色咨询并收紧配额。
+        "peer_dialogue_enabled", "max_peer_messages",
+        # R6：咨询沉淀与动态委派治理。
+        "peer_consult_capture_enabled", "delegation_mode",
+        "max_delegation_depth", "max_dynamic_tasks",
+        # R7：主管审核；R8：委派拒绝原因回灌次数。
+        "supervisor_review_enabled", "max_subtask_corrections",
     }
     unknown = sorted(set(options) - allowed)
     if unknown:
@@ -65,9 +76,29 @@ def _validate_run_options(options: Mapping[str, Any]) -> str | None:
             if key not in {"default_model", "max_cost_usd", "max_llm_calls"}:
                 return f"options.{key} 不能为 null"
             continue
-        if key == "mock":
+        # R3：两个能力开关与 mock 同为布尔开关，共用一条类型校验。
+        if key in ("mock", "tools_enabled", "entity_memory_enabled",
+                   "peer_dialogue_enabled", "peer_consult_capture_enabled",
+                   "supervisor_review_enabled"):
             if not isinstance(value, bool):
-                return "options.mock 必须是布尔值"
+                return f"options.{key} 必须是布尔值"
+        elif key == "delegation_mode":
+            if value not in ("any", "manager_only"):
+                return "options.delegation_mode 必须是 any 或 manager_only"
+        elif key in ("max_delegation_depth", "max_dynamic_tasks",
+                     "max_subtask_corrections"):
+            if isinstance(value, bool) or not isinstance(value, int):
+                return f"options.{key} 必须是整数"
+            if value < 0:
+                return f"options.{key} 必须 >= 0"
+        elif key == "approval_mode":
+            if value not in ("interactive", "deferred"):
+                return "options.approval_mode 必须是 interactive 或 deferred"
+        elif key == "max_peer_messages":
+            if isinstance(value, bool) or not isinstance(value, int):
+                return "options.max_peer_messages 必须是整数"
+            if value < 0:
+                return "options.max_peer_messages 必须 >= 0"
         elif key == "default_model":
             if not isinstance(value, str) or not value.strip():
                 return "options.default_model 必须是非空字符串"
@@ -241,6 +272,10 @@ class ApiServer:
             goal = data.get("goal")
             if isinstance(goal, str) and goal:
                 self.runs[run_id].goal = goal
+        elif event == "run_paused":
+            # R4：审批挂起不是终局，不能落到 run_finished 的 else→failed。
+            self.runs[run_id].status = str(
+                data.get("status") or "awaiting_approval")
         elif event == "run_completed":
             self.runs[run_id].status = "completed"
         elif event == "run_failed":
@@ -433,6 +468,9 @@ class ApiServer:
             if action == "stats":
                 await self._get_stats(run_id, writer)
                 return
+            if action == "approvals":
+                await self._get_approvals(run_id, writer)
+                return
         await self._send_json(writer, 404, {"error": "Not Found"})
 
     def _disk_status(self, run_id: str) -> dict[str, Any] | None:
@@ -469,6 +507,78 @@ class ApiServer:
             "source": "disk",
         }
 
+    async def _get_approvals(
+        self, run_id: str, writer: asyncio.StreamWriter
+    ) -> None:
+        """R4：列出一个 run 的全部审批单（服务重启后仍从盘上可读）。"""
+        if self._output_dir is None:
+            await self._send_json(writer, 503, {"error": "output_dir 未配置"})
+            return
+        from agentcrew.runtime.approvals import ApprovalStore
+        from agentcrew.runtime.checkpoint import _validated_run_id
+
+        try:
+            rid = _validated_run_id(run_id)
+        except ValueError:
+            await self._send_json(writer, 400, {"error": "非法 run_id"})
+            return
+        store = ApprovalStore(self._output_dir / rid)
+        await self._send_json(writer, 200, {
+            "run_id": rid,
+            "approvals": [
+                item.model_dump(mode="json") for item in store.all()
+            ],
+        })
+
+    async def _decide_approval(
+        self, run_id: str, body: bytes, writer: asyncio.StreamWriter
+    ) -> None:
+        """R4：在 HTTP 通道写裁决；引擎侧 resume 后消费这张单继续。"""
+        if self._output_dir is None:
+            await self._send_json(writer, 503, {"error": "output_dir 未配置"})
+            return
+        from agentcrew.runtime.approvals import ApprovalError, ApprovalStore
+        from agentcrew.runtime.checkpoint import _validated_run_id
+
+        try:
+            rid = _validated_run_id(run_id)
+            data = json.loads(body.decode("utf-8")) if body else {}
+        except ValueError:
+            await self._send_json(writer, 400, {"error": "非法 run_id 或 JSON"})
+            return
+        if not isinstance(data, dict):
+            await self._send_json(
+                writer, 400, {"error": "body 必须是 JSON 对象"})
+            return
+        request_id = data.get("request_id")
+        decision = data.get("decision")
+        decided_by = data.get("decided_by", "api")
+        if (not isinstance(request_id, str) or not request_id
+                or not isinstance(decision, dict)
+                or not isinstance(decided_by, str)):
+            await self._send_json(writer, 400, {
+                "error": "需要 request_id(str) / decision(object) / decided_by(str)"
+            })
+            return
+        store = ApprovalStore(self._output_dir / rid)
+        if store.get(request_id) is None:
+            await self._send_json(
+                writer, 404, {"error": f"审批单不存在：{request_id}"})
+            return
+        try:
+            updated = store.decide(
+                request_id, decision, decided_by=decided_by[:80])
+        except ApprovalError as exc:
+            await self._send_json(writer, 409, {"error": str(exc)})
+            return
+        self.on_event("approval_decided", {
+            "run_id": rid,
+            "approval_id": request_id,
+            "checkpoint": updated.checkpoint,
+            "action": updated.decision.get("action", ""),
+        })
+        await self._send_json(writer, 200, updated.model_dump(mode="json"))
+
     async def _handle_post(
         self, path: str, body: bytes, writer: asyncio.StreamWriter,
     ) -> None:
@@ -496,6 +606,9 @@ class ApiServer:
                 return
             if action == "resume":
                 await self._resume_run(run_id, writer)
+                return
+            if action == "approvals":
+                await self._decide_approval(run_id, body, writer)
                 return
             if action == "agents":
                 await self._switch_agent(run_id, body, writer)
@@ -604,7 +717,18 @@ class ApiServer:
         settings = (
             self._settings.model_copy(update=dict(options))
             if options else self._settings)
-        # API 服务器无人值守：人工卡点会在 await prompter 上永久挂起。
+        # R4：deferred 模式把「问人」外包给审批单，run 挂起而不是等 stdin。
+        # 这是 API 通道上第一次真正允许人工卡点存在。
+        if settings.approval_mode == "deferred":
+            from agentcrew.gate.deferred import DeferredPrompter
+            gate = (
+                settings.gate
+                if settings.gate in ("both", "plan", "delivery") else "both"
+            )
+            settings = settings.model_copy(update={"gate": gate})
+            return Crew(settings, on_event=self.on_event,
+                        prompter=DeferredPrompter())
+        # 其余情况：API 服务器无人值守，人工卡点会在 await prompter 上永久挂起。
         settings = settings.model_copy(update={"gate": "none"})
         return Crew(settings, on_event=self.on_event)
 
