@@ -1744,6 +1744,62 @@ X-AgentCrew-Signature: sha256=<hex>
 
 ---
 
+## R13 MCP 服务器生产接线
+
+`agentcrew/mcp` 早就有完整的客户端：能连服务器、能列工具、能调工具。但整条链路缺最后
+一环——**没有一条路把 MCP 工具交给 Agent**。`mcp_servers` 因此一直是死配置，Agent 永远
+只看得见 6 个内置工具。
+
+### 1. 怎么开
+
+```yaml
+tools_enabled: true          # MCP 工具也是工具，没有注册表就无处安放
+mcp_servers:
+  fs:
+    command: [npx, "-y", "@modelcontextprotocol/server-filesystem", /tmp]
+  api:
+    transport: sse
+    url: https://mcp.example/sse
+    headers: {Authorization: "Bearer …"}
+```
+
+`tools_enabled: false`（默认）时一个子进程都不起、一次网络都不发。
+
+### 2. 装配时序
+
+```
+run 开始 → 建工具注册表（6 个内置）→ 连 MCP → 发现工具 → 登记 → 构造 AgentFactory
+```
+
+必须在 `AgentFactory` 之前完成：工厂此刻才拿得到完整工具清单，晚一步则首轮提示词里
+没有 MCP 工具，模型永远不知道自己有这些能力。
+
+### 3. 三条边界
+
+| 边界 | 做法 | 为什么 |
+|---|---|---|
+| 注册名带服务器前缀 | `fs__read_file` | 第三方工具名由服务端定义，会与内置工具撞名；而 `register` 的语义是「后登记覆盖先登记」——撞上就等于第三方脚本悄悄替换了内置工具 |
+| 单个服务器失败只跳过 | 记 `mcp_failed`，其它照连 | 一个外挂坏了不该让整支团队停摆。`CancelledError` 不在此列（`BaseException`），取消照常穿透 |
+| 收尾必须关连接 | `finally` 里 `await _close_mcp()` | 否则 stdio 子进程泄漏；异常路径不走 `_finalize`，只能靠 finally 兜 |
+
+`schema` 原样透传，不替服务端改写：运行前的强校验只认它认识的 JSON Schema 子集，其余
+按「未声明」放行——比改写更安全，也不会把合法工具判成非法。
+
+### 4. 安全边界
+
+`mcp_servers` 是**运维显式配置**的命令行或 URL，接上之后模型就能调用它们的工具。
+这意味着：配置里写什么，等于授权模型执行什么——请只接可信服务器。
+
+工具调用本身仍受 `tool_permissions` 约束（`["*"]` 或未列出的角色 = 全部允许），
+调用结果照常进 ledger 并可审计。
+
+### 5. 兼容性
+
+默认 `mcp_servers={}` → `_attach_mcp_tools` 立刻返回；`tools_enabled=false` 时它拿到的
+注册表是 `None`，同样直接返回。两条路径都零子进程、零网络，三套离线样例照旧 9/9、5/5、7/7。
+
+---
+
 ## 自定义角色 / 团队开发指南
 
 「角色是数据，不是代码」不是口号：一个新角色的全部差异（提示词、输出契约、

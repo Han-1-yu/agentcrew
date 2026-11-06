@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -106,6 +106,8 @@ from agentcrew.tools import (
     WebFetchTool,
     WriteFileTool,
 )
+from agentcrew.mcp.adapter import adapt_tools
+from agentcrew.mcp.client import MCPClient
 from agentcrew.tools.registry import ToolRegistry
 from agentcrew.utils.files import atomic_write_text
 
@@ -286,6 +288,8 @@ class Crew:
         self._on_event = on_event
         #: R12：出站 Webhook 分发器；``None`` = 未配置 URL（零开销）。
         self._webhook: WebhookDispatcher | None = None
+        #: R13：本次 run 建立的 MCP 连接（收尾时逐个 stop，否则子进程泄漏）。
+        self._mcp_clients: list[MCPClient] = []
         self._injected_store = store
         self._capture_experiences_enabled = capture_experiences
         self._reuse_knowledge_enabled = reuse_knowledge
@@ -556,6 +560,9 @@ class Crew:
             )
             return await self._start(checkpoint, goal=goal, resume_board=None)
         finally:
+            # R13：先关 MCP 连接——异常路径不走 ``_finalize``，不在这里关就会
+            # 留下孤儿子进程。
+            await self._close_mcp()
             # R12：兜底排空 Webhook（``_finalize`` 已排空时这里是幂等空操作）。
             # 异常路径不走 ``_finalize``，没有这一步则最后一批通知直接丢。
             self._close_webhook()
@@ -573,6 +580,9 @@ class Crew:
         try:
             return await self._start(checkpoint, goal=None, resume_board=resume_board)
         finally:
+            # R13：先关 MCP 连接——异常路径不走 ``_finalize``，不在这里关就会
+            # 留下孤儿子进程。
+            await self._close_mcp()
             # R12：兜底排空 Webhook（``_finalize`` 已排空时这里是幂等空操作）。
             # 异常路径不走 ``_finalize``，没有这一步则最后一批通知直接丢。
             self._close_webhook()
@@ -614,6 +624,9 @@ class Crew:
         goal = record.project_goal if goal is None else goal
         # R3：工具链装配。默认关闭时返回 None，AgentFactory 与改造前完全一致。
         tool_registry = self._build_tool_registry(checkpoint, ledger)
+        # R13：把 ``mcp_servers`` 声明的 MCP 服务器连上并登记它们的工具。
+        # 必须在 AgentFactory 构造之前完成——工厂此刻才拿得到完整工具清单。
+        await self._attach_mcp_tools(tool_registry, ledger)
         # P3-2：按配置决定是否给工厂挂响应缓存（默认 None = 不缓存，向后兼容）。
         resp_cache = LLMCache() if self._settings.llm_cache_enabled else None
         models = ModelFactory(
@@ -1204,6 +1217,63 @@ class Crew:
             signed=bool(config.secret),
         )
         return dispatcher
+
+    async def _attach_mcp_tools(
+        self, registry: ToolRegistry | None, ledger: Ledger
+    ) -> None:
+        """R13：连接 ``mcp_servers`` 里的每个服务器，把工具登记进注册表。
+
+        只在 ``tools_enabled``（``registry`` 非空）时装配——MCP 工具也是工具，没有
+        注册表就无处安放；这也保证了默认配置下**零子进程、零网络**。
+
+        单个服务器失败（命令不存在、握手超时、配置形状不对）只记一条 ``mcp_failed``
+        并跳过，不影响其它服务器与本 run：MCP 是外挂能力，一个外挂坏了不该让整支
+        团队停摆。``CancelledError`` 不在此列（它是 ``BaseException``），取消照常穿透。
+        """
+        if registry is None or not self._settings.mcp_servers:
+            return
+        for server, raw in self._settings.mcp_servers.items():
+            if not isinstance(raw, Mapping):
+                ledger.emit(
+                    "mcp_failed", server=str(server),
+                    error="mcp_servers 的每个条目都必须是映射")
+                continue
+            client: MCPClient | None = None
+            try:
+                client = MCPClient.from_config(dict(raw))
+                await client.start()
+                specs = await client.list_tools()
+            except Exception as exc:  # noqa: BLE001 —— 第三方进程什么都可能抛
+                if client is not None:
+                    try:
+                        await client.stop()
+                    except Exception:  # noqa: BLE001 —— 关闭失败不掩盖原始错误
+                        pass
+                ledger.emit(
+                    "mcp_failed", server=str(server),
+                    error=f"{type(exc).__name__}: {exc}"[:300])
+                continue
+            tools = adapt_tools(str(server), client, specs)
+            for tool in tools:
+                registry.register(tool)
+            self._mcp_clients.append(client)
+            ledger.emit(
+                "mcp_connected",
+                server=str(server),
+                tools=[tool.name for tool in tools],
+            )
+
+    async def _close_mcp(self) -> None:
+        """R13：关闭本次 run 建立的全部 MCP 连接（幂等）。
+
+        关不掉的连接静默跳过：收尾阶段再抛异常会把成功的结果变成失败。
+        """
+        clients, self._mcp_clients = self._mcp_clients, []
+        for client in clients:
+            try:
+                await client.stop()
+            except Exception:  # noqa: BLE001 —— 已在收尾，不再向上抛
+                pass
 
     def _webhook_sink(
         self, ledger: Ledger

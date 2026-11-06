@@ -8,11 +8,11 @@
 
 ## 0. 一句话现状
 
-**引擎与管线健康，无 P0/P1 阻断项。** 全量测试 **2334 passed / 1 skipped / 0 failed**（2335 用例收集，2026-11-06 R12 后分 5 批实测），三个预设样例 100% 通过，真实模型通道可用（`doctor` 6/6 通过）；Studio 架构检查 / e2e 28/28 / selftest 16/16 全绿。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook，让外部系统能知道跑到哪了。
+**引擎与管线健康，无 P0/P1 阻断项。** 全量测试 **2346 passed / 1 skipped / 0 failed**（2347 用例收集，2026-11-06 R13 后分 5 批实测），三个预设样例 100% 通过，真实模型通道可用（`doctor` 6/6 通过）；Studio 架构检查 / e2e 28/28 / selftest 16/16 全绿。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链。
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | 2335 collected / 2334 passed / 1 skipped / 0 failed（3.12.10 + pytest 9.1.1，`--assert=plain`；R4 +38、R5 +16、R6 +21、R7 +14、R8 +9、R9 +6、R10 +13、R11 +17、R12 +21，本机断言重写 segfault 后按 §6 分 5 批累计） |
+| 全量测试 | 2347 collected / 2346 passed / 1 skipped / 0 failed（3.12.10 + pytest 9.1.1，`--assert=plain`；R4 +38、R5 +16、R6 +21、R7 +14、R8 +9、R9 +6、R10 +13、R11 +17、R12 +21、R13 +12，本机断言重写 segfault 后按 §6 分 5 批累计） |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
@@ -74,7 +74,7 @@ contracts.py（零依赖契约层：EventSink / TaskLike）
 | 模型 | 7 类 provider（openai 兼容 / anthropic / mock / cli / 三传输 MCP）；27 个预设；四级别名解析；故障转移 + 冷却矩阵（402=30min，429=Retry-After 或指数退避，5xx=指数退避）；per-provider 并发信号量 + 60s RPM 滑动窗口；复杂度自动选模 + 动态校准；响应缓存（temperature=0）；预算硬上限 + 80%/90% 软阈值 |
 | 可观测 | `ledger.jsonl` 全事件审计（run/task/llm_call/gate/error…）；contextvars 链路追踪（`utils/trace.py`，`llm_call` 自动带 `task_id`/`attempt`）；`log_level` + `AGENTCREW_LOG_JSON=1` 结构化日志（含脱敏）；`diff` / `status` / 统计端点 |
 | 产物 | 契约校验（路径/类型/最小字节/必需符号）+ 命名空间隔离 + `MANIFEST.json` + sha256；安全落盘（双侧路径规范化） |
-| 工具（R3） | 6 个内置工具（`read_file` / `list_files` / `grep` / `run_python` / `write_file` / `web_fetch`）；`tools_enabled` 默认关闭的 run 级自动装配 + `tool_permissions` 执行期下发；执行前 JSON Schema 子集强校验（失败带正确形状回灌、绝不执行）；`web_fetch` 全链路 SSRF 防护 |
+| 工具（R3/R13） | 6 个内置工具（`read_file` / `list_files` / `grep` / `run_python` / `write_file` / `web_fetch`）+ **R13 起 MCP 服务器的工具**（`server__tool` 前缀防撞名、schema 原样透传、单服务器失败只跳过）；`tools_enabled` 默认关闭的 run 级自动装配 + `tool_permissions` 执行期下发；执行前 JSON Schema 子集强校验（失败带正确形状回灌、绝不执行）；`web_fetch` 全链路 SSRF 防护 |
 | 知识（R3/R11） | 经验库（R11 起为中文二元组 + BM25 检索：IDF 压虚词、长度归一、单字命中不算相关）+ 实体记忆（纯规则抽取五类实体、跨 run 追加归并、加权检索注入 PM 上下文）；`entity_memory_enabled` 默认关闭 |
 | 对外通知（R12） | 出站 Webhook：后台线程投递（不阻塞 run）、HMAC-SHA256 签名（时间戳纳入签名防重放）、`delivery` id 重试不变、失败重试有上限且不改 run 结局；默认推五个 run 级节点；密钥不导出/不进快照/进脱敏词表；默认关闭 |
 | 接口 | CLI（`run/resume/status/roles/agents/switch/samples/clean/cancel/delete/serve/doctor/diff/providers/models/config`）；HTTP API + SSE + Web UI；API Key 认证 + IP 限流；并发 run 上限 `AGENTCREW_MAX_CONCURRENT_RUNS=8` |
@@ -503,8 +503,39 @@ Ledger**）。端到端实跑一次 mock run，本地接收端收到 `run_starte
 与退出码；`schema_version=1`、`TaskStatus` 仍 10 态。
 
 **刻意未做**：投递的持久化重放队列（进程内退出即丢未投部分）→ 多接收端（当前单 URL）
-→ 接收端回调触发补偿动作 → 事件级条件过滤（如「只推失败」）→ 拖拽编排画布 →
-MCP 服务器生产接线。
+→ 接收端回调触发补偿动作 → 事件级条件过滤（如「只推失败」）→ 拖拽编排画布。
+
+### 3.18 R13：MCP 服务器生产接线（2026-11-06）
+
+`agentcrew/mcp` 早就有完整的客户端：能连服务器、能列工具、能调工具。但**没有一条路把
+MCP 工具交给 Agent**——`mcp_servers` 因此是死配置，Agent 永远只看得见 6 个内置工具。
+`_build_tool_registry` 的 docstring 里也写着「需要异步连接与生命周期管理，不在这里
+半接线」，这正是这一轮要清的那条。
+
+| 层 | 落地 | 解决的问题 |
+| --- | --- | --- |
+| 适配器 | 新增 `mcp/adapter.py::MCPToolAdapter` + `adapt_tools` | `MCPTool` 只是数据模型（name/description/inputSchema），不是 `Tool` 实现，注册表收不下它 |
+| 命名 | 注册名 `server__tool`（`qualified_tool_name` 统一小写并折叠非法字符） | 第三方工具名会与内置撞名，而 `register` 是「后登记覆盖先登记」——撞上等于第三方悄悄替换了内置工具 |
+| 装配 | `_attach_mcp_tools` 在 `_build_tool_registry` 之后、`AgentFactory` 之前执行 | 工厂此刻才拿得到完整工具清单，晚一步则首轮提示词里没有 MCP 工具 |
+| 容错 | 单服务器失败记 `mcp_failed` 后跳过 | 一个外挂坏了不该让整支团队停摆；`CancelledError` 不在此列（`BaseException`），取消照常穿透 |
+| 生命周期 | `_close_mcp` 在 `run`/`resume` 的 `finally` 里 `await` | 异常路径不走 `_finalize`，不在这里关就留下孤儿子进程 |
+
+`schema` 原样透传：R3 的强校验只认它认识的 JSON Schema 子集，其余按「未声明」放行——
+比替服务端改写安全，也不会把合法工具判成非法。
+
+**验证**：新增 `tests/test_mcp_wiring.py`（12 例：命名规范化四条、适配器转发用服务端
+原名、`isError` 转错误文本、未绑定客户端、**真连 stdio mock 服务器的端到端**、坏命令
+只跳过不拖垮、坏配置形状、`tools_enabled=false` 零连接、`_close_mcp` 幂等）。
+端到端实跑一次 mock run：`mcp_connected{server: demo, tools: [demo__echo]}`、
+无 `mcp_failed`、`exit_code=0`。全量 **2346 passed / 1 skipped / 0 failed**；
+三样例 9/9、5/5、7/7。
+
+**红线遵守**：默认 `mcp_servers={}` 或 `tools_enabled=false` → `_attach_mcp_tools`
+立刻返回，零子进程、零网络；工具调用仍受 `tool_permissions` 约束、结果照常进 ledger。
+
+**刻意未做**：MCP 服务器的热更新（run 中途变更配置无效）→ 工具级权限细到单个 MCP
+工具（当前按角色白名单整体放行）→ MCP 资源（resources/prompts）支持（当前只用 tools）
+→ 反向暴露（把 agentcrew 自己做成 MCP server）→ 拖拽编排画布。
 
 ---
 
@@ -552,7 +583,8 @@ MCP 服务器生产接线。
 | R9 | 跨任务层级：经理验收规划期任务（见 §3.14） | 2283 |
 | R10 | 主管驳回后换人做（见 §3.15） | 2296 |
 | R11 | 经验检索换 BM25 + 中文二元组（见 §3.16） | 2313 |
-| R12 | 出站 Webhook：关键节点推给外部（见 §3.17） | **2334（当前）** |
+| R12 | 出站 Webhook：关键节点推给外部（见 §3.17） | 2334 |
+| R13 | MCP 服务器接进生产工具链（见 §3.18） | **2346（当前）** |
 
 ---
 
@@ -605,7 +637,7 @@ MCP 服务器生产接线。
 1. ✅ **R3 已闭环**：工具参数 JSON Schema 强校验（见 §3.8）
 2. MCP SSE/HTTP transport 资源关闭（消除 unclosed warning）；`mcp_servers` 仍未接入生产 run
 3. CI 首次实跑（remote 已配，本地领先 161 提交；需验证 3.10–3.13 矩阵）
-4. 功能测试报告汇总（2334 用例按模块/场景出覆盖矩阵）
+4. 功能测试报告汇总（2346 用例按模块/场景出覆盖矩阵）
 
 **大项（建议单独立项）**
 
@@ -618,7 +650,8 @@ MCP 服务器生产接线。
 | ~~实体记忆~~ | — | ✅ **R3 已闭环**：纯规则实体抽取 + 全局库归并检索（见 §3.8）；向量化 / RAG 仍缺 |
 | 官方 SDK + 示例 | 3 人日 | 基于 `openapi.yaml` 封装 Python client |
 | `web_search` | 1 人日 | ✅ `web_fetch`（SSRF 防护）与 `write_file`（受控工作区）已由 R3 闭环；`web_search` 需外部搜索 API 与密钥，待单独设计 |
-| 出站 Webhook | 2 人日 | 事件外推、签名与失败重试 |
+| ~~出站 Webhook~~ | — | ✅ **R12 已闭环**：后台线程投递 + HMAC 签名 + 重试上限（见 §3.17）；仍缺持久化重放队列与多接收端 |
+| ~~MCP 服务器生产接线~~ | — | ✅ **R13 已闭环**：`tools_enabled` 时连接 `mcp_servers`、发现工具、带前缀登记、收尾关连接（见 §3.18） |
 | 运维部署/排障手册 | 1.5 人日 | serve 部署、配置项、doctor 诊断 |
 
 **遗留风险（验收报告 R1–R8，摘其要）**
@@ -680,6 +713,10 @@ MCP 服务器生产接线。
 
 **R12 新增遗留**（按 ROI）：投递的持久化重放队列（进程内退出即丢未投部分）→ 多接收端（当前单 URL）→ 事件级条件过滤（如只推失败）→ 拖拽编排画布 → MCP 服务器生产接线 → 多用户 RBAC / 单步调试 / 官方 SDK。
 
+**R13 已闭环**（见 §3.18）：`tools_enabled` 时连接 `mcp_servers` 里的每个服务器、发现工具、以 `server__tool` 前缀登记、收尾统一关闭；单服务器失败只跳过。
+
+**R13 新增遗留**（按 ROI）：MCP 配置热更新（run 中途变更无效）→ 权限细到单个 MCP 工具（当前按角色白名单整体放行）→ MCP resources / prompts 支持（当前只用 tools）→ 把 agentcrew 自身暴露成 MCP server → 拖拽编排画布 → 多用户 RBAC / 单步调试 / 官方 SDK。
+
 **功能边界（影响对产物的信任方式）**
 
 不执行生成的代码（G1 只静态校验）· token 估算为启发式 · 单进程 asyncio 无分布式 · mock 产物不是模型生成的 · HTTP API 为内部控制面设计（请求体上限 4 MiB，开认证前勿暴露公网）· G3 默认 CLI 交互，`deferred` 模式才走可跨进程恢复的审批单 · 条件分支只支持结果标签枚举、不支持表达式或循环边 · `web_fetch` 仅公网 80/443 且拒绝私网/重定向 · 实体记忆为规则抽取而非语义检索 · 跨角色咨询默认关闭、mock 下只降级不真答、单次 run 至多 `max_peer_messages` 次 · 委派拒绝原因只回灌给**模型自己**（一次），不回灌给调度器做自动重派 · `delegation_mode=manager_only` 只限制「谁能派」；主管审核默认只覆盖**动态委派**任务（`supervisor_scope=all` 才含规划期任务），且只有一层主管、驳回后按配置优先序换人（主管不能指定人选）。
@@ -692,7 +729,7 @@ MCP 服务器生产接线。
 
 | 文档 | 用途 |
 | --- | --- |
-| `README.md` | 项目介绍、8 角色说明、V2–V5 与 R3–R12 能力完善、配置与用法全文 |
+| `README.md` | 项目介绍、8 角色说明、V2–V5 与 R3–R13 能力完善、配置与用法全文 |
 | `PROJECT-STATE.md` | 本文，唯一状态源 |
 | `artifacts/contracts/state-enums.md` · `event-types.md` · `openapi.yaml` · `schemas/*.json` | R4 同步后的状态枚举、事件、HTTP 接口与落盘结构契约 |
 | `docs/role-agent-binding-design.md` | 「角色 = 职责 + 权限，执行体可多绑」设计方案（v1 草案，部分已落地） |
