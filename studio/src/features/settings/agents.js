@@ -23,9 +23,11 @@ const MODES = [
   ['merge', '合并'],
 ];
 
-function copyText(text) {
+async function copyText(text) {
+  // writeText 返回 Promise：不 await 时 try/catch 抓不到拒绝，会「报成功但没复制」，
+  // 还触发全局 unhandledrejection。与 providers/forms.js 的 copyYaml 同款兜底。
   try {
-    navigator.clipboard.writeText(text);
+    await navigator.clipboard.writeText(text);
     toast('success', '已复制', 'YAML 片段已写入剪贴板');
   } catch {
     toast('error', '复制失败', '请手动选择文本复制');

@@ -10,189 +10,250 @@
 <body>
 <div id="app" class="layout">
 
-  <!-- ===== 1. 顶部导航栏（紧凑） ===== -->
-  <header id="topbar">
-    <div class="tb-left">
-      <svg class="brand-mark" width="22" height="22" viewBox="0 0 18 18" aria-hidden="true">
-        <rect x="1"  y="1"  width="7" height="7" rx="1.5"/>
-        <rect x="10" y="1"  width="7" height="7" rx="1.5" opacity=".5"/>
-        <rect x="1"  y="10" width="7" height="7" rx="1.5" opacity=".5"/>
-        <rect x="10" y="10" width="7" height="7" rx="1.5"/>
-      </svg>
-      <span class="brand-name">AgentCrew <em>Studio</em></span>
-      <span class="tb-sep"></span>
-      <span class="tb-workspace" id="tb-workspace" title="点击切换运行">未选择工作区</span>
+  <!-- 背景极光层：纯装饰，不参与交互 -->
+  <div class="aurora" aria-hidden="true"><i></i><i></i><i></i></div>
+
+  <!-- ===== 1. 通高侧边栏：品牌 / 新建 / 导航 / 分组 / 设置 ===== -->
+  <nav id="sidebar" aria-label="主导航">
+    <div class="sb-head">
+      <button class="sb-brand" type="button" title="AgentCrew Studio" aria-label="AgentCrew Studio">
+        <svg class="brand-mark" width="16" height="16" viewBox="0 0 18 18" aria-hidden="true">
+          <rect x="1"  y="1"  width="7" height="7" rx="2"/>
+          <rect x="10" y="1"  width="7" height="7" rx="2" opacity=".45"/>
+          <rect x="1"  y="10" width="7" height="7" rx="2" opacity=".45"/>
+          <rect x="10" y="10" width="7" height="7" rx="2"/>
+        </svg>
+        <span class="brand-name">AgentCrew <em>Studio</em></span>
+        <svg class="brand-chev" width="9" height="9" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+          <path d="M3 4.6 6 7.6 9 4.6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      <button class="icon-btn" id="btn-search" type="button" title="搜索运行" aria-label="搜索运行">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <circle cx="7.1" cy="7.1" r="4.5" stroke="currentColor" stroke-width="1.3"/>
+          <path d="m10.5 10.5 3.2 3.2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- 新建运行：主入口，与底部命令输入框同源 -->
+    <button id="btn-new-run" class="nav-row nav-new" type="button" title="启动一次新的运行">
+      <span class="nav-plus" aria-hidden="true">+</span>
+      <span class="nav-text">新建运行</span>
+    </button>
+
+    <div class="nav-items" id="nav-items">
+      <button class="nav-row nav-item active" data-nav="dashboard" type="button"><span class="nav-text">运行总览</span></button>
+      <button class="nav-row nav-item" data-nav="tasks" type="button"><span class="nav-text">计划审查</span></button>
+      <button class="nav-row nav-item" data-nav="dag" type="button"><span class="nav-text">任务图</span></button>
+      <button class="nav-row nav-item" data-nav="agents" type="button"><span class="nav-text">Agents</span></button>
+      <button class="nav-row nav-item" data-nav="gates" type="button"><span class="nav-text">质量门禁</span></button>
+      <button class="nav-row nav-item" data-nav="artifacts" type="button"><span class="nav-text">产物</span></button>
+      <button class="nav-row nav-item" data-nav="events" type="button"><span class="nav-text">事件日志</span></button>
+      <button class="nav-row nav-item" data-nav="providers" type="button"><span class="nav-text">供应商</span></button>
+    </div>
+
+    <!-- 项目分组：当前运行 = 一个 project，下方缩进任务列表 -->
+    <div class="sb-group" id="sb-project-group">
+      <div class="sb-group-label">Projects</div>
+      <div class="sb-proj" id="sb-proj-row">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path d="M1.8 4.4c0-.7.6-1.2 1.2-1.2h3l1.3 1.5h5.7c.7 0 1.2.5 1.2 1.2v6.3c0 .7-.5 1.2-1.2 1.2H3c-.6 0-1.2-.5-1.2-1.2V4.4Z"
+                stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+        </svg>
+        <span class="sb-proj-name" id="tb-workspace" title="点击切换运行">未选择运行</span>
+      </div>
+      <ul class="sb-list" id="sb-tasklist"></ul>
+      <button class="sb-more" type="button" id="sb-more">Show more</button>
       <div id="run-dropdown" class="run-dropdown hidden">
         <div class="rd-head">最近运行</div>
         <div id="run-dropdown-list" class="rd-list"></div>
       </div>
     </div>
 
-    <div class="tb-run-status" id="tb-run-status">
-      <span class="dot" id="tb-run-dot"></span>
-      <span id="tb-run-label">空闲</span>
+    <!-- 最近运行 -->
+    <div class="sb-group sb-group-recents">
+      <div class="sb-group-label">Recents</div>
+      <ul class="sb-list" id="sb-recents"></ul>
     </div>
 
-    <div class="tb-center">
-      <button id="btn-new-run" class="btn btn-primary" type="button" title="启动一次新的运行">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        新建运行
-      </button>
-    </div>
-
-    <div class="tb-right">
-      <div class="tb-budget" id="tb-budget" title="Token 用量 / 费用 / 预算">
-        <span class="tb-budget-tokens" id="tb-budget-tokens">0 tok</span>
-        <span class="tb-budget-sep">·</span>
-        <span class="tb-budget-cost" id="tb-budget-cost">$0.000</span>
-        <div class="tb-budget-bar"><i id="tb-budget-fill"></i></div>
-        <span class="tb-budget-pct" id="tb-budget-pct">0%</span>
+    <!-- 底部：运行元信息 + 设置 -->
+    <div class="sb-foot">
+      <div class="sb-meta">
+        <div class="sb-row"><span class="sb-label">Provider</span><span class="sb-value" id="sb-provider">OpenAI</span></div>
+        <div class="sb-row"><span class="sb-label">模型</span><span class="sb-value" id="sb-model">gpt-4o</span></div>
+        <div class="sb-budget">
+          <div class="sb-row"><span class="sb-label">预算</span><span class="sb-value" id="sb-budget-pct">0%</span></div>
+          <div class="sb-progress"><i id="sb-budget-fill"></i></div>
+        </div>
+        <div class="sb-row sb-conn">
+          <span class="dot" id="sb-conn-dot"></span><span id="sb-conn-label">已连接</span>
+          <span class="sb-value" id="sb-datasource">演示</span>
+        </div>
       </div>
-      <span class="conn-indicator demo" id="conn-indicator" title="数据连接状态">演示模式</span>
-      <button id="btn-theme" class="btn btn-icon" type="button" title="切换主题" aria-label="切换主题">
-        <svg id="btn-theme-icon" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-      </button>
-      <button id="btn-refresh" class="btn btn-icon" type="button" title="刷新数据" aria-label="刷新">
-        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
-      </button>
-      <button id="btn-notify" class="btn btn-icon" type="button" title="通知" aria-label="通知">
-        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>
+      <button class="nav-row nav-item" data-nav="settings" type="button">
+        <svg class="nav-ico" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="3.1"/>
+          <path d="M19.2 14.9a1.5 1.5 0 0 0 .3 1.7l.1.1a1.9 1.9 0 1 1-2.7 2.7l-.1-.1a1.5 1.5 0 0 0-1.7-.3 1.5 1.5 0 0 0-.9 1.4v.2a1.9 1.9 0 1 1-3.8 0v-.1a1.5 1.5 0 0 0-1-1.4 1.5 1.5 0 0 0-1.7.3l-.1.1a1.9 1.9 0 1 1-2.7-2.7l.1-.1a1.5 1.5 0 0 0 .3-1.7 1.5 1.5 0 0 0-1.4-.9h-.2a1.9 1.9 0 1 1 0-3.8h.1a1.5 1.5 0 0 0 1.4-1 1.5 1.5 0 0 0-.3-1.7l-.1-.1a1.9 1.9 0 1 1 2.7-2.7l.1.1a1.5 1.5 0 0 0 1.7.3h.1a1.5 1.5 0 0 0 .9-1.4v-.2a1.9 1.9 0 1 1 3.8 0v.1a1.5 1.5 0 0 0 .9 1.4 1.5 1.5 0 0 0 1.7-.3l.1-.1a1.9 1.9 0 1 1 2.7 2.7l-.1.1a1.5 1.5 0 0 0-.3 1.7v.1a1.5 1.5 0 0 0 1.4.9h.2a1.9 1.9 0 1 1 0 3.8h-.1a1.5 1.5 0 0 0-1.4.9Z"/>
         </svg>
-        <span class="notify-dot hidden" id="notify-dot"></span>
-      </button>
-      <button id="btn-user" class="btn btn-icon" type="button" title="账户" aria-label="账户">
-        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
-        </svg>
+        <span class="nav-text">设置</span>
       </button>
     </div>
-  </header>
+  </nav>
 
-  <div class="body-row">
-    <!-- ===== 2. 左侧项目导航 ===== -->
-    <nav id="sidebar">
-      <div class="nav-items" id="nav-items">
-        <button class="nav-item active" data-nav="dashboard" type="button">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
-          <span>运行总览</span>
-        </button>
-        <button class="nav-item" data-nav="tasks" type="button">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
-          <span>计划审查</span>
-        </button>
-        <button class="nav-item" data-nav="dag" type="button">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7.5l2.5 8M16 7.5l-2.5 8M8.5 6h7"/></svg>
-          <span>任务图</span>
-        </button>
-        <button class="nav-item" data-nav="agents" type="button">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 1 3 3v1h1a3 3 0 0 1 3 3v9H5V9a3 3 0 0 1 3-3h1V5a3 3 0 0 1 3-3z"/><path d="M9 13h.01M15 13h.01"/></svg>
-          <span>Agents</span>
-        </button>
-        <button class="nav-item" data-nav="gates" type="button">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/><path d="M9 12l2 2 4-4"/></svg>
-          <span>质量门禁</span>
-        </button>
-        <button class="nav-item" data-nav="artifacts" type="button">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-          <span>产物</span>
-        </button>
-        <button class="nav-item" data-nav="events" type="button">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
-          <span>事件日志</span>
-        </button>
-        <button class="nav-item" data-nav="providers" type="button">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/></svg>
-          <span>供应商</span>
-        </button>
-        <button class="nav-item" data-nav="settings" type="button">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-          <span>设置</span>
-        </button>
+  <!-- ===== 2. 主列：指标条 + 内容 + 悬浮命令框 ===== -->
+  <div class="main-col">
+    <header id="topbar">
+      <div class="tb-metrics">
+        <span class="tb-run-status" id="tb-run-status">
+          <span class="dot" id="tb-run-dot"></span>
+          <span id="tb-run-label">空闲</span>
+        </span>
+        <span class="tb-dsep"></span>
+        <span class="tb-metric"><b class="mono" id="tb-agents">0</b> Agents</span>
+        <span class="tb-dsep"></span>
+        <span class="tb-metric"><b class="mono" id="tb-tasks">0</b> 任务</span>
+        <span class="tb-dsep"></span>
+        <span class="tb-budget" id="tb-budget" title="Token 用量 / 费用 / 预算">
+          <b class="mono" id="tb-budget-tokens">0</b><span class="tb-metric-dim">tok</span>
+          <span class="tb-metric-dim mono" id="tb-budget-cost">$0.000</span>
+          <span class="tb-budget-bar"><i id="tb-budget-fill"></i></span>
+          <span class="tb-metric-dim mono" id="tb-budget-pct">0%</span>
+        </span>
+        <span class="tb-dsep"></span>
+        <span class="conn-indicator demo" id="conn-indicator" title="数据连接状态">演示模式</span>
       </div>
 
-      <div class="sidebar-bottom">
-        <div class="sb-meta">
-          <div class="sb-row"><span class="sb-label">Provider</span><span class="sb-value" id="sb-provider">OpenAI</span></div>
-          <div class="sb-row"><span class="sb-label">模型</span><span class="sb-value" id="sb-model">gpt-4o</span></div>
-          <div class="sb-budget">
-            <div class="sb-row"><span class="sb-label">预算</span><span class="sb-value" id="sb-budget-pct">0%</span></div>
-            <div class="sb-progress"><i id="sb-budget-fill"></i></div>
+      <div class="tb-actions">
+        <button id="btn-theme" class="btn btn-icon" type="button" title="切换主题" aria-label="切换主题">
+          <svg id="btn-theme-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
+        <button id="btn-refresh" class="btn btn-icon" type="button" title="刷新数据" aria-label="刷新">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        </button>
+        <button id="btn-notify" class="btn btn-icon" type="button" title="通知" aria-label="通知">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>
+          </svg>
+          <span class="notify-dot hidden" id="notify-dot"></span>
+        </button>
+        <button id="btn-user" class="btn btn-icon" type="button" title="账户" aria-label="账户">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="body-row">
+      <main id="main" tabindex="-1">
+        <!-- Dashboard 视图 -->
+        <section id="dashboard-view">
+          <!-- 3. 当前运行状态区（由 JS 渲染） -->
+          <div id="run-status-bar"></div>
+
+          <!-- 4. Agent 依赖图（核心）：以执行者为节点，任务 DAG 折叠成 Agent DAG -->
+          <section class="dash-block" id="dag-section">
+            <div class="block-head">
+              <div class="dag-head-left">
+                <h2 class="block-title">Agent 依赖图</h2>
+                <div class="dag-kicker">
+                  <span id="dag-summary">—</span>
+                  <span class="dag-kicker-sep">·</span>
+                  <span id="dag-hint">箭头指向下游 Agent；线宽 = 跨 Agent 依赖任务数</span>
+                </div>
+              </div>
+              <div class="dag-tools">
+                <div class="dag-mode-switch" id="dag-mode-switch" role="tablist" aria-label="依赖图视图切换">
+                  <button class="dag-mode-btn active" type="button" role="tab" data-dag-mode="agent">Agent 视图</button>
+                  <button class="dag-mode-btn" type="button" role="tab" data-dag-mode="task">任务视图</button>
+                </div>
+                <div class="dag-controls">
+                  <button class="btn btn-sm" id="dag-zoom-out" type="button" title="缩小" aria-label="缩小">−</button>
+                  <span class="dag-zoom-label" id="dag-zoom-label">100%</span>
+                  <button class="btn btn-sm" id="dag-zoom-in" type="button" title="放大" aria-label="放大">＋</button>
+                  <button class="btn btn-sm" id="dag-fit" type="button" title="适应屏幕" aria-label="适应屏幕">适应</button>
+                  <button class="btn btn-sm" id="dag-reset" type="button" title="重置" aria-label="重置">重置</button>
+                </div>
+              </div>
+            </div>
+            <div class="dag-canvas-wrap" id="dag-canvas-wrap">
+              <svg id="dag-svg" xmlns="http://www.w3.org/2000/svg"></svg>
+            </div>
+            <!-- 窄屏降级：任务列表 -->
+            <div class="dag-list-fallback hidden" id="dag-list-fallback"></div>
+          </section>
+
+          <!-- 5. Agent 协作状态 -->
+          <section class="dash-block" id="agents-section">
+            <div class="block-head"><h2 class="block-title">Agent 协作状态</h2></div>
+            <div class="agents-grid" id="agents-grid"></div>
+          </section>
+
+          <!-- 6. 三层质量门禁 -->
+          <section class="dash-block" id="gates-section">
+            <div class="block-head"><h2 class="block-title">质量门禁</h2></div>
+            <div class="gates-grid" id="gates-grid"></div>
+          </section>
+
+          <!-- 6.5 成本分析 -->
+          <section class="dash-block" id="cost-section">
+            <div class="block-head"><h2 class="block-title">成本分析</h2></div>
+            <div id="cost-panel"></div>
+          </section>
+
+          <!-- 7. 最近事件时间线 -->
+          <section class="dash-block" id="events-section">
+            <div class="block-head">
+              <h2 class="block-title">最近事件</h2>
+              <div class="events-filter" id="events-filter"></div>
+            </div>
+            <div class="events-list" id="events-list"></div>
+          </section>
+        </section>
+
+        <!-- 其他页面：开发中空状态 -->
+        <section id="placeholder-view" class="hidden"></section>
+      </main>
+    </div>
+
+    <!-- ===== 8. 悬浮命令输入框：新建运行的快捷入口 ===== -->
+    <div class="composer" id="composer">
+      <div class="composer-bar">
+        <span class="cb-dot" aria-hidden="true"></span>
+        <span class="cb-proj" id="cmp-proj">未选择运行</span>
+        <span class="cb-sep">·</span>
+        <span class="cb-mode" id="cmp-mode">自动执行</span>
+        <svg class="cb-chev" width="9" height="9" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+          <path d="M3 4.6 6 7.6 9 4.6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <div class="composer-box">
+        <textarea id="cmp-input" class="composer-input" rows="1" spellcheck="false"
+          placeholder="描述目标，AgentCrew 会自动编排 Agent 依赖与执行顺序…"></textarea>
+        <div class="composer-foot">
+          <div class="cf-left">
+            <button class="cf-add" id="cmp-add" type="button" title="打开完整新建运行表单" aria-label="更多选项">+</button>
+            <button class="cf-tag" id="cmp-access" type="button" title="新建运行默认执行模式（自动执行）">
+              <i aria-hidden="true"></i><span id="cmp-access-label">Full access</span>
+            </button>
           </div>
-          <div class="sb-row sb-conn">
-            <span class="dot" id="sb-conn-dot"></span><span id="sb-conn-label">已连接</span>
-          </div>
-          <div class="sb-row"><span class="sb-label">数据源</span><span class="sb-value" id="sb-datasource">演示</span></div>
-          <div class="sb-row sb-v7">
-            <span class="sb-label">路由</span><span class="sb-value" id="sb-routing">weighted</span>
-          </div>
-          <div class="sb-row sb-v7">
-            <span class="sb-label">亲和性</span><span class="sb-value" id="sb-affinity">off</span>
-          </div>
-          <div class="sb-row sb-v7">
-            <span class="sb-label">脱敏</span><span class="sb-value" id="sb-redact">关闭</span>
+          <div class="cf-right">
+            <button class="cf-model" id="cmp-model" type="button" title="当前默认模型">
+              <span id="cmp-model-name">AgentCrew</span>
+              <svg width="9" height="9" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                <path d="M3 4.6 6 7.6 9 4.6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            <button class="cf-send" id="cmp-send" type="button" title="启动运行（⌘/Ctrl + Enter）" aria-label="启动运行">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M8 12.6V3.6M8 3.6 4.2 7.4M8 3.6l3.8 3.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
           </div>
         </div>
       </div>
-    </nav>
-
-    <!-- ===== 主内容区 ===== -->
-    <main id="main" tabindex="-1">
-      <!-- Dashboard 视图 -->
-      <section id="dashboard-view">
-        <!-- 3. 当前运行状态区（由 JS 渲染） -->
-        <div id="run-status-bar"></div>
-
-        <!-- 4. 任务 DAG 概览（核心） -->
-        <section class="dash-block" id="dag-section">
-          <div class="block-head">
-            <h2 class="block-title">任务依赖图</h2>
-            <div class="dag-controls">
-              <button class="btn btn-sm" id="dag-zoom-out" type="button" title="缩小" aria-label="缩小">−</button>
-              <span class="dag-zoom-label" id="dag-zoom-label">100%</span>
-              <button class="btn btn-sm" id="dag-zoom-in" type="button" title="放大" aria-label="放大">＋</button>
-              <button class="btn btn-sm" id="dag-fit" type="button" title="适应屏幕" aria-label="适应屏幕">适应</button>
-              <button class="btn btn-sm" id="dag-reset" type="button" title="重置" aria-label="重置">重置</button>
-            </div>
-          </div>
-          <div class="dag-canvas-wrap" id="dag-canvas-wrap">
-            <svg id="dag-svg" xmlns="http://www.w3.org/2000/svg"></svg>
-          </div>
-          <!-- 窄屏降级：任务列表 -->
-          <div class="dag-list-fallback hidden" id="dag-list-fallback"></div>
-        </section>
-
-        <!-- 5. Agent 协作状态 -->
-        <section class="dash-block" id="agents-section">
-          <div class="block-head"><h2 class="block-title">Agent 协作状态</h2></div>
-          <div class="agents-grid" id="agents-grid"></div>
-        </section>
-
-        <!-- 6. 三层质量门禁 -->
-        <section class="dash-block" id="gates-section">
-          <div class="block-head"><h2 class="block-title">质量门禁</h2></div>
-          <div class="gates-grid" id="gates-grid"></div>
-        </section>
-
-        <!-- 6.5 成本分析 -->
-        <section class="dash-block" id="cost-section">
-          <div class="block-head"><h2 class="block-title">成本分析</h2></div>
-          <div id="cost-panel"></div>
-        </section>
-
-        <!-- 7. 最近事件时间线 -->
-        <section class="dash-block" id="events-section">
-          <div class="block-head">
-            <h2 class="block-title">最近事件</h2>
-            <div class="events-filter" id="events-filter"></div>
-          </div>
-          <div class="events-list" id="events-list"></div>
-        </section>
-      </section>
-
-      <!-- 其他页面：开发中空状态 -->
-      <section id="placeholder-view" class="hidden"></section>
-    </main>
+    </div>
   </div>
 </div>
 

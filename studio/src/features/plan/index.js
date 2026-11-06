@@ -7,6 +7,9 @@ import { h, s } from '../../lib/dom.js';
 import { fmtDur, simplifyGoal } from '../../lib/format.js';
 import { S } from '../../lib/store.js';
 
+import { readNumber } from '../../lib/validate.js';
+
+import { emptyState } from '../../ui/states.js';
 import { confirmAction } from '../../ui/modal.js';
 import { toast } from '../../ui/toast.js';
 
@@ -23,6 +26,11 @@ function renderPlanPage(container) {
   const renderList = () => {
     list.innerHTML = '';
     const sorted = [...tasks].sort((a, b) => a.id.localeCompare(b.id));
+    if (!sorted.length) {
+      list.appendChild(emptyState('暂无任务',
+        '这次运行还没有拆解出任务。启动新运行后可在这里审查任务 DAG。'));
+      return;
+    }
     for (const t of sorted) {
       const meta = STATUS_META[t.status] || STATUS_META.unknown;
       const rm = roleMeta(t.role);
@@ -58,8 +66,16 @@ function renderPlanPage(container) {
                 ...[1, 3, 5, 7, 9].map(p => h('option', { value: p, selected: (t.priority || 5) === p }, `P${p}`)))),
             h('div', { class: 'plan-field' },
               h('label', {}, '超时 (秒)'),
-              h('input', { class: 'plan-input', type: 'number', value: t.timeout_seconds || 300, disabled: isReal,
-                oninput: (e) => { t.timeout_seconds = parseInt(e.target.value) || 300; S.planDirty = true; } })),
+              h('input', { class: 'plan-input', type: 'number', min: '1', max: '86400', step: '1',
+                value: t.timeout_seconds || 300, disabled: isReal,
+                oninput: (e) => {
+                  // 输入框连 min 都没有时 -5 / 999999999 会直接写进任务模型；
+                  // 这里统一走 readNumber，非法值只标红、不落盘（不弹 toast 刷屏）。
+                  const r = readNumber(e.target, { min: 1, max: 86400, integer: true,
+                    fallback: 300, label: '超时' });
+                  e.target.classList.toggle('input-error', !!r.error);
+                  if (!r.error) { t.timeout_seconds = r.value; S.planDirty = true; }
+                } })),
             h('div', { class: 'plan-field' },
               h('label', {}, '依赖'),
               h('input', { class: 'plan-input', value: (t.dependencies || []).join(', '), disabled: isReal,

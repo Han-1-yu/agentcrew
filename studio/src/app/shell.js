@@ -10,50 +10,95 @@ import { S } from '../lib/store.js';
 import { closeModal, showModal } from '../ui/modal.js';
 import { toast } from '../ui/toast.js';
 
-import { closeDetailPanel } from '../features/detail/panel.js';
+import { closeDetailPanel, openTaskDetail } from '../features/detail/panel.js';
 
 import { applyDemoState } from './mock.js';
 import { updateConnIndicator } from './realtime.js';
 $('#detail-mask').addEventListener('click',closeDetailPanel);
 document.addEventListener('keydown',(e)=>{ if(e.key==='Escape'){ closeDetailPanel(); closeModal(); } });
+
+/* ============================================================
+   chrome 渲染
+   ------------------------------------------------------------
+   顶栏只留一行指标（运行状态 / Agent 数 / 任务数 / Token·费用·预算），
+   侧栏负责品牌、导航与分组列表。所有写入都走 setText/守卫，
+   某个元素在别的页面里不存在时不会连累整轮渲染。
+   ============================================================ */
+
+/** 只在值真的变了才写 DOM：renderChrome 每秒跑一次，避免无谓的重排。 */
+function setText(id, value){
+  const el = document.getElementById(id);
+  if(!el) return;
+  const v = value == null ? '' : String(value);
+  if(el.textContent !== v) el.textContent = v;
+}
+function setWidth(id, pct){
+  const el = document.getElementById(id);
+  if(el) el.style.width = pct + '%';
+}
+
 function renderChrome(){
-  const d=S.dash; if(!d)return; const run=d.run; const st=run.stats||{};
+  const d=S.dash; if(!d) return;
+  const run=d.run; const st=run.stats||{};
   const meta=RUN_META[run.status]||RUN_META.idle;
-  $('#tb-run-dot').className='dot '+meta.dot; $('#tb-run-label').textContent=meta.label;
-  $('#tb-workspace').textContent=simplifyGoal(run.project_goal);
-  const cost=st.estimated_cost_usd||0, pct=Math.min(100,cost/run.budget_limit_usd*100);
-  $('#tb-budget-tokens').textContent=fmtTokens((st.prompt_tokens||0)+(st.completion_tokens||0));
-  $('#tb-budget-cost').textContent=fmtCost(cost);
-  $('#tb-budget-pct').textContent=Math.round(pct)+'%';
-  $('#tb-budget-fill').style.width=pct+'%';
-  const tb=$('#tb-budget'); tb.classList.toggle('warn',pct>=90&&pct<100); tb.classList.toggle('err',pct>=100);
-  $('#sb-provider').textContent=run.provider; $('#sb-model').textContent=run.model;
-  $('#sb-budget-pct').textContent=Math.round(pct)+'%'; $('#sb-budget-fill').style.width=pct+'%';
-  const sbf=document.querySelector('.sb-progress'); sbf.classList.toggle('warn',pct>=90&&pct<100); sbf.classList.toggle('err',pct>=100);
-  $('#sb-conn-dot').className='dot ' + (S.realMode ? 'running' : 'idle');
-  $('#sb-conn-label').textContent = S.realMode ? '已连接' : '演示模式';
-  const ds = $('#sb-datasource'); if (ds) { ds.textContent = S.realMode ? '真实' : '演示'; ds.style.color = S.realMode ? 'var(--success)' : 'var(--warn)'; }
-  // V7 网关高级功能状态
-  const cfg = S.settings || {};
-  const routingEl = $('#sb-routing');
-  if (routingEl) {
-    const strategy = cfg.routingStrategy || 'weighted';
-    const routingLabels = { weighted: '权重随机', rotate: '轮询', usage: '最少使用', order: '顺序' };
-    routingEl.textContent = routingLabels[strategy] || strategy;
-  }
-  const affinityEl = $('#sb-affinity');
-  if (affinityEl) {
-    const mode = cfg.affinityMode || 'off';
-    const affinityLabels = { off: '关闭', session: '会话保持', turn: '每轮可换' };
-    affinityEl.textContent = affinityLabels[mode] || mode;
-    affinityEl.style.color = mode === 'off' ? 'var(--text-ter)' : 'var(--accent)';
-  }
-  const redactEl = $('#sb-redact');
-  if (redactEl) {
-    redactEl.textContent = cfg.redactEnabled === false ? '关闭' : '启用';
-    redactEl.style.color = cfg.redactEnabled === false ? 'var(--text-ter)' : 'var(--success)';
-  }
+
+  const dotEl=$('#tb-run-dot');
+  if(dotEl) dotEl.className='dot '+meta.dot;
+  setText('tb-run-label', meta.label);
+  setText('tb-workspace', simplifyGoal(run.project_goal));
+  setText('tb-agents', Object.keys(d.agents||{}).length);
+  setText('tb-tasks', (d.tasks||[]).length);
+
+  const cost=st.estimated_cost_usd||0;
+  const limit=run.budget_limit_usd||0;
+  const pct=limit>0?Math.min(100,cost/limit*100):0;
+  setText('tb-budget-tokens', fmtTokens((st.prompt_tokens||0)+(st.completion_tokens||0)));
+  setText('tb-budget-cost', fmtCost(cost));
+  setText('tb-budget-pct', Math.round(pct)+'%');
+  setWidth('tb-budget-fill', pct);
+  const tb=$('#tb-budget');
+  if(tb){ tb.classList.toggle('warn',pct>=90&&pct<100); tb.classList.toggle('err',pct>=100); }
+
+  setText('sb-provider', run.provider);
+  setText('sb-model', run.model);
+  setText('sb-budget-pct', Math.round(pct)+'%');
+  setWidth('sb-budget-fill', pct);
+  const sbf=document.querySelector('.sb-progress');
+  if(sbf){ sbf.classList.toggle('warn',pct>=90&&pct<100); sbf.classList.toggle('err',pct>=100); }
+
+  const sbDot=$('#sb-conn-dot');
+  if(sbDot) sbDot.className='dot '+(S.realMode?'running':'idle');
+  setText('sb-conn-label', S.realMode?'已连接':'演示模式');
+  const ds=$('#sb-datasource');
+  if(ds){ ds.textContent=S.realMode?'真实':'演示'; ds.style.color=S.realMode?'var(--success)':'var(--warn)'; }
+
+  renderSidebarTasks();
   updateConnIndicator();
+}
+
+/* ---- 侧栏 Projects 分组：当前运行的缩进任务列表 ---- */
+let lastTaskSig='';
+function renderSidebarTasks(){
+  const list=document.getElementById('sb-tasklist'); if(!list) return;
+  const tasks=(S.dash&&S.dash.tasks)||[];
+  const top=tasks.slice(0,5);
+  // 每秒一次的重渲染：内容没变就直接跳过，避免丢 hover / 选中态
+  const sig=((S.dash&&S.dash.run&&S.dash.run.dir)||'')+'|'+top.map(t=>t.id+'.'+t.title).join('|')+'|'+tasks.length;
+  if(sig===lastTaskSig) return;
+  lastTaskSig=sig;
+
+  list.innerHTML='';
+  if(!top.length){
+    list.appendChild(h('li',{},h('span',{class:'sb-li-text'},'暂无任务')));
+    return;
+  }
+  top.forEach(t=>{
+    list.appendChild(h('li',{class:'is-click',title:t.title,onclick:()=>openTaskDetail(t.id)},
+      h('span',{class:'sb-li-text'},t.title)));
+  });
+  if(tasks.length>top.length){
+    list.appendChild(h('li',{},h('span',{class:'sb-li-text'},`还有 ${tasks.length-top.length} 个任务…`)));
+  }
 }
 
 /* ============================================================

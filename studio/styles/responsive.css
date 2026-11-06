@@ -7,11 +7,13 @@
 @media (max-width: 1100px) {
   .agents-grid { grid-template-columns: repeat(2, 1fr); }
 }
-/* 1024px 平板横屏：侧栏折叠为图标 */
+/* 1024px 平板横屏：侧栏折叠为图标条（窗口最小宽度 1080，正常不会触发，仅作兜底） */
 @media (max-width: 1024px) {
-  #sidebar { flex: 0 0 56px; }
-  .nav-item span, .sidebar-bottom .sb-label, .sidebar-bottom .sb-value, .sidebar-bottom .sb-row > span:not(.dot) { display: none; }
-  .nav-item { justify-content: center; padding: 0; }
+  #sidebar { flex: 0 0 56px; width: 56px; min-width: 56px; padding: 12px 6px; }
+  .sb-head { justify-content: center; padding: 0; }
+  .brand-name, .brand-chev, .sb-group, .sb-meta { display: none; }
+  .nav-row .nav-text, .sidebar-bottom .sb-label, .sidebar-bottom .sb-value, .sidebar-bottom .sb-row > span:not(.dot) { display: none; }
+  .nav-row { justify-content: center; padding: 0; }
   .sidebar-bottom { padding: 8px; }
   .sb-progress, .sb-row.sb-conn span:last-child { display: none; }
   .sb-conn { justify-content: center; }

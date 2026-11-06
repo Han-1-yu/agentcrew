@@ -7,6 +7,8 @@ import { apiFetch } from '../../lib/api.js';
 import { $, h } from '../../lib/dom.js';
 import { S } from '../../lib/store.js';
 
+import { isStaleRender } from '../../ui/states.js';
+
 import { ev } from '../../app/mock.js';
 import { switchNav } from '../../app/router.js';
 
@@ -14,6 +16,7 @@ import { buildProviderCard } from './card.js';
 import { openAddProviderModal } from './forms.js';
 import { openModelSwitcher } from './models.js';
 async function renderProvidersPage(container) {
+  const token = S.navToken;
   container.appendChild(h('div', { class: 'page-head prov-head' },
     h('div', { style: 'display:flex;align-items:center;gap:10px' },
       h('h2', {}, '供应商管理'),
@@ -94,6 +97,10 @@ async function renderProvidersPage(container) {
       endpoint_candidates: p.endpoint_candidates != null ? p.endpoint_candidates : (preset && preset.endpoint_candidates) || null,
     };
   }));
+
+  // 上面两次 await 期间用户可能已经切页：占位区被清空，全局 ID 选择器会拿到
+  // null（或更糟——写进新版页面造成重复按钮）。过期就直接放弃这次渲染。
+  if (isStaleRender(token, container)) return;
 
   // ── 分类筛选按钮 ──
   const catBar = $('#prov-cat-bar');

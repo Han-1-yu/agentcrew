@@ -30,3 +30,29 @@
   border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .loading-text { font-size: 13px; color: var(--text-sub); }
+
+/* ---- 页面级三态（loading / empty / error）----
+   由 src/ui/states.js 统一产出，供各功能页共用；只负责状态本身，
+   页面自己的 page-head / 工具条仍由各页渲染。 */
+.page-state {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: var(--sp-2); min-height: 160px; padding: var(--sp-8) var(--sp-5);
+  text-align: center; font-size: var(--fs-body); color: var(--text-sub);
+}
+.page-state-title { font-size: 14px; color: var(--text); }
+.page-state-detail {
+  font-size: var(--fs-sm); color: var(--text-ter); max-width: 460px;
+  line-height: 1.6; word-break: break-word;
+}
+.page-state .btn { margin-top: var(--sp-2); }
+.page-state-spinner {
+  width: 22px; height: 22px; border: 2px solid var(--accent-track);
+  border-top-color: var(--accent); border-radius: 50%;
+  animation: spin .7s linear infinite;
+}
+.page-state.is-error .page-state-title { color: var(--error-text); }
+.page-state.is-error { background: var(--error-bg-faint); border-radius: 8px; }
+/* 运行下拉是紧凑列表，三态节点在这里收窄，避免把下拉撑成整屏 */
+#run-dropdown-list .page-state,
+#events-list .page-state { min-height: 72px; padding: var(--sp-4) var(--sp-3); gap: var(--sp-1); }
+#events-list .page-state .btn { display: none; }

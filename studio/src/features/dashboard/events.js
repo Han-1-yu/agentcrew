@@ -13,6 +13,8 @@ import { $, h } from '../../lib/dom.js';
 import { fmtDur, relTime, trunc } from '../../lib/format.js';
 import { S } from '../../lib/store.js';
 
+import { emptyState } from '../../ui/states.js';
+
 
 function renderEvents() {
   const list=$('#events-list'), filter=$('#events-filter'); if(!list)return;
@@ -25,7 +27,14 @@ function renderEvents() {
       h('span',{class:'fdot'}), m.label));
   }
   list.innerHTML='';
-  const evs=[...S.dash.events].reverse().filter(e=>S.eventFilter.has(e.event)).slice(0,50);
+  const all=S.dash.events||[];
+  const evs=[...all].reverse().filter(e=>S.eventFilter.has(e.event)).slice(0,50);
+  if(!evs.length){
+    list.appendChild(all.length
+      ? emptyState('当前筛选下没有事件','在上方类型筛选里重新勾选事件类型即可查看。')
+      : emptyState('暂无事件','运行开始后，事件会实时出现在这里。'));
+    return;
+  }
   for(const e of evs){
     const m=EVENT_META[e.event]||{color:'var(--text-ter)',label:e.event};
     const key=e.ts+e.event; const expanded=S.eventExpanded.has(key);

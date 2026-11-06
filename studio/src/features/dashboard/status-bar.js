@@ -16,6 +16,10 @@ import { iconPause, iconPlay, iconX } from '../../ui/icons.js';
 import { confirmAction } from '../../ui/modal.js';
 import { toast } from '../../ui/toast.js';
 
+// 「恢复」后延迟 2s 刷新当前 run；期间用户可能已经切到别的 run，旧的定时器
+// 不该再强行 switchRun 回来。模块级持有句柄，重复点击也只保留最后一个。
+let resumeSwitchTimer = null;
+
 function renderRunStatusBar() {
   const host=$('#run-status-bar'); if(!host)return;
   const run=S.dash.run; const meta=RUN_META[run.status]||RUN_META.idle;
@@ -50,7 +54,13 @@ function renderRunStatusBar() {
           const origMock = !!(run.config_snapshot && run.config_snapshot.mock);
           await window.studio.resumeRun({runDir: run.dir, mock: origMock, auto: true});
           toast('success','已恢复', origMock ? '从检查点继续运行（Mock）' : '从检查点继续运行（真实模型）');
-          setTimeout(async ()=>{ try { await switchRun(run.dir); } catch {} }, 2000);
+          if (resumeSwitchTimer) clearTimeout(resumeSwitchTimer);
+          const resumeDir = run.dir;
+          resumeSwitchTimer = setTimeout(async ()=>{
+            resumeSwitchTimer = null;
+            if (S.watchDir && S.watchDir !== resumeDir) return;
+            try { await switchRun(resumeDir); } catch {}
+          }, 2000);
         } catch(e) { toast('error','恢复失败',String(e.message||e)); }
       } else {
         run.status='running'; pushEvent('human_approved',{note:'resume from checkpoint'}); startSim(); renderDashboard();

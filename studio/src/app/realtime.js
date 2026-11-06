@@ -38,9 +38,13 @@ function appendEvents(events) {
 /* P3：SSE 实时推送客户端 */
 let sseSource = null;
 function connectSSE(runId) {
-  const base = (S.settings && S.settings.apiBaseUrl) || '';
-  if (!base) return false;
+  // 先关旧连接再看有没有 base：从「有 API 地址的 run」切到「没配地址的 run」
+  // 时，旧实现在 ``if (!base) return false`` 提前返回，旧 SSE 继续往新 run
+  // 的事件表里推数据。
   if (sseSource) { try { sseSource.close(); } catch {} sseSource = null; }
+  S.sseConnected = false;
+  const base = (S.settings && S.settings.apiBaseUrl) || '';
+  if (!base) { updateConnIndicator(); return false; }
   try {
     const url = `${base.replace(/\/$/, '')}/runs/${encodeURIComponent(runId)}/events`;
     sseSource = new EventSource(url);
@@ -67,6 +71,17 @@ function connectSSE(runId) {
 function disconnectSSE() {
   if (sseSource) { try { sseSource.close(); } catch {} sseSource = null; }
   S.sseConnected = false;
+}
+
+/**
+ * 换 run / 退出前收干净实时通道：关 SSE、取消挂起的快照防抖、复位连接指示。
+ * ``sseReloadTimer`` 的回调会 loadRun + renderDashboard，不 clear 的话切页或
+ * 换 run 之后仍会拿旧 dir 覆盖新数据。
+ */
+function resetRealtime() {
+  disconnectSSE();
+  if (sseReloadTimer) { clearTimeout(sseReloadTimer); sseReloadTimer = null; }
+  updateConnIndicator();
 }
 function onWatchSnapshot(payload) {
   if (!payload || payload.dir !== S.watchDir) return;
@@ -95,12 +110,16 @@ function handleRealtimeEvent(evt) {
   const stateEvents = ['task_started', 'task_finished', 'gate_result', 'run_status_changed', 'budget_warning', 'budget_exhausted'];
   if (stateEvents.includes(evt.event)) {
     if (sseReloadTimer) clearTimeout(sseReloadTimer);
+    // 记下调度那一刻的 run 目录：定时器触发期间用户可能已经切了 run，
+    // 不能拿旧的 S.watchDir 去刷新新数据（也不能在离开页面后强刷看板）。
+    const scheduledDir = S.watchDir;
     sseReloadTimer = setTimeout(async () => {
-      if (S.watchDir) {
+      sseReloadTimer = null;
+      if (scheduledDir && scheduledDir === S.watchDir && S.dash) {
         try {
-          const snap = await window.studio.loadRun(S.watchDir);
-          if (snap && snap.run) {
-            S.dash.run = Object.assign(enrichRun(snap.run), { dir: S.watchDir });
+          const snap = await window.studio.loadRun(scheduledDir);
+          if (snap && snap.run && scheduledDir === S.watchDir) {
+            S.dash.run = Object.assign(enrichRun(snap.run), { dir: scheduledDir });
             if (snap.tasks) {
               S.dash.tasks = snap.tasks.map(mapRealTask);
               S.dash.agents = deriveAgents(S.dash.tasks);
@@ -140,6 +159,7 @@ export {
   handleRealtimeEvent,
   onWatchLedger,
   onWatchSnapshot,
+  resetRealtime,
   sseReloadTimer,
   sseSource,
   updateConnIndicator,

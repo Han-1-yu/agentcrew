@@ -5,7 +5,7 @@ import { h, s } from '../lib/dom.js';
 import { S } from '../lib/store.js';
 
 import { nowTs } from './mock.js';
-import { connectSSE } from './realtime.js';
+import { connectSSE, resetRealtime } from './realtime.js';
 /* 将真实 task（tasks.json）映射为渲染层期望的格式 */
 function mapRealTask(t) {
   const status = t.status || 'pending';
@@ -98,6 +98,9 @@ function enrichRun(run) {
 
 /* 加载真实 run 数据并启动 watch */
 async function loadRealRun(dir) {
+  // 换 run（或重刷）前先收掉上一条实时通道：否则旧 SSE 仍往 S.dash.events
+  // 推事件，500ms 的快照防抖定时器也可能用旧 watchDir 覆盖新数据。
+  resetRealtime();
   try {
     const snap = await window.studio.loadRun(dir);
     if (!snap || !snap.run) return false;
@@ -118,8 +121,12 @@ async function loadRealRun(dir) {
     S._eventKeys = null;    // 换 run：重建事件去重索引
     S.realMode = true;
     S.watchDir = dir;
-    // P3：优先 SSE，回退文件 watch
-    const runId = snap.run.run_id || path.basename(dir);
+    // P3：优先 SSE，回退文件 watch。
+    // 渲染进程是纯 ESM 且 nodeIntegration=false，没有 Node 的 path 模块；
+    // 旧的 path.basename(dir) 在 run.json 缺 run_id 时会抛 ReferenceError，
+    // 被下面的 catch 吞掉后表现为「切换失败」。用纯字符串取目录名兜底。
+    const fallbackId = String(dir).split(/[\\/]/).filter(Boolean).pop() || String(dir);
+    const runId = snap.run.run_id || fallbackId;
     if (!connectSSE(runId)) {
       try { await window.studio.watchRun(dir, true); } catch {}
     }

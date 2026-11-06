@@ -4,6 +4,8 @@
 import { h } from '../../lib/dom.js';
 import { S } from '../../lib/store.js';
 
+import { readAlias, readNumber } from '../../lib/validate.js';
+
 import { closeModal, showModal } from '../../ui/modal.js';
 import { toast } from '../../ui/toast.js';
 function openQuotaModal() {
@@ -39,7 +41,12 @@ function openQuotaModal() {
         h('div', { class: 'quota-col' },
           h('div', { class: 'quota-col-title' }, '月'),
           monthlyCalls, monthlyTokens, monthlyCost)));
-    rows.push({ aliasInput, daily: { dailyCalls, dailyTokens, dailyCost }, weekly: { weeklyCalls, weeklyTokens, weeklyCost }, monthly: { monthlyCalls, monthlyTokens, monthlyCost }, rowEl });
+    rows.push({
+      aliasInput,
+      daily:   { calls: dailyCalls, tokens: dailyTokens, cost: dailyCost },
+      weekly:  { calls: weeklyCalls, tokens: weeklyTokens, cost: weeklyCost },
+      monthly: { calls: monthlyCalls, tokens: monthlyTokens, cost: monthlyCost },
+    });
     return rowEl;
   };
 
@@ -51,36 +58,60 @@ function openQuotaModal() {
   } }, '+ 添加别名配额');
 
   const saveBtn = h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => {
+    // 三个窗口共用同一份校验：此前 parseInt('-5') = -5、parseFloat('1e999')
+    // = Infinity 会原样写进 quotas（负值配额等于永久耗尽），另有一份从未被
+    // 调用的死 collect() 与三份重复读取。
+    const collectWindow = (fields, label) => {
+      const out = {};
+      let error = '';
+      const specs = [
+        ['max_calls', fields.calls, { min: 0, max: 1e9, integer: true, fallback: 0, label: `${label} 调用次数` }],
+        ['max_tokens', fields.tokens, { min: 0, max: 1e15, integer: true, fallback: 0, label: `${label} Token` }],
+        ['max_cost_usd', fields.cost, { min: 0, max: 1e9, fallback: 0, label: `${label} 费用` }],
+      ];
+      for (const [key, el, opts] of specs) {
+        const r = readNumber(el, opts);
+        if (r.error) { error = error || r.error; el.classList.add('input-error'); }
+        else {
+          el.classList.remove('input-error');
+          if (String(el.value || '').trim()) out[key] = r.value;
+        }
+      }
+      return { out, error };
+    };
     const next = {};
+    let firstError = '';
     for (const r of rows) {
-      const alias = r.aliasInput.value.trim();
-      if (!alias) continue;
-      const collect = (obj) => {
-        const out = {};
-        if (obj.dailyCalls?.value) out.max_calls = parseInt(obj.dailyCalls.value) || 0;
-        if (obj.dailyTokens?.value) out.max_tokens = parseInt(obj.dailyTokens.value) || 0;
-        if (obj.dailyCost?.value) out.max_cost_usd = parseFloat(obj.dailyCost.value) || 0;
-        return Object.keys(out).length ? out : undefined;
-      };
-      // 修正字段名映射
-      const d = {};
-      if (r.daily.dailyCalls.value) d.max_calls = parseInt(r.daily.dailyCalls.value) || 0;
-      if (r.daily.dailyTokens.value) d.max_tokens = parseInt(r.daily.dailyTokens.value) || 0;
-      if (r.daily.dailyCost.value) d.max_cost_usd = parseFloat(r.daily.dailyCost.value) || 0;
-      const w = {};
-      if (r.weekly.weeklyCalls.value) w.max_calls = parseInt(r.weekly.weeklyCalls.value) || 0;
-      if (r.weekly.weeklyTokens.value) w.max_tokens = parseInt(r.weekly.weeklyTokens.value) || 0;
-      if (r.weekly.weeklyCost.value) w.max_cost_usd = parseFloat(r.weekly.weeklyCost.value) || 0;
-      const m = {};
-      if (r.monthly.monthlyCalls.value) m.max_calls = parseInt(r.monthly.monthlyCalls.value) || 0;
-      if (r.monthly.monthlyTokens.value) m.max_tokens = parseInt(r.monthly.monthlyTokens.value) || 0;
-      if (r.monthly.monthlyCost.value) m.max_cost_usd = parseFloat(r.monthly.monthlyCost.value) || 0;
+      const aliasInput = r.aliasInput;
+      const alias = aliasInput.value.trim();
+      const filled = [r.daily, r.weekly, r.monthly]
+        .some(w => [w.calls, w.tokens, w.cost].some(el => String(el.value || '').trim()));
+      if (!alias) {
+        // 完全空白的行直接跳过；填了数值却没写别名的行要报错，不能静默丢弃。
+        if (filled) {
+          firstError = firstError || '请为每个配额行填写别名（provider:model）';
+          aliasInput.classList.add('input-error');
+        }
+        continue;
+      }
+      const aliasCheck = readAlias(alias, { label: '配额别名' });
+      if (aliasCheck.error) {
+        firstError = firstError || aliasCheck.error;
+        aliasInput.classList.add('input-error');
+        continue;
+      }
+      aliasInput.classList.remove('input-error');
+      const d = collectWindow(r.daily, '日');
+      const w = collectWindow(r.weekly, '周');
+      const m = collectWindow(r.monthly, '月');
+      firstError = firstError || d.error || w.error || m.error;
       const quota = {};
-      if (Object.keys(d).length) quota.daily = d;
-      if (Object.keys(w).length) quota.weekly = w;
-      if (Object.keys(m).length) quota.monthly = m;
+      if (Object.keys(d.out).length) quota.daily = d.out;
+      if (Object.keys(w.out).length) quota.weekly = w.out;
+      if (Object.keys(m.out).length) quota.monthly = m.out;
       if (Object.keys(quota).length) next[alias] = quota;
     }
+    if (firstError) { toast('error', '配额未保存', firstError); return; }
     if (!S.settings) S.settings = {};
     S.settings.quotas = next;
     S.settings.quota_enabled = Object.keys(next).length > 0;

@@ -5,6 +5,7 @@ import { $, $$, h, s } from '../../lib/dom.js';
 import { fmtBytes } from '../../lib/format.js';
 import { S } from '../../lib/store.js';
 
+import { emptyState, errorState, isStaleRender, loadingState } from '../../ui/states.js';
 import { toast } from '../../ui/toast.js';
 
 import { switchNav } from '../../app/router.js';
@@ -15,6 +16,8 @@ const ARTIFACT_ICONS = {
 };
 
 async function renderArtifactsPage(container) {
+  const token = S.navToken;
+  const reload = () => { container.innerHTML = ''; renderArtifactsPage(container); };
   container.appendChild(h('div', { class: 'page-head' },
     h('h2', {}, '产物'),
     h('div', { style: 'display:flex;gap:8px' },
@@ -29,7 +32,8 @@ async function renderArtifactsPage(container) {
   container.appendChild(body);
 
   if (!S.dash.run || !S.dash.run.dir) {
-    body.appendChild(h('div', { class: 'ph-empty' }, '未选择运行'));
+    body.appendChild(emptyState('未选择运行',
+      '请从右上角的运行列表中选择一次运行，再查看其产物。'));
     return;
   }
 
@@ -42,17 +46,22 @@ async function renderArtifactsPage(container) {
   const listEl = h('div', { class: 'art-tree-list' });
   tree.appendChild(listEl);
 
+  listEl.appendChild(loadingState('正在读取产物清单…'));
   let entries = [];
   try {
     entries = await window.studio.listArtifacts(S.dash.run.dir);
   } catch (e) {
-    listEl.appendChild(h('div', { class: 'ph-empty' }, '加载失败：' + String(e.message || e)));
+    listEl.innerHTML = '';
+    listEl.appendChild(errorState('产物清单加载失败', String(e.message || e), reload));
     return;
   }
+  // await 期间可能已经切页：不再往已卸载的 DOM 继续渲染。
+  if (isStaleRender(token, container)) return;
+  listEl.innerHTML = '';
 
   if (!entries || !entries.length) {
-    listEl.appendChild(h('div', { class: 'ph-empty' }, '该运行暂无产物'));
-    preview.appendChild(h('div', { class: 'ph-empty' }, '选择左侧文件查看内容'));
+    listEl.appendChild(emptyState('该运行暂无产物', '任务完成后，产物会出现在这里。'));
+    preview.appendChild(emptyState('选择左侧文件查看内容'));
     return;
   }
 
@@ -90,7 +99,7 @@ async function renderArtifactsPage(container) {
       listEl.appendChild(item);
     }
   }
-  preview.appendChild(h('div', { class: 'ph-empty' }, '选择左侧文件查看内容'));
+  preview.appendChild(emptyState('选择左侧文件查看内容'));
 }
 
 async function previewArtifact(preview, f) {
@@ -100,11 +109,15 @@ async function previewArtifact(preview, f) {
     h('span', { class: 'art-preview-meta' },
       `${fmtBytes(f.sizeBytes)} · ${f.role || '—'} · ${f.task || '—'}`),
     h('div', { style: 'display:flex;gap:4px' },
-      f.task ? h('button', { class: 'btn btn-sm', onclick: () => { closeTaskDetail(); openTaskDetail(f.task); } }, '关联任务') : null,
+      // 直接打开即可：openDetailPanel 会先清空抽屉。此前调用的
+      // closeTaskDetail 全仓未定义（且 closeDetailPanel 的 220ms 延时收起
+      // 会把刚打开的面板又藏起来），点这个按钮必抛 ReferenceError。
+      f.task ? h('button', { class: 'btn btn-sm', onclick: () => openTaskDetail(f.task) }, '关联任务') : null,
       h('button', { class: 'btn btn-sm', title: '在文件管理器中显示',
         onclick: () => { const p = S.dash.run.dir + '\\' + (f.path || '').replace(/\//g, '\\'); window.studio.revealFile(p); } },
         '📂 显示'))));
   const content = h('pre', { class: 'art-preview-content' });
+  content.textContent = '加载中…';
   preview.appendChild(content);
   try {
     const r = await window.studio.readArtifact(S.dash.run.dir, f.path);

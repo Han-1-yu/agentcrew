@@ -1,25 +1,20 @@
-/* 运行状态条：当前 run 的目标、阶段、指标与操作。左侧 3px 色条表示运行状态。 */
+/* 运行抬头：当前 run 的目标、阶段、指标与操作。
+   不再是独立卡片——它是页面标题区，用排版层次和一条发丝线立住，
+   让下方的毛玻璃区块（尤其依赖图）成为画面的主体。 */
 
 #run-status-bar {
-  position: relative; overflow: hidden;
-  padding: var(--sp-4) var(--sp-5) var(--sp-3);
-  background: var(--bg-panel);
-  border: 1px solid var(--border); border-radius: var(--r-md);
+  position: relative;
+  padding: 0 var(--sp-1);
+  background: none;
+  border: none;
 }
-#run-status-bar::before {
-  content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
-  background: var(--text-ter); transition: background var(--dur-2) ease;
-}
-#run-status-bar.status-running::before   { background: var(--status-running); }
-#run-status-bar.status-completed::before { background: var(--success); }
-#run-status-bar.status-failed::before    { background: var(--error); }
-#run-status-bar.status-paused::before    { background: var(--warn); }
-#run-status-bar.status-planning::before  { background: var(--sky); }
+/* 状态只在状态 chip 上表达，左侧不再有彩色标尺 */
+#run-status-bar::before { content: none; }
 
-.rs-top { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
+.rs-top { display: flex; align-items: center; gap: var(--sp-3); row-gap: var(--sp-3); flex-wrap: wrap; }
 .rs-id {
   font-family: var(--font-mono); font-size: 10px; color: var(--text-ter);
-  padding: 2px 6px; border-radius: var(--r-xs); background: var(--ink-04);
+  padding: 2px 7px; border-radius: var(--r-pill); background: var(--ink-05);
   cursor: pointer; transition: color var(--dur-1) ease;
 }
 .rs-id:hover { color: var(--accent-text); }
@@ -31,29 +26,33 @@
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
-/* 阶段切换：三段式分段控件 */
+/* 阶段切换：胶囊分段控件 */
 .rs-stage-seg {
-  display: inline-flex; gap: 1px; padding: 2px;
-  background: var(--ink-05); border-radius: var(--r-sm);
+  display: inline-flex; gap: 2px; padding: 2px;
+  background: var(--ink-05);
+  border: 1px solid var(--border-weak); border-radius: var(--r-pill);
 }
 .rs-stage-seg button {
-  height: 22px; padding: 0 10px;
-  border: none; border-radius: var(--r-xs);
+  height: 22px; padding: 0 11px;
+  border: none; border-radius: var(--r-pill);
   background: transparent; color: var(--text-ter);
   font-size: var(--fs-xs); cursor: pointer;
   transition: background var(--dur-1) ease, color var(--dur-1) ease;
 }
 .rs-stage-seg button:hover { color: var(--text); }
-.rs-stage-seg button.on { background: var(--bg-panel); color: var(--text); font-weight: 600; box-shadow: var(--shadow-1); }
+.rs-stage-seg button.on {
+  background: var(--glass-bg-strong); color: var(--text);
+  font-weight: 500; box-shadow: var(--glass-highlight);
+}
 
 /* 状态 chip：淡底 + 语义色文字（比实心块安静，但对比度足够） */
 .rs-status-chip {
   display: inline-flex; align-items: center; gap: 6px;
   height: 24px; padding: 0 10px;
   border: 1px solid transparent; border-radius: var(--r-pill);
-  font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.02em;
+  font-size: var(--fs-xs); font-weight: 500; letter-spacing: 0.02em;
 }
-.rs-status-chip .dot { width: 6px; height: 6px; }
+.rs-status-chip .dot { width: 5px; height: 5px; }
 .rs-status-chip.running { background: var(--status-running-bg); color: var(--status-running); border-color: var(--status-running-bg); }
 .rs-status-chip.running .dot { background: var(--status-running); }
 .rs-status-chip.paused  { background: var(--warn-bg); color: var(--warn-text); border-color: var(--warn-border-soft); }
@@ -67,13 +66,18 @@
 .rs-status-chip.idle    { background: var(--ink-06); color: var(--text-sub); border-color: var(--border-weak); }
 .rs-status-chip.idle .dot { background: var(--text-ter); }
 
-/* 指标行：六列，竖向发丝线分隔 */
+/* 指标行：六列，竖向发丝线分隔。数值不换行——换行会把整行撑高、看起来挤 */
 .rs-stats {
-  display: grid; grid-template-columns: repeat(6, 1fr);
-  margin-top: var(--sp-4); padding-top: var(--sp-3);
+  display: grid; grid-template-columns: repeat(6, minmax(0, 1fr));
+  margin-top: var(--sp-5); padding-top: var(--sp-4);
   border-top: 1px solid var(--border-weak);
 }
-.rs-stat { display: flex; flex-direction: column; gap: 3px; padding: 0 var(--sp-4); border-left: 1px solid var(--border-weak); }
+.rs-stat {
+  display: flex; flex-direction: column; gap: 5px;
+  padding: 0 var(--sp-5);
+  border-left: 1px solid var(--border-weak);
+  min-width: 0;
+}
 .rs-stat:first-child { border-left: none; padding-left: 0; }
 .rs-stat .k {
   font-size: 10px; color: var(--text-ter);
@@ -81,37 +85,16 @@
 }
 .rs-stat .v {
   font-family: var(--font-mono);
-  font-size: 15px; font-weight: 600; color: var(--text);
-  line-height: 1.25; letter-spacing: -0.01em;
+  font-size: 16px; font-weight: 600; color: var(--text);
+  line-height: 1.3; letter-spacing: -0.01em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
-.rs-actions { display: flex; gap: var(--sp-2); margin-top: var(--sp-4); flex-wrap: wrap; }
+.rs-actions { display: flex; gap: 10px; margin-top: var(--sp-5); flex-wrap: wrap; }
 
 @media (max-width: 1100px) {
   .rs-stats { grid-template-columns: repeat(3, 1fr); row-gap: var(--sp-3); }
   .rs-stat:nth-child(4) { border-left: none; padding-left: 0; }
-}
-
-/* ---- 视觉增强：只在"运行中"给一点活气 ---- */
-/* 顶部扫描光带：一眼看出这条 run 还在推进，而不是停在某个数字上 */
-#run-status-bar.status-running::after {
-  content: ''; position: absolute; left: 0; top: 0; height: 2px; width: 100%;
-  background-image: linear-gradient(90deg, transparent, var(--status-running), transparent);
-  background-size: 45% 100%; background-repeat: no-repeat;
-  animation: sbSweep 2.8s ease-in-out infinite;
-  pointer-events: none;
-}
-@keyframes sbSweep {
-  0%   { background-position: -45% 0; }
-  100% { background-position: 145% 0; }
-}
-
-/* 状态点的呼吸环：与扫描光带同源，表示"进程活着" */
-.rs-status-chip.running .dot { animation: chipPulse 1.8s ease-out infinite; }
-@keyframes chipPulse {
-  0%   { box-shadow: 0 0 0 0 var(--glow-running); }
-  70%  { box-shadow: 0 0 0 5px transparent; }
-  100% { box-shadow: 0 0 0 0 transparent; }
 }
 
 /* 读数：等宽数字对齐，hover 轻微抬起（信息密度高的地方只给最小反馈） */

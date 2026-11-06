@@ -26,6 +26,9 @@ const S = {
   view: { zoom: 1, x: 0, y: 0 },   // DAG 视图变换
   runFilter: null,                  // 项目筛选
   sseConnected: false,              // SSE 连接状态
+  // 每次 switchNav / 页面重渲染都自增：异步页在 await 之后比对它，过期就别再
+  // 往已卸载的 DOM 写内容（配合 ui/states.js 的 isStaleRender）。
+  navToken: 0,
 };
 
 // 自测遥测（selftest 依赖，必须保留）

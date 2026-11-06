@@ -7,6 +7,8 @@ import { h, s } from '../../lib/dom.js';
 import { fmtDur, fmtTokens, trunc } from '../../lib/format.js';
 import { S } from '../../lib/store.js';
 
+import { emptyState } from '../../ui/states.js';
+
 import { switchNav } from '../../app/router.js';
 
 import { openTaskDetail } from '../detail/panel.js';
@@ -18,9 +20,13 @@ function renderAgentsPage(container) {
   const grid = h('div', { class: 'agents-full-grid' });
   container.appendChild(grid);
   const agents = S.dash.agents || {};
+  if (!Object.keys(agents).length) {
+    grid.appendChild(emptyState('暂无 Agent 数据', '本次运行还没有派生出角色负载统计。'));
+    return;
+  }
   for (const [role, a] of Object.entries(agents)) {
     const meta = ROLE_META[role] || { label: role, color: 'var(--text-ter)' };
-    const myTasks = S.dash.tasks.filter(t => t.role === role);
+    const myTasks = (S.dash.tasks || []).filter(t => t.role === role);
     // 派生统计
     const totalCost = myTasks.reduce((s, t) => s + ((t.result && t.result.cost_usd) || 0), 0);
     const totalRetries = myTasks.reduce((s, t) => s + Math.max(0, (t.attempts || 1) - 1), 0);
@@ -49,7 +55,13 @@ function renderAgentsPage(container) {
         h('div', { class: 'agent-full-tasks' },
           h('div', { class: 'agent-full-tasks-title' }, `任务列表（${myTasks.length}）`),
           ...myTasks.map(t => h('div', { class: 'agent-full-task-item',
-            onclick: () => { switchNav('dashboard'); setTimeout(() => openTaskDetail(t.id), 100); } },
+            onclick: () => {
+              switchNav('dashboard');
+              // 以前是裸 100ms 定时器：这期间再切页会在错误页面上弹出任务
+              // 详情。用 navToken + rAF 收口，导航变了就放弃这次打开。
+              const token = S.navToken;
+              requestAnimationFrame(() => { if (token === S.navToken) openTaskDetail(t.id); });
+            } },
             h('span', { class: `ts-dot ts-${t.status}` }),
             h('span', { class: 'agent-full-task-id' }, t.id),
             h('span', { class: 'agent-full-task-title' }, trunc(t.title, 30))))))));

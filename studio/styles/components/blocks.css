@@ -1,15 +1,20 @@
-/* 通用区块（dash-block）、块头、页面头、状态点。 */
+/* 通用区块（dash-block）、块头、页面头、状态点。
+   区块 = 一张毛玻璃卡片：半透明面 + 1px 白描边 + 顶部高光 + 大圆角，不再用实色底 + 硬边框。 */
 
 /* ---- 看板区块 ---- */
 .dash-block {
-  background: var(--bg-panel);
-  border: 1px solid var(--border); border-radius: var(--r-md);
-  padding: var(--sp-4) var(--sp-5);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-xl);
+  padding: var(--sp-5) var(--sp-6);
+  box-shadow: var(--glass-highlight), var(--shadow-2);
+  -webkit-backdrop-filter: blur(var(--blur-card)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--blur-card)) saturate(var(--glass-saturate));
 }
 .block-head {
-  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4);
   flex-wrap: wrap;
-  padding-bottom: var(--sp-2); margin-bottom: var(--sp-3);
+  padding-bottom: var(--sp-3); margin-bottom: var(--sp-4);
   border-bottom: 1px solid var(--border-weak);
 }
 .block-title {
@@ -30,8 +35,8 @@
 }
 .ph-empty { padding: var(--sp-10) var(--sp-5); text-align: center; font-size: var(--fs-body); color: var(--text-ter); }
 
-/* ---- 状态点：克制，无发光 ---- */
-.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-ter); flex: 0 0 auto; }
+/* ---- 状态点：一颗小圆，状态色是它唯一的色彩 ---- */
+.dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-ter); flex: 0 0 auto; }
 .dot.running { background: var(--status-running); }
 .dot.warning { background: var(--warn); }
 .dot.error { background: var(--error); }

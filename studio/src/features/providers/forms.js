@@ -5,6 +5,8 @@ import { BUILTIN_PROVIDERS } from '../../contracts/providers.js';
 
 import { h, s } from '../../lib/dom.js';
 
+import { readUrl } from '../../lib/validate.js';
+
 import { closeModal, showModal } from '../../ui/modal.js';
 import { toast } from '../../ui/toast.js';
 function buildProviderFormFields(initial) {
@@ -77,8 +79,21 @@ function buildProviderFormFields(initial) {
     keyInput, keyStatusEl, keyHintEl, saveKeyBtn };
 }
 
-function copyYaml(yamlBox) {
+function copyYaml(fields) {
   return async () => {
+    // 兼容旧调用（直接传 textarea）：有 nameInput 时先做必填 / URL 校验，
+    // 避免把 `myprovider` / `https://your-endpoint` 这类占位兜底复制给用户，
+    // 或把 `javascript:`、无协议字符串拼进 agentcrew.yaml。
+    const yamlBox = fields.yamlBox || fields;
+    if (fields.nameInput) {
+      const url = readUrl(fields.urlInput, { required: true, label: 'Base URL' });
+      const problems = [
+        fields.nameInput.value.trim() ? '' : 'Provider key 不能为空',
+        url.error,
+        fields.envInput.value.trim() ? '' : 'API Key 环境变量名不能为空',
+      ].filter(Boolean);
+      if (problems.length) { toast('error', '配置不完整', problems.join('；')); return; }
+    }
     const text = yamlBox.value;
     try { await navigator.clipboard.writeText(text); toast('success', '已复制', 'YAML 片段已写入剪贴板'); }
     catch (e) {
@@ -123,7 +138,7 @@ function openAddProviderModal() {
       h('div', { class: 'ap-warn' }, 'Studio 不直接修改 agentcrew.yaml，复制后请粘贴到项目根目录 agentcrew.yaml。')),
     h('div', { class: 'modal-actions' },
       h('button', { class: 'btn', onclick: closeModal }, '关闭'),
-      h('button', { class: 'btn btn-primary', onclick: copyYaml(f.yamlBox) }, '一键复制'))));
+      h('button', { class: 'btn btn-primary', onclick: copyYaml(f) }, '一键复制'))));
 }
 
 /* 编辑现有 provider：内置 → models.providers.<name> 覆盖片段；自定义 → custom_providers 片段 */
@@ -160,7 +175,7 @@ function openEditProviderModal(p) {
       h('div', { class: 'ap-warn' }, 'Studio 不直接修改 agentcrew.yaml，复制后请粘贴到项目根目录 agentcrew.yaml。')),
     h('div', { class: 'modal-actions' },
       h('button', { class: 'btn', onclick: closeModal }, '关闭'),
-      h('button', { class: 'btn btn-primary', onclick: copyYaml(f.yamlBox) }, '一键复制'))));
+      h('button', { class: 'btn btn-primary', onclick: copyYaml(f) }, '一键复制'))));
 }
 
 /* ============================================================

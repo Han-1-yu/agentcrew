@@ -20,7 +20,8 @@ function buildPageHead(cfg) {
   return h('div', { class: 'page-head' },
     h('h2', {}, '设置'),
     h('button', { class: 'btn btn-primary', onclick: async () => {
-      const next = collectSettings(cfg);
+      const { values: next, error } = collectSettings(cfg);
+      if (error) { toast('error', '设置未保存', error); return; }
       try {
         await window.studio.setSettings(next);
         S.settings = Object.assign({}, S.settings, next);

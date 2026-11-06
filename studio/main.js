@@ -938,7 +938,7 @@ function createWindow() {
     height: 900,
     minWidth: 1080,
     minHeight: 680,
-    backgroundColor: '#0d1117',
+    backgroundColor: '#070B16',
     title: 'AgentCrew Studio',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),

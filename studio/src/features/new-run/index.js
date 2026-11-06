@@ -7,14 +7,19 @@ import { apiFetch } from '../../lib/api.js';
 import { $, h } from '../../lib/dom.js';
 import { S } from '../../lib/store.js';
 
+import { readAlias, readNumber } from '../../lib/validate.js';
+
 import { closeModal, showModal } from '../../ui/modal.js';
 import { toast } from '../../ui/toast.js';
 
 import { switchRun } from '../runs/index.js';
-function openNewRunModal(){
+function openNewRunModal(opts = {}){
   // 记忆上次的模式选择；首次默认**真实模式**——Mock 产物是固定 Todo 夹具，与目标无关
   const saved = localStorage.getItem('agentcrew:nrMock');
   const mockDefault = saved == null ? !!(S.settings && S.settings.defaultMock) : saved === '1';
+  // 自动执行（命令框里的 Full access 标签写的就是它），默认开
+  const savedAuto = localStorage.getItem('agentcrew:nrAuto');
+  const autoDefault = savedAuto == null ? true : savedAuto === '1';
   showModal(h('div',{},
     h('h3',{class:'modal-title'},'启动新运行'),
     h('div',{class:'nr-form'},
@@ -48,7 +53,7 @@ function openNewRunModal(){
       // 模式复选
       h('div',{class:'nr-checks'},
         h('label',{},h('input',{type:'checkbox',id:'nr-mock',checked:mockDefault}),'Mock 模式'),
-        h('label',{},h('input',{type:'checkbox',id:'nr-auto',checked:true}),'自动执行'),
+        h('label',{},h('input',{type:'checkbox',id:'nr-auto',checked:autoDefault}),'自动执行'),
         h('label',{},h('input',{type:'checkbox',id:'nr-demo'}),'Demo 目标')),
 
       // 高级选项（默认收起）
@@ -89,6 +94,16 @@ function openNewRunModal(){
           goalEl.focus();
           return;
         }
+        // 统一数值/别名校验：`type=number min=0` 挡不住 -5，parseFloat('1e999')
+        // 是 Infinity，parseInt('1e999') 又会静默变成 1；自定义别名按后端
+        // parse_alias 的 provider:model 口径提前拦住。
+        const costR = readNumber($('#nr-maxcost'),
+          { min: 0, max: 1000000, fallback: 0, label: '预算上限' });
+        const callsR = readNumber($('#nr-max-llm-calls'),
+          { min: 0, max: 10000000, integer: true, fallback: 0, label: 'max-llm-calls' });
+        const aliasR = readAlias(assembleNrAlias());
+        const paramError = costR.error || callsR.error || aliasR.error;
+        if (paramError) { toast('error', '参数有误', paramError); return; }
         const project=$('#nr-project').value.trim();
         const mockOn=$('#nr-mock').checked;
         const startBtn=$('#nr-start');
@@ -101,9 +116,9 @@ function openNewRunModal(){
             mock: mockOn,
             auto: $('#nr-auto').checked,
             project: project || null,
-            model: assembleNrAlias() || null,
-            maxCost: Math.max(0, parseFloat($('#nr-maxcost').value) || 0),
-            maxLlmCalls: Math.max(0, parseInt($('#nr-max-llm-calls').value) || 0),
+            model: aliasR.value || null,
+            maxCost: costR.value,
+            maxLlmCalls: callsR.value,
             // 慢速 mock：拉长每次模拟 LLM 调用，留出观察与取消窗口
             env: (mockOn && $('#nr-slow').checked) ? { AGENTCREW_MOCK_LATENCY_MS: '2000' } : null,
           });
@@ -111,18 +126,31 @@ function openNewRunModal(){
           toast('success','已启动', mockOn ? 'Mock 运行已提交…' : '真实模型运行已提交，耗时数分钟…');
           // 轮询等 CLI 创建出**新的** run 目录再切换（不能取 runs[0]——可能是别的运行）
           const before = new Set(((await window.studio.listRuns())||[]).map(x=>x.dir));
+          let switched = false;
           for(let i=0;i<120;i++){
             await new Promise(res=>setTimeout(res,500));
             try {
               const fresh = ((await window.studio.listRuns())||[]).find(x=>!before.has(x.dir));
-              if(fresh){ await switchRun(fresh.dir); break; }
+              if(fresh){ await switchRun(fresh.dir); switched = true; break; }
             } catch {}
           }
+          // 60s 都没等到新目录时给一句明确反馈，别让用户对着静默的旧看板等。
+          if(!switched) toast('info','已启动','未检测到新的 run 目录，请在运行列表中手动切换');
         } catch(e) {
           startBtn.disabled=false; startBtn.textContent='启动';
           toast('error','启动失败', String(e.message||e));
         }
       }},'启动'))));
+
+  // 从底部命令输入框进来：预填目标，光标落到末尾（用户仍可在弹窗里改）
+  if (opts && opts.goal) {
+    const g = $('#nr-goal');
+    if (g) {
+      g.value = String(opts.goal);
+      g.focus();
+      try { g.setSelectionRange(g.value.length, g.value.length); } catch {}
+    }
+  }
 
   // 输入时自动清除目标错误态
   $('#nr-goal').addEventListener('input',()=>{

@@ -3,6 +3,7 @@
    新增样式请放进对应域文件，不要往这里堆规则。 */
 
 @import './tokens.css';
+@import './tokens-light.css';
 @import './base.css';
 
 /* 布局骨架 */
@@ -12,6 +13,7 @@
 
 /* 通用组件 */
 @import './components/blocks.css';
+@import './components/composer.css';
 @import './components/buttons.css';
 @import './components/status-bar.css';
 @import './components/cost.css';

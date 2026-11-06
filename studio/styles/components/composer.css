@@ -1,0 +1,120 @@
+/* 悬浮命令输入框：主区底部居中，上方一条小型项目选择条，框内占位文字 + 左下加号/权限标签 + 右下模型/发送。
+   行为上它是「新建运行」的快捷入口：输入目标 → 发送 → 打开新建运行表单并预填。 */
+
+.composer {
+  position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%);
+  z-index: 25;
+  width: min(720px, calc(100% - 112px));
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+}
+.composer.hidden { display: none !important; }
+
+/* ---------- 项目选择条 ---------- */
+.composer-bar {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 27px; padding: 0 12px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg-quiet);
+  -webkit-backdrop-filter: blur(var(--blur-card)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--blur-card)) saturate(var(--glass-saturate));
+  box-shadow: var(--glass-highlight);
+  font-size: var(--fs-xs); color: var(--text-ter);
+  max-width: 100%;
+  cursor: pointer;
+  transition: border-color var(--dur-1) ease, color var(--dur-1) ease;
+}
+.composer-bar:hover { border-color: var(--glass-border-strong); color: var(--text-sub); }
+.cb-dot { width: 4px; height: 4px; border-radius: 50%; background: var(--text-ter); flex: 0 0 auto; }
+.cb-proj { color: var(--text-sub); font-weight: 500; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cb-sep { opacity: 0.5; }
+.cb-mode { white-space: nowrap; }
+.cb-chev { opacity: 0.45; flex: 0 0 auto; }
+
+/* ---------- 输入卡 ---------- */
+.composer-box {
+  width: 100%;
+  padding: 12px 14px 10px;
+  border-radius: var(--r-xl);
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--blur-float)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--blur-float)) saturate(var(--glass-saturate));
+  box-shadow: var(--glass-highlight), var(--shadow-3);
+  transition: border-color var(--dur-2) ease, box-shadow var(--dur-2) ease;
+}
+.composer-box:focus-within {
+  border-color: var(--glass-border-strong);
+  box-shadow: var(--glass-highlight-strong), var(--shadow-3), 0 0 0 1px var(--accent-border-soft);
+}
+.composer-input {
+  display: block; width: 100%;
+  min-height: 36px; max-height: 140px;
+  padding: 0 3px;
+  border: none; background: transparent; color: var(--text);
+  font-family: inherit; font-size: 13px; line-height: 1.6;
+  resize: none; outline: none;
+}
+.composer-input::placeholder { color: var(--text-ter); }
+
+.composer-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); margin-top: 6px; }
+.cf-left, .cf-right { display: flex; align-items: center; gap: 8px; min-width: 0; }
+
+.cf-add {
+  display: grid; place-items: center;
+  width: 26px; height: 26px; padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--glass-border);
+  background: var(--ink-05); color: var(--text-sub);
+  font-size: 15px; line-height: 1;
+  transition: background var(--dur-1) ease, color var(--dur-1) ease, border-color var(--dur-1) ease;
+}
+.cf-add:hover { background: var(--ink-10); color: var(--text); border-color: var(--glass-border-strong); }
+
+.cf-tag {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 26px; padding: 0 11px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--glass-border);
+  background: var(--ink-05); color: var(--text-sub);
+  font-size: var(--fs-xs);
+  transition: background var(--dur-1) ease, color var(--dur-1) ease;
+}
+.cf-tag i { width: 4px; height: 4px; border-radius: 50%; background: var(--accent); transition: background var(--dur-1) ease; }
+.cf-tag:hover { background: var(--ink-08); color: var(--text); }
+.cf-tag.off { color: var(--text-ter); }
+.cf-tag.off i { background: var(--text-ter); }
+
+.cf-model {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 0 2px; border: none; background: none;
+  color: var(--text-ter); font-size: var(--fs-xs);
+  max-width: 220px; transition: color var(--dur-1) ease;
+}
+.cf-model:hover { color: var(--text-sub); }
+.cf-model span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cf-model svg { opacity: 0.45; flex: 0 0 auto; }
+
+.cf-send {
+  display: grid; place-items: center;
+  width: 32px; height: 32px; padding: 0;
+  border: none; border-radius: 50%;
+  background: var(--cmp-send-bg); color: var(--cmp-send-fg);
+  box-shadow: var(--cmp-send-shadow);
+  transition: transform var(--dur-1) ease, filter var(--dur-1) ease;
+}
+.cf-send:hover { filter: brightness(1.04); }
+.cf-send:active { transform: scale(0.94); }
+.cf-send:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* 窄窗口：让出左右留白，避免和依赖图抢宽度 */
+@media (max-width: 1180px) {
+  .composer { width: calc(100% - 48px); bottom: 16px; }
+}
+/* 矮窗口：收起项目条、压低输入框，保证不和首屏内容打架 */
+@media (max-height: 760px) {
+  .composer { bottom: 14px; gap: 6px; }
+  .composer-bar { display: none; }
+  .composer-box { padding: 11px 13px 9px; }
+  .composer-input { min-height: 32px; }
+}

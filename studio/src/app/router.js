@@ -4,6 +4,8 @@
 import { $, $$, h } from '../lib/dom.js';
 import { S, persistState } from '../lib/store.js';
 
+import { emptyState } from '../ui/states.js';
+
 import { renderAgentsPage } from '../features/agents-page/index.js';
 import { renderArtifactsPage } from '../features/artifacts/index.js';
 import { renderDagPage } from '../features/dag-page/index.js';
@@ -13,12 +15,32 @@ import { renderPlanPage } from '../features/plan/index.js';
 import { renderProvidersPage } from '../features/providers/index.js';
 import { renderSettingsPage } from '../features/settings/index.js';
 function switchNav(key){
-  S.nav=key; persistState();
+  S.nav=key;
+  // 让上一版页面的异步续体失效：页面 render 里捕获 S.navToken，await 之后
+  // 用 isStaleRender 比对，切走后不再往已卸载（或新版）的 DOM 写内容。
+  S.navToken += 1;
+  persistState();
   $$('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.nav===key));
+  // 命令输入框只在运行总览出现：其他页面是表单/列表，悬浮框会挡住内容
+  const composer=document.getElementById('composer');
+  if(composer) composer.classList.toggle('hidden',key!=='dashboard');
+  // 同时开关底部渐隐带，避免输入框消失后仍压着一层暗角
+  const mainCol=document.querySelector('.main-col');
+  if(mainCol) mainCol.classList.toggle('has-composer',key==='dashboard');
   const dash=$('#dashboard-view'), ph=$('#placeholder-view');
+  // 无论去哪一页都先清空占位区：dashboard 分支此前只加 .hidden，上一页的
+  // 监听器与 DOM 会一直挂到下次切换，行为与其余分支不一致。
+  ph.innerHTML='';
   if(key==='dashboard'){ ph.classList.add('hidden'); dash.classList.remove('hidden'); return; }
   dash.classList.add('hidden'); ph.classList.remove('hidden');
-  ph.innerHTML='';
+  // 统一的无运行数据态：8 个页面都直接读 S.dash.tasks / S.dash.run，为空时
+  // 逐页抛 TypeError。给一个明确的空态 + 启动入口，而不是空白页或报错。
+  if(!S.dash || !S.dash.run){
+    ph.appendChild(emptyState('暂无运行数据',
+      '当前没有可展示的运行。启动一次新运行，或从右上角切换到已有记录。',
+      { label:'新建运行', onclick:()=>document.getElementById('btn-new-run')?.click() }));
+    return;
+  }
   if(key==='artifacts'){ renderArtifactsPage(ph); return; }
   if(key==='settings'){ renderSettingsPage(ph); return; }
   if(key==='events'){ renderEventsPage(ph); return; }

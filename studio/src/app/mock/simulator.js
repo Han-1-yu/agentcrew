@@ -4,7 +4,7 @@
  */
 
 import { RUN_ID, T, buildMockAgents, buildMockEvents, buildMockGates, buildMockRun, buildMockTasks, ev, initMockData, nowTs } from './fixtures.js';
-import { renderChrome } from '../shell.js';
+import { deriveAgents, deriveGates } from '../data.js';
 import { renderDashboard } from '../../features/dashboard/index.js';
 import { $, h } from '../../lib/dom.js';
 import { parseTs } from '../../lib/format.js';
@@ -106,13 +106,25 @@ function simTick(){
 function applyDemoState(state){
   stopSim();
   if(state==='empty'){
-    // 无运行记录：清空数据层，在状态条显示引导；重置按钮直接重载页面恢复骨架
-    S.dash=null; stopSim();
-    $('#run-status-bar').innerHTML='';
-    $('#run-status-bar').appendChild(h('div',{class:'banner info',style:'margin:0'},
-      '没有运行记录。点击右上角「新建运行」开始第一次多智能体协作。'));
-    $('#run-status-bar').appendChild(h('button',{class:'btn btn-primary',style:'margin-top:8px',onclick:()=>location.reload()},'创建示例运行'));
-    renderChrome();
+    // 无运行记录。此前直接 S.dash=null：renderDashboard / renderChrome 会提前
+    // return，看板残留上一次运行的旧 DOM；而 8 个页面都直接读 S.dash.run，
+    // 之后任意一次导航都抛 TypeError。改成「形状完整、内容为空」的数据，
+    // 让各页既有的 || [] 兜底自然生效，并显式重渲染一次清掉旧内容。
+    stopSim();
+    S.dash={
+      run:{ run_id:null, dir:null, status:'idle', phase:'planning', project_goal:'',
+            stats:{}, provider:'—', model:'—', budget_limit_usd:0 },
+      tasks:[], agents:deriveAgents([]), gates:deriveGates([]), events:[],
+    };
+    S.realMode=false; S.watchDir=null; S._eventKeys=null;
+    renderDashboard();
+    const bar=$('#run-status-bar');
+    if(bar){
+      bar.innerHTML='';
+      bar.appendChild(h('div',{class:'banner info',style:'margin:0'},
+        '没有运行记录。点击右上角「新建运行」开始第一次多智能体协作。'));
+      bar.appendChild(h('button',{class:'btn btn-primary',style:'margin-top:8px',onclick:()=>location.reload()},'创建示例运行'));
+    }
     return;
   }
   initMockData(); const d=S.dash; const run=d.run;

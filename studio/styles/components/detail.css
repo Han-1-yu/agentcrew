@@ -11,18 +11,19 @@
 
 #detail-panel {
   position: fixed; top: 0; right: 0; bottom: 0; width: 400px; max-width: 92vw;
-  background: var(--bg-panel); z-index: 41;
-  box-shadow: -24px 0 60px -30px var(--shadow-drawer), -1px 0 0 var(--border);
+  /* 抽屉是浮层，必须"实"：用不透明的 --bg-float，否则透出背后的看板 */
+  background: var(--bg-float); z-index: 41;
+  box-shadow: var(--shadow-3), -1px 0 0 var(--border);
   display: flex; flex-direction: column;
-  border-left: 1px solid var(--border);
+  border-left: 1px solid var(--glass-border);
 }
 
 /* 标题区：粘在顶部，滚动时内容从下面穿过去 */
 .dp-head {
   position: sticky; top: 0; z-index: 2;
   padding: 14px 16px 12px;
-  background: var(--bg-panel);
-  background: color-mix(in srgb, var(--bg-panel) 88%, transparent);
+  background: color-mix(in srgb, var(--bg-float) 90%, transparent);
+  -webkit-backdrop-filter: blur(12px) saturate(1.2);
   backdrop-filter: blur(12px) saturate(1.2);
   border-bottom: 1px solid var(--ink-10);
 }

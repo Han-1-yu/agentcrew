@@ -1,57 +1,43 @@
-/* 任务依赖图：画布、节点、连线、缩放控件、窄屏降级列表。
+/* 依赖图：画布、节点、连线、缩放控件、窄屏降级列表。
  *
- * 图上唯一的动效预算给了「正在发生的事」：运行中节点呼吸 + 热路径流动虚线。
- * 静止节点不发光、不漂浮——满屏都在动等于没有重点。
+ * 视觉：节点是中性毛玻璃卡片（1px 白色描边 + 顶部高光），角色不再上色，
+ * 身份靠头一个字与位置区分；状态只留一颗小圆点。连线统一冷白半透明，
+ * 只有「正在发生的事」才提亮——满屏都在动等于没有重点。
  */
 
-.dag-controls { display: flex; align-items: center; gap: var(--sp-1); }
+.dag-controls { display: flex; align-items: center; gap: 6px; }
 .dag-zoom-label {
   min-width: 40px; text-align: center;
   font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-sub);
 }
 
-/* 画布：点阵网格 + 顶部铜色微光，让空白区域也有"图纸"质感 */
+/* 画布：一片干净的玻璃面，顶部一点弥散光，不用点阵网格。
+   高度由 JS 写入的 aspect-ratio 决定——画布贴合图形比例，不留大片信箱边；
+   max-height 兜住矮窗口，保证首屏能看到整张图而不被悬浮命令框压住。 */
 .dag-canvas-wrap {
-  position: relative; height: 440px;
-  border: 1px solid var(--border-weak); border-radius: var(--r-md);
+  position: relative; height: auto; aspect-ratio: 2 / 1;
+  min-height: 300px; max-height: clamp(340px, 40vh, 480px);
+  /* 画布直接坐在卡片上：不再套一层带边框的"卡中卡" */
+  border: none; border-radius: 0;
   overflow: hidden; cursor: grab;
-  background-color: var(--bg-canvas);
-  background-image:
-    radial-gradient(120% 70% at 50% 0%, var(--accent-bg-faint), transparent 70%),
-    radial-gradient(var(--ink-10) 1px, transparent 1px);
-  background-size: 100% 100%, 18px 18px;
-  background-position: 0 0, -1px -1px;
-  box-shadow: inset 0 1px 0 var(--ink-04), inset 0 -32px 48px -40px var(--ink-20);
-  transition: box-shadow var(--dur-2) ease;
+  background: none;
+  box-shadow: none;
+  transition: none;
 }
-.dag-canvas-wrap.panning { cursor: grabbing; box-shadow: inset 0 1px 0 var(--ink-04), inset 0 0 0 1px var(--accent-border-soft); }
-/* 四角标记：给画布一点"工程图纸"的仪式感，纯装饰不拦事件 */
-.dag-canvas-wrap::before {
-  content: ''; position: absolute; inset: 10px; pointer-events: none; z-index: 1;
-  background:
-    linear-gradient(var(--ink-18), var(--ink-18)) left top / 12px 1px no-repeat,
-    linear-gradient(var(--ink-18), var(--ink-18)) left top / 1px 12px no-repeat,
-    linear-gradient(var(--ink-18), var(--ink-18)) right top / 12px 1px no-repeat,
-    linear-gradient(var(--ink-18), var(--ink-18)) right top / 1px 12px no-repeat,
-    linear-gradient(var(--ink-18), var(--ink-18)) left bottom / 12px 1px no-repeat,
-    linear-gradient(var(--ink-18), var(--ink-18)) left bottom / 1px 12px no-repeat,
-    linear-gradient(var(--ink-18), var(--ink-18)) right bottom / 12px 1px no-repeat,
-    linear-gradient(var(--ink-18), var(--ink-18)) right bottom / 1px 12px no-repeat;
-}
+.dag-canvas-wrap.panning { cursor: grabbing; }
 #dag-svg { width: 100%; height: 100%; display: block; position: relative; }
 #dag-svg text { font-family: var(--font-ui); }
 
-/* ---- 连线：状态即颜色，热路径会"流" ---- */
+/* ---- 连线：统一冷白细线，热路径才提亮 ---- */
 .dag-edge {
-  fill: none; stroke: var(--ink-25); stroke-width: 1.2; opacity: 0.75;
+  fill: none; stroke: var(--dag-edge); stroke-width: 1.2; opacity: 0.8;
   transition: stroke var(--dur-2) ease, stroke-width var(--dur-1) ease, opacity var(--dur-2) ease;
 }
-.dag-edge.done   { stroke: var(--success); stroke-width: 1.8; opacity: 0.95; }
-.dag-edge.failed { stroke: var(--warn); stroke-width: 1.4; stroke-dasharray: 4 3; opacity: 0.9; }
+.dag-edge.done   { stroke: var(--dag-edge); stroke-width: 1.6; opacity: 0.95; }
+.dag-edge.failed { stroke: var(--error); stroke-width: 1.4; stroke-dasharray: 4 3; opacity: 0.9; }
 .dag-edge.hot {
-  stroke: var(--accent); stroke-width: 2.2; opacity: 1;
+  stroke: var(--dag-edge-hot); stroke-width: 1.8; opacity: 1;
   stroke-dasharray: 8 6;
-  filter: drop-shadow(0 0 3px var(--glow-accent));
   animation: edgeFlow 0.9s linear infinite;
 }
 @keyframes edgeFlow { to { stroke-dashoffset: -14; } }
@@ -64,9 +50,9 @@
   transform-box: fill-box; transform-origin: center;
   transition: transform var(--dur-2) var(--ease-out), filter var(--dur-2) var(--ease-out);
 }
-.dag-node:hover .node-body { transform: translateY(-3px) scale(1.012); }
+.dag-node:hover .node-body { transform: translateY(-2px); }
 .dag-node:hover .node-body,
-.dag-node.is-focus .node-body { filter: drop-shadow(0 10px 16px var(--shadow)); }
+.dag-node.is-focus .node-body { filter: drop-shadow(0 12px 18px var(--shadow)); }
 
 /* 入场：每个 run 每个节点只播一次（由 JS 的 enter 类控制） */
 .dag-node.enter .node-body { animation: nodeIn 0.42s var(--ease-out) backwards; animation-delay: calc(var(--i) * 26ms); }
@@ -75,39 +61,34 @@
   to   { opacity: 1; transform: translateY(0) scale(1); }
 }
 
+/* 卡面：半透明玻璃（白 5.5%）+ 1px 白描边；SVG 里没有 backdrop-filter，
+   用「浅白填充 + 白色描边 + 顶部 sheen」模拟磨砂玻璃的层次。 */
 .dag-node rect.node-box {
-  fill: var(--bg-panel);
-  stroke: var(--text-ter);
-  transition: stroke var(--dur-2) ease, stroke-width var(--dur-1) ease,
-              fill var(--dur-2) ease, filter var(--dur-2) ease;
-  filter: drop-shadow(0 1px 2px var(--shadow));
+  fill: var(--dag-node-fill);
+  stroke: var(--dag-node-border);
+  stroke-width: 1.1;
+  transition: stroke var(--dur-2) ease, stroke-width var(--dur-1) ease, fill var(--dur-2) ease;
 }
-.dag-node:hover rect.node-box { stroke-width: 2.2; }
-.dag-node .node-inner { fill: none; stroke: var(--ink-08); stroke-width: 1; pointer-events: none; }
-.dag-node:hover .node-inner { stroke: var(--ink-14); }
+.dag-node:hover rect.node-box { stroke: var(--glass-border-strong); }
+.dag-node .node-inner { fill: none; stroke: transparent; stroke-width: 0; }
 .dag-node.flash { animation: nodeFlash 0.5s ease; }
 @keyframes nodeFlash { 0% { filter: brightness(1.25); } 100% { filter: none; } }
 
-/* 运行中：描边「走马灯」+ 呼吸 + 外发光 —— 全图唯一在动的东西 */
-.dag-node.running rect.node-box {
-  stroke-dasharray: 16 9;
-  animation: dagPulse 2.2s ease-in-out infinite, borderMarch 1.1s linear infinite;
-}
-@keyframes dagPulse { 0%, 100% { stroke-opacity: 1; } 50% { stroke-opacity: 0.5; } }
-@keyframes borderMarch { to { stroke-dashoffset: -25; } }
-.dag-node.running .node-body { filter: drop-shadow(0 0 9px var(--glow-running)); }
+/* 运行中：描边柔和呼吸（唯一在动的东西），不做霓虹外发光 */
+.dag-node.running rect.node-box { animation: dagPulse 2.6s ease-in-out infinite; }
+@keyframes dagPulse { 0%, 100% { stroke-opacity: 1; } 50% { stroke-opacity: 0.45; } }
 
-/* 悬停聚焦：只留该节点与它的直接上下游，其余压暗——密集图里靠这个找关系 */
+/* 悬停聚焦：只留该节点与它的直接上下游，其余压暗 */
 #dag-svg.dag-focus .dag-node:not(.is-focus) { opacity: 0.34; }
-#dag-svg.dag-focus .dag-edge:not(.edge-focus) { opacity: 0.10; }
-.dag-edge.edge-focus { stroke-width: 2.6; opacity: 1; }
-.dag-node.is-focus rect.node-box { stroke-width: 2.6; }
+#dag-svg.dag-focus .dag-edge:not(.edge-focus) { opacity: 0.12; }
+.dag-edge.edge-focus { stroke-width: 2; opacity: 1; }
+.dag-node.is-focus rect.node-box { stroke-width: 1.8; }
 
 /* ---- 节点内文字：全部走语义 token，两套主题自动适配 ---- */
 .dag-node text.node-title    { fill: var(--text); font-weight: 600; }
 .dag-node text.node-meta     { fill: var(--text-ter); }
 .dag-node text.node-role     { fill: var(--text-sub); }
-.dag-node text.node-on-solid { fill: var(--on-solid); }
+.dag-node text.node-on-solid { fill: var(--text); }
 .dag-node text.node-retry    { fill: var(--warn); font-weight: 600; }
 .dag-node text.node-error    { fill: var(--error); }
 .dag-node .node-prog-track   { fill: var(--ink-10); }
@@ -116,40 +97,130 @@
 .dag-node .node-check        { fill: var(--success); }
 .dag-node .node-check-mark   { stroke: var(--on-solid); stroke-width: 2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
 
-/* ---- 10 种状态的填充与描边 ---- */
-.dag-node[data-status="pending"]   .node-box { fill: var(--status-pending-bg);   stroke: var(--status-pending); }
-.dag-node[data-status="ready"]     .node-box { fill: var(--status-ready-bg);     stroke: var(--status-ready); }
-.dag-node[data-status="running"]   .node-box { fill: var(--status-running-bg);   stroke: var(--status-running); }
-.dag-node[data-status="review"]    .node-box { fill: var(--status-review-bg);    stroke: var(--status-review); }
-.dag-node[data-status="rework"]    .node-box { fill: var(--status-rework-bg);    stroke: var(--status-rework); }
-.dag-node[data-status="blocked"]   .node-box { fill: var(--status-blocked-bg);   stroke: var(--status-blocked); }
-.dag-node[data-status="succeeded"] .node-box { fill: var(--status-succeeded-bg); stroke: var(--status-succeeded); }
-.dag-node[data-status="failed"]    .node-box { fill: var(--status-failed-bg);    stroke: var(--status-failed); }
-.dag-node[data-status="skipped"]   .node-box { fill: var(--status-skipped-bg);   stroke: var(--status-skipped); }
-.dag-node[data-status="cancelled"] .node-box { fill: var(--status-cancelled-bg); stroke: var(--status-cancelled); }
-.dag-node[data-status="unknown"]   .node-box { fill: var(--bg-subtle);           stroke: var(--text-ter); }
+/* ---- 状态只影响描边与文字，不再整卡换底色 ---- */
+.dag-node[data-status] .node-box { fill: var(--dag-node-fill); stroke: var(--dag-node-border); }
+.dag-node[data-status="failed"]   .node-box { stroke: var(--error-border); }
+.dag-node[data-status="blocked"]  .node-box { stroke: var(--warn-border); }
+.dag-node[data-status="running"]  .node-box { stroke: var(--glass-border-strong); }
+.dag-node[data-status] .node-accent { fill: transparent; }
+.dag-node[data-status] .node-chip   { fill: var(--ink-08); }
 
-.dag-node[data-status="pending"]   .node-accent, .dag-node[data-status="pending"]   .node-chip { fill: var(--status-pending); }
-.dag-node[data-status="ready"]     .node-accent, .dag-node[data-status="ready"]     .node-chip { fill: var(--status-ready); }
-.dag-node[data-status="running"]   .node-accent, .dag-node[data-status="running"]   .node-chip { fill: var(--status-running); }
-.dag-node[data-status="review"]    .node-accent, .dag-node[data-status="review"]    .node-chip { fill: var(--status-review); }
-.dag-node[data-status="rework"]    .node-accent, .dag-node[data-status="rework"]    .node-chip { fill: var(--status-rework); }
-.dag-node[data-status="blocked"]   .node-accent, .dag-node[data-status="blocked"]   .node-chip { fill: var(--status-blocked); }
-.dag-node[data-status="succeeded"] .node-accent, .dag-node[data-status="succeeded"] .node-chip { fill: var(--status-succeeded); }
-.dag-node[data-status="failed"]    .node-accent, .dag-node[data-status="failed"]    .node-chip { fill: var(--status-failed); }
-.dag-node[data-status="skipped"]   .node-accent, .dag-node[data-status="skipped"]   .node-chip { fill: var(--status-skipped); }
-.dag-node[data-status="cancelled"] .node-accent, .dag-node[data-status="cancelled"] .node-chip { fill: var(--status-cancelled); }
-.dag-node[data-status="unknown"]   .node-accent, .dag-node[data-status="unknown"]   .node-chip { fill: var(--text-ter); }
+/* ---- 头像：中性玻璃圆，不再按角色上色 ---- */
+.dag-node .node-avatar { fill: var(--avatar-fill); }
+.dag-node .node-avatar-ring { fill: none; stroke: var(--glass-border); stroke-width: 1; }
 
-/* ---- 角色圆点：8 个角色各一色（低饱和装饰色） ---- */
-.dag-node[data-role="project_manager"]  .node-avatar { fill: var(--purple); }
-.dag-node[data-role="product_manager"]  .node-avatar { fill: var(--pink); }
-.dag-node[data-role="architect"]        .node-avatar { fill: var(--accent); }
-.dag-node[data-role="backend_dev"]      .node-avatar { fill: var(--success); }
-.dag-node[data-role="frontend_dev"]     .node-avatar { fill: var(--sky); }
-.dag-node[data-role="qa_engineer"]      .node-avatar { fill: var(--orange); }
-.dag-node[data-role="devops_engineer"]  .node-avatar { fill: var(--indigo); }
-.dag-node[data-role="technical_writer"] .node-avatar { fill: var(--text-ter); }
+/* ============================================================
+   Agent 依赖图：以执行者为节点的分层视图
+   ============================================================ */
+
+/* ---- 块头：标题 + 统计 + 视图切换 ---- */
+.dag-head-left { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.dag-kicker {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  font-size: var(--fs-xs); color: var(--text-ter);
+}
+.dag-kicker-sep { opacity: 0.45; }
+#dag-summary { font-family: var(--font-mono); color: var(--text-sub); letter-spacing: 0.02em; }
+.dag-tools { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
+.dag-mode-switch {
+  display: inline-flex; gap: 2px; padding: 2px;
+  background: var(--ink-04);
+  border: 1px solid var(--border-weak); border-radius: var(--r-pill);
+}
+.dag-mode-btn {
+  appearance: none; border: 0; background: transparent; cursor: pointer;
+  padding: 4px 11px; border-radius: var(--r-pill);
+  font-family: inherit; font-size: var(--fs-xs); color: var(--text-ter);
+  transition: color var(--dur-1) ease, background var(--dur-1) ease, box-shadow var(--dur-1) ease;
+}
+.dag-mode-btn:hover { color: var(--text); }
+.dag-mode-btn.active {
+  background: var(--glass-bg-strong); color: var(--text);
+  font-weight: 500; box-shadow: var(--glass-highlight);
+}
+
+/* ---- 层级带：安静的底衬，不再画虚线框 ---- */
+.dag-tier { fill: var(--dag-tier-bg); stroke: none; }
+.dag-tier-label {
+  fill: var(--text-ter); opacity: 0.6;
+  font-family: var(--font-mono); letter-spacing: 1.6px;
+}
+.dag-tier-ghost { fill: var(--ink-05); letter-spacing: -2px; }
+
+/* ---- Agent 卡片：中性毛玻璃，角色色只留在极淡的 sheen 里 ---- */
+.agent-node[data-status] rect.node-box {
+  fill: var(--dag-node-fill);
+  stroke: var(--dag-node-border); stroke-opacity: 1; stroke-width: 1.1;
+}
+.agent-node[data-status]:hover rect.node-box,
+.agent-node[data-status].is-focus rect.node-box { stroke: var(--glass-border-strong); stroke-width: 1.6; }
+.agent-node .node-inner { stroke: transparent; }
+.agent-node .node-sheen { pointer-events: none; opacity: 0.5; }
+.agent-node[data-status] .node-accent { fill: transparent; }
+.agent-node .node-avatar-ring { fill: none; stroke: var(--glass-border); stroke-width: 1; }
+
+.agent-node text.node-title { fill: var(--text); font-weight: 600; }
+.agent-node text.node-sub { fill: var(--text-ter); }
+.agent-node text.metric-value { fill: var(--text); font-weight: 500; font-family: var(--font-mono); }
+.agent-node text.metric-label { fill: var(--text-ter); }
+.agent-node text.metric-label.hot { fill: var(--accent-text); font-weight: 500; }
+.agent-node .agent-hairline { stroke: var(--border-weak); stroke-width: 1; }
+
+/* 状态点：一颗 2.6px 的小圆，颜色即状态（替代原来的整块胶囊） */
+.agent-state-dot { fill: var(--tone-color); }
+.agent-node text.agent-state-text { fill: var(--text-ter); }
+
+/* 完成率 */
+.agent-node .agent-progress-track { fill: var(--ink-08); }
+.agent-node .agent-progress-fill { fill: var(--accent); opacity: 0.85; }
+.agent-node text.agent-progress-text { fill: var(--text-ter); font-family: var(--font-mono); }
+
+/* 任务 chip：点它直达任务详情 */
+.agent-task { cursor: pointer; }
+.agent-task rect { fill: var(--ink-04); stroke: var(--border-weak); stroke-width: 1; transition: fill var(--dur-1) ease, stroke var(--dur-1) ease; }
+.agent-task text { fill: var(--text-sub); }
+.agent-task:hover rect { fill: var(--ink-08); stroke: var(--glass-border-strong); }
+.agent-task:hover text { fill: var(--text); }
+.agent-node text.agent-more { fill: var(--text-ter); }
+
+/* 运行中：只让「正在发生的」呼吸，其余保持静止 */
+.agent-node[data-status].running rect.node-box { animation: agentBreathe 2.6s ease-in-out infinite; }
+@keyframes agentBreathe {
+  0%, 100% { stroke-opacity: 0.95; }
+  50%      { stroke-opacity: 0.38; }
+}
+.agent-node.running .agent-progress-fill { animation: progPulse 1.6s ease-in-out infinite; }
+
+/* ---- Agent 连线：统一冷白，线宽编码依赖任务数 ---- */
+.agent-edge {
+  stroke: var(--dag-edge); stroke-opacity: 0.55; stroke-linecap: round;
+  transition: stroke-opacity var(--dur-2) ease, stroke-width var(--dur-1) ease;
+}
+.agent-edge.agent-done   { stroke-opacity: 0.7; }
+.agent-edge.agent-failed { stroke: var(--error); stroke-opacity: 0.8; }
+.agent-edge.agent-live {
+  stroke: var(--dag-edge-hot); stroke-opacity: 0.95; stroke-dasharray: 7 7;
+  animation: agentFlow 1.1s linear infinite;
+}
+@keyframes agentFlow { to { stroke-dashoffset: -14; } }
+/* 回环依赖：环是协作的一部分（返工、回补），画成安静的虚线，不和正向流抢注意力 */
+.agent-edge.agent-back {
+  stroke-dasharray: 3 6; stroke-opacity: 0.55; animation: none;
+}
+
+/* 悬停：自己和直接上下游留在光里，其余压暗 */
+#dag-svg.dag-focus .agent-node.is-near { opacity: 0.82; }
+.agent-edge.edge-focus { stroke-opacity: 1; stroke-width: 2; }
+
+.edge-weight-bg { fill: var(--bg-float); stroke: var(--border-weak); stroke-width: 1; }
+text.edge-weight { fill: var(--text-ter); }
+
+.dag-empty-text { fill: var(--text-ter); }
+
+.dag-agent-dot {
+  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  margin-right: 6px; vertical-align: middle;
+}
 
 /* ---- 窄屏降级列表 ---- */
 .dag-list-fallback { display: flex; flex-direction: column; gap: var(--sp-1); }

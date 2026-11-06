@@ -47,12 +47,15 @@ async function openCompareModal(otherRun) {
     ['创建时间', fmtDateTime(cur?.created_at || cur?.start_time), fmtDateTime(otherData.run?.created_at || otherData.run?.start_time)],
   ];
 
+  // h() 对字符串子节点走 createTextNode，不解析 HTML。这里必须返回**节点**，
+  // 否则「差值」列会把 <span class="cmp-diff ..."> 当成字面文本显示出来。
   const diff = (a, b) => {
     const na = parseFloat(a), nb = parseFloat(b);
-    if (isNaN(na) || isNaN(nb)) return '';
+    if (!Number.isFinite(na) || !Number.isFinite(nb)) return null;
     const d = na - nb;
-    if (Math.abs(d) < 0.0001) return '<span class="cmp-diff zero">0</span>';
-    return `<span class="cmp-diff ${d > 0 ? 'pos' : 'neg'}">${d > 0 ? '+' : ''}${d.toFixed(4)}</span>`;
+    if (Math.abs(d) < 0.0001) return h('span', { class: 'cmp-diff zero' }, '0');
+    return h('span', { class: `cmp-diff ${d > 0 ? 'pos' : 'neg'}` },
+      `${d > 0 ? '+' : ''}${d.toFixed(4)}`);
   };
 
   showModal(h('div', { class: 'cmp-modal' },

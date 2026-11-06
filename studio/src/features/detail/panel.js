@@ -10,7 +10,7 @@ import { S } from '../../lib/store.js';
 
 import { toast } from '../../ui/toast.js';
 
-import { metaCell } from '../dashboard/agents.js';
+import { metaCell, renderAgents } from '../dashboard/agents.js';
 import { renderDashboard } from '../dashboard/index.js';
 import { buildTaskAgentControl } from './task-agent.js';
 function openDetailPanel(node){

@@ -1,7 +1,7 @@
 /**
  * 启动装配：读设置 → 恢复上次运行与主题 → 绑定交互 → 首帧渲染。
  */
-import { $, $$ } from '../lib/dom.js';
+import { $, $$, h } from '../lib/dom.js';
 import { S } from '../lib/store.js';
 
 import { anyOverlayOpen, closeModal } from '../ui/modal.js';
@@ -9,16 +9,42 @@ import { toast } from '../ui/toast.js';
 
 import { renderDashboard } from '../features/dashboard/index.js';
 import { closeDetailPanel } from '../features/detail/panel.js';
+import { initComposer, syncComposer } from '../features/composer/index.js';
 import { openNewRunModal } from '../features/new-run/index.js';
-import { closeRunDropdown, toggleRunDropdown } from '../features/runs/index.js';
+import { closeRunDropdown, loadRunList, toggleRunDropdown } from '../features/runs/index.js';
 
 import { loadRealRun } from './data.js';
 import { initMockData, startSim } from './mock.js';
 import { onWatchLedger, onWatchSnapshot } from './realtime.js';
 import { switchNav } from './router.js';
 import { applyTheme, cycleTheme, openUserMenu, renderChrome } from './shell.js';
+/** 首屏加载遮罩：getSettings / detectPython / listRuns / loadRealRun 都是异步 IPC，
+ *  期间界面是一副「空闲 / 0 Agents / 0 任务」的静态骨架，看起来像数据丢了。
+ *  返回一个幂等的收起函数，由 boot 在 finally 里调用，异常路径也不会留遮罩。 */
+function showBootLoading(){
+  const overlay=h('div',{class:'loading-overlay',id:'boot-loading-overlay'},
+    h('div',{class:'loading-spinner'}),
+    h('div',{class:'loading-text'},'正在加载工作区…'));
+  document.body.appendChild(overlay);
+  let removed=false;
+  return ()=>{ if(removed)return; removed=true; overlay.remove(); };
+}
+
 async function boot(){
+  const hideBootLoading=showBootLoading();
+  try { return await bootSequence(); }
+  finally { hideBootLoading(); }
+}
+
+async function bootSequence(){
   $('#btn-new-run').addEventListener('click',openNewRunModal);
+  // 侧栏搜索：直接打开运行切换下拉（下拉里已带项目筛选）
+  const btnSearch = $('#btn-search');
+  if (btnSearch) btnSearch.addEventListener('click',(e)=>{ e.stopPropagation(); toggleRunDropdown(); });
+  // 侧栏 Projects 分组的 Show more → 计划审查页
+  const sbMore = $('#sb-more');
+  if (sbMore) sbMore.addEventListener('click',()=>switchNav('tasks'));
+  initComposer();
   $('#btn-refresh').addEventListener('click', async () => {
     if (S.realMode && S.watchDir) {
       try { await loadRealRun(S.watchDir); renderDashboard(); toast('info', '已刷新', '数据已重新加载'); }
@@ -109,11 +135,13 @@ async function boot(){
   } catch {}
 
   renderDashboard();
+  // 侧栏 Recents / 下拉共用的运行列表（一次 IPC，两处渲染）
+  loadRunList();
   // 恢复上次查看的页面
   const lastPage = localStorage.getItem('agentcrew:lastPage');
   switchNav(lastPage || 'dashboard');
   if (!S.realMode) startSim();
-  setInterval(renderChrome,1000);
+  setInterval(()=>{ renderChrome(); syncComposer(); },1000);
 }
 
 /* 状态持久化 */

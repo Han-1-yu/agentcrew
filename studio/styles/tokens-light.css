@@ -1,0 +1,160 @@
+/* 浅色主题覆盖层：与 tokens.css 共用同一套变量名，只换值。
+   单独成文件是为了让每个样式分片都留在 300 行以内（架构护栏要求）。
+   选择器必须限定在 :root 上——设置页的主题分段按钮也带 data-theme，不能被误伤。 */
+
+/* ---------- 浅色主题：同一套语义，换成冷调纸感 + 同色系玻璃 ----------
+   只改变量值：结构、圆角、动效、字体全部共用，保证两主题是同一套设计语言。
+   选择器必须限定在 :root 上——设置页的分段控件按钮也带 data-theme，不能被误伤。 */
+:root[data-theme="light"] {
+  --bg-page: #EDF0F8;
+  --bg-panel: rgba(255, 255, 255, 0.72);
+  --bg-subtle: rgba(255, 255, 255, 0.55);
+  --bg-float: #FFFFFF;
+  --bg-canvas: rgba(255, 255, 255, 0.45);
+  --bg-inset: rgba(94, 116, 165, 0.07);
+
+  --aurora-1: rgba(110, 150, 255, 0.34);
+  --aurora-2: rgba(158, 130, 255, 0.26);
+  --aurora-3: rgba(120, 170, 255, 0.22);
+  --aurora-base-from: #EEF2FB;
+  --aurora-base-mid: #EAEEF8;
+  --aurora-base-to: #E4E9F5;
+
+  --glass-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(255, 255, 255, 0.62));
+  --glass-bg-strong: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(255, 255, 255, 0.72));
+  --glass-bg-quiet: linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.40));
+  --glass-border: rgba(255, 255, 255, 0.85);
+  --glass-border-strong: rgba(255, 255, 255, 0.95);
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  --glass-highlight-strong: inset 0 1px 0 #FFFFFF;
+
+  --border: rgba(30, 48, 92, 0.11);
+  --border-weak: rgba(30, 48, 92, 0.07);
+  --border-input: rgba(30, 48, 92, 0.16);
+
+  --text: #101828;
+  --text-sub: #4E5C7A;
+  --text-ter: #7C89A6;
+  --on-solid: #FFFFFF;
+
+  --accent: #3D5FD9;
+  --accent-hover: #3350C2;
+  --accent-text: #2F4FC4;
+  --accent-bg-faint: rgba(61, 95, 217, 0.03);
+  --accent-bg-soft: rgba(61, 95, 217, 0.07);
+  --accent-bg: rgba(61, 95, 217, 0.11);
+  --accent-bg-strong: rgba(61, 95, 217, 0.16);
+  --accent-focus: rgba(61, 95, 217, 0.18);
+  --accent-track: rgba(61, 95, 217, 0.26);
+  --accent-border: rgba(61, 95, 217, 0.32);
+  --accent-border-med: rgba(61, 95, 217, 0.42);
+  --accent-border-strong: rgba(61, 95, 217, 0.55);
+  --accent-border-soft: rgba(61, 95, 217, 0.16);
+  --glow-accent: rgba(61, 95, 217, 0.24);
+  --glow-running: rgba(45, 130, 220, 0.26);
+
+  --ink-02: rgba(30, 48, 92, 0.02);
+  --ink-03: rgba(30, 48, 92, 0.03);
+  --ink-04: rgba(30, 48, 92, 0.04);
+  --ink-05: rgba(30, 48, 92, 0.05);
+  --ink-06: rgba(30, 48, 92, 0.06);
+  --ink-07: rgba(30, 48, 92, 0.07);
+  --ink-08: rgba(30, 48, 92, 0.08);
+  --ink-10: rgba(30, 48, 92, 0.10);
+  --ink-12: rgba(30, 48, 92, 0.12);
+  --ink-14: rgba(30, 48, 92, 0.14);
+  --ink-15: rgba(30, 48, 92, 0.15);
+  --ink-18: rgba(30, 48, 92, 0.18);
+  --ink-20: rgba(30, 48, 92, 0.20);
+  --ink-22: rgba(30, 48, 92, 0.22);
+  --ink-25: rgba(30, 48, 92, 0.25);
+  --ink-28: rgba(30, 48, 92, 0.28);
+  --ink-30: rgba(30, 48, 92, 0.30);
+
+  --success: #1E9A5A;
+  --success-text: #16794A;
+  --success-bg-quiet: rgba(30, 154, 90, 0.06);
+  --success-bg: rgba(30, 154, 90, 0.10);
+  --success-bg-chip: rgba(30, 154, 90, 0.14);
+
+  --warn: #B9871F;
+  --warn-text: #8F6612;
+  --warn-bg-soft: rgba(185, 135, 31, 0.07);
+  --warn-bg: rgba(185, 135, 31, 0.11);
+  --warn-border-soft: rgba(185, 135, 31, 0.16);
+  --warn-border: rgba(185, 135, 31, 0.26);
+
+  --error: #D0453C;
+  --error-text: #AE322A;
+  --error-bg-faint: rgba(208, 69, 60, 0.03);
+  --error-bg-ghost: rgba(208, 69, 60, 0.04);
+  --error-bg-quiet: rgba(208, 69, 60, 0.06);
+  --error-bg: rgba(208, 69, 60, 0.08);
+  --error-bg-soft: rgba(208, 69, 60, 0.10);
+  --error-bg-med: rgba(208, 69, 60, 0.13);
+  --error-bg-chip: rgba(208, 69, 60, 0.16);
+  --error-border-soft: rgba(208, 69, 60, 0.18);
+  --error-border: rgba(208, 69, 60, 0.32);
+  --error-border-strong: rgba(208, 69, 60, 0.52);
+
+  --status-pending: #7C89A6;
+  --status-pending-bg: rgba(30, 48, 92, 0.06);
+  --status-ready: #3D5FD9;
+  --status-ready-bg: rgba(61, 95, 217, 0.09);
+  --status-running: #2D82DC;
+  --status-running-bg: rgba(45, 130, 220, 0.11);
+  --status-review: #B9871F;
+  --status-review-bg: rgba(185, 135, 31, 0.11);
+  --status-rework: #B9871F;
+  --status-rework-bg: rgba(185, 135, 31, 0.15);
+  --status-blocked: #B9871F;
+  --status-blocked-bg: rgba(185, 135, 31, 0.08);
+  --status-succeeded: #1E9A5A;
+  --status-succeeded-bg: rgba(30, 154, 90, 0.10);
+  --status-failed: #D0453C;
+  --status-failed-bg: rgba(208, 69, 60, 0.10);
+  --status-skipped: #7C89A6;
+  --status-skipped-bg: rgba(30, 48, 92, 0.05);
+  --status-cancelled: #7C89A6;
+  --status-cancelled-bg: rgba(30, 48, 92, 0.05);
+
+  --purple: #5566A8;
+  --pink: #6E6E9E;
+  --sky: #3C7A9E;
+  --orange: #5A6B90;
+  --indigo: #4A5CA8;
+
+  --dag-node-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.70));
+  --dag-node-fill: rgba(255, 255, 255, 0.80);
+  --avatar-fill: rgba(30, 48, 92, 0.07);
+  --dag-node-border: rgba(30, 48, 92, 0.10);
+  --dag-node-inner: rgba(255, 255, 255, 0.40);
+  --dag-edge: rgba(80, 110, 180, 0.38);
+  --dag-edge-hot: rgba(61, 95, 217, 0.62);
+  --dag-tier-bg: rgba(255, 255, 255, 0.22);
+  --dag-tier-border: rgba(30, 48, 92, 0.06);
+
+  --log-bg: #101828;
+  --log-text: #D8E2F7;
+  --log-err: #F58E88;
+  --toast-bg: #101828;
+  --toast-success-bg: #10301F;
+  --toast-error-bg: #33181A;
+  --toast-warning-bg: #302715;
+
+  --mask: rgba(16, 24, 40, 0.32);
+  --mask-strong: rgba(16, 24, 40, 0.42);
+  --shadow: rgba(30, 48, 92, 0.12);
+  --shadow-modal: rgba(30, 48, 92, 0.18);
+  --shadow-drawer: rgba(30, 48, 92, 0.10);
+  --loading-mask: rgba(237, 240, 248, 0.72);
+
+  --shadow-1: 0 1px 3px rgba(30, 48, 92, 0.07);
+  --shadow-2: 0 12px 28px -14px rgba(30, 48, 92, 0.26), 0 1px 3px rgba(30, 48, 92, 0.08);
+  --shadow-3: 0 26px 60px -22px rgba(30, 48, 92, 0.34), 0 2px 8px rgba(30, 48, 92, 0.10);
+
+  --cmp-send-bg: linear-gradient(180deg, #4C6BE6, #3350C2);
+  --cmp-send-fg: #FFFFFF;
+  --cmp-send-shadow: 0 6px 16px rgba(51, 80, 194, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  --scrim: linear-gradient(180deg, rgba(237, 240, 248, 0) 0%, rgba(235, 239, 248, 0.62) 42%, rgba(233, 238, 247, 0.96) 100%);
+}

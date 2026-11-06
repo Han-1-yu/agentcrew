@@ -7,6 +7,7 @@ import { $, h } from '../../lib/dom.js';
 import { fmtDateTime, simplifyGoal } from '../../lib/format.js';
 import { S, persistState } from '../../lib/store.js';
 
+import { emptyState, errorState, loadingState } from '../../ui/states.js';
 import { toast } from '../../ui/toast.js';
 
 import { loadRealRun } from '../../app/data.js';
@@ -17,10 +18,13 @@ import { openCompareModal } from './compare.js';
 async function loadRunList() {
   const listEl = $('#run-dropdown-list');
   if (!listEl) return;
+  listEl.innerHTML = '';
+  listEl.appendChild(loadingState('正在读取运行列表…'));
   try {
     const runs = await window.studio.listRuns();
     if (!runs || !runs.length) {
-      listEl.innerHTML = '<div class="rd-empty">暂无运行记录</div>';
+      listEl.innerHTML = '';
+      listEl.appendChild(emptyState('暂无运行记录', '点击右上角「新建运行」开始第一次协作。'));
       return;
     }
     listEl.innerHTML = '';
@@ -84,8 +88,35 @@ async function loadRunList() {
         listEl.appendChild(item);
       }
     }
+    renderSidebarRecents(runs);
   } catch (e) {
-    listEl.innerHTML = '<div class="rd-empty">加载失败</div>';
+    listEl.innerHTML = '';
+    listEl.appendChild(errorState('运行列表加载失败', String(e.message || e), loadRunList));
+  }
+}
+
+/**
+ * 侧栏 Recents 分组：与运行下拉共用同一份 listRuns 结果，只渲染最近 5 条。
+ * 点击 = 切换运行（与下拉条目完全同一个动作，不新增数据通道）。
+ */
+function renderSidebarRecents(runs) {
+  const list = $('#sb-recents');
+  if (!list) return;
+  list.innerHTML = '';
+  const top = (runs || []).slice(0, 5);
+  if (!top.length) {
+    list.appendChild(h('li', {}, h('span', { class: 'sb-li-text' }, '暂无运行记录')));
+    return;
+  }
+  for (const r of top) {
+    const active = S.dash && S.dash.run && S.dash.run.dir === r.dir;
+    list.appendChild(h('li', {
+      class: 'is-click' + (active ? ' is-active' : ''),
+      title: r.goal || r.runId || '',
+      onclick: () => { closeRunDropdown(); switchRun(r.dir); },
+    },
+      h('span', { class: 'sb-li-dot' }),
+      h('span', { class: 'sb-li-text' }, simplifyGoal(r.goal || r.runId || '未命名'))));
   }
 }
 
@@ -119,6 +150,7 @@ async function switchRun(dir) {
     if (ok) {
       renderDashboard();
       persistState();
+      loadRunList();   // 刷新侧栏 Recents 的当前项高亮
       toast('info', '已切换', simplifyGoal(S.dash.run.project_goal));
     } else {
       toast('error', '切换失败', '无法加载该运行数据');

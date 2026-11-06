@@ -4,6 +4,8 @@
 import { h } from '../../lib/dom.js';
 import { S } from '../../lib/store.js';
 
+import { readUrl } from '../../lib/validate.js';
+
 function buildConnectionGroup(cfg) {
   const connStatus = h('div', { class: 'set-inline-status', id: 'set-conn-status' });
   const testConnBtn = h('button', { class: 'btn btn-sm', id: 'set-test-conn', type: 'button' }, '测试连接');
@@ -13,13 +15,21 @@ function buildConnectionGroup(cfg) {
     const v = apiInput.value.trim();
     testConnBtn.disabled = !v;
     testConnBtn.title = v ? '' : '请先填写后端 API 地址';
+    apiInput.classList.remove('input-error');
   };
   apiInput.addEventListener('input', refreshBtnState);
   refreshBtnState();
 
   testConnBtn.addEventListener('click', async () => {
-    const base = apiInput.value.trim();
-    if (!base) return;
+    // 与保存时同一口径：非法地址不要拿去拼 fetch / SSE，先给行内错误。
+    const parsed = readUrl(apiInput, { required: true, label: '后端 API 地址' });
+    if (parsed.error) {
+      apiInput.classList.add('input-error');
+      connStatus.className = 'set-inline-status err';
+      connStatus.textContent = parsed.error;
+      return;
+    }
+    const base = parsed.value;
     testConnBtn.disabled = true;
     const orig = testConnBtn.textContent;
     testConnBtn.textContent = '测试中…';

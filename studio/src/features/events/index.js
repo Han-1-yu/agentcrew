@@ -1,9 +1,11 @@
 /**
  * 事件日志页：类型筛选 + 展开详情。
  */
-import { $, h } from '../../lib/dom.js';
+import { $, $$, h } from '../../lib/dom.js';
 import { fmtClock } from '../../lib/format.js';
 import { S } from '../../lib/store.js';
+
+import { emptyState } from '../../ui/states.js';
 
 import { switchNav } from '../../app/router.js';
 
@@ -29,11 +31,17 @@ function renderEventsPage(container) {
   const listEl = h('div', { class: 'ev-full-list', id: 'ev-full-list' });
   container.appendChild(listEl);
 
-  // 构建类型筛选
+  // 构建类型筛选。此前每次进页都 `S.eventFilter = new Set(allTypes)`，
+  // 把用户在上一页取消过的类型又勾回来；空事件时还会把筛选集清空成空 Set，
+  // 与「筛选无命中」混淆。这里保留用户选择，只把新出现的类型补进去。
   const allTypes = [...new Set((S.dash.events || []).map(e => e.event))].sort();
-  S.eventFilter = new Set(allTypes);
+  if (!(S.eventFilter instanceof Set)) S.eventFilter = new Set();
+  if (!S._eventTypeSeen) S._eventTypeSeen = new Set();
   for (const t of allTypes) {
-    const btn = h('button', { class: 'ev-filter-btn active', 'data-type': t,
+    if (!S._eventTypeSeen.has(t)) { S._eventTypeSeen.add(t); S.eventFilter.add(t); }
+  }
+  for (const t of allTypes) {
+    const btn = h('button', { class: 'ev-filter-btn' + (S.eventFilter.has(t) ? ' active' : ''), 'data-type': t,
       onclick: () => {
         btn.classList.toggle('active');
         if (S.eventFilter.has(t)) S.eventFilter.delete(t); else S.eventFilter.add(t);
@@ -54,7 +62,20 @@ function renderEventsList() {
     .filter(e => !q || JSON.stringify(e).toLowerCase().includes(q));
   listEl.innerHTML = '';
   if (!evs.length) {
-    listEl.appendChild(h('div', { class: 'ph-empty' }, '无匹配事件'));
+    const all = S.dash.events || [];
+    if (!all.length) {
+      listEl.appendChild(emptyState('暂无事件', '本次运行还没有产生事件记录。'));
+    } else {
+      listEl.appendChild(emptyState('无匹配事件',
+        '当前搜索词或类型筛选没有命中任何事件。',
+        { label: '重置筛选', onclick: () => {
+          const search = $('#ev-search'); if (search) search.value = '';
+          S.eventFilter = new Set([...new Set(all.map(e => e.event))]);
+          S.evPage = 1;
+          $$('.ev-filter-btn').forEach(b => b.classList.add('active'));
+          renderEventsList();
+        } }));
+    }
     return;
   }
   const PAGE_SIZE = 100;
