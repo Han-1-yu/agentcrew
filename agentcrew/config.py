@@ -12,6 +12,7 @@ import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 import yaml
 from dotenv import load_dotenv
@@ -77,6 +78,11 @@ _ENV_TO_FIELD: dict[str, str] = {
     "AGENTCREW_SUPERVISOR_SCOPE": "supervisor_scope",
     "AGENTCREW_SUPERVISOR_ROLE": "supervisor_role",
     "AGENTCREW_MAX_SUPERVISOR_REASSIGNMENTS": "max_supervisor_reassignments",
+    # R12：Webhook 的标量配置。webhook_events 是列表，下面单独解析。
+    "AGENTCREW_WEBHOOK_URL": "webhook_url",
+    "AGENTCREW_WEBHOOK_SECRET": "webhook_secret",
+    "AGENTCREW_WEBHOOK_TIMEOUT_SECONDS": "webhook_timeout_seconds",
+    "AGENTCREW_WEBHOOK_MAX_RETRIES": "webhook_max_retries",
 }
 
 #: ``AGENTCREW_MODEL_<ROLE>`` → ``role_bindings[<role 小写>]``（spec §17.2）。
@@ -94,6 +100,8 @@ _YAML_SCALAR_KEYS = (
     "peer_consult_capture_enabled", "supervisor_review_enabled",
     "max_subtask_corrections", "supervisor_scope", "supervisor_role",
     "max_supervisor_reassignments",
+    "webhook_url", "webhook_secret", "webhook_events", "webhook_timeout_seconds",
+    "webhook_max_retries",
 )
 
 #: 分层合并时按 key 覆盖（映射型）/ 按序合并去重（列表型）而非整体替换的字段。
@@ -329,6 +337,13 @@ def _env_values() -> dict[str, object]:
         raw = os.environ.get(env_name, "").strip()
         if raw:
             values[field_name] = raw
+    # R12：事件列表在环境变量里只能写成逗号分隔，交给这里拆；
+    # 若塞进 _ENV_TO_FIELD，字符串会被直接赋给 list 字段并报校验错。
+    raw_webhook_events = os.environ.get("AGENTCREW_WEBHOOK_EVENTS", "").strip()
+    if raw_webhook_events:
+        values["webhook_events"] = [
+            item.strip() for item in raw_webhook_events.split(",") if item.strip()
+        ]
     role_bindings: dict[str, str] = {}
     for env_name, raw in os.environ.items():
         if env_name.startswith(_ROLE_MODEL_ENV_PREFIX) and raw.strip():
@@ -747,6 +762,77 @@ class Settings(BaseModel):
     换人**同时消耗返工额度**：同一份额度换一只手试，不是免费加次数。所以额度用尽
     照样 FAILED，不存在「换了人就能无限重试」。
     """
+    webhook_url: str = ""
+    """R12：出站 Webhook 的地址（默认空 = 关闭，不发任何请求）。
+
+    ``http`` / ``https``，且拒绝带用户信息的 URL（``https://user:pass@host``）——
+    密钥走 ``webhook_secret`` 的签名，不该混在 URL 里被日志与代理记下来。
+
+    **不做内网 IP 黑名单**：与 ``web_fetch`` 不同，这是运维显式配置的目标，企业
+    内网服务恰恰是最常见的接收方；`web_fetch` 需要防 SSRF 是因为它的目标由模型
+    决定。前提是这份配置可信，请自行确认接收端。
+    """
+    webhook_secret: str = ""
+    """R12：HMAC-SHA256 签名密钥（默认空 = 不签名）。
+
+    签名值放在 ``X-AgentCrew-Signature``，对 ``<timestamp>.<body>`` 求值，
+    接收方用同一密钥校验并比对时间戳即可防重放。密钥**不导出、不进配置快照**
+    （``config_snapshot`` 里替换为 ``***``），推荐用环境变量注入。
+    """
+    webhook_events: list[str] = Field(
+        default_factory=lambda: [
+            "run_started", "run_finished", "approval_requested",
+            "run_stalled", "deadlock",
+        ]
+    )
+    """R12：推送哪些事件（默认五个 run 级节点；``["*"]`` = 全推）。
+
+    刻意不含 ``task_completed``：它每个任务发一次，9 个任务就是 9 个请求，
+    多数接收方只关心「跑完了没有、卡在哪」。需要细粒度就自己加。
+    """
+    webhook_timeout_seconds: float = 5.0
+    """R12：单次投递超时（默认 5 秒）。投递在后台线程，不阻塞 run。"""
+    webhook_max_retries: int = 2
+    """R12：投递失败的重试次数（默认 2，指数退避上限 2 秒）。
+
+    总耗时受 ``max_retries`` 与退避上限共同约束；run 结束等待队列排空最多 5 秒，
+    排不完的部分记 ``webhook_failed(shutdown_timeout)`` 而不是无限等。
+    """
+
+    @field_validator("webhook_url")
+    @classmethod
+    def _validate_webhook_url(cls, value: str) -> str:
+        """空串合法（= 关闭）；非空时必须是不带用户信息的 http/https 地址。
+
+        **不做内网 IP 判断**：这是运维显式配置的目标，企业内网服务是最常见的
+        接收方。``web_fetch`` 需要防 SSRF，是因为它的目标由模型决定。
+        """
+        url = (value or "").strip()
+        if not url:
+            return ""
+        parts = urlsplit(url)
+        if parts.scheme not in ("http", "https"):
+            raise ValueError("webhook_url 必须是 http/https 地址")
+        if not parts.netloc:
+            raise ValueError("webhook_url 缺少主机名")
+        if "@" in parts.netloc:
+            raise ValueError(
+                "webhook_url 不能带用户名密码：请改用 webhook_secret 做 HMAC 签名")
+        return url
+
+    @field_validator("webhook_timeout_seconds")
+    @classmethod
+    def _validate_webhook_timeout(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("webhook_timeout_seconds 必须 > 0")
+        return value
+
+    @field_validator("webhook_max_retries")
+    @classmethod
+    def _validate_webhook_retries(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("webhook_max_retries 必须 >= 0")
+        return value
     max_subtask_corrections: int = 1
     """R8：子任务被拒时把原因回灌给模型、要一次修正后回复的次数上限（默认 1）。
 
@@ -884,6 +970,9 @@ class Settings(BaseModel):
         # mcp_servers 是自由形状映射（command/args/env…），没有 schema 可依，
         # 逐层按字段名判密钥（含 key/token/secret 即抹成 ***）。
         data["mcp_servers"] = _redact_unknown(self.mcp_servers)
+        # R12：webhook 密钥同样不能进快照——它会随 run.json 落盘。
+        if data.get("webhook_secret"):
+            data["webhook_secret"] = "***"
         return data
 
     def _api_key_env_name(self, provider: str) -> str:
@@ -924,6 +1013,10 @@ class Settings(BaseModel):
             for env_name in env_names
             if (raw := os.environ.get(env_name, "")).strip()
         ]
+        # R12：Webhook 的签名密钥同样要参与脱敏——它一旦漏进事件或日志，
+        # 等于把签名能力交出去。
+        if self.webhook_secret.strip():
+            found.append(self.webhook_secret.strip())
         return list(dict.fromkeys(found))
 
     def api_key_for(self, provider: str) -> str | None:

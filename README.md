@@ -1675,6 +1675,75 @@ BM25 在纯本地做到「词组级匹配 + 权重归一」，是这条红线下
 
 ---
 
+## R12 出站 Webhook：让外部系统知道跑到哪了
+
+这套编排器此前没有任何对外通知手段：run 结束、审批挂起、任务卡住，外部系统一概不知道，
+只能人盯着终端。Webhook 是让它能被别的系统用起来的第一块。
+
+### 1. 配置
+
+```yaml
+webhook_url: https://your-service.example/agentcrew
+webhook_secret: ${AGENTCREW_WEBHOOK_SECRET}   # 可选，配了就签名
+webhook_events: [run_started, run_finished, approval_requested]
+webhook_timeout_seconds: 5
+webhook_max_retries: 2
+```
+
+默认只推五个 run 级节点：`run_started` / `run_finished` / `approval_requested` /
+`run_stalled` / `deadlock`。**刻意不含 `task_completed`**——它每个任务发一次，9 个
+任务就是 9 个请求，多数接收方只关心「跑完了没有、卡在哪」。要细粒度就配
+`["*"]`。
+
+### 2. 协议
+
+```
+POST <webhook_url>
+Content-Type: application/json
+X-AgentCrew-Event: run_finished
+X-AgentCrew-Delivery: <uuid，重试时不变>
+X-AgentCrew-Timestamp: <unix 秒>
+X-AgentCrew-Signature: sha256=<hex>
+```
+
+```json
+{"event": "run_finished", "timestamp": 1793976943,
+ "data": {"run_id": "20261106-225542-eed9", "status": "completed", "exit_code": 0}}
+```
+
+签名对象是 `<timestamp>.<body>`，用 `HMAC-SHA256(webhook_secret, …)`。把时间戳纳入
+签名，接收方才能否决「很久以前截获、现在重放」的请求；只签 body 的话同一个请求可以
+无限重放。`X-AgentCrew-Delivery` 在重试之间**不变**，接收方据此幂等。
+
+仓库里有 `verify_signature()` 可直接用于接收端校验（常量时间比较）。
+
+### 3. 三条设计取舍
+
+| 取舍 | 做法 | 原因 |
+|---|---|---|
+| 不阻塞 run | 事件进队列，daemon 线程投递 | `on_event` 是同步回调，可能在事件循环里；直接发 HTTP 会让整个 run 卡在一个网络超时上 |
+| 失败不拖垮 run | 重试有上限、退避有上限；收尾最多等 5 秒排空 | 通知是辅助设施。排不完就记 `webhook_failed(shutdown_timeout)` 放手 |
+| 不碰 Ledger | 结果先进队列，由主线程 drain 后落账 | `Ledger.emit` 没有锁，从后台线程写会与主线程交错 |
+
+### 4. 安全边界
+
+- **拒绝带用户信息的 URL**（`https://user:pass@host`）：凭证走签名，不该混在 URL 里
+  被代理与日志记下来。
+- **密钥不导出、不进配置快照**（`config_snapshot` 里替换为 `***`），并加入脱敏词表
+  ——它一旦漏进事件或日志，等于把签名能力交出去。
+- **启用时只记打码后的 URL**（丢掉查询串）：`?token=…` 抄进 ledger 就是泄露。
+- **不做内网 IP 黑名单**。与 `web_fetch` 不同，这是运维显式配置的目标，企业内网服务
+  恰恰是最常见的接收方；`web_fetch` 要防 SSRF 是因为它的目标由模型决定。
+- **HTTP 接口不接收密钥**：`POST /runs` 的 `options` 只允许 url / events / timeout /
+  retries，`webhook_secret` 只认配置文件与环境变量。
+
+### 5. 兼容性
+
+默认 `webhook_url` 为空 → 分发器为 `None`，整条链路零开销，`_has_observer` 退化成
+「有 `on_event` 吗」——与 R12 之前完全一致。三套离线样例不带任何网络请求。
+
+---
+
 ## 自定义角色 / 团队开发指南
 
 「角色是数据，不是代码」不是口号：一个新角色的全部差异（提示词、输出契约、
@@ -2041,6 +2110,11 @@ models:
 | `AGENTCREW_SUPERVISOR_SCOPE` | `delegated` | R9：主管审核范围 `delegated`（只审委派任务）/ `all`（也审规划期任务） |
 | `AGENTCREW_SUPERVISOR_ROLE` | `project_manager` | R9：`scope=all` 时规划期任务的主管角色 |
 | `AGENTCREW_MAX_SUPERVISOR_REASSIGNMENTS` | `1` | R10：主管驳回后换人做的次数上限（`0` = 不换人） |
+| `AGENTCREW_WEBHOOK_URL` | 空 | R12：出站 Webhook 地址（空 = 关闭） |
+| `AGENTCREW_WEBHOOK_SECRET` | 空 | R12：HMAC 签名密钥（空 = 不签名） |
+| `AGENTCREW_WEBHOOK_EVENTS` | 五个 run 级节点 | R12：逗号分隔的事件名，`*` = 全推 |
+| `AGENTCREW_WEBHOOK_TIMEOUT_SECONDS` | `5` | R12：单次投递超时 |
+| `AGENTCREW_WEBHOOK_MAX_RETRIES` | `2` | R12：投递失败重试次数 |
 
 > 注意：`OLLAMA_BASE_URL` **不参与端点解析** —— provider 的 `base_url` 只来自
 > 内置预设或 `agentcrew.yaml` 的 `models.providers.<provider>.base_url`。把远程
@@ -2074,6 +2148,8 @@ YAML 只识别以下键；`output_dir` / `mock` / `log_level` 等请用环境变
 | `supervisor_role` | R9：规划期任务的主管角色，默认 `project_manager` |
 | `role_fallback` | R10：角色 → 备选角色数组；空 = 不换人 |
 | `max_supervisor_reassignments` | R10：换人次数上限，默认 `1` |
+| `webhook_url` / `webhook_secret` | R12：出站 Webhook 地址与签名密钥，默认空（关闭） |
+| `webhook_events` / `webhook_timeout_seconds` / `webhook_max_retries` | R12：推送的事件、超时与重试，默认 5 节点 / 5 秒 / 2 次 |
 | `tool_permissions` | R3 生效：角色 → 工具白名单，开启 `tools_enabled` 后由 Crew 下发 |
 | `models.default` | 默认模型别名（等价 `AGENTCREW_DEFAULT_MODEL`） |
 | `models.role_bindings.<role_key>` | 按角色覆盖模型 |

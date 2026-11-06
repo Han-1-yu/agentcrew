@@ -1391,6 +1391,15 @@ def _cmd_config_export(args: argparse.Namespace) -> int:
     if (snap.get("supervisor_role")
             and snap["supervisor_role"] != "project_manager"):
         export_doc["supervisor_role"] = snap["supervisor_role"]
+    # R12：Webhook 只在配了 URL 时导出整组；密钥**永不导出**（它会随文件流传）。
+    if snap.get("webhook_url"):
+        export_doc["webhook_url"] = snap["webhook_url"]
+        export_doc["webhook_events"] = list(snap.get("webhook_events") or [])
+        if snap.get("webhook_timeout_seconds") not in (None, 5.0):
+            export_doc["webhook_timeout_seconds"] = float(
+                snap["webhook_timeout_seconds"])
+        if snap.get("webhook_max_retries") not in (None, 2):
+            export_doc["webhook_max_retries"] = int(snap["webhook_max_retries"])
     if snap.get("approval_mode") and snap["approval_mode"] != "interactive":
         export_doc["approval_mode"] = snap["approval_mode"]
     # 去掉空段
@@ -1507,6 +1516,8 @@ def _cmd_config_import(args: argparse.Namespace) -> int:
         "max_subtask_corrections",                    # R8 拒绝原因回灌
         "supervisor_scope", "supervisor_role",        # R9 跨任务层级
         "role_fallback", "max_supervisor_reassignments",  # R10 自动重派
+        "webhook_url", "webhook_secret", "webhook_events",  # R12 出站 Webhook
+        "webhook_timeout_seconds", "webhook_max_retries",
     ):
         if key in data:
             existing[key] = data[key]

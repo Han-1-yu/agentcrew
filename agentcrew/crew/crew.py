@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from agentcrew.agents.base_agent import BaseAgent
@@ -79,6 +80,7 @@ from agentcrew.runtime.approvals import (
     ApprovalStore,
 )
 from agentcrew.runtime.ledger import Ledger
+from agentcrew.runtime.webhook import WebhookConfig, WebhookDispatcher
 from agentcrew.task.conditions import is_conditional_skip
 from agentcrew.task.planner import (
     MIN_PLAN_SCORE,
@@ -282,6 +284,8 @@ class Crew:
         self._catalog = catalog if catalog is not None else build_catalog(settings)
         self._prompter = prompter
         self._on_event = on_event
+        #: R12：出站 Webhook 分发器；``None`` = 未配置 URL（零开销）。
+        self._webhook: WebhookDispatcher | None = None
         self._injected_store = store
         self._capture_experiences_enabled = capture_experiences
         self._reuse_knowledge_enabled = reuse_knowledge
@@ -552,6 +556,9 @@ class Crew:
             )
             return await self._start(checkpoint, goal=goal, resume_board=None)
         finally:
+            # R12：兜底排空 Webhook（``_finalize`` 已排空时这里是幂等空操作）。
+            # 异常路径不走 ``_finalize``，没有这一步则最后一批通知直接丢。
+            self._close_webhook()
             self._active = False
 
     async def resume(self) -> RunRecord:
@@ -566,6 +573,9 @@ class Crew:
         try:
             return await self._start(checkpoint, goal=None, resume_board=resume_board)
         finally:
+            # R12：兜底排空 Webhook（``_finalize`` 已排空时这里是幂等空操作）。
+            # 异常路径不走 ``_finalize``，没有这一步则最后一批通知直接丢。
+            self._close_webhook()
             self._active = False
 
     # ── 流程外壳 ──────────────────────────────────────────────────────────
@@ -599,6 +609,8 @@ class Crew:
             store = ArtifactStore(
                 checkpoint.artifacts_dir, run_id=record.run_id, ledger=ledger
             )
+        # R12：出站 Webhook。URL 为空时返回 None，整条链路零开销。
+        self._webhook = self._build_webhook(ledger)
         goal = record.project_goal if goal is None else goal
         # R3：工具链装配。默认关闭时返回 None，AgentFactory 与改造前完全一致。
         tool_registry = self._build_tool_registry(checkpoint, ledger)
@@ -669,8 +681,8 @@ class Crew:
             store.load_manifest(checkpoint.artifacts_dir / "MANIFEST.json")
         # P1-5：把 run 开始（含 run_id）推给 ``on_event`` 观察者 —— API 服务器据此
         # 把后台任务与 HTTP 响应里的 ``run_id`` 对上；终端看板同理提前开版。
-        if self._on_event is not None:
-            self._on_event("run_started", {
+        if self._has_observer:
+            self._dispatch_event("run_started", {
                 "run_id": record.run_id,
                 "goal": run.goal,
             })
@@ -923,7 +935,7 @@ class Crew:
                 ledger=run.ledger,
                 checkpoint=run.checkpoint,
                 max_concurrency=self._settings.max_concurrency,
-                on_event=self._on_event,
+                on_event=self._dispatch_event,
                 on_checkpoint=lambda: self._persist_record(run),
                 calibrator=self._calibrator,
                 # R6：委派治理——角色是否存在、谁能派、能套多深、能裂变多少。
@@ -1143,6 +1155,84 @@ class Crew:
             supervisor=supervisor,
             reassign=reassign,
         )
+
+    @property
+    def _has_observer(self) -> bool:
+        """是否值得发事件：有 ``on_event`` 回调或配了 Webhook 任一即可。
+
+        R12 之前这个判断就是 ``self._on_event is not None``；加了 Webhook 之后
+        「CLI 不传 on_event 但配了 webhook」也要能发事件，否则通知永远到不了。
+
+        用 ``getattr`` 取 ``_webhook``：有的用例为验证 ``_finalize`` 的幂等会绕过
+        ``__init__`` 直接构造对象，那种半成品实例没有这个属性，不该因此崩。
+        """
+        return (self._on_event is not None
+                or getattr(self, "_webhook", None) is not None)
+
+    def _dispatch_event(self, name: str, payload: dict[str, Any]) -> None:
+        """事件统一出口：先给 ``on_event``（SSE / 看板），再给 Webhook。
+
+        顺序固定：本地观察者同步执行，Webhook 只是入队（后台线程投递），所以
+        这里不会因为网络慢而拖住 run。
+        """
+        if self._on_event is not None:
+            self._on_event(name, payload)
+        if self._webhook is not None:
+            self._webhook.emit(name, payload)
+
+    def _build_webhook(self, ledger: Ledger) -> WebhookDispatcher | None:
+        """按配置构造分发器；URL 为空时返回 ``None``（默认关闭）。
+
+        启用时记一条 ``webhook_enabled``，但**只记打码后的 URL**：查询串里可能
+        带 token，整条 URL 写进 ledger 就等于泄露。
+        """
+        if not self._settings.webhook_url:
+            return None
+        config = WebhookConfig(
+            url=self._settings.webhook_url,
+            secret=self._settings.webhook_secret,
+            events=tuple(self._settings.webhook_events),
+            timeout_seconds=self._settings.webhook_timeout_seconds,
+            max_retries=self._settings.webhook_max_retries,
+        )
+        dispatcher = WebhookDispatcher(
+            config, sink=self._webhook_sink(ledger))
+        ledger.emit(
+            "webhook_enabled",
+            url=_redact_url(config.url),
+            events=list(config.events),
+            signed=bool(config.secret),
+        )
+        return dispatcher
+
+    def _webhook_sink(
+        self, ledger: Ledger
+    ) -> Callable[[str, dict[str, Any]], None]:
+        """投递结果的落账口；ledger 已关时静默丢弃。
+
+        收尾顺序里 ledger 可能先关（``_finalize`` 尾部），而队列里还剩几条结果。
+        那些结果记不上就记不上——绝不能因为「一条通知的日志」在收尾阶段抛异常。
+        """
+        def sink(name: str, data: dict[str, Any]) -> None:
+            try:
+                ledger.emit(name, **data)
+            except (RuntimeError, TypeError):
+                # RuntimeError：ledger 已关（收尾顺序差异）。
+                # TypeError：data 的键与 emit 的位置参数撞名——实测过一次
+                # （`event`），这类错误绝不该让 run 挂掉，所以一并兜住。
+                pass
+
+        return sink
+
+    def _close_webhook(self) -> None:
+        """收尾：等投递队列排空（最多 5 秒），随后丢弃引用。
+
+        幂等；半构造实例（绕过 ``__init__`` 的用例）没有属性时直接返回。
+        """
+        dispatcher = getattr(self, "_webhook", None)
+        if dispatcher is not None:
+            dispatcher.close()
+        self._webhook = None
 
     def _validate_config(self, run: _Run) -> None:
         """上下文预算必须装得下每个角色**实际绑定**的模型窗口（spec §11.2）。
@@ -1457,13 +1547,16 @@ class Crew:
             checkpoint=request.checkpoint,
             context=request.context,
         )
-        if self._on_event is not None:
-            self._on_event("run_paused", payload)
-            self._on_event("approval_requested", {
+        if self._has_observer:
+            self._dispatch_event("run_paused", payload)
+            self._dispatch_event("approval_requested", {
                 "run_id": record.run_id,
                 "approval_id": request.id,
                 "checkpoint": request.checkpoint,
             })
+        # R12：先排空 Webhook 队列（run_paused / run_finished 可能就是最后一条
+        # 通知），再关 ledger——顺序反了的话 sink 会往已关闭的 ledger 里写。
+        self._close_webhook()
         run.ledger.close()
         return record
 
@@ -1496,12 +1589,15 @@ class Crew:
         )
         # P1-5：同一事件同步推给 ``on_event`` 观察者（API SSE / 终端看板），
         # 与 ledger 里的字段同形 —— 实时流不用等落盘就能看到 run 结局。
-        if self._on_event is not None:
-            self._on_event("run_finished", {
+        if self._has_observer:
+            self._dispatch_event("run_finished", {
                 "run_id": record.run_id,
                 "status": status.value,
                 "exit_code": code,
             })
+        # R12：先排空 Webhook 队列（run_paused / run_finished 可能就是最后一条
+        # 通知），再关 ledger——顺序反了的话 sink 会往已关闭的 ledger 里写。
+        self._close_webhook()
         run.ledger.close()
         return record
 
@@ -1721,3 +1817,16 @@ _rework_line = report.rework_line
 _review_line = report.review_line
 _elapsed_line = report.elapsed_line
 _failure_line = report.failure_line
+
+
+def _redact_url(url: str) -> str:
+    """只保留 ``scheme://host/path``，丢掉查询串与片段。
+
+    查询串里经常带 ``?token=…``：把整条 URL 写进 ledger 等于把凭证抄进审计文件。
+    启用 Webhook 时记的就是这个函数的结果。
+    """
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return "<invalid-url>"
+    return f"{parts.scheme}://{parts.netloc}{parts.path or '/'}"

@@ -478,6 +478,34 @@
 
 ---
 
+## 10. 出站通知（R12）
+
+### `webhook_enabled`
+- **触发时机**：run 装配期配了 `webhook_url`，分发器就绪后。**URL 已打码**（只留 `scheme://host/path`，查询串丢弃——那里常带 token）。
+- **data**：
+  | 字段 | 类型 | 必填 | 含义 |
+  |---|---|---|---|
+  | `url` | string | 是 | 打码后的地址。 |
+  | `events` | string[] | 是 | 订阅的事件名（`["*"]` = 全推）。 |
+  | `signed` | boolean | 是 | 是否配了签名密钥。 |
+
+### `webhook_delivered`
+- **触发时机**：一次投递拿到 2xx。重试后成功也记这一条，`attempts` 是实际次数。
+- **data**：
+  | 字段 | 类型 | 必填 | 含义 |
+  |---|---|---|---|
+  | `webhook_event` | string | 是 | 被推送的事件名。**不叫 `event`**：与 `Ledger.emit` 的位置参数同名会撞成 `TypeError`。 |
+  | `delivery` | string | 是 | 投递 id（重试之间不变，接收方据此幂等）。 |
+  | `attempts` | integer | 是 | 实际尝试次数。 |
+
+### `webhook_failed`
+- **触发时机**：重试耗尽仍失败，或收尾时队列没排空（`error="shutdown_timeout"`）。
+- **data**：`webhook_event`、`delivery`、`attempts`、`error`（`HTTP 500` / `URLError: …` / `shutdown_timeout`）。
+
+> 这三条只描述「通知有没有发出去」，不影响 run 结局：投递失败不会让任务失败，也不会改退出码。
+
+---
+
 ## 事件触发矩阵（真实 demo run `20261006-183534-fa97` 实测）
 
 | 事件 | 次数 |

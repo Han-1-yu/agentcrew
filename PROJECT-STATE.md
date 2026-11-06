@@ -8,11 +8,11 @@
 
 ## 0. 一句话现状
 
-**引擎与管线健康，无 P0/P1 阻断项。** 全量测试 **2313 passed / 1 skipped / 0 failed**（2314 用例收集，2026-11-06 R11 后分 5 批实测），三个预设样例 100% 通过，真实模型通道可用（`doctor` 6/6 通过）；Studio 架构检查 / e2e 28/28 / selftest 16/16 全绿。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25。
+**引擎与管线健康，无 P0/P1 阻断项。** 全量测试 **2334 passed / 1 skipped / 0 failed**（2335 用例收集，2026-11-06 R12 后分 5 批实测），三个预设样例 100% 通过，真实模型通道可用（`doctor` 6/6 通过）；Studio 架构检查 / e2e 28/28 / selftest 16/16 全绿。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook，让外部系统能知道跑到哪了。
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | 2314 collected / 2313 passed / 1 skipped / 0 failed（3.12.10 + pytest 9.1.1，`--assert=plain`；R4 +38、R5 +16、R6 +21、R7 +14、R8 +9、R9 +6、R10 +13、R11 +17，本机断言重写 segfault 后按 §6 分 5 批累计） |
+| 全量测试 | 2335 collected / 2334 passed / 1 skipped / 0 failed（3.12.10 + pytest 9.1.1，`--assert=plain`；R4 +38、R5 +16、R6 +21、R7 +14、R8 +9、R9 +6、R10 +13、R11 +17、R12 +21，本机断言重写 segfault 后按 §6 分 5 批累计） |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
@@ -76,6 +76,7 @@ contracts.py（零依赖契约层：EventSink / TaskLike）
 | 产物 | 契约校验（路径/类型/最小字节/必需符号）+ 命名空间隔离 + `MANIFEST.json` + sha256；安全落盘（双侧路径规范化） |
 | 工具（R3） | 6 个内置工具（`read_file` / `list_files` / `grep` / `run_python` / `write_file` / `web_fetch`）；`tools_enabled` 默认关闭的 run 级自动装配 + `tool_permissions` 执行期下发；执行前 JSON Schema 子集强校验（失败带正确形状回灌、绝不执行）；`web_fetch` 全链路 SSRF 防护 |
 | 知识（R3/R11） | 经验库（R11 起为中文二元组 + BM25 检索：IDF 压虚词、长度归一、单字命中不算相关）+ 实体记忆（纯规则抽取五类实体、跨 run 追加归并、加权检索注入 PM 上下文）；`entity_memory_enabled` 默认关闭 |
+| 对外通知（R12） | 出站 Webhook：后台线程投递（不阻塞 run）、HMAC-SHA256 签名（时间戳纳入签名防重放）、`delivery` id 重试不变、失败重试有上限且不改 run 结局；默认推五个 run 级节点；密钥不导出/不进快照/进脱敏词表；默认关闭 |
 | 接口 | CLI（`run/resume/status/roles/agents/switch/samples/clean/cancel/delete/serve/doctor/diff/providers/models/config`）；HTTP API + SSE + Web UI；API Key 认证 + IP 限流；并发 run 上限 `AGENTCREW_MAX_CONCURRENT_RUNS=8` |
 | 桌面端 | Studio 九页（运行列表 / 看板 / 事件流 / 任务详情 / 产物 / 图表 / 供应商 / 设置…）；明暗主题；e2e + 视觉回归 |
 
@@ -463,6 +464,48 @@ hierarchical 缺的最后一环。
 **刻意未做**：向量检索（缺 embedding 通道）；实体记忆改用 BM25（阈值语义要重新设计）；
 跨库统一检索（经验 + 实体仍各自检索）；拖拽编排画布；出站 Webhook；MCP 服务器生产接线。
 
+### 3.17 R12：出站 Webhook（2026-11-06）
+
+这套编排器此前没有任何对外通知手段：run 结束、审批挂起、任务卡住，外部系统一概不知道，
+只能人盯着终端。这一轮补上第一块对外能力。
+
+| 层 | 落地 | 解决的问题 |
+| --- | --- | --- |
+| 投递器 | 新增 `runtime/webhook.py::WebhookDispatcher`：``queue.Queue`` + daemon 线程 | `on_event` 是同步回调，可能在事件循环里；直接发 HTTP 会让整个 run 卡在网络超时上 |
+| 失败语义 | 重试有上限、退避上限 2 秒；收尾最多等 5 秒排空，超时记 `shutdown_timeout` | 通知是辅助设施，不能让主流程等它 |
+| 线程边界 | 投递结果先进 `_results` 队列，由**主线程** drain 后交给 sink | `Ledger.emit` 没有锁（open/append/fsync），后台线程写会与主线程交错 |
+| 安全 | 拒绝带用户信息的 URL；密钥不导出/不进快照/进脱敏词表；启用时只记打码 URL | `?token=…` 抄进 ledger、密钥随 run.json 落盘，都等于泄露 |
+| 接口面 | `POST /runs` 的 `options` 只放 url / events / timeout / retries | 密钥不该经 HTTP 接口传 |
+| 接入 | Crew 的 `_dispatch_event` 统一出口：先 `on_event`，再 Webhook；`_has_observer` 兼容「没传 on_event 但配了 webhook」 | 否则 CLI 场景的通知永远发不出去 |
+
+**默认推送五个 run 级节点**（`run_started` / `run_finished` / `approval_requested` /
+`run_stalled` / `deadlock`），刻意不含 `task_completed`——它每任务一次，9 个任务就是
+9 个请求，多数接收方只关心「跑完没有、卡在哪」。
+
+**实测踩到的两个坑**（都已修并加回归）：
+
+1. **结果字典的键与 `Ledger.emit` 位置参数撞名**。用 `event` 作键展开成
+   `ledger.emit(name, event=...)` → `TypeError: got multiple values for argument
+   'event'`，而它发生在 `_dispatch_event` 里，直接把整个 run 打挂（实测 `exit_code=1`）。
+   改键名为 `webhook_event`，并把 `TypeError` 一并纳入 sink 的兜底。
+2. **`_finalize` 的幂等用例绕过 `__init__`**，半构造实例没有 `_webhook` 属性。
+   `_has_observer` / `_close_webhook` 改用 `getattr` 兜住。
+
+**验证**：新增 `tests/test_webhook.py`（21 例：配置校验四条、签名往返与三类拒绝、
+真实 HTTP 投递的头与体、无密钥不签名、事件过滤、未启用零请求、重试后成功且 delivery
+不变、重试耗尽记失败、连不上不抛、close 排空、close 后忽略、**投递结果能落进真
+Ledger**）。端到端实跑一次 mock run，本地接收端收到 `run_started` + `run_finished`
+（均带签名），ledger 记 `webhook_enabled` + 2 条 `webhook_delivered`，`exit_code=0`。
+全量 **2334 passed / 1 skipped / 0 failed**；三样例 9/9、5/5、7/7。
+
+**红线遵守**：默认 `webhook_url` 为空 → 分发器 `None`，`_has_observer` 退化为「有
+`on_event` 吗」，与 R12 之前逐字一致；三套离线样例零网络请求；投递失败不改 run 结局
+与退出码；`schema_version=1`、`TaskStatus` 仍 10 态。
+
+**刻意未做**：投递的持久化重放队列（进程内退出即丢未投部分）→ 多接收端（当前单 URL）
+→ 接收端回调触发补偿动作 → 事件级条件过滤（如「只推失败」）→ 拖拽编排画布 →
+MCP 服务器生产接线。
+
 ---
 
 ## 4. 历史报告汇总（已并入本文，原文归档）
@@ -508,7 +551,8 @@ hierarchical 缺的最后一环。
 | R8 | 委派被拒原因回灌：SubtaskDispatcher + 一次纠正轮（见 §3.13） | 2277 |
 | R9 | 跨任务层级：经理验收规划期任务（见 §3.14） | 2283 |
 | R10 | 主管驳回后换人做（见 §3.15） | 2296 |
-| R11 | 经验检索换 BM25 + 中文二元组（见 §3.16） | **2313（当前）** |
+| R11 | 经验检索换 BM25 + 中文二元组（见 §3.16） | 2313 |
+| R12 | 出站 Webhook：关键节点推给外部（见 §3.17） | **2334（当前）** |
 
 ---
 
@@ -561,7 +605,7 @@ hierarchical 缺的最后一环。
 1. ✅ **R3 已闭环**：工具参数 JSON Schema 强校验（见 §3.8）
 2. MCP SSE/HTTP transport 资源关闭（消除 unclosed warning）；`mcp_servers` 仍未接入生产 run
 3. CI 首次实跑（remote 已配，本地领先 161 提交；需验证 3.10–3.13 矩阵）
-4. 功能测试报告汇总（2313 用例按模块/场景出覆盖矩阵）
+4. 功能测试报告汇总（2334 用例按模块/场景出覆盖矩阵）
 
 **大项（建议单独立项）**
 
@@ -580,7 +624,8 @@ hierarchical 缺的最后一环。
 **遗留风险（验收报告 R1–R8，摘其要）**
 
 - 真实模型输出非确定、无固定种子（仅 temperature=0 走缓存）→ 关键产物做结构化 diff，保留 mock 确定性基线
-- 无向量库/RAG（经验库已由 R11 升级为 BM25 + 中文二元组，实体记忆仍为单字加权匹配；两者都不是向量检索）；工具入参强校验已由 R3 闭环，但只覆盖声明的标准 schema 子集
+- 无向量库/RAG（经验库已由 R11 升级为 BM25 + 中文二元组，实体记忆仍为单字加权匹配；两者都不是向量检索）；
+- 出站 Webhook 无持久化重放队列：进程退出时队列里没投出去的部分直接丢（记 `shutdown_timeout`）；工具入参强校验已由 R3 闭环，但只覆盖声明的标准 schema 子集
 - run 目录无静态加密、平台侧无传输加密；`serve` 单进程多 Crew 容量未压测
 - 第三方 MCP 工具安全边界依赖人工配置；无主动告警通道；CI 未实跑
 
@@ -629,7 +674,11 @@ hierarchical 缺的最后一环。
 
 **R11 已闭环**（见 §3.16）：经验检索从「单字命中计数」换成中文二元组 + BM25，IDF 压虚词、长度归一、单字重合不算命中；无新增依赖，原有 9 个经验库用例一行未改全过。
 
-**R11 新增遗留**（按 ROI）：向量检索（缺 embedding 通道，分词/打分已独立成模块，替换点单点）→ 实体记忆改用同一套 BM25（阈值语义需重新设计）→ 经验与实体跨库统一检索 → 拖拽编排画布 → 出站 Webhook → MCP 服务器生产接线 → 多用户 RBAC / 单步调试 / 官方 SDK。
+**R11 新增遗留**（按 ROI）：向量检索（缺 embedding 通道，分词/打分已独立成模块，替换点单点）→ 实体记忆改用同一套 BM25（阈值语义需重新设计）→ 经验与实体跨库统一检索 → 拖拽编排画布 → 出站 Webhook → MCP 服务器生产接线。
+
+**R12 已闭环**（见 §3.17）：出站 Webhook 把五个 run 级节点推给外部系统；后台线程投递不阻塞 run、HMAC 签名含时间戳、重试有上限且失败不改 run 结局；密钥三处防泄露（不导出/不进快照/进脱敏词表）。
+
+**R12 新增遗留**（按 ROI）：投递的持久化重放队列（进程内退出即丢未投部分）→ 多接收端（当前单 URL）→ 事件级条件过滤（如只推失败）→ 拖拽编排画布 → MCP 服务器生产接线 → 多用户 RBAC / 单步调试 / 官方 SDK。
 
 **功能边界（影响对产物的信任方式）**
 
@@ -643,7 +692,7 @@ hierarchical 缺的最后一环。
 
 | 文档 | 用途 |
 | --- | --- |
-| `README.md` | 项目介绍、8 角色说明、V2–V5 与 R3–R11 能力完善、配置与用法全文 |
+| `README.md` | 项目介绍、8 角色说明、V2–V5 与 R3–R12 能力完善、配置与用法全文 |
 | `PROJECT-STATE.md` | 本文，唯一状态源 |
 | `artifacts/contracts/state-enums.md` · `event-types.md` · `openapi.yaml` · `schemas/*.json` | R4 同步后的状态枚举、事件、HTTP 接口与落盘结构契约 |
 | `docs/role-agent-binding-design.md` | 「角色 = 职责 + 权限，执行体可多绑」设计方案（v1 草案，部分已落地） |

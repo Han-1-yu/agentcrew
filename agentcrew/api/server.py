@@ -69,6 +69,9 @@ def _validate_run_options(options: Mapping[str, Any]) -> str | None:
         "supervisor_scope", "supervisor_role",
         # R10：主管驳回后换人做。
         "role_fallback", "max_supervisor_reassignments",
+        # R12：出站 Webhook（密钥不经 HTTP 接口传，只认配置文件/环境变量）。
+        "webhook_url", "webhook_events", "webhook_timeout_seconds",
+        "webhook_max_retries",
     }
     unknown = sorted(set(options) - allowed)
     if unknown:
@@ -102,7 +105,7 @@ def _validate_run_options(options: Mapping[str, Any]) -> str | None:
                     return f"options.role_fallback.{role} 必须是角色 key 数组"
         elif key in ("max_delegation_depth", "max_dynamic_tasks",
                      "max_subtask_corrections",
-                     "max_supervisor_reassignments"):
+                     "max_supervisor_reassignments", "webhook_max_retries"):
             if isinstance(value, bool) or not isinstance(value, int):
                 return f"options.{key} 必须是整数"
             if value < 0:
@@ -110,6 +113,21 @@ def _validate_run_options(options: Mapping[str, Any]) -> str | None:
         elif key == "approval_mode":
             if value not in ("interactive", "deferred"):
                 return "options.approval_mode 必须是 interactive 或 deferred"
+        elif key == "webhook_url":
+            if not isinstance(value, str) or not value.strip():
+                return "options.webhook_url 必须是非空字符串"
+            if not value.startswith(("http://", "https://")):
+                return "options.webhook_url 必须是 http/https 地址"
+            if "@" in value.split("//", 1)[-1].split("/", 1)[0]:
+                return "options.webhook_url 不能带用户名密码"
+        elif key == "webhook_events":
+            if isinstance(value, str) or not isinstance(value, list):
+                return "options.webhook_events 必须是事件名数组"
+            if not value:
+                return "options.webhook_events 不能为空数组（要全推请用 [\"*\"]）"
+            for item in value:
+                if not isinstance(item, str) or not item.strip():
+                    return "options.webhook_events 的每一项都必须是非空字符串"
         elif key == "max_peer_messages":
             if isinstance(value, bool) or not isinstance(value, int):
                 return "options.max_peer_messages 必须是整数"
@@ -124,6 +142,11 @@ def _validate_run_options(options: Mapping[str, Any]) -> str | None:
             lower = 0 if key == "max_llm_calls" else 1
             if value < lower:
                 return f"options.{key} 必须 >= {lower}"
+        elif key == "webhook_timeout_seconds":
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return "options.webhook_timeout_seconds 必须是数字"
+            if value <= 0:
+                return "options.webhook_timeout_seconds 必须 > 0"
         elif key == "max_cost_usd":
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 return "options.max_cost_usd 必须是数值"
