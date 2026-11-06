@@ -74,6 +74,8 @@ _ENV_TO_FIELD: dict[str, str] = {
     "AGENTCREW_PEER_CONSULT_CAPTURE_ENABLED": "peer_consult_capture_enabled",
     "AGENTCREW_SUPERVISOR_REVIEW_ENABLED": "supervisor_review_enabled",
     "AGENTCREW_MAX_SUBTASK_CORRECTIONS": "max_subtask_corrections",
+    "AGENTCREW_SUPERVISOR_SCOPE": "supervisor_scope",
+    "AGENTCREW_SUPERVISOR_ROLE": "supervisor_role",
 }
 
 #: ``AGENTCREW_MODEL_<ROLE>`` → ``role_bindings[<role 小写>]``（spec §17.2）。
@@ -89,7 +91,7 @@ _YAML_SCALAR_KEYS = (
     # R6：动态委派的治理参数。
     "delegation_mode", "max_delegation_depth", "max_dynamic_tasks",
     "peer_consult_capture_enabled", "supervisor_review_enabled",
-    "max_subtask_corrections",
+    "max_subtask_corrections", "supervisor_scope", "supervisor_role",
 )
 
 #: 分层合并时按 key 覆盖（映射型）/ 按序合并去重（列表型）而非整体替换的字段。
@@ -695,6 +697,23 @@ class Settings(BaseModel):
 
     规划阶段的任务没有 ``delegated_by``，完全不受影响。离线 mock 通道没有
     supervisor 夹具，开启后会被明确跳过并记 ``supervisor_review_skipped``。
+    """
+    supervisor_scope: Literal["delegated", "all"] = "delegated"
+    """R9：主管审核覆盖哪些任务（默认 ``delegated`` = 只审动态委派任务）。
+
+    - ``delegated``：只有 ``Task.delegated_by`` 非空的任务被主管验收（R7 行为）。
+    - ``all``：规划期任务回落到 ``supervisor_role`` 验收——这是 CrewAI
+      ``Process.hierarchical`` 里「经理监督下属全部产出」的那一半。
+
+    默认不放开有两个理由：规划期任务每个都要多一次真实评审调用，升级时不该静默
+    涨价；且多数场景下 G2 的机器评审已经够用。主管角色本来就在 G2 评审人里时
+    自动跳过（例如 ``architect`` 的任务本就由 ``project_manager`` 审），不重复烧钱。
+    """
+    supervisor_role: str = "project_manager"
+    """R9：``supervisor_scope="all"`` 时，规划期任务的主管角色 key（默认 PM）。
+
+    必须真实存在于角色目录；不存在时该任务跳过并记
+    ``supervisor_review_skipped(unknown_supervisor)``，不静默改用别人。
     """
     max_subtask_corrections: int = 1
     """R8：子任务被拒时把原因回灌给模型、要一次修正后回复的次数上限（默认 1）。

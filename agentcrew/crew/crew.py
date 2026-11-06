@@ -1112,7 +1112,11 @@ class Crew:
                 )
             else:
                 supervisor = SupervisorReviewer(
-                    reviewer, self._catalog, run.ledger)
+                    reviewer, self._catalog, run.ledger,
+                    # R9：scope=all 时规划期任务也由 supervisor_role 验收。
+                    scope=self._settings.supervisor_scope,
+                    fallback_role=self._settings.supervisor_role,
+                )
         return Gatekeeper(
             reviewer,
             run.store,

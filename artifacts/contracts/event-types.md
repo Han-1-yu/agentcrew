@@ -170,14 +170,14 @@
   | `suggestions` | string[] | 否 | 仅 layer=llm：不阻塞的额外意见。 |
   | `reviewer` | string | 是 | `"static:contract"` / 角色 key / `"<role>:score-bypass"` / `"human:delivery"`。 |
 
-### `supervisor_review_skipped`（R7）
-- **触发时机**：`supervisor_review_enabled` 打开但没有真的审——三种原因：自己派给自己、主管角色不在目录里、离线 mock 通道无夹具。
+### `supervisor_review_skipped`（R7 / R9）
+- **触发时机**：主管审核开关打开但没有真的审。原因包括：自己派给自己、主管角色不在目录里、离线 mock 通道无夹具、主管本来就在 G2 评审人里（R9 去重）、``supervisor_scope=all`` 但没配主管角色（R9）。
 - **data**：
   | 字段 | 类型 | 必填 | 含义 |
   |---|---|---|---|
-  | `reason` | string | 是 | `self_delegated` / `unknown_supervisor` / `mock_channel`。 |
+  | `reason` | string | 是 | `self_delegated` / `unknown_supervisor` / `mock_channel` / `already_in_g2` / `no_supervisor_configured`。 |
   | `task_id` | string | 否 | 任务级跳过时有；`mock_channel` 是 run 级，没有任务。 |
-  | `supervisor` | string | 否 | 派活者的角色 key（`mock_channel` 时缺省）。 |
+  | `supervisor` | string | 否 | 主管角色 key（`mock_channel` 与 `no_supervisor_configured` 时可能为空）。 |
   | `run_id` | string | 否 | 仅 `mock_channel`（run 装配期决定不启用）。 |
 
 > 主管审核**成功**时不会有额外事件：它就是一条 `gate_result(layer="supervisor")`，与 G2 同构，便于按层统一统计。

@@ -8,11 +8,11 @@
 
 ## 0. 一句话现状
 
-**引擎与管线健康，无 P0/P1 阻断项。** 全量测试 **2277 passed / 1 skipped / 0 failed**（2278 用例收集，2026-11-06 R8 后分 5 批实测），三个预设样例 100% 通过，真实模型通道可用（`doctor` 6/6 通过）；Studio 架构检查 / e2e 28/28 / selftest 16/16 全绿。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改。
+**引擎与管线健康，无 P0/P1 阻断项。** 全量测试 **2283 passed / 1 skipped / 0 failed**（2284 用例收集，2026-11-06 R9 后分 5 批实测），三个预设样例 100% 通过，真实模型通道可用（`doctor` 6/6 通过）；Studio 架构检查 / e2e 28/28 / selftest 16/16 全绿。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活。
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | 2278 collected / 2277 passed / 1 skipped / 0 failed（3.12.10 + pytest 9.1.1，`--assert=plain`；R4 +38、R5 +16、R6 +21、R7 +14、R8 +9，本机断言重写 segfault 后按 §6 分 5 批累计） |
+| 全量测试 | 2284 collected / 2283 passed / 1 skipped / 0 failed（3.12.10 + pytest 9.1.1，`--assert=plain`；R4 +38、R5 +16、R6 +21、R7 +14、R8 +9、R9 +6，本机断言重写 segfault 后按 §6 分 5 批累计） |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
@@ -70,7 +70,7 @@ contracts.py（零依赖契约层：EventSink / TaskLike）
 | 委派（R6） | 动态子任务四道闸：角色必须存在（拼错不再静默落通用兜底）/ `manager_only` 时只有经理能派 / 层数 ≤ `max_delegation_depth` / 总数 ≤ `max_dynamic_tasks`；拒绝留 `subtask_rejected_by_policy` 带原因、run 不停；`Task.delegated_by` 留痕派发者。咨询带上提问方任务背景（contextvar 透传，不改回调签名）；`peer_consult_capture_enabled` 可把真实问答沉淀进经验库 |
 | 委派（R8） | 被拒原因**回灌模型**：`SubtaskDispatcher` 暴露 `last_rejection`，Agent 据此回灌并重问一次（`max_subtask_corrections`，默认 1）；裸闭包不回灌（调用次数不变）；只纠正一轮不套娃 |
 | 门禁 | G1 静态校验（语法/危险导入/非空/契约）；G2 并行多评审 + Jaccard 去重（收敛默认关）；G3 人工卡点；`bump_rework` 唯一调用点在 Gatekeeper |
-| 门禁（R7） | 主管审核：动态委派任务在 G1/G2 放行后，由**派活的人**再评一次（`layer="supervisor"`），复用同一套返工通道；不受 score / 收敛旁路保护；自派自审与未知主管跳过并留痕；默认关闭、mock 通道明确跳过 |
+| 门禁（R7/R9） | 主管审核：动态委派任务在 G1/G2 放行后，由**派活的人**再评一次（`layer="supervisor"`），复用同一套返工通道；不受 score / 收敛旁路保护。R9 起 `supervisor_scope=all` 时规划期任务回落到 `supervisor_role`（默认 PM）验收，主管已在 G2 评审人里则跳过；默认关闭、mock 通道明确跳过 |
 | 模型 | 7 类 provider（openai 兼容 / anthropic / mock / cli / 三传输 MCP）；27 个预设；四级别名解析；故障转移 + 冷却矩阵（402=30min，429=Retry-After 或指数退避，5xx=指数退避）；per-provider 并发信号量 + 60s RPM 滑动窗口；复杂度自动选模 + 动态校准；响应缓存（temperature=0）；预算硬上限 + 80%/90% 软阈值 |
 | 可观测 | `ledger.jsonl` 全事件审计（run/task/llm_call/gate/error…）；contextvars 链路追踪（`utils/trace.py`，`llm_call` 自动带 `task_id`/`attempt`）；`log_level` + `AGENTCREW_LOG_JSON=1` 结构化日志（含脱敏）；`diff` / `status` / 统计端点 |
 | 产物 | 契约校验（路径/类型/最小字节/必需符号）+ 命名空间隔离 + `MANIFEST.json` + sha256；安全落盘（双侧路径规范化） |
@@ -380,8 +380,33 @@ dispatcher 拒绝时设原因 / 成功时清空、Scheduler 注入的是对象�
 不追问（那层已有自己的轮次上限）；`schema_version=1`、`TaskStatus` 仍 10 态。
 
 **刻意未做**：把拒绝原因也回灌给**调度器**自动重派（当前只回灌给模型自己）；
-`<subtask>` 围栏的结构化纠错建议（当前只给文本原因）；跨任务层级流程；向量化 RAG；
+`<subtask>` 围栏的结构化纠错建议（当前只给文本原因）；向量化 RAG；
 拖拽编排画布；出站 Webhook；MCP 服务器生产接线。
+
+### 3.14 R9：跨任务层级——经理也验收规划期的活（2026-11-06）
+
+R7 的主管审核只覆盖**动态委派**任务：`delegated_by` 是谁就由谁验收。但 PM 在规划
+阶段拆出来的任务没有 `delegated_by`——它们的主管理应也是 PM，R7 完全没管。这是
+hierarchical 缺的最后一环。
+
+| 层 | 落地 | 解决的问题 |
+| --- | --- | --- |
+| 覆盖范围 | `supervisor_scope ∈ {delegated, all}`（默认 `delegated`） | 规划期任务也能被主管验收；默认不放开是因为每任务多一次真实调用，升级不该静默涨价 |
+| 主管来源 | `supervisor_role`（默认 `project_manager`） | 没有 `delegated_by` 时回落到配置角色；有则派活的人优先 |
+| 去重 | 主管已在 `catalog.reviewer_for(task.role)` 里时跳过 | `architect` 的任务 G2 本就是 PM 在审，再以主管身份审一遍是重复烧钱；判断依据是目录，不是猜 |
+| 审计 | `supervisor_review_skipped` 的 reason 扩到五种 | `already_in_g2` / `no_supervisor_configured` 让「为什么没审」可回答 |
+
+**验证**：`tests/test_supervisor_review.py` 补 6 例（`scope=all` 审规划期任务、
+默认 scope 不管、主管已在 G2 时跳过、未知主管跳过、空角色跳过、派活优先于配置），
+该文件共 20 例。全量 **2283 passed / 1 skipped / 0 failed**；三样例 9/9、5/5、7/7。
+
+**红线遵守**：默认 `scope=delegated` + `role=project_manager` → 规划期任务完全不受
+影响，R7 的 14 个用例原样通过；两个新键走 YAML / env / export-import / API options
+四通道，枚举与空串当场 400；调度决策仍无 LLM。
+
+**刻意未做**：AI 主管驳回后的自动重派（当前只能退回原执行者）；主管 `suggestions`
+通道（当前只取 `issues`）；多级主管（只有一层）；向量化 RAG；拖拽编排画布；
+出站 Webhook；MCP 服务器生产接线。
 
 ---
 
@@ -425,7 +450,8 @@ dispatcher 拒绝时设原因 / 成功时清空、Scheduler 注入的是对象�
 | R5 | 跨角色咨询接真调用：`BaseAgent.consult` + `PeerRouter` 配额/去重/身份绑定（见 §3.10） | 2233 |
 | R6 | 协作深化：委派四道闸 + 咨询带上下文 + 咨询沉淀（见 §3.11） | 2254 |
 | R7 | 主管审核：谁派的活谁验收（见 §3.12） | 2268 |
-| R8 | 委派被拒原因回灌：SubtaskDispatcher + 一次纠正轮（见 §3.13） | **2277（当前）** |
+| R8 | 委派被拒原因回灌：SubtaskDispatcher + 一次纠正轮（见 §3.13） | 2277 |
+| R9 | 跨任务层级：经理验收规划期任务（见 §3.14） | **2283（当前）** |
 
 ---
 
@@ -478,7 +504,7 @@ dispatcher 拒绝时设原因 / 成功时清空、Scheduler 注入的是对象�
 1. ✅ **R3 已闭环**：工具参数 JSON Schema 强校验（见 §3.8）
 2. MCP SSE/HTTP transport 资源关闭（消除 unclosed warning）；`mcp_servers` 仍未接入生产 run
 3. CI 首次实跑（remote 已配，本地领先 161 提交；需验证 3.10–3.13 矩阵）
-4. 功能测试报告汇总（2277 用例按模块/场景出覆盖矩阵）
+4. 功能测试报告汇总（2283 用例按模块/场景出覆盖矩阵）
 
 **大项（建议单独立项）**
 
@@ -536,9 +562,13 @@ dispatcher 拒绝时设原因 / 成功时清空、Scheduler 注入的是对象�
 
 **R8 新增遗留**（按 ROI）：拒绝原因同时回灌给**调度器**做自动重派 → `<subtask>` 围栏的结构化纠错建议（当前只给文本原因）→ 向量化 RAG → 拖拽编排画布 → 出站 Webhook → MCP 服务器生产接线。
 
+**R9 已闭环**（见 §3.14）：`supervisor_scope=all` 让规划期任务也由 `supervisor_role` 验收（默认 `delegated` 不变）；主管已在 G2 评审人里时自动跳过，不重复烧钱。
+
+**R9 新增遗留**（按 ROI）：AI 主管驳回后的自动重派（当前只能退回原执行者）→ 主管 `suggestions` 通道（当前只取 `issues`）→ 多级主管链（当前只有一层）→ 拒绝原因回灌调度器做自动重派 → `<subtask>` 结构化纠错建议 → 向量化 RAG → 拖拽编排画布 → 出站 Webhook → MCP 服务器生产接线。
+
 **功能边界（影响对产物的信任方式）**
 
-不执行生成的代码（G1 只静态校验）· token 估算为启发式 · 单进程 asyncio 无分布式 · mock 产物不是模型生成的 · HTTP API 为内部控制面设计（请求体上限 4 MiB，开认证前勿暴露公网）· G3 默认 CLI 交互，`deferred` 模式才走可跨进程恢复的审批单 · 条件分支只支持结果标签枚举、不支持表达式或循环边 · `web_fetch` 仅公网 80/443 且拒绝私网/重定向 · 实体记忆为规则抽取而非语义检索 · 跨角色咨询默认关闭、mock 下只降级不真答、单次 run 至多 `max_peer_messages` 次 · 委派拒绝原因只回灌给**模型自己**（一次），不回灌给调度器做自动重派 · `delegation_mode=manager_only` 只限制「谁能派」，主管审核（`supervisor_review_enabled`）也只覆盖**动态委派**任务，规划期任务仍只走 G2。
+不执行生成的代码（G1 只静态校验）· token 估算为启发式 · 单进程 asyncio 无分布式 · mock 产物不是模型生成的 · HTTP API 为内部控制面设计（请求体上限 4 MiB，开认证前勿暴露公网）· G3 默认 CLI 交互，`deferred` 模式才走可跨进程恢复的审批单 · 条件分支只支持结果标签枚举、不支持表达式或循环边 · `web_fetch` 仅公网 80/443 且拒绝私网/重定向 · 实体记忆为规则抽取而非语义检索 · 跨角色咨询默认关闭、mock 下只降级不真答、单次 run 至多 `max_peer_messages` 次 · 委派拒绝原因只回灌给**模型自己**（一次），不回灌给调度器做自动重派 · `delegation_mode=manager_only` 只限制「谁能派」；主管审核默认只覆盖**动态委派**任务（`supervisor_scope=all` 才含规划期任务），且只有一层主管、驳回后只能退回原执行者。
 
 ---
 
@@ -548,7 +578,7 @@ dispatcher 拒绝时设原因 / 成功时清空、Scheduler 注入的是对象�
 
 | 文档 | 用途 |
 | --- | --- |
-| `README.md` | 项目介绍、8 角色说明、V2–V5 与 R3–R8 能力完善、配置与用法全文 |
+| `README.md` | 项目介绍、8 角色说明、V2–V5 与 R3–R9 能力完善、配置与用法全文 |
 | `PROJECT-STATE.md` | 本文，唯一状态源 |
 | `artifacts/contracts/state-enums.md` · `event-types.md` · `openapi.yaml` · `schemas/*.json` | R4 同步后的状态枚举、事件、HTTP 接口与落盘结构契约 |
 | `docs/role-agent-binding-design.md` | 「角色 = 职责 + 权限，执行体可多绑」设计方案（v1 草案，部分已落地） |

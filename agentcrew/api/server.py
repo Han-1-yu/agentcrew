@@ -64,8 +64,9 @@ def _validate_run_options(options: Mapping[str, Any]) -> str | None:
         # R6：咨询沉淀与动态委派治理。
         "peer_consult_capture_enabled", "delegation_mode",
         "max_delegation_depth", "max_dynamic_tasks",
-        # R7：主管审核；R8：委派拒绝原因回灌次数。
+        # R7：主管审核；R8：委派拒绝原因回灌次数；R9：覆盖范围与主管角色。
         "supervisor_review_enabled", "max_subtask_corrections",
+        "supervisor_scope", "supervisor_role",
     }
     unknown = sorted(set(options) - allowed)
     if unknown:
@@ -85,6 +86,12 @@ def _validate_run_options(options: Mapping[str, Any]) -> str | None:
         elif key == "delegation_mode":
             if value not in ("any", "manager_only"):
                 return "options.delegation_mode 必须是 any 或 manager_only"
+        elif key == "supervisor_scope":
+            if value not in ("delegated", "all"):
+                return "options.supervisor_scope 必须是 delegated 或 all"
+        elif key == "supervisor_role":
+            if not isinstance(value, str) or not value.strip():
+                return "options.supervisor_role 必须是非空字符串"
         elif key in ("max_delegation_depth", "max_dynamic_tasks",
                      "max_subtask_corrections"):
             if isinstance(value, bool) or not isinstance(value, int):

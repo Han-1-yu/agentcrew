@@ -1535,6 +1535,55 @@ if child_id is None:
 
 ---
 
+## R9 跨任务层级：经理也验收规划期的活
+
+R7 的主管审核只覆盖**动态委派**任务——`delegated_by` 是谁就由谁验收。但 PM 在规划
+阶段拆出来的那些任务没有 `delegated_by`，它们的主管理应也是 PM，R7 却完全没管。
+这是 hierarchical 缺的最后一环。
+
+### 1. 一个开关加一个角色
+
+```yaml
+supervisor_review_enabled: true
+supervisor_scope: all            # delegated（默认）| all
+supervisor_role: project_manager # scope=all 时规划期任务的主管
+```
+
+`scope=all` 时，没有 `delegated_by` 的任务回落到 `supervisor_role` 验收；有
+`delegated_by` 的仍然以派活的人为准（派活优先于配置）。
+
+### 2. 为什么默认不开
+
+规划期任务每个都多一次真实评审调用——CNY 意义上的涨价。升级不该静默改变成本结构，
+所以默认仍是 `delegated`，要更严格的层级监督就显式打开。
+
+### 3. 不重复烧钱的判断
+
+角色的 G2 评审人是静态配置的（`catalog.reviewer_for`）。比如 `architect` 的任务本来
+就由 `project_manager` 审——`scope=all` 再让 PM 以「主管」身份审一遍纯属浪费。所以
+主管已经在 G2 评审人里时直接跳过，记 `supervisor_review_skipped(already_in_g2)`。
+
+`backend_dev` 的 G2 评审人是 `architect`，不含 PM，所以 PM 额外验收它是真正的新增
+监督，正常执行。
+
+### 4. 跳过的五种原因都可追溯
+
+| reason | 含义 |
+|---|---|
+| `self_delegated` | 自己派给自己 |
+| `unknown_supervisor` | 主管角色不在目录里 |
+| `already_in_g2` | 主管本来就在 G2 评审人里（去重） |
+| `no_supervisor_configured` | `scope=all` 但 `supervisor_role` 配了空串 |
+| `mock_channel` | 离线 mock 无夹具（run 级） |
+
+### 5. 兼容性
+
+默认 `scope=delegated` + `role=project_manager`：规划期任务完全不受影响，R7 的 14 个
+用例原样通过。两个新键都可经 YAML / env / `config export-import` / `POST /runs`
+`options` 设置（枚举与空串当场 400）。
+
+---
+
 ## 自定义角色 / 团队开发指南
 
 「角色是数据，不是代码」不是口号：一个新角色的全部差异（提示词、输出契约、
@@ -1898,6 +1947,8 @@ models:
 | `AGENTCREW_MAX_DYNAMIC_TASKS` | `20` | R6：一次 run 内动态子任务总数上限 |
 | `AGENTCREW_SUPERVISOR_REVIEW_ENABLED` | `false` | R7：动态委派任务的产出先由派活的人验收 |
 | `AGENTCREW_MAX_SUBTASK_CORRECTIONS` | `1` | R8：子任务被拒时把原因回灌给模型的次数上限（`0` = 关闭） |
+| `AGENTCREW_SUPERVISOR_SCOPE` | `delegated` | R9：主管审核范围 `delegated`（只审委派任务）/ `all`（也审规划期任务） |
+| `AGENTCREW_SUPERVISOR_ROLE` | `project_manager` | R9：`scope=all` 时规划期任务的主管角色 |
 
 > 注意：`OLLAMA_BASE_URL` **不参与端点解析** —— provider 的 `base_url` 只来自
 > 内置预设或 `agentcrew.yaml` 的 `models.providers.<provider>.base_url`。把远程
@@ -1927,6 +1978,8 @@ YAML 只识别以下键；`output_dir` / `mock` / `log_level` 等请用环境变
 | `max_dynamic_tasks` | R6：动态子任务总数上限，默认 `20` |
 | `supervisor_review_enabled` | R7：主管审核开关，默认 `false` |
 | `max_subtask_corrections` | R8：委派拒绝原因回灌次数上限，默认 `1` |
+| `supervisor_scope` | R9：主管审核范围，默认 `delegated` |
+| `supervisor_role` | R9：规划期任务的主管角色，默认 `project_manager` |
 | `tool_permissions` | R3 生效：角色 → 工具白名单，开启 `tools_enabled` 后由 Crew 下发 |
 | `models.default` | 默认模型别名（等价 `AGENTCREW_DEFAULT_MODEL`） |
 | `models.role_bindings.<role_key>` | 按角色覆盖模型 |

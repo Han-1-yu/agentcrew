@@ -342,3 +342,77 @@ def test_review_line_unchanged_without_supervisor():
     line = review_line([task])
 
     assert line == "100%（G1 拦截 0 / G2 驳回 0 / 人工驳回 0）"
+
+
+# ── R9：覆盖规划期任务（跨任务层级） ─────────────────────────────────────
+
+
+def _supervisor_all(env, reviewer, *, role: str = "project_manager"):
+    return SupervisorReviewer(reviewer, env["catalog"], env["ledger"],
+                              scope="all", fallback_role=role)
+
+
+async def test_scope_all_reviews_planned_task(env):
+    """没有 delegated_by 的规划期任务：scope=all 时由配置的主管角色验收。"""
+    fake = _FakeReviewer()
+    task = env["task"].model_copy(update={"delegated_by": ""})
+
+    record = await _supervisor_all(env, fake).review(task, round_no=1)
+
+    assert record is not None
+    assert fake.calls == [("T-DYN-001", ["project_manager"], "supervisor")]
+
+
+async def test_scope_delegated_ignores_planned_task(env):
+    """默认 scope=delegated：规划期任务完全不受影响（R7 行为）。"""
+    fake = _FakeReviewer()
+    task = env["task"].model_copy(update={"delegated_by": ""})
+
+    assert await _supervisor(env, fake).review(task, round_no=1) is None
+    assert fake.calls == []
+
+
+async def test_scope_all_skips_when_supervisor_already_in_g2(env):
+    """architect 的任务 G2 本来就是 PM 在审：不再以主管身份重复烧一次调用。"""
+    fake = _FakeReviewer()
+    task = env["task"].model_copy(update={
+        "role": "architect", "delegated_by": "",
+    })
+
+    assert await _supervisor_all(env, fake).review(task, round_no=1) is None
+    assert fake.calls == []
+    events = list(env["ledger"].events("supervisor_review_skipped"))
+    assert events[0].data["reason"] == "already_in_g2"
+
+
+async def test_scope_all_unknown_role_is_skipped(env):
+    fake = _FakeReviewer()
+    task = env["task"].model_copy(update={"delegated_by": ""})
+
+    assert await _supervisor_all(
+        env, fake, role="ghost_manager").review(task, round_no=1) is None
+    assert fake.calls == []
+    events = list(env["ledger"].events("supervisor_review_skipped"))
+    assert events[0].data["reason"] == "unknown_supervisor"
+
+
+async def test_scope_all_empty_role_is_skipped(env):
+    """配了空串：跳过并说明「没配主管」，不静默改用别人。"""
+    fake = _FakeReviewer()
+    task = env["task"].model_copy(update={"delegated_by": ""})
+
+    assert await _supervisor_all(env, fake, role="  ").review(
+        task, round_no=1) is None
+    assert fake.calls == []
+    events = list(env["ledger"].events("supervisor_review_skipped"))
+    assert events[0].data["reason"] == "no_supervisor_configured"
+
+
+async def test_delegated_task_still_wins_over_fallback(env):
+    """两者都成立时以 delegated_by 为准：派活的人优先于配置的主管。"""
+    fake = _FakeReviewer()
+
+    record = await _supervisor_all(env, fake).review(env["task"], round_no=1)
+
+    assert record is not None
+    assert fake.calls[0][1] == ["project_manager"]

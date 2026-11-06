@@ -1382,6 +1382,12 @@ def _cmd_config_export(args: argparse.Namespace) -> int:
                          ("max_subtask_corrections", 1)):
         if snap.get(key) not in (None, default):
             export_doc[key] = int(snap[key])
+    # R9：主管审核的覆盖范围与主管角色，同样只在偏离默认值时导出。
+    if snap.get("supervisor_scope") and snap["supervisor_scope"] != "delegated":
+        export_doc["supervisor_scope"] = snap["supervisor_scope"]
+    if (snap.get("supervisor_role")
+            and snap["supervisor_role"] != "project_manager"):
+        export_doc["supervisor_role"] = snap["supervisor_role"]
     if snap.get("approval_mode") and snap["approval_mode"] != "interactive":
         export_doc["approval_mode"] = snap["approval_mode"]
     # 去掉空段
@@ -1495,6 +1501,7 @@ def _cmd_config_import(args: argparse.Namespace) -> int:
         "delegation_mode", "max_delegation_depth", "max_dynamic_tasks",  # R6 委派治理
         "supervisor_review_enabled",                  # R7 主管审核
         "max_subtask_corrections",                    # R8 拒绝原因回灌
+        "supervisor_scope", "supervisor_role",        # R9 跨任务层级
     ):
         if key in data:
             existing[key] = data[key]
