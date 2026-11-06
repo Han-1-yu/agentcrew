@@ -1584,6 +1584,54 @@ supervisor_role: project_manager # scope=all 时规划期任务的主管
 
 ---
 
+## R10 换个人做：主管驳回后的重派
+
+主管说这活不行，最自然的反应是「换个人来做」。但 `Gatekeeper` 原来的驳回只有两条路：
+退回原执行者（`REWORK`）或额度用尽 `FAILED`——主管对「这个人做不好」的判断没有出口。
+
+这一层加一条：主管驳回且还有重派额度时，把 `task.role` 换成配置的备选角色，然后
+**照常走 `REWORK`**。
+
+### 1. 不动状态机
+
+状态机不允许 `REWORK → READY`，但允许 `REWORK → RUNNING`——所以只在返工**前**换
+`role`，下次派发自然找新角色。10 态契约、`ALLOWED_TRANSITIONS` 一行没改。
+
+```yaml
+supervisor_review_enabled: true
+role_fallback:
+  backend_dev: [qa_engineer, architect]   # 按顺序取第一个可用的
+max_supervisor_reassignments: 1           # 默认 1；0 = 不换人
+```
+
+### 2. 三条边界
+
+| 边界 | 行为 | 原因 |
+|---|---|---|
+| 候选必须真实存在 | 不在角色目录就跳过看下一个 | 换给一个没有提示词的角色等于降质 |
+| 不换给当前角色 | 跳过 | 映射里写回自己是最常见的手误 |
+| 不换给主管本人 | 跳过 | 派活的人转身去执行，下轮就没人验收了 |
+
+全部候选都不可用 → 不换人，驳回仍退回原执行者。
+
+### 3. 换人不等于加次数
+
+重派**同时消耗返工额度**。同一份额度换一只手试，不是免费多一次。额度用尽时直接
+`FAILED`，连换人都不做（避免「换了人还是失败」这种无意义的状态变更）。
+
+### 4. 只有主管的驳回会换人
+
+G2（机器评审）驳回不换人——换人是「谁做得更好」的判断，机器评审没有这个信息，它只
+说「这份产出不合标准」。让 G2 也能换人，等于用分数决定人事，那不是它该管的事。
+
+### 5. 兼容性
+
+默认 `role_fallback = {}` + 上限 1：`pick()` 恒为 `None`，`_reject` 行为与 R10 之前
+逐字一致。两个键走 YAML / env（上限）/ `config export-import` / `POST /runs`
+`options`（形状与负数当场 400）。
+
+---
+
 ## 自定义角色 / 团队开发指南
 
 「角色是数据，不是代码」不是口号：一个新角色的全部差异（提示词、输出契约、
@@ -1949,6 +1997,7 @@ models:
 | `AGENTCREW_MAX_SUBTASK_CORRECTIONS` | `1` | R8：子任务被拒时把原因回灌给模型的次数上限（`0` = 关闭） |
 | `AGENTCREW_SUPERVISOR_SCOPE` | `delegated` | R9：主管审核范围 `delegated`（只审委派任务）/ `all`（也审规划期任务） |
 | `AGENTCREW_SUPERVISOR_ROLE` | `project_manager` | R9：`scope=all` 时规划期任务的主管角色 |
+| `AGENTCREW_MAX_SUPERVISOR_REASSIGNMENTS` | `1` | R10：主管驳回后换人做的次数上限（`0` = 不换人） |
 
 > 注意：`OLLAMA_BASE_URL` **不参与端点解析** —— provider 的 `base_url` 只来自
 > 内置预设或 `agentcrew.yaml` 的 `models.providers.<provider>.base_url`。把远程
@@ -1980,6 +2029,8 @@ YAML 只识别以下键；`output_dir` / `mock` / `log_level` 等请用环境变
 | `max_subtask_corrections` | R8：委派拒绝原因回灌次数上限，默认 `1` |
 | `supervisor_scope` | R9：主管审核范围，默认 `delegated` |
 | `supervisor_role` | R9：规划期任务的主管角色，默认 `project_manager` |
+| `role_fallback` | R10：角色 → 备选角色数组；空 = 不换人 |
+| `max_supervisor_reassignments` | R10：换人次数上限，默认 `1` |
 | `tool_permissions` | R3 生效：角色 → 工具白名单，开启 `tools_enabled` 后由 Crew 下发 |
 | `models.default` | 默认模型别名（等价 `AGENTCREW_DEFAULT_MODEL`） |
 | `models.role_bindings.<role_key>` | 按角色覆盖模型 |

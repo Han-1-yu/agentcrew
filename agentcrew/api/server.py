@@ -67,6 +67,8 @@ def _validate_run_options(options: Mapping[str, Any]) -> str | None:
         # R7：主管审核；R8：委派拒绝原因回灌次数；R9：覆盖范围与主管角色。
         "supervisor_review_enabled", "max_subtask_corrections",
         "supervisor_scope", "supervisor_role",
+        # R10：主管驳回后换人做。
+        "role_fallback", "max_supervisor_reassignments",
     }
     unknown = sorted(set(options) - allowed)
     if unknown:
@@ -92,8 +94,15 @@ def _validate_run_options(options: Mapping[str, Any]) -> str | None:
         elif key == "supervisor_role":
             if not isinstance(value, str) or not value.strip():
                 return "options.supervisor_role 必须是非空字符串"
+        elif key == "role_fallback":
+            if not isinstance(value, dict):
+                return "options.role_fallback 必须是对象（角色 → 备选角色数组）"
+            for role, candidates in value.items():
+                if isinstance(candidates, str) or not isinstance(candidates, list):
+                    return f"options.role_fallback.{role} 必须是角色 key 数组"
         elif key in ("max_delegation_depth", "max_dynamic_tasks",
-                     "max_subtask_corrections"):
+                     "max_subtask_corrections",
+                     "max_supervisor_reassignments"):
             if isinstance(value, bool) or not isinstance(value, int):
                 return f"options.{key} 必须是整数"
             if value < 0:

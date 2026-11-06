@@ -179,6 +179,17 @@ class TaskBoard:
         task = self._tasks[task_id]
         return self._replace(task, rework_count=task.rework_count + 1)
 
+    def reassign(self, task_id: str, role: str) -> Task:
+        """R10：换执行角色并自增 ``reassign_count``；**不改状态**。
+
+        复用既有 ``REWORK → RUNNING`` 通道：下一次派发自然会找新角色，不必新增
+        ``REWORK → READY`` 跃迁（那会动 10 态契约）。调用方负责在此之前确认新角色
+        真实存在——这里不做目录查询，``TaskBoard`` 不该知道角色目录长什么样。
+        """
+        task = self._tasks[task_id]
+        return self._replace(
+            task, role=role, reassign_count=task.reassign_count + 1)
+
     def record_review(self, task_id: str, record: ReviewRecord) -> None:
         """追加一条评审记录；不改状态。
 

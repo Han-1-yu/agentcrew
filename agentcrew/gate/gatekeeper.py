@@ -48,6 +48,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.config import GateMode
 from agentcrew.context.context_bus import ContextBus
+from agentcrew.gate.reassign import ReassignPolicy
 from agentcrew.gate.reviewer import Reviewer, normalize_issue_text
 from agentcrew.gate.static_checks import (
     ExtendedCheckResult,
@@ -151,6 +152,7 @@ class Gatekeeper:
         convergence_threshold: int | None = None,
         gate_config: dict[str, Any] | None = None,
         supervisor: SupervisorReviewer | None = None,
+        reassign: ReassignPolicy | None = None,
     ) -> None:
         cfg = dict(gate_config or {})
         g3_enabled = bool(cfg.get("g3_enabled", True))
@@ -196,6 +198,9 @@ class Gatekeeper:
         #: R7：主管审核（谁派的活谁验收）。``None``（默认）= 不启用，行为与
         #: R7 之前逐字一致；Crew 在 ``supervisor_review_enabled`` 且非 mock 时注入。
         self._supervisor = supervisor
+        #: R10：主管驳回后换人做的策略。``None`` = 不换人（默认），驳回仍退回原
+        #: 执行者；没有 ``role_fallback`` 映射时即使注入也永不生效。
+        self._reassign = reassign
 
     # ---- 自动门禁 ----
 
@@ -317,7 +322,9 @@ class Gatekeeper:
         if primary.verdict == "approve":
             next_status = self._to_succeeded(task_id)
         else:
-            next_status = self._reject(self._board.get(task_id), fix_hints)
+            next_status = self._reject(
+                self._board.get(task_id), fix_hints,
+                layer=primary.layer, supervisor=primary.reviewer)
         return GateDecision(
             verdict=primary.verdict,
             record=primary,
@@ -427,17 +434,50 @@ class Gatekeeper:
         """``REVIEW → SUCCEEDED``（全部门禁通过）。"""
         return self._transition(task_id, TaskStatus.SUCCEEDED)
 
-    def _reject(self, task: Task, fix_hints: list[str]) -> TaskStatus:
+    def _reject(
+        self, task: Task, fix_hints: list[str], *,
+        layer: str = "", supervisor: str = "",
+    ) -> TaskStatus:
         """驳回路径：还有返工额度就返工，额度用尽则失败。
 
         额度 = ``min(任务自带 max_reworks, gate_config.max_review_attempts)``：
         前者是单任务上限，后者是全局评审轮次上限。两者默认值 2 / 3，故未配置
         时与改造前完全一致；只有显式把全局上限调小才会提前收口。
+
+        R10：主管驳回（``layer="supervisor"``）且配了备选角色时，先把活换给别人
+        （``_maybe_reassign``）再返工——换人**也**消耗同一次返工额度，不是免费
+        加次数；额度用尽照样 FAILED。
         """
         rework_limit = min(task.max_reworks, self._max_review_attempts)
         if task.rework_count < rework_limit:
+            self._maybe_reassign(task, layer=layer, supervisor=supervisor)
             return self._to_rework(task.id, fix_hints)
         return self._transition(task.id, TaskStatus.FAILED)
+
+    def _maybe_reassign(
+        self, task: Task, *, layer: str, supervisor: str
+    ) -> None:
+        """R10：主管驳回且还有重派额度时，把执行角色换成备选角色。
+
+        只改 ``task.role``、不改状态：随后照常走 ``REWORK``，下次派发自然找新
+        角色。没有备选映射 / 额度用尽 / 替代就是主管本人时什么都不做——驳回仍
+        退回原执行者，行为与 R10 之前一致。
+        """
+        if layer != "supervisor" or self._reassign is None:
+            return
+        replacement = self._reassign.pick(task, supervisor=supervisor)
+        if replacement is None:
+            return
+        previous_role = task.role
+        updated = self._board.reassign(task.id, replacement)
+        self._ledger.emit(
+            "supervisor_reassigned",
+            task_id=task.id,
+            from_role=previous_role,
+            to_role=replacement,
+            supervisor=supervisor,
+            reassign_count=updated.reassign_count,
+        )
 
     def _to_rework(self, task_id: str, fix_hints: list[str]) -> TaskStatus:
         """``REVIEW → REWORK``，并强制配对额度自增与返工决策记录。

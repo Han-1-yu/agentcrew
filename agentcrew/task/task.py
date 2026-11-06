@@ -102,6 +102,12 @@ class Task(BaseModel):
     与 ``parent_id`` 的区别是「父任务可能被返工丢弃、角色不会」：事后看板想回答
     「这个活是谁派的」，只能靠这里。规划阶段的任务与既存 run 数据一律为空串。
     """
+    reassign_count: int = 0
+    """R10：主管驳回后「换个人做」的次数（默认 0 = 没换过）。
+
+    复用既有的 ``REWORK → RUNNING`` 通道：只改 ``role``，不动状态机。上限由
+    ``max_supervisor_reassignments`` 控制，用尽后驳回改回原执行者，避免无限换人。
+    """
     priority: int = Field(default=5, ge=1, le=9)  # 数字小者优先
     brief: str = ""  # PM 写给下游的一句话摘要（供上下文压缩）
     timeout_seconds: int = 300  # P1-4：单次执行超时（秒），超时走 attempts 重试通道

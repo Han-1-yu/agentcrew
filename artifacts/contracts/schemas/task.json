@@ -7,7 +7,8 @@
   "additionalProperties": false,
   "required": [
     "id", "title", "description", "role", "acceptance_criteria", "deliverables",
-    "dependencies", "parent_id", "dynamic", "delegated_by", "priority", "brief",
+    "dependencies", "parent_id", "dynamic", "delegated_by", "reassign_count",
+    "priority", "brief",
     "timeout_seconds", "status", "attempts", "rework_count",
     "max_attempts", "max_reworks", "result", "reviews", "status_history",
     "created_at", "updated_at"
@@ -38,6 +39,11 @@
     "delegated_by": {
       "type": "string",
       "description": "R6 动态委派留痕：派发者角色 key；空串（默认）= 不是委派产生的任务。父任务可能被返工丢弃，角色不会，故单独留一份。非必填，旧版 tasks.json 不含此键。"
+    },
+    "reassign_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "R10 主管驳回后换人做的次数（默认 0）。上限由 max_supervisor_reassignments 控制，用尽后驳回改回原执行者。非必填，旧版 tasks.json 不含此键。"
     },
     "priority": {"type": "integer", "minimum": 1, "maximum": 9, "description": "数字小者优先，默认 5。"},
     "brief": {"type": "string", "description": "PM 写给下游的一句话摘要（供上下文压缩）。"},

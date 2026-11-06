@@ -52,6 +52,7 @@ from agentcrew.context.summarizer import summarizer_from_factory
 from agentcrew.crew import report
 from agentcrew.crew.scheduler import Scheduler
 from agentcrew.gate.gatekeeper import Gatekeeper, Prompter, Reviewer
+from agentcrew.gate.reassign import ReassignPolicy
 from agentcrew.gate.supervisor import SupervisorReviewer
 from agentcrew.knowledge.entity import (
     EntityMemoryStore,
@@ -1103,6 +1104,7 @@ class Crew:
         # supervisor 夹具，强行启用只会让每次主管评审都撞 StructuredOutputError
         # 再被当成格式错误放行——不如明确跳过并留一条可追溯的原因。
         supervisor = None
+        reassign = None
         if self._settings.supervisor_review_enabled:
             if self._settings.mock:
                 run.ledger.emit(
@@ -1117,6 +1119,14 @@ class Crew:
                     scope=self._settings.supervisor_scope,
                     fallback_role=self._settings.supervisor_role,
                 )
+                # R10：只有配了备选映射才接线——空映射时 pick 恒为 None，
+                # 不构造也就少一个对象。
+                if self._settings.role_fallback:
+                    reassign = ReassignPolicy(
+                        self._catalog, self._settings.role_fallback,
+                        max_reassignments=(
+                            self._settings.max_supervisor_reassignments),
+                    )
         return Gatekeeper(
             reviewer,
             run.store,
@@ -1131,6 +1141,7 @@ class Crew:
             context_bus=bus,
             review_score_threshold=self._settings.review_score_threshold,
             supervisor=supervisor,
+            reassign=reassign,
         )
 
     def _validate_config(self, run: _Run) -> None:

@@ -76,6 +76,7 @@ _ENV_TO_FIELD: dict[str, str] = {
     "AGENTCREW_MAX_SUBTASK_CORRECTIONS": "max_subtask_corrections",
     "AGENTCREW_SUPERVISOR_SCOPE": "supervisor_scope",
     "AGENTCREW_SUPERVISOR_ROLE": "supervisor_role",
+    "AGENTCREW_MAX_SUPERVISOR_REASSIGNMENTS": "max_supervisor_reassignments",
 }
 
 #: ``AGENTCREW_MODEL_<ROLE>`` → ``role_bindings[<role 小写>]``（spec §17.2）。
@@ -92,12 +93,14 @@ _YAML_SCALAR_KEYS = (
     "delegation_mode", "max_delegation_depth", "max_dynamic_tasks",
     "peer_consult_capture_enabled", "supervisor_review_enabled",
     "max_subtask_corrections", "supervisor_scope", "supervisor_role",
+    "max_supervisor_reassignments",
 )
 
 #: 分层合并时按 key 覆盖（映射型）/ 按序合并去重（列表型）而非整体替换的字段。
 _MAPPING_FIELDS = (
     "role_bindings", "provider_overrides", "model_tiers", "model_failover",
     "mcp_servers", "gate_config", "tool_permissions", "api_keys",
+    "role_fallback",
     "custom_providers",
     "agent_profiles", "role_agents",
 )
@@ -303,6 +306,19 @@ def _yaml_values() -> dict[str, object]:
         if not isinstance(tool_permissions, dict):
             raise ValueError(f"配置文件 tool_permissions 段必须是映射：{path}")
         values["tool_permissions"] = dict(tool_permissions)
+    role_fallback = data.get("role_fallback")
+    if role_fallback:
+        if not isinstance(role_fallback, dict):
+            raise ValueError(f"配置文件 role_fallback 段必须是映射：{path}")
+        # 形状固定为 role → [备选角色…]；写成标量是常见手误，当场报错比默默
+        # 把字符串拆成单字符好（Python 对 str 迭代正是这么做的）。
+        normalized: dict[str, list[str]] = {}
+        for key, raw in role_fallback.items():
+            if isinstance(raw, str) or not isinstance(raw, (list, tuple)):
+                raise ValueError(
+                    f"配置文件 role_fallback.{key} 必须是角色 key 列表：{path}")
+            normalized[str(key)] = [str(item) for item in raw if str(item).strip()]
+        values["role_fallback"] = normalized
     return values
 
 
@@ -714,6 +730,22 @@ class Settings(BaseModel):
 
     必须真实存在于角色目录；不存在时该任务跳过并记
     ``supervisor_review_skipped(unknown_supervisor)``，不静默改用别人。
+    """
+    role_fallback: dict[str, list[str]] = Field(default_factory=dict)
+    """R10：主管驳回后可以换给谁做（role → 备选角色列表，按声明顺序取第一个可用的）。
+
+    形状为 ``{"backend_dev": ["senior_backend", "architect"]}``，经 YAML
+    ``role_fallback:`` 段加载。**空映射（默认）= 永不换人**，驳回仍退回原执行者——
+    没有「谁能替谁」的知识就自动挑一个顺眼的角色，比不换更糟。
+
+    候选必须真实存在于角色目录、不等于当前角色、也不等于主管本人（派活的人转身
+    去执行会同时丢掉执行者与验收人）。
+    """
+    max_supervisor_reassignments: int = 1
+    """R10：主管驳回触发「换人做」的次数上限（默认 1；``0`` = 不换人）。
+
+    换人**同时消耗返工额度**：同一份额度换一只手试，不是免费加次数。所以额度用尽
+    照样 FAILED，不存在「换了人就能无限重试」。
     """
     max_subtask_corrections: int = 1
     """R8：子任务被拒时把原因回灌给模型、要一次修正后回复的次数上限（默认 1）。

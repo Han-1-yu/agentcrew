@@ -152,8 +152,6 @@
   | `attempt` | integer | 是 | |
   | `notes` | string | 是 | 说明原文。 |
 
----
-
 ## 4. 门禁
 
 ### `gate_result`
@@ -181,6 +179,22 @@
   | `run_id` | string | 否 | 仅 `mock_channel`（run 装配期决定不启用）。 |
 
 > 主管审核**成功**时不会有额外事件：它就是一条 `gate_result(layer="supervisor")`，与 G2 同构，便于按层统一统计。
+
+### `supervisor_reassigned`（R10）
+- **触发时机**：主管驳回、且 ``role_fallback`` 给出可用替代角色、且 ``reassign_count < max_supervisor_reassignments``。换人后**照常走 REWORK**（状态不变，只改 `role`）。
+- **data**：
+  | 字段 | 类型 | 必填 | 含义 |
+  |---|---|---|---|
+  | `task_id` | string | 是 | |
+  | `from_role` | string | 是 | 原执行角色。 |
+  | `to_role` | string | 是 | 新执行角色。 |
+  | `supervisor` | string | 是 | 做出判断的主管角色。 |
+  | `reassign_count` | integer | 是 | 换人之后的累计次数。 |
+
+> 换人**同时消耗返工额度**：同一份额度换一只手试，不是免费加次数。额度用尽时直接 `FAILED`，不发此事件。
+
+---
+
 
 ---
 
