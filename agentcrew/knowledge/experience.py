@@ -5,28 +5,23 @@
 ``output_dir/knowledge/experiences.jsonl``（JSONL，每行一条），**全局共享、跨 run**
 ——不在任何 run 目录之下，因此 run 被 ``clean`` 删掉后经验依然保留。
 
-检索是朴素的关键词匹配（P3-5 不引入向量检索）：把查询与经验的任务描述 / 解决方案 /
-关键决策统一切成「英文词 + 单字 CJK」token，按命中数排序取前 N。足够粗糙、足够
-可测，且不引入任何外部依赖。
+检索用 BM25（R11，见 :mod:`agentcrew.knowledge.retrieval`）：中文按单字 + 相邻
+二元组切分，IDF 自动压低虚词、长度归一避免长文本占优。此前是「单字命中计数」，
+「写代码」与「写文档」会互相命中，一个「的」字就足以把无关经验顶上来。
+
+**为什么不用向量检索**：全仓没有 embedding 接口，接一个就要引 provider 方法、网络
+调用与计费，而项目红线是「离线可跑」。BM25 是这条红线下最实的一步；等 embedding
+通道存在了，替换点只在 :meth:`ExperienceStore.query` 这一处。
 """
 
 from __future__ import annotations
 
-import re
 from datetime import datetime
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
-#: 经验描述 / 摘要进关键词倒排前的分词：英文数字按词切，CJK 按单字切。
-#: 中文没有天然空格分词，按单字切是「够用的关键词匹配」——它对「待办」「后端」
-#: 这类词能命中，又不引入 jieba 等外部依赖。
-_TOKEN_RE = re.compile(r"[a-z0-9]+|[\u4e00-\u9fff]")
-
-
-def _tokenize(text: str) -> set[str]:
-    """把一段文本切成用于关键词匹配的 token 集合（小写、去重）。"""
-    return set(_TOKEN_RE.findall(text.lower()))
+from agentcrew.knowledge.retrieval import BM25Index
 
 
 class Experience(BaseModel):
@@ -86,20 +81,32 @@ class ExperienceStore:
         role: str | None = None,
         limit: int = 5,
     ) -> list[Experience]:
-        """按任务描述的关键词匹配查询相关经验，返回命中数最高的前 ``limit`` 条。
+        """按任务描述检索相关经验，返回 BM25 得分最高的前 ``limit`` 条。
 
-        ``role`` 给定时先按角色过滤；无任何 token 命中（或查询无有效 token）时返回
-        空列表，而不是把整库端上来——「相关」必须至少有一个词沾边。
+        ``role`` 给定时先按角色过滤——这是硬约束，索引也只建在过滤后的候选上，
+        免得某个角色独有的词把 IDF 带偏。零命中时返回空列表，而不是把整库端上来：
+        「相关」必须至少真的沾边。
         """
         candidates = self.all()
         if role is not None:
             candidates = [exp for exp in candidates if exp.role == role]
-        scored = [
-            (self._score(task_description, exp), exp) for exp in candidates
-        ]
-        scored = [(score, exp) for score, exp in scored if score > 0]
-        scored.sort(key=lambda item: (-item[0], item[1].created_at))
-        return [exp for _, exp in scored[: max(0, limit)]]
+        if not candidates:
+            return []
+        index = BM25Index([self._haystack(exp) for exp in candidates])
+        return [candidates[offset]
+                for offset, _ in index.search(task_description, max(0, limit))]
+
+    @staticmethod
+    def _haystack(exp: Experience) -> str:
+        """一条经验参与检索的全文：任务描述 + 解决方案 + 关键决策。
+
+        产物路径不参与：它们区分度低（大量 ``utils.py`` 之类），又容易让同一批
+        经验靠路径互相命中。
+        """
+        return "\n".join(
+            (exp.task_description, exp.solution_summary,
+             " ".join(exp.key_decisions))
+        )
 
     def inject_context(self, goal: str, *, limit: int = 3) -> str:
         """检索与项目目标相关的历史经验，渲染成可直接拼进 PM 上下文的文本。
@@ -126,19 +133,3 @@ class ExperienceStore:
             if exp.key_decisions:
                 lines.append("- 关键决策：" + "；".join(exp.key_decisions))
         return "\n".join(lines)
-
-    @staticmethod
-    def _score(query: str, exp: Experience) -> int:
-        """一条查询与一条经验的关键词命中数（查询 token 在经验文本中出现的个数）。"""
-        query_tokens = _tokenize(query)
-        if not query_tokens:
-            return 0
-        haystack = " ".join(
-            (
-                exp.task_description,
-                exp.solution_summary,
-                " ".join(exp.key_decisions),
-            )
-        )
-        haystack_tokens = _tokenize(haystack)
-        return sum(1 for token in query_tokens if token in haystack_tokens)
