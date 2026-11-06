@@ -17,6 +17,7 @@ from agentcrew.utils.files import (
     UnsafePathError,
     atomic_write_text,
     is_link_like,
+    path_in_scope,
     read_text,
     safe_relpath,
     sha256_bytes,
@@ -148,7 +149,7 @@ class ArtifactStore:
         if normalized != spec.path:
             raise UndeclaredArtifactError(normalized, task.id)
 
-        if path_scope and not any(normalized.startswith(scope) for scope in path_scope):
+        if path_scope and not path_in_scope(normalized, path_scope):
             raise ArtifactScopeError(normalized, agent or task.id, list(path_scope))
 
         target = self.resolve(normalized)

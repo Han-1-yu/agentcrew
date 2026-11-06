@@ -39,8 +39,15 @@ __all__ = [
 #: （与改造前逐字节一致：手写响应从不为未知状态码编造短语）。
 REASONS: dict[int, str] = {
     200: "OK", 202: "Accepted", 400: "Bad Request", 401: "Unauthorized",
-    404: "Not Found", 405: "Method Not Allowed", 429: "Too Many Requests",
+    404: "Not Found", 405: "Method Not Allowed", 409: "Conflict",
+    413: "Payload Too Large", 429: "Too Many Requests",
+    500: "Internal Server Error", 503: "Service Unavailable",
+    504: "Gateway Timeout",
 }
+
+#: 请求体上限（内部控制面也需要一个硬边界）：声明超过该长度的 body 直接拒绝，
+#: 避免「声明极大 Content-Length 却不发包」把连接挂在读等待上。
+MAX_BODY_BYTES = 4 * 1024 * 1024
 
 
 @dataclass(slots=True)

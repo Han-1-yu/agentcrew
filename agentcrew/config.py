@@ -214,7 +214,14 @@ def _yaml_values() -> dict[str, object]:
     path = Path(os.environ.get("AGENTCREW_CONFIG") or "agentcrew.yaml")
     if not path.is_file():
         return {}
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    # YAML 语法错误抛的是 yaml.YAMLError（ScannerError / ParserError / ComposerError），
+    # 不是 ValueError / OSError。CLI 的每个子命令都按 ``except (OSError, ValueError)``
+    # 收口配置错误，不在这里收敛就会让一次手改坏缩进变成全命令栈崩（连 --help 和
+    # doctor 都打不开）。收敛成 ValueError 后，所有入口复用同一条「配置错误」路径。
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as exc:
+        raise ValueError(f"配置文件 YAML 解析失败：{path}: {exc}") from exc
     if not isinstance(data, dict):
         raise ValueError(f"配置文件必须是 YAML 映射：{path}")
     values: dict[str, object] = {

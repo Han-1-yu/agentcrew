@@ -54,7 +54,7 @@ from agentcrew.gate.gatekeeper import Gatekeeper, Prompter, Reviewer
 from agentcrew.knowledge.experience import Experience, ExperienceStore
 from agentcrew.models import factory as model_factory
 from agentcrew.models.cache import LLMCache
-from agentcrew.models.complexity import ComplexityCalibrator, set_calibrator
+from agentcrew.models.complexity import ComplexityCalibrator
 from agentcrew.models.factory import BudgetExhaustedError, ModelFactory, ModelFactoryError
 from agentcrew.roles.builtin import BUILTIN_ROLES
 from agentcrew.roles.catalog import RoleCatalog
@@ -256,10 +256,14 @@ class Crew:
         self._stalled = False
         self._active = False
         self._finalized = False
-        # P3-1：每次 Crew 构造都装入一个全新的全局校准器 —— 本次 run 的执行结果
-        # 据此调整后续任务的复杂度选模。未注入（旧测试直连 ModelFactory）时
-        # ``get_calibrator()`` 为 None，工厂走静态评估，行为不变。
-        set_calibrator(ComplexityCalibrator())
+        # P3-1（2026-11 会话隔离改造）：校准器从「模块级全局单例」改为 **Crew
+        # 实例属性**，构造 ModelFactory 时显式注入。原实现每次构造 Crew 都调用
+        # ``set_calibrator(ComplexityCalibrator())`` 全量替换全局单例——API 服务器
+        # 对每个 POST /runs 并发新建 Crew，后启动的 run 会当场清空先启动 run 已
+        # 积累的校准分桶，两个 run 的执行结局还会互相污染对方的模型选型。改为
+        # 实例注入后各 run 完全隔离；直连 ModelFactory 的旧测试仍可用全局
+        # ``set_calibrator``（工厂在未注入实例时回退读全局，行为兼容）。
+        self._calibrator = ComplexityCalibrator()
         #: 外部取消请求（API ``POST /runs/{id}/cancel``）：软取消 —— 不再派发新任务，
         #: 等在跑任务收尾后以 CANCELLED 收尾（退出码 130）。
         self._cancel_event = asyncio.Event()
@@ -545,6 +549,7 @@ class Crew:
         models = ModelFactory(
             self._settings, ledger=ledger, fixtures_dir=_fixtures_dir(),
             cache=resp_cache,
+            calibrator=self._calibrator,
         )
         # 执行体级 run 累计成本：resume 后把上一段的花费灌回来，
         # 否则额度在重启瞬间清零，"整场上限"就名存实亡。
@@ -602,6 +607,15 @@ class Crew:
             if resume_board is None:
                 board = await self._plan_phase(run)
             else:
+                # 规划期被强杀的 run 可能没有 tasks.json（或空板）。空板
+                # is_terminal() 恒为 True、stats 全 0，若不拦住，_final_status
+                # 会把「一个连计划都没生成的 run」判成 COMPLETED（假成功、静默
+                # 丢数据）。这里 fail loud，异常由下面的兜底分支封版为 FAILED。
+                if not resume_board.all():
+                    raise ValueError(
+                        f"run {record.run_id!r} 没有可续跑的任务面板"
+                        "（规划未完成或面板已损坏）；请新建 run，不要 resume 这个 run"
+                    )
                 # 重建而不是直接复用 load_board() 的面板：on_change 回调（每次
                 # 状态跃迁即落盘）只在构造函数上挂得进去，而 load_board 建的面板
                 # 没有它。缺了它，resume 后 READY→RUNNING 那次 attempts 扣除要等到
@@ -643,6 +657,19 @@ class Crew:
                 self._finalize(
                     run, RunStatus.FAILED, exit_code=EXIT_CODES["config"]
                 )
+            raise
+        except BaseException:
+            # 兜底封版：任何未列入白名单的异常（配置校验、门禁构造期 ValueError、
+            # 落盘 OSError、on_event 回调异常、KeyboardInterrupt…）都不得让
+            # run.json 永久停在 RUNNING —— 那正是 output/ 下一批「僵尸 run」的
+            # 来源，且盘上与硬杀产生的死 run 完全无法区分。CancelledError 已在
+            # 上面单独收口为 INTERRUPTED，这里处理其余全部退出路径。
+            if not self._finalized:
+                try:
+                    self._finalize(run, RunStatus.FAILED)
+                except Exception:
+                    # 封版自身失败不能掩盖原始异常；原异常必须如实抛给调用方。
+                    pass
             raise
 
     # ── 阶段 0：规划 ──────────────────────────────────────────────────────
@@ -785,6 +812,7 @@ class Crew:
                 max_concurrency=self._settings.max_concurrency,
                 on_event=self._on_event,
                 on_checkpoint=lambda: self._persist_record(run),
+                calibrator=self._calibrator,
             )
             # P1-5：持有当前调度器供外部 ``cancel()`` 转发；若取消请求已在路上
             # （规划阶段到达），新装配的调度器立刻停止派发。
@@ -961,6 +989,10 @@ class Crew:
             run.store,
             board,
             gate=self._settings.gate,
+            # P2-5：门禁规则必须真正接线。此前 Crew 装配时漏传，导致
+            # gate_config 里的 g1/g2 开关、评审人数、收敛阈值在真实 run 中
+            # 全部回落硬编码默认值（配置形同虚设）。
+            gate_config=self._settings.gate_config,
             ledger=run.ledger,
             prompter=self._prompter,
             context_bus=bus,
@@ -1037,6 +1069,10 @@ class Crew:
     def _final_status(self, board: TaskBoard) -> RunStatus:
         """终局判定（spec §7.4）：有失败/阻塞/跳过或未终结即 FAILED。"""
         stats = board.stats()
+        # 空板不是「全部成功」：规划未完成 / 面板损坏时绝不能判 COMPLETED。
+        # 与 resume_from 的空板校验互为双保险（那里拦入口，这里拦终局判定）。
+        if stats.total_tasks == 0:
+            return RunStatus.FAILED
         if stats.failed or stats.blocked or stats.skipped or not board.is_terminal():
             return RunStatus.FAILED
         if any(task.status is TaskStatus.CANCELLED for task in board.all()):
@@ -1103,7 +1139,13 @@ class Crew:
     def _finalize(
         self, run: _Run, status: RunStatus, *, exit_code: int | None = None
     ) -> RunRecord:
-        """封版：写状态与统计、锁 MANIFEST、发 ``run_finished``、关账。"""
+        """封版：写状态与统计、锁 MANIFEST、发 ``run_finished``、关账（幂等）。"""
+        if self._finalized:
+            return run.record
+        # 先置位再动副作用：封版中途抛异常（on_event 回调 / 落盘 OSError）时，
+        # 异常链上的兜底分支不会二次封版把终态改写，也不会向已 close 的
+        # ledger 再 emit 一条重复的 run_finished。
+        self._finalized = True
         self._sync_stats(run)
         record = run.record
         record.status = status
@@ -1130,7 +1172,6 @@ class Crew:
                 "exit_code": code,
             })
         run.ledger.close()
-        self._finalized = True
         return record
 
     def _write_stall_report(self, run: _Run, report: str) -> Path:

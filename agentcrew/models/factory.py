@@ -57,8 +57,10 @@ import** 运行时编排层（``runtime.ledger``）与任务领域层（``task.t
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 import time
+from asyncio import Lock as _AsyncLock
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import datetime
@@ -72,8 +74,8 @@ from agentcrew.contracts import AgentBudgetExceeded, EventSink, TaskLike
 from agentcrew.models import agent_budget, budget, routing, structured
 from agentcrew.models.affinity import AffinityTracker
 from agentcrew.models.cache import LLMCache
+from agentcrew.models.complexity import ComplexityCalibrator, get_calibrator
 from agentcrew.models.complexity import evaluate as evaluate_complexity
-from agentcrew.models.complexity import get_calibrator
 from agentcrew.models.config import (
     PROVIDER_PRESETS,
     ModelBinding,
@@ -116,6 +118,7 @@ from agentcrew.models.routing import WeightedAlias
 from agentcrew.models.structured import DegradeEvent
 from agentcrew.utils.retry import TransientError
 from agentcrew.utils.tokens import estimate_tokens
+from agentcrew.utils.trace import current_trace
 
 if TYPE_CHECKING:
     from agentcrew.models.complexity import ComplexityLevel
@@ -133,6 +136,8 @@ __all__ = [
 ]
 
 _T = TypeVar("_T")
+
+_logger = logging.getLogger(__name__)
 
 #: 默认 fixture 根目录（仓库根的 ``examples/fixtures``）。模块级常量是契约的
 #: 一部分：测试与 Task 34 的 Crew 都靠 monkeypatch 它注入临时 fixtures，
@@ -299,6 +304,25 @@ class _CandidatePlan:
             f"尝试了 {self._total} 个）：{exc}")
 
 
+def _trace_fields() -> dict[str, Any]:
+    """从当前协程的追踪上下文提取 ``llm_call`` 记账字段（第四层可观测性）。
+
+    :class:`~agentcrew.utils.trace.TraceContext` 由 ``BaseAgent.execute`` 进入时
+    设置；追踪未设置（评审直连、测试直连工厂、旧用法）时返回空 dict，事件形状
+    与改造前逐字段一致。**刻意不含 ``role``**：调用方显式传了 ``role``，重复
+    关键字会在调用点直接 ``TypeError``。
+    """
+    trace = current_trace()
+    if trace is None:
+        return {}
+    fields: dict[str, Any] = {}
+    if trace.task_id is not None:
+        fields["task_id"] = trace.task_id
+    if trace.attempt is not None:
+        fields["attempt"] = trace.attempt
+    return fields
+
+
 class ModelFactory:
     """按别名缓存 Provider，并独占全局 LLM 调用信号量与用量统计。"""
 
@@ -309,8 +333,16 @@ class ModelFactory:
         ledger: EventSink | None = None,
         fixtures_dir: Path | None = None,
         cache: LLMCache | None = None,
+        calibrator: ComplexityCalibrator | None = None,
     ) -> None:
+        """``calibrator``（2026-11 会话隔离改造）：本工厂专属的复杂度校准器。
+
+        传 ``None``（默认）时回退读全局 ``get_calibrator()`` —— 旧测试直连
+        工厂 + ``set_calibrator`` 的用法不受影响；``Crew`` 现在按 run 注入
+        实例，并发 run 的校准数据不再经由全局单例互相污染。
+        """
         self._settings = settings
+        self._calibrator = calibrator
         self._ledger = ledger
         # P3-2：可选响应缓存。``None``（默认）时所有 LLM 调用都不缓存，行为与
         # 改造前逐字节一致；只有 ``temperature == 0`` 的确定性调用才走缓存。
@@ -335,6 +367,10 @@ class ModelFactory:
         self._agent_run_cost: dict[str, float] = {}
         # V6 P0.5：per-provider RPM 滑动窗口时间戳（provider 名 → 单调递增时间戳列表）。
         self._rpm_timestamps: dict[str, list[float]] = {}
+        # 2026-11 读写安全修复：per-key 串行锁 —— 「清窗 → 检查 → 入列」必须在
+        # 锁内完成，否则并发协程会基于同一份窗口快照各自 sleep 后同时入列，
+        # 实际并发超过 max_rpm（超卖竞态）。
+        self._rpm_locks: dict[str, asyncio.Lock] = {}
         self._llm_calls = 0
         self._total_prompt_tokens = 0
         self._total_completion_tokens = 0
@@ -624,9 +660,14 @@ class ModelFactory:
             for alias in list(self._cache.keys()):
                 try:
                     await self.health_check(alias)
-                except Exception:
+                except Exception as exc:
                     # health_check 内部已捕获并记录错误；这里再兜一层防止循环崩溃。
-                    pass
+                    # 2026-11 容错加固：兜底层不再完全静默——循环自身异常
+                    # （如事件循环/调度问题）此前无从诊断。debug 级别避免持续
+                    # 故障刷屏（每次探测间隔都会打）。
+                    _logger.debug(
+                        "健康探测循环兜底捕获异常：%s: %s",
+                        type(exc).__name__, exc)
 
     def start_health_monitoring(self) -> None:
         """启动后台健康探测任务（如果配置启用且尚未运行）。"""
@@ -690,7 +731,11 @@ class ModelFactory:
         if role_binding:
             return role_binding
         original_level = evaluate_complexity(task)
-        calibrator = get_calibrator()
+        # 2026-11 会话隔离改造：优先用本工厂注入的校准器（run 级实例），
+        # 未注入时回退全局（旧测试直连工厂 + set_calibrator 的用法保持兼容）。
+        calibrator = (
+            self._calibrator if self._calibrator is not None
+            else get_calibrator())
         if calibrator is not None:
             level = calibrator.calibrate(task)
             if level is not original_level:
@@ -1108,35 +1153,35 @@ class ModelFactory:
         session_id: str | None = None,
         use_cache: bool = True,
     ) -> CompletionResult:
-        """对一个别名做一次完整尝试：配额 → 缓存 → 信号量 → 脱敏 → 记账。
+        """对一个别名做一次完整尝试：缓存 → 配额 → 信号量 → 脱敏 → 记账。
 
-        配额用「预扣 + 释放/结算」两段式：请求发出前 ``reserve`` 预估用量，
-        失败时 ``release`` 退回，成功后交给 ``_account`` 按实际用量结算。预扣
-        是为了让**并发**请求不能同时通过检查而一起超配额。
+        缓存命中零成本，直接返回且不占配额。配额用「预扣 + 归还」两段式：
+        ``check`` 通过后才 ``reserve``，随后由 ``finally`` 保证任何退出路径
+        （含取消与非白名单异常）都归还；实际用量只由 ``_account`` 结算一次。
+        预扣是为了让**并发**请求不能同时通过检查而一起超配额。
 
         V7-P0：请求前脱敏、响应后还原（未启用时零开销）。
         V7-P3：成功后把会话绑定到该别名（下次亲和性优先命中）。
         """
         estimated = _estimate_request_tokens(messages, max_tokens)
+        # P3-2：缓存命中零成本，必须排在配额检查之前。此前 check 在前，配额刚
+        # 耗尽时明明可零成本返回，却被 QuotaExhaustedError 误拒并触发一次无谓
+        # 的 failover；reserve 之后又立刻 release，也是一次空转。
+        cache_key = (
+            self._resp_cache_key(alias, messages, temperature, max_tokens)
+            if use_cache else None)
+        if cache_key is not None and self._resp_cache is not None:
+            cached = self._resp_cache.get(cache_key)
+            if cached is not None:
+                self._emit_cache_hit(alias, cache_key)
+                self._account_cached(cached, purpose=purpose, role=role)
+                return cached.model_copy(update={"from_cache": True})
+        # check 必须在 reserve 之外、try 之外：QuotaExhaustedError 属于故障转移
+        # 白名单，若放进 try，异常分支会把「本次从未预扣」误 release，抹掉别的
+        # 并发请求的预扣 → 并发超卖。放外面则直接冒泡给 _run_plan 触发 failover。
+        self._quota_tracker.check(alias)
+        self._quota_tracker.reserve(alias, estimated)
         try:
-            # V7-P2：配额检查 —— 耗尽时抛 QuotaExhaustedError，
-            # 被 _PROVIDER_UNAVAILABLE_TYPES 捕获后触发故障转移
-            self._quota_tracker.check(alias)
-            # V7 质量修复：预扣预计用量，防止并发请求同时通过检查超配额
-            self._quota_tracker.reserve(alias, estimated)
-            # P3-2：确定性调用先查响应缓存 —— 命中直接返回，不占信号量、
-            # 不调 Provider、不计 token/成本。
-            cache_key = (
-                self._resp_cache_key(alias, messages, temperature, max_tokens)
-                if use_cache else None)
-            if cache_key is not None and self._resp_cache is not None:
-                cached = self._resp_cache.get(cache_key)
-                if cached is not None:
-                    self._emit_cache_hit(alias, cache_key)
-                    self._account_cached(cached, purpose=purpose, role=role)
-                    # 缓存命中：释放预扣，不记录实际用量
-                    self._quota_tracker.release(alias, estimated)
-                    return cached.model_copy(update={"from_cache": True})
             provider = self.get(alias)
             provider_name = provider.binding.provider
             sem = self._get_provider_semaphore(
@@ -1152,8 +1197,6 @@ class ModelFactory:
                     max_tokens=max_tokens,
                     response_format=response_format)
                 result = self._redact_result(result, redactor)
-            # 释放预扣（release 与后续 consume 之间无 await，原子安全）
-            self._quota_tracker.release(alias, estimated)
             self._account(
                 result, purpose=purpose, role=role,
                 binding=provider.binding, alias=alias)
@@ -1164,10 +1207,11 @@ class ModelFactory:
             if cache_key is not None and self._resp_cache is not None:
                 self._resp_cache.set(cache_key, result)
             return result
-        except _PROVIDER_UNAVAILABLE_TYPES:
-            # 调用失败：释放预扣后交给上层的候选计划处理
+        finally:
+            # finally 覆盖 BaseException：CancelledError / ModelFactoryError /
+            # 普通 RuntimeError 一律归还，_reserved 绝不泄漏。与 _account 里的
+            # consume 之间没有 await，原子性与原来的「release 紧邻 consume」等价。
             self._quota_tracker.release(alias, estimated)
-            raise
 
     async def _structured_attempt(
         self,
@@ -1211,6 +1255,14 @@ class ModelFactory:
                     self._emit_cache_hit(alias, cache_key)
                     self._account_cached(cached, purpose=purpose, role=role)
                     return parsed
+        # 配额此前对整条结构化路径完全失效：PM 拆解 / G2 评审既不 check 也不
+        # reserve，却仍由 _account 累加用量（只记账不设防）。阶梯内部最多
+        # 3 + repair_attempts 次 complete，按最坏次数一次性预扣，避免阶梯中途
+        # check 看见自己尚未归还的预扣而把自己误拒、中断降级流程。
+        worst_calls = 3 + max(0, repair_attempts)
+        estimated = _estimate_request_tokens(messages, max_tokens) * worst_calls
+        self._quota_tracker.check(alias)
+        self._quota_tracker.reserve(alias, estimated)
         try:
             provider_name = provider.binding.provider
             sem = self._get_provider_semaphore(
@@ -1229,11 +1281,15 @@ class ModelFactory:
         finally:
             # 信号量已释放（async with 先于本 finally 退出）；阶梯成功与失败
             # 走同一条记账路径，已消耗的 token 一条都不丢。故障转移时失败别名
-            # 的消耗也照记（真实 LLM 调用）。
-            for result in collecting.results:
-                self._account(
-                    result, purpose=purpose, role=role,
-                    binding=provider.binding, alias=alias)
+            # 的消耗也照记（真实 LLM 调用）。配额预扣用内层 finally 兜住，
+            # 即使 _account 自己抛错也绝不泄漏。
+            try:
+                for result in collecting.results:
+                    self._account(
+                        result, purpose=purpose, role=role,
+                        binding=provider.binding, alias=alias)
+            finally:
+                self._quota_tracker.release(alias, estimated)
         # 阶梯成功：把最后一次（产出合法 schema 的）结果文本写入响应缓存。
         if (cache_key is not None and collecting.results
                 and self._resp_cache is not None):
@@ -1539,24 +1595,39 @@ class ModelFactory:
         - 每次调用清理 60 秒前的旧时间戳；
         - 若窗口内已达 ``max_rpm``，await 到最早时间戳滑出窗口再继续；
         - 调用结束把当前时间戳入列 —— 即本次请求占用一个 RPM 槽位。
+
+        2026-11 读写安全修复：全程持有 per-key ``asyncio.Lock``。原实现里
+        「检查窗口满 → sleep → 入列」之间存在 await 间隙，N 个并发协程会同时
+        看到满窗、睡同样的时长、然后全部入列——窗口内请求数可超 ``max_rpm``
+        达 N-1（超卖），反而触发上游 429 与冷却链路。锁内串行化后，后到的
+        协程必然基于前一个入列后的新鲜窗口状态重新判定。单调用者路径（锁无
+        争用）行为与改造前逐字节一致。
         """
         if max_rpm is None:
             return
-        timestamps = buckets.setdefault(key, [])
-        now = time.monotonic()
-        cutoff = now - _RPM_WINDOW_SECONDS
-        while timestamps and timestamps[0] < cutoff:
-            timestamps.pop(0)
-        if len(timestamps) >= max_rpm:
-            wait_time = timestamps[0] + _RPM_WINDOW_SECONDS - now
-            if wait_time > 0:
-                await asyncio.sleep(wait_time)
-                # 睡醒后再清一次窗口（sleep 期间可能又有其他协程入列）。
-                now = time.monotonic()
-                cutoff = now - _RPM_WINDOW_SECONDS
-                while timestamps and timestamps[0] < cutoff:
-                    timestamps.pop(0)
-        timestamps.append(time.monotonic())
+        # 锁的引用经 ``from asyncio import Lock`` 直接绑定：部分测试会把整个
+        # ``asyncio`` 模块替换成只含 ``sleep`` 的桩，模块属性查找会拿到桩而炸。
+        lock = self._rpm_locks.setdefault(key, _AsyncLock())
+        async with lock:
+            timestamps = buckets.setdefault(key, [])
+            now = time.monotonic()
+            cutoff = now - _RPM_WINDOW_SECONDS
+            # 清窗条件用 ``<=``：恰好满 60 秒的时间戳已滑出窗口（2026-11 竞态
+            # 修复的边界一致性——若仍保留在窗内而 wait_time 又算出 0，会出现
+            # 「不等待却直接入列」的边界超卖）。
+            while timestamps and timestamps[0] <= cutoff:
+                timestamps.pop(0)
+            if len(timestamps) >= max_rpm:
+                wait_time = timestamps[0] + _RPM_WINDOW_SECONDS - now
+                if wait_time > 0:
+                    await asyncio.sleep(wait_time)
+                    # 睡醒后再清一次窗口（sleep 期间其他协程可能已入列并释放锁，
+                    # 本协程拿回锁后必须基于最新状态重判）。
+                    now = time.monotonic()
+                    cutoff = now - _RPM_WINDOW_SECONDS
+                    while timestamps and timestamps[0] <= cutoff:
+                        timestamps.pop(0)
+            timestamps.append(time.monotonic())
 
     def _account_cached(
         self, result: CompletionResult, *, purpose: str, role: str
@@ -1569,8 +1640,10 @@ class ModelFactory:
         """
         if self._ledger is None:
             return
+        # 2026-11 可观测性：追踪上下文在场时携带 task_id/attempt（见 _account）。
         self._ledger.emit(
             "llm_call",
+            **_trace_fields(),
             role=role,
             model=result.model,
             prompt_tokens=0,
@@ -1747,6 +1820,7 @@ class ModelFactory:
         if self._ledger is not None:
             self._ledger.emit(
                 "llm_call",
+                **_trace_fields(),
                 role=role,
                 model=result.model,
                 prompt_tokens=result.prompt_tokens,

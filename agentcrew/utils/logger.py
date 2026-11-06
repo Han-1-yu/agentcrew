@@ -6,6 +6,7 @@ handler 上的 filter 脱敏整条记录（渲染后的消息、异常文本与�
 必须挂在 handler 上，logger 级 filter 不作用于子 logger 传播上来的记录。
 """
 
+import json
 import logging
 import re
 import sys
@@ -115,11 +116,42 @@ class _RedactingStreamHandler(logging.StreamHandler):
         self._redacting_filter.set_secrets(secrets)
 
 
-def setup_logging(level: str, secrets: Sequence[str]) -> None:
+class JsonFormatter(logging.Formatter):
+    """JSON 结构化日志 formatter（第四层可观测性：便于日志系统检索分析）。
+
+    脱敏发生在 handler 的 filter（先于 formatter 执行），所以这里拿到的
+    ``record.msg`` / ``exc_text`` 已是脱敏后的文本，无需二次处理。字段固定：
+    ``ts`` / ``level`` / ``logger`` / ``message``，异常时附 ``stack``。
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload: dict[str, object] = {
+            "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_text:
+            payload["stack"] = record.exc_text
+        elif record.exc_info:
+            payload["stack"] = "".join(
+                traceback.format_exception(*record.exc_info)).rstrip("\n")
+        if record.stack_info:
+            payload["stack_info"] = record.stack_info
+        return json.dumps(payload, ensure_ascii=False)
+
+
+def setup_logging(
+    level: str, secrets: Sequence[str], *, json_format: bool = False
+) -> None:
     """在 root logger 上装好脱敏日志；可重复调用，handler 始终只有一个。
 
     ``StreamHandler`` 在构造时绑定当时的 ``sys.stderr``，因此每次调用都把流更新
     为当前 ``sys.stderr``（capsys 等会在测试间替换它）。
+
+    ``json_format``（2026-11 接线改造）：``True`` 时输出 JSON 结构化日志——
+    这是 ``Settings.log_level`` 从「死配置」变回活开关的配套能力；CLI 入口经
+    环境变量 ``AGENTCREW_LOG_JSON`` 开启，缺省保持纯文本（行为兼容）。
     """
     root = logging.getLogger()
     root.setLevel(level)
@@ -137,6 +169,12 @@ def setup_logging(level: str, secrets: Sequence[str]) -> None:
         # flush，直接换流不会丢数据。
         handler.stream = sys.stderr
     handler.setLevel(level)
+    if json_format:
+        handler.setFormatter(JsonFormatter())
+    else:
+        # 纯文本模式保持改造前的裸消息输出（无格式前缀）：既有测试与脚本
+        # 逐字节比对 stderr 内容，加 ``LEVEL name:`` 前缀是破坏性变更。
+        handler.setFormatter(None)
 
 
 def get_logger(name: str) -> logging.Logger:

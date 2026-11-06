@@ -17,11 +17,14 @@ prompt 缓存（如 OpenAI 的 prompt cache、Anthropic 的 cache_control）降�
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+_logger = logging.getLogger(__name__)
 
 #: 亲和性模式
 AFFINITY_OFF = "off"
@@ -106,8 +109,12 @@ class AffinityTracker:
                     last_used=last_used,
                     switch_count=rec.get("switch_count", 0),
                 )
-        except (json.JSONDecodeError, OSError, KeyError):
-            pass
+        except (json.JSONDecodeError, OSError, KeyError) as exc:
+            # 2026-11 容错加固：缓存损坏/不可读时降级为空表继续跑（原有行为），
+            # 但必须留一条警告——此前完全静默，用户对「亲和性怎么失效了」无线索。
+            _logger.warning(
+                "亲和性状态文件不可读，已重置为空（%s）: %s",
+                type(exc).__name__, exc)
         self._loaded = True
 
     def _save(self) -> None:
@@ -130,8 +137,9 @@ class AffinityTracker:
             }
             self._state_path.write_text(
                 json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        except OSError:
-            pass
+        except OSError as exc:
+            # 2026-11 容错加固：持久化失败不阻塞主流程（原有行为），但留警告。
+            _logger.warning("亲和性状态文件写入失败（不影响本次调用）: %s", exc)
 
     def resolve(
         self,

@@ -150,7 +150,12 @@ class Gatekeeper:
         convergence_threshold: int | None = None,
         gate_config: dict[str, Any] | None = None,
     ) -> None:
-        if prompter is None and (gate in _PLAN_GATES or gate in _DELIVERY_GATES):
+        cfg = dict(gate_config or {})
+        g3_enabled = bool(cfg.get("g3_enabled", True))
+        # g3_enabled=False 是「显式关闭人工卡点」：此时 gate 模式虽含卡点，
+        # 也不该再要求 prompter（否则配置形同虚设）。默认 True 时守卫原样生效。
+        if (prompter is None and g3_enabled
+                and (gate in _PLAN_GATES or gate in _DELIVERY_GATES)):
             raise ValueError(
                 f"gate={gate!r} 包含人工卡点，但没有传入 prompter："
                 "人工闸门不得静默降级为自动放行；请传入 Prompter，"
@@ -163,13 +168,18 @@ class Gatekeeper:
         self._ledger = ledger
         self._prompter = prompter
         self._context_bus = context_bus
-        # P2-5：门禁规则从 gate_config 读取，缺省回落构造参数 / 硬编码默认值；
-        # gate_config=None 时行为与原来完全一致。
-        cfg = dict(gate_config or {})
+        # P2-5：门禁规则从 gate_config 读取（cfg 已在构造期守卫前解析），
+        # 缺省回落构造参数 / 硬编码默认值；gate_config=None 时行为与原来完全一致。
         self._g1_enabled: bool = cfg.get("g1_enabled", True)
         self._g2_enabled: bool = cfg.get("g2_enabled", True)
         self._g3_enabled: bool = cfg.get("g3_enabled", True)
-        self._max_review_attempts: int = cfg.get("max_review_attempts", 3)
+        # 该键此前只赋值、全仓无读取点（死配置）。按 config.py 的文档把它接成
+        # 「全局返工/评审轮次上限」，在 _reject 里与任务自身 max_reworks 取较小值。
+        # 默认 3 大于任务默认 max_reworks=2，因此旧行为逐字不变。
+        try:
+            self._max_review_attempts = max(0, int(cfg.get("max_review_attempts", 3)))
+        except (TypeError, ValueError):
+            self._max_review_attempts = 3
         # gate_config 中的阈值显式覆盖构造参数（构造参数本身即旧默认值）。
         self._review_score_threshold = cfg.get(
             "review_score_threshold", review_score_threshold)
@@ -353,6 +363,9 @@ class Gatekeeper:
         这里的 ``None`` 判断只是类型收窄，不是运行期的降级路径。
         """
         planned = list(tasks)
+        if not self._g3_enabled:
+            # g3_enabled=False：显式关闭人工卡点，放行原拆解且不触碰 prompter。
+            return PlanDecision(action="approve", tasks=planned)
         if self._gate in _PLAN_GATES and self._prompter is not None:
             return await self._prompter.ask_plan(planned)
         return PlanDecision(action="approve", tasks=planned)
@@ -361,7 +374,10 @@ class Gatekeeper:
         """交付卡点：``gate`` 开启时询问 prompter，否则直接接受。
 
         同 :meth:`human_plan_gate`：``prompter=None`` + 开关开启的组合不可达。
+        ``g3_enabled=False`` 时直接接受，不触碰 prompter。
         """
+        if not self._g3_enabled:
+            return DeliveryDecision(action="accept")
         if self._gate in _DELIVERY_GATES and self._prompter is not None:
             return await self._prompter.ask_delivery(record)
         return DeliveryDecision(action="accept")
@@ -391,8 +407,14 @@ class Gatekeeper:
         return self._transition(task_id, TaskStatus.SUCCEEDED)
 
     def _reject(self, task: Task, fix_hints: list[str]) -> TaskStatus:
-        """驳回路径：还有返工额度就返工，额度用尽则失败。"""
-        if task.rework_count < task.max_reworks:
+        """驳回路径：还有返工额度就返工，额度用尽则失败。
+
+        额度 = ``min(任务自带 max_reworks, gate_config.max_review_attempts)``：
+        前者是单任务上限，后者是全局评审轮次上限。两者默认值 2 / 3，故未配置
+        时与改造前完全一致；只有显式把全局上限调小才会提前收口。
+        """
+        rework_limit = min(task.max_reworks, self._max_review_attempts)
+        if task.rework_count < rework_limit:
             return self._to_rework(task.id, fix_hints)
         return self._transition(task.id, TaskStatus.FAILED)
 

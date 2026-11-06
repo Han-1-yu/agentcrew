@@ -13,6 +13,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from agentcrew.utils.files import path_in_scope
+
 
 class Duty(str, Enum):
     """执行体在一个角色里承担的责任。
@@ -75,8 +77,7 @@ class AgentProfile(BaseModel):
         """路径是否落在本执行体的写入范围内（空前缀 = 不限）。"""
         if not self.path_scope:
             return True
-        normalized = path.replace("\\", "/").lstrip("./")
-        return any(normalized.startswith(scope) for scope in self.path_scope)
+        return path_in_scope(path, self.path_scope)
 
 
 class BoundAgent(BaseModel):

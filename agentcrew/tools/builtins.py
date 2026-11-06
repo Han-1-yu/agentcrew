@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import re
 import sys
@@ -21,11 +22,37 @@ from typing import Any
 from pydantic import Field
 
 from agentcrew.tools.tool import Tool
-from agentcrew.utils.files import UnsafePathError, read_text, safe_relpath
+from agentcrew.utils.files import (
+    UnsafePathError,
+    is_link_like,
+    read_text,
+    safe_relpath,
+)
+
+
+def _crosses_link(workdir: Path, rel: Path) -> bool:
+    """从 ``workdir`` 到 ``workdir / rel`` 的每一段是否经过符号链接 / 重解析点。
+
+    :func:`safe_relpath` 只做词法规范化：``link/file.txt`` 完全合法，但如果
+    ``link`` 是指向项目外的符号链接，``target.is_file()`` / ``read_text()``
+    会跟着链接把项目外的文件读出来。``ArtifactStore`` 早已用 ``is_link_like``
+    逐段拒绝写入路径，这里把同一条边界补到读工具上。
+    """
+    current = workdir
+    for part in rel.parts:
+        current = current / part
+        try:
+            if is_link_like(current):
+                return True
+        except OSError:
+            # 该段（及其后代）不存在，不可能再冒出链接；让调用方给出
+            # 「文件不存在」而不是误报「路径越界」。
+            return False
+    return False
 
 
 def _resolve(workdir: Path, raw: str) -> Path | None:
-    """把模型给的相对路径安全解析到 ``workdir`` 内；越界返回 ``None``。
+    """把模型给的相对路径安全解析到 ``workdir`` 内；越界或经链接返回 ``None``。
 
     ``.`` 与空串视作根目录本身（列目录 / grep 从项目根开始是常见调用）。
     """
@@ -34,6 +61,8 @@ def _resolve(workdir: Path, raw: str) -> Path | None:
     try:
         rel = safe_relpath(raw)
     except UnsafePathError:
+        return None
+    if _crosses_link(workdir, rel):
         return None
     return workdir / rel
 
@@ -132,7 +161,16 @@ class GrepTool(Tool):
         if not root.is_dir():
             return f"错误：目录不存在：{path}"
         matches: list[str] = []
-        for file_path in sorted(p for p in root.rglob("*") if p.is_file()):
+        for file_path in sorted(root.rglob("*")):
+            if not file_path.is_file():
+                continue
+            # rglob 不会下钻链接目录，但链接到项目外的**文件**仍会被 is_file()
+            # 认作普通文件；逐段拒掉，避免把外部内容塞进模型上下文。
+            try:
+                if _crosses_link(self.workdir, file_path.relative_to(self.workdir)):
+                    continue
+            except (OSError, ValueError):
+                continue
             try:
                 text = read_text(file_path)
             except (OSError, UnicodeDecodeError):
@@ -169,7 +207,18 @@ class RunPythonTool(Tool):
                   **kwargs: Any) -> str:
         if not code:
             return "错误：缺少必填参数 code"
-        limit = float(timeout) if timeout else self.default_timeout
+        if timeout is None:
+            limit = self.default_timeout
+        else:
+            # 模型给的参数不经过任何 schema 强校验：``"abc"`` 会让 float()
+            # 抛 ValueError 冒泡断掉 Agent，负数/nan/极大值会让 wait_for 立刻
+            # 超时或永远不超时。统一收成可读的错误文本回灌。
+            try:
+                limit = float(timeout)
+            except (TypeError, ValueError):
+                return "错误：timeout 必须是数值（秒）"
+            if not math.isfinite(limit) or not 0 < limit <= 60:
+                return "错误：timeout 必须落在 (0, 60] 秒内"
         env = {
             "PATH": os.environ.get("PATH", ""),
             "SYSTEMROOT": os.environ.get("SYSTEMROOT", ""),

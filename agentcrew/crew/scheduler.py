@@ -64,7 +64,7 @@ from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.context.context_bus import ContextBus
 from agentcrew.contracts import AgentBudgetExceeded
 from agentcrew.gate.gatekeeper import GateDecision, Gatekeeper
-from agentcrew.models.complexity import get_calibrator
+from agentcrew.models.complexity import ComplexityCalibrator, get_calibrator
 from agentcrew.models.factory import BudgetExhaustedError
 from agentcrew.runtime.checkpoint import CheckpointStore
 from agentcrew.runtime.ledger import Ledger
@@ -101,6 +101,11 @@ class WorkerOutcome(BaseModel):
     result: TaskResult | None = None
     decision: GateDecision | None = None
     error: str | None = None
+    # 2026-11 容错加固：异常类型名显式成列。历史上类型名被拍进 ``error`` 头部
+    # （"Type: msg"），``_emit_error`` 再用 ``partition(":")[0]`` 反解析回来——
+    # 消息里任何带冒号的前缀都会让 exc_type 审计字段失真。新字段优先于反解析，
+    # 旧字符串格式保持不变（``error`` 仍是完整消息，消费方不受影响）。
+    error_type: str | None = None
 
 
 class Scheduler:
@@ -123,6 +128,7 @@ class Scheduler:
         stall_timeout_seconds: int = 300,
         on_event: Callable[[str, dict], None] | None = None,
         on_checkpoint: Callable[[], None] | None = None,
+        calibrator: ComplexityCalibrator | None = None,
     ) -> None:
         if max_concurrency < 1:
             raise ValueError(f"max_concurrency 必须 >= 1：{max_concurrency}")
@@ -132,6 +138,9 @@ class Scheduler:
         self._context_bus = context_bus
         self._ledger = ledger
         self._checkpoint = checkpoint
+        # 2026-11 会话隔离改造：run 级校准器由 Crew 显式注入；未注入时
+        # _record_calibration 回退读全局（直连 Scheduler 的旧测试行为不变）。
+        self._calibrator = calibrator
         self._on_event = on_event
         #: 每次 checkpoint 落盘后的回调（Task 29 的 Crew 用它同步 ``run.json``
         #: 的统计，见 :meth:`_save_checkpoint`）；未接线时零开销。
@@ -429,7 +438,8 @@ class Scheduler:
         if outcome.error == CANCELLED_ERROR:
             self._cancel_running(task_id)
         elif outcome.error is not None:
-            self._handle_error(task_id, outcome.error)
+            # error_type（2026-11）：异常类型名显式传递，不再依赖字符串反解析。
+            self._handle_error(task_id, outcome.error, outcome.error_type)
         decision = outcome.decision
         self._notify(
             "task_completed",
@@ -445,7 +455,10 @@ class Scheduler:
 
     def _record_calibration(self, task_id: str) -> None:
         """终局任务喂给复杂度校准器（P3-1）；校准器未注入时零开销跳过。"""
-        calibrator = get_calibrator()
+        # 2026-11 会话隔离改造：优先用 run 级注入实例，未注入回退全局（兼容）。
+        calibrator = (
+            self._calibrator if self._calibrator is not None
+            else get_calibrator())
         if calibrator is None:
             return
         task = self._board.get(task_id)
@@ -454,7 +467,9 @@ class Scheduler:
         elif task.status is TaskStatus.FAILED:
             calibrator.record(task, False, task.attempts)
 
-    def _handle_error(self, task_id: str, error: str) -> None:
+    def _handle_error(
+        self, task_id: str, error: str, error_type: str | None = None
+    ) -> None:
         """执行/门禁错误的去向：按板上状态与 ``attempts`` 额度决定。
 
         执行阶段（``RUNNING``）：``attempts < max_attempts`` → ``READY`` 重试，
@@ -468,7 +483,8 @@ class Scheduler:
         """
         task = self._board.get(task_id)
         if task.status is TaskStatus.RUNNING:
-            self._emit_error("agent.execute", task_id, error)
+            self._emit_error("agent.execute", task_id, error,
+                             error_type=error_type)
             if task.attempts < task.max_attempts:
                 # 把失败原因**写进跃迁理由**：它会随 status_history 落进
                 # tasks.json，下一次派发时由 _fix_hints 取出来交给模型。
@@ -485,7 +501,8 @@ class Scheduler:
                 )
             return
         if task.status is TaskStatus.REVIEW:
-            self._emit_error("gate.evaluate", task_id, error)
+            self._emit_error("gate.evaluate", task_id, error,
+                             error_type=error_type)
             self._transition(task_id, TaskStatus.FAILED, reason="gate-error")
 
     def _cancel_running(self, task_id: str) -> None:
@@ -557,14 +574,29 @@ class Scheduler:
             task_id=task_id,
             **{"from": before.value, "to": to.value, "reason": reason},
         )
+        # 状态跃迁本身就是「板子往前动了」的证据。慢门禁（G2 评审超过
+        # stall_timeout_seconds）期间只有跃迁、没有完成事件，此前漏刷会让
+        # _wait_for_outcome 误判停滞、硬取消一个正在正常评审的 worker。
+        self._touch_progress()
 
-    def _emit_error(self, where: str, task_id: str, error: str) -> None:
-        """落一条 ``error`` 审计事件（spec §14.1）；``exc_type`` 从错误串头部取。"""
+    def _emit_error(
+        self,
+        where: str,
+        task_id: str,
+        error: str,
+        *,
+        error_type: str | None = None,
+    ) -> None:
+        """落一条 ``error`` 审计事件（spec §14.1）。
+
+        ``exc_type`` 优先取显式传入的 ``error_type``（WorkerOutcome 新字段）；
+        未提供时回退到从错误串头部分析（历史行为，保留兼容）。
+        """
         self._ledger.emit(
             "error",
             where=where,
             task_id=task_id,
-            exc_type=error.partition(":")[0] or "Exception",
+            exc_type=error_type or error.partition(":")[0] or "Exception",
             message=error,
         )
 
@@ -710,12 +742,13 @@ class Scheduler:
 
 
 def _error_outcome(task_id: str, exc: BaseException) -> WorkerOutcome:
-    """把异常收敛成错误结局（类型名进 ``error`` 头部，供 ``exc_type`` 审计）。"""
+    """把异常收敛成错误结局（类型名进 ``error`` 头部与 ``error_type``，供审计）。"""
     return WorkerOutcome(
         task_id=task_id,
         result=None,
         decision=None,
         error=f"{type(exc).__name__}: {exc}",
+        error_type=type(exc).__name__,
     )
 
 

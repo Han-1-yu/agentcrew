@@ -49,6 +49,20 @@ _logger = logging.getLogger(__name__)
 _EXCERPT_LIMIT = 200
 
 
+def _safe_lines(handle: Any, path: Any) -> Iterator[str]:
+    """逐行迭代；文件系统层错误（权限 / 目录 / I/O 中断）保留已读到的部分。
+
+    ``errors="replace"`` 只兜解码错误，**不兜 OSError**。读取契约是"无论文件
+    处于什么历史状态都读得出能读的部分"，迭代中途的 I/O 错误也不该让整份
+    历史读不出来。JSON 坏行仍由调用方按原规则跳过并逐条记 warning。
+    """
+    try:
+        for line in handle:
+            yield line
+    except OSError as exc:
+        _logger.warning("ledger 读取中断，保留已读部分 %s: %s", path, exc)
+
+
 class LedgerEvent(BaseModel):
     """一条已写入 ledger 的事件。"""
 
@@ -156,8 +170,14 @@ class Ledger:
             file = open(self._path, encoding="utf-8", errors="replace")
         except FileNotFoundError:
             return  # 从未 emit 过（或 run 目录被清理）：零事件是诚实的答案
+        except OSError as exc:
+            # ledger.jsonl 被误建成目录 / 权限被撤 / 路径链接循环时，
+            # 不能让整条读链路崩掉；按零事件处理并留一条 warning。
+            _logger.warning("ledger 无法打开，按零事件处理 %s: %s", self._path, exc)
+            return
         with file:
-            for number, line in enumerate(file, start=1):
+            for number, line in enumerate(
+                    _safe_lines(file, self._path), start=1):
                 stripped = line.strip()
                 if not stripped:
                     continue

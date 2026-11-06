@@ -5,11 +5,14 @@
 要么完整、要么不发生。
 """
 
+from __future__ import annotations
+
 import hashlib
 import os
 import secrets
 import stat
 import time
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from uuid import uuid4
@@ -73,6 +76,37 @@ def safe_relpath(raw: str) -> PurePosixPath:
         raise UnsafePathError(f"空路径: {raw!r}")
 
     return PurePosixPath(*segments)
+
+
+def normalize_path_scope(scope: str) -> str:
+    """把 ``path_scope`` 的配置原值规范化成可比较的路径段前缀。
+
+    配置里写 ``./backend/``、``backend\\``、``backend`` 都应等价于 ``backend``；
+    统一反斜杠、去掉前导 ``./``、去掉首尾分隔符。空 scope 返回空串（调用方跳过）。
+    """
+    unified = scope.replace("\\", "/").strip()
+    while unified.startswith("./"):
+        unified = unified[2:]
+    return unified.strip("/")
+
+
+def path_in_scope(path: str, scopes: Sequence[str]) -> bool:
+    """``path`` 是否落在任一 ``scope`` 之下，按**路径段**比较而非字符串前缀。
+
+    ``startswith("backend")`` 会把 ``backend_secret/x.py`` 误判为在 ``backend``
+    域内（多执行体写保护被绕过，可覆盖他人产物）；带尾斜杠的 ``backend/`` 又
+    会拒绝恰好等于 ``backend`` 的路径。这里统一成「相等或以 ``scope + '/'``
+    开头」，且两侧都先规范化。非法路径一律判 False（fail-closed）。
+    """
+    try:
+        normalized = safe_relpath(path).as_posix()
+    except UnsafePathError:
+        return False
+    for scope in scopes:
+        prefix = normalize_path_scope(scope)
+        if prefix and (normalized == prefix or normalized.startswith(prefix + "/")):
+            return True
+    return False
 
 
 #: os.replace 遇 Windows 瞬时锁（杀软实时扫描 / 并发读取，WinError 5）时的重试参数。

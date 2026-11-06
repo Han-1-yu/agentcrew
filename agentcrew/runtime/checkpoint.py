@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -50,6 +50,11 @@ _RUN_SUBDIRS = ("artifacts", "context", "review", "diagnostics")
 #: 这么多行就合并回 ``tasks.json`` 并清空 delta 文件——避免一个长 run 把 delta 无限
 #: 撑大，也让 resume 不必重放几百行增量。
 DELTA_COMPACTION_THRESHOLD = 50
+
+#: 判定「僵尸 RUNNING」的静默时长。活 run 每次状态跃迁都会刷新 ``updated_at``；
+#: 超过该时长没有任何心跳，只可能是进程被强杀/断电后遗留的死 run，允许清理。
+#: 24h 远大于任务级超时与停滞检测（均 300s），不会误判正常长跑。
+STALE_RUNNING_AFTER = timedelta(hours=24)
 
 #: 显式传入的 run_id 的允许字符集：与 ``slugify_run_id`` 的输出同族，不含任何分隔符。
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -461,7 +466,49 @@ def _assert_deletable(target: Path, root: Path) -> None:
         raise RuntimeError(f"拒绝删除 output_dir 之外的路径: {target} -> {resolved}")
 
 
-def clean(output_dir: Path, *, keep: int, dry_run: bool = False) -> list[Path]:
+def _deletion_guard_status(run_dir: Path) -> str | None:
+    """删除守卫读到的状态；**无法证明「不是 running」时一律返回 running**。
+
+    ``run.json`` 存在但读不出（损坏 / Windows 文件被独占 / 瞬时 OSError）、
+    顶层不是 dict、或缺 ``status`` 字段，都按最危险的情况处理，绝不放行
+    ``rmtree``。仅「目录里根本没有 run.json」返回 ``None``（不是有效 run 目录）。
+    """
+    record_path = run_dir / "run.json"
+    if not record_path.is_file():
+        return None
+    try:
+        data = json.loads(read_text(record_path))
+    except (json.JSONDecodeError, OSError, ValueError):
+        return RunStatus.RUNNING.value
+    if not isinstance(data, dict):
+        return RunStatus.RUNNING.value
+    status = data.get("status")
+    return status if isinstance(status, str) else RunStatus.RUNNING.value
+
+
+def is_stale_running(run_dir: Path, *, now: datetime | None = None) -> bool:
+    """``run.json`` 停在 RUNNING 且超过 :data:`STALE_RUNNING_AFTER` 无心跳 → 僵尸 run。
+
+    读不出状态/时间一律返回 False（= 不认为可安全删除），与守卫的 fail-closed
+    方向一致。进程强杀不可被 ``try/finally`` 兜住，这个判据是历史死 run 的收敛出口。
+    """
+    try:
+        data = json.loads(read_text(run_dir / "run.json"))
+        if not isinstance(data, dict) or data.get("status") != RunStatus.RUNNING.value:
+            return False
+        raw = data.get("updated_at")
+        if not isinstance(raw, str):
+            return False
+        updated = datetime.fromisoformat(raw)
+        return (now or datetime.now()) - updated > STALE_RUNNING_AFTER
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def clean(
+    output_dir: Path, *, keep: int, dry_run: bool = False,
+    protect_running: bool = False,
+) -> list[Path]:
     """按 run_id 倒序保留最近 ``keep`` 个 run，删除其余（spec §13.5）。
 
     只处理「目录且含 ``run.json``」的条目：散落文件、外来目录、缺 ``run.json``
@@ -473,7 +520,12 @@ def clean(output_dir: Path, *, keep: int, dry_run: bool = False) -> list[Path]:
     删除**：``runs[keep:]`` 里任何一个目标链接样式（符号链接 / Windows junction /
     其他重解析点）或 resolve 后不严格位于 ``output_dir`` 之下，整次 clean 就抛
     ``RuntimeError`` 且**一个都不删**——调用方拿到的语义是「什么都没删」，而不是
-    「删了一半然后抛异常」。``dry_run`` 同样跑校验：干跑要能预告真跑会拒绝什么。
+    「删了一半然后抛异常」。    ``dry_run`` 同样跑校验：干跑要能预告真跑会拒绝什么。
+
+    ``protect_running=True``（CLI 默认开启）时额外跳过活 run：批量清理误删一个
+    正在写盘的 run 等于中途拔电源。超过 :data:`STALE_RUNNING_AFTER` 无心跳的
+    僵尸 RUNNING 仍可删，避免死 run 永远清不掉。默认值 ``False`` 保持库层
+    ``clean(keep=N)`` 的既有契约不变。
     """
     if keep < 0:
         raise ValueError(f"keep 必须 >= 0：{keep}")
@@ -481,6 +533,12 @@ def clean(output_dir: Path, *, keep: int, dry_run: bool = False) -> list[Path]:
     root = output_dir.resolve()
     runs = sorted(_run_dirs(output_dir), key=lambda path: path.name, reverse=True)
     targets = runs[keep:]
+    if protect_running:
+        targets = [
+            target for target in targets
+            if _deletion_guard_status(target) != RunStatus.RUNNING.value
+            or is_stale_running(target)
+        ]
     for target in targets:
         _assert_deletable(target, root)
     removed: list[Path] = []
@@ -497,8 +555,10 @@ def delete_run(output_dir: Path, run_id: str) -> int:
     与 :func:`clean` 共享 ``_assert_deletable`` 边界校验（链接样式 / output_dir
     之外一律拒绝）。``running`` 状态的 run 拒绝删除（提示先 cancel），因为删一个
     活着的 run 等于在进程写盘中途拔电源 —— 产物可能只写了一半，且进程下次
-    checkpoint 会因目录消失而崩。非 running 状态（completed / failed / cancelled /
-    interrupted）均可删除。
+    checkpoint 会因目录消失而崩。    非 running 状态（completed / failed / cancelled / interrupted）均可删除。
+    ``run.json`` 读不出时按 running 处理（fail-closed）；超过
+    :data:`STALE_RUNNING_AFTER` 无心跳的僵尸 RUNNING 允许删除，让强杀遗留的
+    死 run 可以收敛，而不是永远卡在「先 cancel」的死循环里。
 
     删除前先统计目录总大小（``shutil.rmtree`` 不返回释放量），用于 CLI 打印
     「释放 N 字节」。run_id 必须通过 :func:`_validated_run_id` 校验（拒绝
@@ -509,17 +569,11 @@ def delete_run(output_dir: Path, run_id: str) -> int:
     run_dir = output_dir / run_id
     if not run_dir.is_dir():
         raise FileNotFoundError(f"run 不存在: {run_dir}")
-    record_path = run_dir / "run.json"
-    if record_path.is_file():
-        try:
-            data = json.loads(read_text(record_path))
-            status = data.get("status") if isinstance(data, dict) else None
-        except (json.JSONDecodeError, OSError):
-            status = None
-        if status == RunStatus.RUNNING.value:
-            raise RuntimeError(
-                f"run {run_id!r} 正在运行中，拒绝删除：请先 cancel 该 run"
-                f"（python main.py cancel {run_id}）")
+    if (_deletion_guard_status(run_dir) == RunStatus.RUNNING.value
+            and not is_stale_running(run_dir)):
+        raise RuntimeError(
+            f"run {run_id!r} 正在运行中，拒绝删除：请先 cancel 该 run"
+            f"（python main.py cancel {run_id}）")
     _assert_deletable(run_dir, output_dir.resolve())
     freed = sum(f.stat().st_size for f in run_dir.rglob("*") if f.is_file())
     shutil.rmtree(run_dir)

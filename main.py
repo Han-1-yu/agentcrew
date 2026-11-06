@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import os
 import sys
 from collections.abc import Callable, Coroutine, Sequence
@@ -78,6 +79,7 @@ from agentcrew.runtime.checkpoint import (
     delete_run,
 )
 from agentcrew.runtime.ledger import Ledger, LedgerEvent
+from agentcrew.utils.logger import setup_logging
 from examples.todo_web_project import PROJECT_GOAL
 
 #: 含人工卡点的 gate 模式（与 ``Gatekeeper`` 的 ``_PLAN_GATES`` / ``_DELIVERY_GATES`` 同源）。
@@ -209,6 +211,9 @@ def build_parser() -> argparse.ArgumentParser:
                            help="保留的 run 个数（默认 5）")
     clean_cmd.add_argument("--dry-run", action="store_true",
                            help="只列出将删除的 run，不真删")
+    clean_cmd.add_argument(
+        "--protect-running", action="store_true",
+        help="跳过正在运行且有心跳的 run（生产环境建议开启；僵尸 run 仍可清理）")
     clean_cmd.add_argument("--output-dir", metavar="DIR")
 
     cancel = sub.add_parser(
@@ -308,9 +313,32 @@ def _add_run_flags(parser: argparse.ArgumentParser) -> None:
 # ── 入口 ──────────────────────────────────────────────────────────────────
 
 
+def _setup_logging_early() -> None:
+    """在分派任何子命令之前接线脱敏日志（2026-11 可观测性改造）。
+
+    ``utils.logger.setup_logging`` 与 ``Settings.log_level`` 此前是「建好却从未
+    被调用」的死基建——全库日志调用（ledger 坏行警告、MCP 传输警告等）落在
+    root logger 的默认 WARNING 上且无格式。这里统一接线：
+
+    - 配置加载失败时**静默跳过**：入口绝不因日志配置崩掉，子命令自己的错误
+      路径（``_fail``）照常工作；
+    - ``AGENTCREW_LOG_JSON=1`` 切换 JSON 结构化输出（便于日志系统检索），
+      缺省纯文本，行为兼容。
+    """
+    try:
+        settings = Settings.load()
+    except (OSError, ValueError):
+        return
+    json_format = os.environ.get(
+        "AGENTCREW_LOG_JSON", "").strip().lower() in ("1", "true", "yes")
+    setup_logging(settings.log_level, settings.secret_values(),
+                  json_format=json_format)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """解析并分派；返回进程退出码（spec §7.4 的那张表）。"""
     _install_encoding_safe_stdio()
+    _setup_logging_early()
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command is None:
@@ -593,7 +621,10 @@ def _cmd_roles(args: argparse.Namespace) -> int:
     console = Console()
     from agentcrew.agents.plan import binding_for
     from agentcrew.config import Settings
-    settings = Settings.load()
+    try:
+        settings = Settings.load()
+    except (OSError, ValueError) as exc:
+        return _fail(f"配置错误：{exc}")
     for spec in BUILTIN_ROLES:
         _out(console, f"[{spec.key}] {spec.title} —— {spec.goal}")
         _out(console, f"  职责  {'；'.join(spec.responsibilities)}")
@@ -625,10 +656,18 @@ def _cmd_switch(args: argparse.Namespace) -> int:
     from agentcrew.crew.crew import build_catalog
     from agentcrew.roles.binding import Duty
 
-    settings = Settings.load()
+    try:
+        settings = Settings.load()
+    except (OSError, ValueError) as exc:
+        return _fail(f"配置错误：{exc}")
     if args.output_dir:
         settings = settings.model_copy(update={"output_dir": Path(args.output_dir).resolve()})
-    run_dir = settings.output_dir / args.run_id
+    # 与 status / resume / cancel / delete / diff 同一条边界：switch 会往 run 目录
+    # 写两个 JSON，run_id 必须先收进 output_dir 内，否则 ``../`` 会写到别处。
+    try:
+        run_dir = _run_dir(settings, args.run_id)
+    except ValueError as exc:
+        return _fail(f"非法 run_id：{exc}")
     if not run_dir.is_dir():
         print(f"run 目录不存在：{run_dir}", file=sys.stderr)
         return EXIT_CODES["config"]
@@ -647,27 +686,37 @@ def _cmd_switch(args: argparse.Namespace) -> int:
               file=sys.stderr)
         return EXIT_CODES["config"]
 
+    # 覆盖文件损坏时**不能**当成空对象再写回：那会静默抹掉用户已有的全部覆盖，
+    # 且没有任何提示。fail loud，让用户先修复或自行删除。
+    def _read_overrides(path: Path) -> dict:
+        if not path.is_file():
+            return {}
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ValueError(
+                f"覆盖文件损坏：{path}（{exc}）；请修复或删除后再 switch") from exc
+        if not isinstance(payload, dict):
+            raise ValueError(f"覆盖文件格式错误：{path} 必须是 JSON 对象")
+        return payload
+
     if args.task:
         # 任务级覆盖：只影响这一次任务的派发，与角色绑定互不干扰
         path = run_dir / "task_overrides.json"
-        payload = {}
-        if path.is_file():
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
-                payload = {}
+        try:
+            payload = _read_overrides(path)
+        except ValueError as exc:
+            return _fail(str(exc))
         payload[args.task] = {"role": args.role, "profile": args.agent}
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"已写入 {path}：{args.task}（{args.role}）→ {args.agent}（下次 resume 生效）")
         return EXIT_CODES["ok"]
 
     path = run_dir / "binding_overrides.json"
-    payload = {}
-    if path.is_file():
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            payload = {}
+    try:
+        payload = _read_overrides(path)
+    except ValueError as exc:
+        return _fail(str(exc))
     kept = [a for a in members
             if a.duty is not Duty.PRIMARY and a.profile != args.agent]
     payload[args.role] = {
@@ -691,7 +740,10 @@ def _cmd_agents(args: argparse.Namespace) -> int:
     from agentcrew.config import Settings
     from agentcrew.crew.crew import build_catalog
 
-    settings = Settings.load()
+    try:
+        settings = Settings.load()
+    except (OSError, ValueError) as exc:
+        return _fail(f"配置错误：{exc}")
     catalog = build_catalog(settings)
     plan = resolve_plan(settings, catalog, "preview")
 
@@ -775,13 +827,17 @@ def _cmd_clean(args: argparse.Namespace) -> int:
     """按 run_id 倒序保留最近 ``--keep`` 个 run，删除其余（spec §13.5）。
 
     ``--dry-run`` 只列不删（:func:`agentcrew.runtime.checkpoint.clean` 的真跑与
-    干跑共用同一套边界校验）。
+    干跑共用同一套边界校验）。``--protect-running`` 显式开启活 run 保护：
+    库层 ``clean`` 默认不保护以维持 spec §13.5 的既有契约，生产批量清理时
+    由 CLI 开关决定是否跳过「有心跳的 running」，僵尸 RUNNING 始终可清理。
     """
     if args.keep < 0:
         return _fail("clean：--keep 必须 >= 0。")
     try:
         settings = _settings_from(args)
-        removed = clean(settings.output_dir, keep=args.keep, dry_run=args.dry_run)
+        removed = clean(settings.output_dir, keep=args.keep,
+                        dry_run=args.dry_run,
+                        protect_running=getattr(args, "protect_running", False))
     except (OSError, RuntimeError, ValueError) as exc:
         return _fail(f"clean 失败：{exc}")
     console = Console()
@@ -879,18 +935,36 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     from agentcrew.api.auth import APIKeyAuth, RateLimiter
     from agentcrew.api.server import ApiServer
 
-    async def _serve() -> None:
-        settings = _settings_from(args)
+    # 端口由 argparse 保证是 int，但不保证落在合法区间：-1 / 70000 会让
+    # asyncio.start_server 抛 OverflowError，端口被占用抛 OSError，两者此前都以
+    # 裸 traceback 结束（serve 是最常用的启动命令）。0 虽能绑定随机端口，打印的
+    # 地址却是 :0，同样不可用。统一在启动前给出「配置错误」而非栈崩。
+    if not 1 <= args.port <= 65535:
+        return _fail(f"serve：--port 必须是 1–65535，实际 {args.port}。")
+
+    async def _serve() -> int:
+        try:
+            settings = _settings_from(args)
+        except (OSError, ValueError) as exc:
+            return _fail(f"serve：配置错误：{exc}")
         # E-3：按配置装配认证 / 限流；两者默认关闭，缺省时与改造前行为一致。
         api_keys = list(settings.api_keys)
         cli_key = getattr(args, "api_key", None)
         if cli_key:
             api_keys.append(cli_key)
-        auth = (
-            APIKeyAuth(api_keys)
-            if (settings.api_auth_enabled or bool(cli_key)) and api_keys
-            else None
-        )
+        wants_auth = settings.api_auth_enabled or bool(cli_key)
+        # 显式开启认证却没有密钥时，旧逻辑的 ``and api_keys`` 会让 auth = None，
+        # 服务匿名可访问且不打印任何提示（fail-open）。这里改为 fail-closed：
+        # 要么补齐 api_keys，要么明确关闭认证，避免"以为开了认证"的错觉。
+        if wants_auth and not api_keys:
+            return _fail(
+                "serve：已启用 API 认证但未配置任何密钥，服务不会以匿名方式启动；"
+                "请配置 agentcrew.yaml 的 api_keys / --api-key，或关闭 api_auth_enabled。")
+        auth = APIKeyAuth(api_keys) if wants_auth else None
+        if (settings.api_rate_limit_enabled
+                and settings.api_rate_limit_max > 0
+                and settings.api_rate_limit_window < 1):
+            return _fail("serve：api_rate_limit_window 必须 >= 1（否则限流静默失效）。")
         rate_limiter = (
             RateLimiter(
                 max_requests=settings.api_rate_limit_max,
@@ -908,7 +982,10 @@ def _cmd_serve(args: argparse.Namespace) -> int:
             auth=auth, rate_limiter=rate_limiter,
             model_factory=model_factory,
         )
-        await server.start()
+        try:
+            await server.start()
+        except (OSError, OverflowError, ValueError) as exc:
+            return _fail(f"serve 启动失败（{args.host}:{args.port}）：{exc}")
         print(f"AgentCrew API server listening on http://{args.host}:{args.port}")
         print(f"  Web UI: http://{args.host}:{args.port}/")
         print("  GET  /health              健康检查")
@@ -928,9 +1005,9 @@ def _cmd_serve(args: argparse.Namespace) -> int:
             pass
         finally:
             await server.stop()
+        return EXIT_CODES["ok"]
 
-    asyncio.run(_serve())
-    return EXIT_CODES["ok"]
+    return asyncio.run(_serve())
 
 
 def _cmd_doctor(args: argparse.Namespace) -> int:
@@ -1441,13 +1518,27 @@ def _stdin_isatty() -> bool:
 
 
 def _invalid_numbers(args: argparse.Namespace) -> str | None:
-    """正整数开关的校验（argparse 只管类型，不管取值）；非法时返回错误消息。"""
+    """数值开关的校验（argparse 只管类型，不管取值）；非法时返回错误消息。
+
+    ``--max-cost`` 特别要挡 ``nan`` / ``inf``：预算判定是
+    ``total_cost_usd > max_cost_usd``，与 NaN 比较恒为 False，配了上限等于没配；
+    inf 同理。负值 / 负调用上限会让第一次 LLM 调用就以「预算耗尽」失败，用户
+    看不出是自己把上限写成了负数。引擎侧负上限的既有语义由测试钉住，这里只
+    在 CLI 入口拦住非法输入。
+    """
+    cmd = getattr(args, "command", "run")
     concurrency = getattr(args, "max_concurrency", None)
     if concurrency is not None and concurrency < 1:
-        return "run：--max-concurrency 必须 >= 1。"
+        return f"{cmd}：--max-concurrency 必须 >= 1。"
     budget = getattr(args, "context_budget", None)
     if budget is not None and budget < 1:
-        return "run：--context-budget 必须 >= 1。"
+        return f"{cmd}：--context-budget 必须 >= 1。"
+    cost = getattr(args, "max_cost", None)
+    if cost is not None and (not math.isfinite(cost) or cost < 0):
+        return f"{cmd}：--max-cost 必须是 >= 0 的有限数。"
+    calls = getattr(args, "max_llm_calls", None)
+    if calls is not None and calls < 0:
+        return f"{cmd}：--max-llm-calls 必须 >= 0。"
     return None
 
 

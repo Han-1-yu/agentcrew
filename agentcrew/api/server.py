@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
+import os
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,6 +37,54 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from agentcrew.api import http as http_transport
 from agentcrew.api.auth import APIKeyAuth, RateLimiter
 from agentcrew.models.config import PROVIDER_PRESETS as PROVIDER_PRESETS_NAMES
+
+
+def _validate_run_options(options: Mapping[str, Any]) -> str | None:
+    """``POST /runs`` 的 ``options`` 白名单 + 逐字段类型/范围校验，返回错误文案。
+
+    ``Settings.model_copy(update=...)`` 既不校验也不过滤：任意键都会被塞进
+    ``Settings.__dict__``，``{"mock": "false"}`` 里的字符串还会被当成 truthy
+    的开关（客户端想关 mock、实际却强制开了）。此前唯一的兜底是 ``except
+    Exception: settings = self._settings`` —— 失败被静默吞掉、请求照样回 202，
+    用户以为 options 生效了。这里在入口挡住，值仍由 Settings 的既有语义解释。
+
+    白名单按「可安全按 run 覆盖且不会绕过服务端边界」取最小集合；``gate``
+    恒被 ``_build_crew`` 覆写为 none，``output_dir`` / ``api_keys`` 等属于
+    服务端配置，均不开放。
+    """
+    allowed = {
+        "mock", "default_model", "max_concurrency", "context_budget_tokens",
+        "max_cost_usd", "max_llm_calls", "model_tiers", "gate_config",
+    }
+    unknown = sorted(set(options) - allowed)
+    if unknown:
+        return ("options 含不支持的键：" + "、".join(unknown)
+                + "；可用：" + "、".join(sorted(allowed)))
+    for key, value in options.items():
+        if value is None:
+            if key not in {"default_model", "max_cost_usd", "max_llm_calls"}:
+                return f"options.{key} 不能为 null"
+            continue
+        if key == "mock":
+            if not isinstance(value, bool):
+                return "options.mock 必须是布尔值"
+        elif key == "default_model":
+            if not isinstance(value, str) or not value.strip():
+                return "options.default_model 必须是非空字符串"
+        elif key in ("max_concurrency", "context_budget_tokens", "max_llm_calls"):
+            if isinstance(value, bool) or not isinstance(value, int):
+                return f"options.{key} 必须是整数"
+            lower = 0 if key == "max_llm_calls" else 1
+            if value < lower:
+                return f"options.{key} 必须 >= {lower}"
+        elif key == "max_cost_usd":
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return "options.max_cost_usd 必须是数值"
+            if not math.isfinite(value) or value < 0:
+                return "options.max_cost_usd 必须是 >= 0 的有限数"
+        elif not isinstance(value, dict):
+            return f"options.{key} 必须是对象"
+    return None
 
 
 @dataclass
@@ -77,9 +127,23 @@ class EventBus:
         return len(self._subscribers)
 
 
+#: 请求体补读超时（秒）：绝大多数请求一次 ``read`` 就凑满，只有跨 TCP 段到达
+#: 或客户端少发时才进补读；短超时把「声明长度却不发包」收口为 400，不会死等。
+_BODY_READ_TIMEOUT = 1.0
+
+
 def _clamp_int(raw: str, *, default: int, minimum: int) -> int:
     """把查询参数里的整数读出来；非法 / 缺失用 ``default``，并压到 ``minimum`` 以上。"""
     return http_transport.clamp_int(raw, default=default, minimum=minimum)
+
+
+def _env_int(name: str, default: int) -> int:
+    """读一个整型环境变量；缺失 / 非法一律回 ``default``（配置容错）。"""
+    raw = os.environ.get(name, "")
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
 
 
 class ApiServer:
@@ -134,6 +198,12 @@ class ApiServer:
         self._model_factory = model_factory
         #: A5：模型发现结果缓存（provider → (timestamp, models) 或 (timestamp, error)）。
         self._discovery_cache: dict[str, tuple[float, Any]] = {}
+        # 2026-11 并发加固：同时存活的 run 数上限。每个 crew 自带 LLM 信号量，
+        # 但 N 个并发 run = N × max_concurrency 的 LLM 并发与无界的内存/句柄；
+        # 超限时创建/resume 端点直接 429。环境变量可调，默认 8。
+        self._max_concurrent_runs = max(
+            1, _env_int("AGENTCREW_MAX_CONCURRENT_RUNS", 8))
+        self._active_run_count = 0
 
     async def start(self) -> None:
         self._server = await asyncio.start_server(
@@ -202,11 +272,25 @@ class ApiServer:
             if request.method == "GET":
                 await self._handle_get(request.path, writer)
             elif request.method in ("POST", "PUT"):
-                # 按声明长度读，但不苛求凑满：客户端少发（含调试用的坏 JSON）
-                # 都在 JSON 解析处收成 400，而不是在这里死等字节。
-                body = (
-                    await reader.read(request.content_length)
-                    if request.content_length > 0 else b"")
+                length = request.content_length
+                if length > http_transport.MAX_BODY_BYTES:
+                    await self._send_json(
+                        writer, 413,
+                        {"error": f"请求体过大（上限 "
+                                  f"{http_transport.MAX_BODY_BYTES} 字节）"})
+                    return
+                # StreamReader.read(n) 只返回当前 buffer 里已有的字节，合法大 body
+                # 跨 TCP 段到达时会被截断成半截 JSON（误报 400）。先读一次，不足
+                # 再按剩余长度补读；少发 / 不发包由短超时收口，交给 JSON 解析 400。
+                body = await reader.read(length) if length > 0 else b""
+                if length > 0 and len(body) < length:
+                    try:
+                        rest = await asyncio.wait_for(
+                            reader.readexactly(length - len(body)),
+                            timeout=_BODY_READ_TIMEOUT)
+                    except (asyncio.IncompleteReadError, asyncio.TimeoutError) as exc:
+                        rest = getattr(exc, "partial", b"")
+                    body += rest
                 if request.method == "POST":
                     await self._handle_post(request.path, body, writer)
                 else:
@@ -217,9 +301,21 @@ class ApiServer:
                 await self._send_json(writer, 405, {"error": "Method Not Allowed"})
         except (ConnectionError, asyncio.CancelledError):
             pass
+        except Exception as exc:
+            # 兜底：任何未预料异常都必须给客户端一个 HTTP 响应。此前 OSError 会
+            # 穿透所有 except，finally 只关连接 → 客户端拿到 0 字节、服务端无记录。
+            try:
+                await self._send_json(
+                    writer, 500,
+                    {"error": f"服务端内部错误：{type(exc).__name__}: {exc}"})
+            except (ConnectionError, OSError):
+                pass
         finally:
             writer.close()
-            await writer.wait_closed()
+            try:
+                await writer.wait_closed()
+            except (ConnectionError, OSError):
+                pass
 
     # ── E-3：认证 / 速率限制中间件 ──────────────────────────────────────────
 
@@ -282,7 +378,9 @@ class ApiServer:
         # ``path.endswith("/status")`` 这类裸匹配（P2-9 的 ledger/stats 端点
         # 自带查询参数）。无查询串时 ``parsed.path`` 与历史行为逐字节一致。
         parsed = urlsplit(path)
-        p = parsed.path
+        # 统一去掉路径尾斜杠：``/runs/`` 与 ``/runs`` 是同一个资源，此前只有
+        # POST /runs 用裸字符串比较，带尾斜杠或查询串会直接 404。
+        p = parsed.path.rstrip("/") or "/"
         query = parse_qs(parsed.query)
         if p == "/" or p == "/index.html":
             # 看板页面按需 import：dashboard 是纯字符串大常量，只有访问根路径时
@@ -308,16 +406,23 @@ class ApiServer:
                 return
             if action == "status":
                 run = self.runs.get(run_id)
-                if run is None:
+                if run is not None:
+                    await self._send_json(writer, 200, {
+                        "run_id": run.run_id,
+                        "goal": run.goal,
+                        "status": run.status,
+                        "task_count": len(run.tasks),
+                        "tasks": run.tasks,
+                    })
+                    return
+                # 内存表只覆盖本进程启动过的 run；服务重启后 /runs、/ledger、
+                # /stats 都能从磁盘读，唯独 /status 回 404，看板点开历史 run
+                # 永远停在 pending。这里按同一份 run.json / tasks.json 回落。
+                disk = self._disk_status(run_id)
+                if disk is None:
                     await self._send_json(writer, 404, {"error": "run not found"})
                     return
-                await self._send_json(writer, 200, {
-                    "run_id": run.run_id,
-                    "goal": run.goal,
-                    "status": run.status,
-                    "task_count": len(run.tasks),
-                    "tasks": run.tasks,
-                })
+                await self._send_json(writer, 200, disk)
                 return
             if action == "model":
                 await self._get_model(run_id, writer)
@@ -330,14 +435,49 @@ class ApiServer:
                 return
         await self._send_json(writer, 404, {"error": "Not Found"})
 
+    def _disk_status(self, run_id: str) -> dict[str, Any] | None:
+        """从盘上 ``run.json`` / ``tasks.json`` 还原最小状态（服务重启后的 /status）。
+
+        run_id 先过 ``_validated_run_id``：这个端点是读路径，但拼路径的方式与
+        ``DELETE`` / ``ledger`` 完全一样，不能留一条绕过边界的口子。规划阶段就
+        失败的 run 没有 ``tasks.json``，任务表按空处理而不是整个 404。
+        """
+        if self._output_dir is None:
+            return None
+        from agentcrew.runtime.checkpoint import CheckpointStore, _validated_run_id
+
+        try:
+            store = CheckpointStore(self._output_dir / _validated_run_id(run_id))
+            record = store.load_record()
+        except (OSError, ValueError):
+            return None
+        tasks: dict[str, dict[str, Any]] = {}
+        try:
+            raw = json.loads((store.run_dir / "tasks.json").read_text(encoding="utf-8"))
+            entries = raw.get("tasks") or [] if isinstance(raw, dict) else []
+            for task in entries:
+                if isinstance(task, dict) and task.get("id"):
+                    tasks[str(task["id"])] = task
+        except (OSError, ValueError):
+            pass
+        return {
+            "run_id": record.run_id or run_id,
+            "goal": record.project_goal,
+            "status": record.status.value,
+            "task_count": len(tasks),
+            "tasks": tasks,
+            "source": "disk",
+        }
+
     async def _handle_post(
         self, path: str, body: bytes, writer: asyncio.StreamWriter,
     ) -> None:
-        if path == "/runs":
+        parsed = urlsplit(path)
+        p = parsed.path.rstrip("/") or "/"
+        if p == "/runs":
             await self._create_run(body, writer)
             return
-        parsed = urlsplit(path)
-        segments = [unquote(s) for s in parsed.path.split("/") if s]
+        segments = [unquote(s) for s in p.split("/") if s]
         # A4：POST /providers/{name}/test（V5 P2：支持 ?mode=stream 流式测速）
         if len(segments) == 3 and segments[0] == "providers" and segments[2] == "test":
             query = parse_qs(parsed.query)
@@ -363,8 +503,12 @@ class ApiServer:
             if action == "events":
                 try:
                     data = json.loads(body.decode("utf-8")) if body else {}
-                except json.JSONDecodeError:
+                except (json.JSONDecodeError, UnicodeDecodeError):
                     await self._send_json(writer, 400, {"error": "invalid JSON"})
+                    return
+                if not isinstance(data, dict):
+                    await self._send_json(
+                        writer, 400, {"error": "body 必须是 JSON 对象"})
                     return
                 event = data.pop("_event", "custom")
                 data.setdefault("run_id", run_id)
@@ -379,7 +523,7 @@ class ApiServer:
         """``POST /runs``：校验 body → 建 Crew → 后台跑 → 回 run_id。"""
         try:
             data = json.loads(body.decode("utf-8")) if body else {}
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError):
             await self._send_json(writer, 400, {"error": "invalid JSON"})
             return
         if not isinstance(data, dict):
@@ -393,18 +537,43 @@ class ApiServer:
         if not isinstance(options, Mapping):
             await self._send_json(writer, 400, {"error": "options 必须是对象"})
             return
-        crew = self._build_crew(goal, options)
+        option_error = _validate_run_options(options)
+        if option_error is not None:
+            await self._send_json(writer, 400, {"error": option_error})
+            return
+        try:
+            crew = self._build_crew(goal, options)
+        except (ValueError, TypeError) as exc:
+            await self._send_json(
+                writer, 400, {"error": f"options 无法应用：{exc}"})
+            return
         if crew is None:
             await self._send_json(
                 writer, 503,
                 {"error": "server 未配置 crew_factory/settings，无法创建 run"},
             )
             return
+        # 2026-11 并发加固：并发 run 数上限（检查与占用之间无 await，原子）。
+        if self._active_run_count >= self._max_concurrent_runs:
+            await self._send_json(
+                writer, 429,
+                {"error": (
+                    f"并发 run 数已达上限（{self._max_concurrent_runs}）；"
+                    "请等待在跑 run 结束，或调大环境变量 "
+                    "AGENTCREW_MAX_CONCURRENT_RUNS")},
+            )
+            return
+        self._active_run_count += 1
         started: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         task = asyncio.create_task(
             self._run_crew(crew, lambda: crew.run(goal), started))
         try:
             run_id = await asyncio.wait_for(started, timeout=30)
+        except asyncio.CancelledError:
+            # handler 被取消时 CancelledError 不属于 Exception，若不显式收口，
+            # 后台 run 会继续跑且永远不进 active_crews/_run_tasks 注册表（幽灵 run）。
+            task.cancel()
+            raise
         except asyncio.TimeoutError:
             task.cancel()
             await self._send_json(
@@ -430,12 +599,11 @@ class ApiServer:
             return None
         from agentcrew.crew.crew import Crew
 
-        try:
-            settings = (
-                self._settings.model_copy(update=dict(options))
-                if options else self._settings)
-        except Exception:
-            settings = self._settings
+        # options 已在 _create_run 过白名单与类型校验；这里不再用 except Exception
+        # 静默吞掉装配失败（那会让请求回 202 而用户以为配置生效了）。
+        settings = (
+            self._settings.model_copy(update=dict(options))
+            if options else self._settings)
         # API 服务器无人值守：人工卡点会在 await prompter 上永久挂起。
         settings = settings.model_copy(update={"gate": "none"})
         return Crew(settings, on_event=self.on_event)
@@ -467,7 +635,14 @@ class ApiServer:
                 except Exception:
                     pass
         finally:
-            if started.done() and started.exception() is None:
+            # 2026-11 并发加固：无论结局如何都释放并发 run 槽位（创建端点在
+            # ``create_task`` 前同步占用）。coroutine 已被调度后才可能进入本
+            # 函数，因此 ``finally`` 必然执行——槽位不会泄漏。
+            self._active_run_count -= 1
+            # started 被 wait_for 超时取消后，对已取消的 Future 调 .exception()
+            # 会抛 CancelledError，使 finally 当场中断、注册表摘除被跳过。
+            if (started.done() and not started.cancelled()
+                    and started.exception() is None):
                 run_id = started.result()
                 self.active_crews.pop(run_id, None)
                 self._run_tasks.pop(run_id, None)
@@ -512,8 +687,15 @@ class ApiServer:
         """
         try:
             payload = json.loads(body.decode("utf-8")) if body else {}
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError):
             await self._send_json(writer, 400, {"error": "invalid JSON"})
+            return
+        if not isinstance(payload, dict):
+            await self._send_json(writer, 400, {"error": "body 必须是 JSON 对象"})
+            return
+        if "reset" in payload and not isinstance(payload["reset"], bool):
+            # bool("false") is True：字符串会变成「撤销覆盖」，与客户端意图相反
+            await self._send_json(writer, 400, {"error": "reset 必须是布尔值"})
             return
         role = str(payload.get("role") or "")
         reset = bool(payload.get("reset"))
@@ -574,8 +756,14 @@ class ApiServer:
         """
         try:
             payload = json.loads(body.decode("utf-8")) if body else {}
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError):
             await self._send_json(writer, 400, {"error": "invalid JSON"})
+            return
+        if not isinstance(payload, dict):
+            await self._send_json(writer, 400, {"error": "body 必须是 JSON 对象"})
+            return
+        if "reset" in payload and not isinstance(payload["reset"], bool):
+            await self._send_json(writer, 400, {"error": "reset 必须是布尔值"})
             return
         reset = bool(payload.get("reset"))
         agent = str(payload.get("agent") or "")
@@ -632,6 +820,16 @@ class ApiServer:
 
     async def _resume_run(self, run_id: str, writer: asyncio.StreamWriter) -> None:
         """``POST /runs/{id}/resume``：从 checkpoint 恢复 run 并后台执行（202）。"""
+        # resume 会 load_board → repair_statuses → 写盘，是**写**路径。CLI 的
+        # resume 走 _run_dir() 收口、DELETE 走 _validated_run_id()，这里此前是
+        # 唯一一条直接把 run_id 拼进 output_dir 的路径。
+        from agentcrew.runtime.checkpoint import _validated_run_id
+
+        try:
+            _validated_run_id(run_id)
+        except ValueError as exc:
+            await self._send_json(writer, 400, {"error": str(exc)})
+            return
         if run_id in self.active_crews:
             await self._send_json(
                 writer, 409, {"error": "run 已在运行中"})
@@ -640,20 +838,44 @@ class ApiServer:
             await self._send_json(
                 writer, 503, {"error": "server 未配置 settings，无法 resume"})
             return
+        # 2026-11 并发加固：resume 与 create 共享同一份并发 run 槽位。
+        if self._active_run_count >= self._max_concurrent_runs:
+            await self._send_json(
+                writer, 429,
+                {"error": (
+                    f"并发 run 数已达上限（{self._max_concurrent_runs}）；"
+                    "请等待在跑 run 结束，或调大环境变量 "
+                    "AGENTCREW_MAX_CONCURRENT_RUNS")},
+            )
+            return
+        self._active_run_count += 1
         from agentcrew.crew.crew import Crew
 
         try:
             crew = Crew.resume_from(self._settings, run_id, on_event=self.on_event)
         except (OSError, ValueError) as exc:
+            self._active_run_count -= 1  # 未进入后台任务，立即归还槽位
             await self._send_json(
                 writer, 404, {"error": f"无法恢复 run {run_id!r}：{exc}"})
+            return
+        except Exception as exc:
+            # 槽位已占用：resume_from 对畸形 tasks.json 抛的 AttributeError /
+            # TypeError 等不在上面两类里。不在这里归还，_run_crew 根本没被创建，
+            # 槽位会永久泄漏，累计到上限后所有 run 请求永久 429。
+            self._active_run_count -= 1
+            await self._send_json(
+                writer, 500, {"error": f"无法恢复 run {run_id!r}："
+                                      f"{type(exc).__name__}: {exc}"})
             return
         started: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         task = asyncio.create_task(
             self._run_crew(crew, crew.resume, started))
         try:
             resumed_id = await asyncio.wait_for(started, timeout=30)
-        except Exception as exc:
+        except asyncio.CancelledError:
+            task.cancel()
+            raise
+        except Exception as exc:  # resume 启动失败
             task.cancel()
             await self._send_json(
                 writer, 500, {"error": f"resume 启动失败：{type(exc).__name__}: {exc}"})
@@ -724,11 +946,22 @@ class ApiServer:
             event = query.get("event", [None])[0] or None
             limit = _clamp_int(query.get("limit", ["100"])[0], default=100, minimum=1)
             offset = _clamp_int(query.get("offset", ["0"])[0], default=0, minimum=0)
-            events = reader.query_events(
+            # 2026-11 事件循环保护：ledger 查询会物化/遍历整个 JSONL 文件
+            # （同步 IO），下放线程池，避免大 run 的读请求卡住事件循环。
+            # 串行而非 gather：gather 在其中一个 to_thread 抛异常时不取消兄弟
+            # 任务，那个线程会继续把整份 JSONL 读进内存再丢弃。两次只读遍历
+            # 同一文件，串行开销可忽略，且异常能当场收敛。
+            events = await asyncio.to_thread(
+                reader.query_events,
                 run_id, event=event, limit=limit, offset=offset)
-            total = reader.count_events(run_id, event=event)
+            total = await asyncio.to_thread(
+                reader.count_events, run_id, event=event)
         except ValueError as exc:
             await self._send_json(writer, 400, {"error": str(exc)})
+            return
+        except OSError as exc:
+            await self._send_json(
+                writer, 500, {"error": f"ledger 读取失败：{exc}"})
             return
         await self._send_json(
             writer, 200, {"events": events, "total": total})
@@ -751,9 +984,14 @@ class ApiServer:
                 await self._send_json(
                     writer, 404, {"error": f"run {run_id!r} 不存在"})
                 return
-            stats = reader.event_stats(run_id)
+            # 2026-11 事件循环保护：统计会全量遍历 ledger，同上下放线程池。
+            stats = await asyncio.to_thread(reader.event_stats, run_id)
         except ValueError as exc:
             await self._send_json(writer, 400, {"error": str(exc)})
+            return
+        except OSError as exc:
+            await self._send_json(
+                writer, 500, {"error": f"ledger 统计失败：{exc}"})
             return
         await self._send_json(writer, 200, {"run_id": run_id, **stats})
 
@@ -790,7 +1028,7 @@ class ApiServer:
         """``PUT /runs/{id}/model``：body ``{"alias": ..., "role": ...}`` 切换模型。"""
         try:
             data = json.loads(body.decode("utf-8")) if body else {}
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError):
             await self._send_json(writer, 400, {"error": "invalid JSON"})
             return
         if not isinstance(data, dict):
@@ -849,7 +1087,12 @@ class ApiServer:
             # running 状态拒绝删除 → 409 Conflict
             await self._send_json(writer, 409, {"error": str(exc)})
             return
-        except (OSError, ValueError) as exc:
+        except ValueError as exc:
+            # 与 /ledger、/stats 同一口径：非法 run_id 是客户端错误（400），
+            # 不是服务端故障（此前归 500）。
+            await self._send_json(writer, 400, {"error": str(exc)})
+            return
+        except OSError as exc:
             await self._send_json(writer, 500, {"error": str(exc)})
             return
         # 从内存注册表中移除（如果存在）

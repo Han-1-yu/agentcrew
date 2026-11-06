@@ -23,6 +23,7 @@ from datetime import datetime
 from agentcrew.agents.base_agent import AgentExecutionError, BaseAgent
 from agentcrew.agents.plan import ResolvedAgent, pick_primary
 from agentcrew.artifacts.spec import ArtifactRecord
+from agentcrew.utils.files import path_in_scope
 from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.config import Settings
 from agentcrew.contracts import EventSink
@@ -109,7 +110,7 @@ class TeamAgent:
             specs = [
                 spec for spec in task.deliverables
                 if not member.path_scope
-                or any(spec.path.startswith(scope) for scope in member.path_scope)
+                or path_in_scope(spec.path, member.path_scope)
             ]
             if specs:
                 assignments.append((member, specs))

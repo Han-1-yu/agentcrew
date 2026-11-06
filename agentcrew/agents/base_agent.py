@@ -87,6 +87,7 @@ from agentcrew.runtime.ledger import Ledger
 from agentcrew.task.task import Task, TaskResult
 from agentcrew.tools import Tool, ToolRegistry
 from agentcrew.utils.files import UnsafePathError
+from agentcrew.utils.trace import TraceContext, reset_trace, set_trace
 
 #: 默认摘要的长度上限（spec §8.1「取 notes 前 400 字符」）。
 #: P3-6 起：有产物时产物正文智能摘要优先于此额度，notes 作为补充；无产物时
@@ -422,7 +423,27 @@ class BaseAgent(ABC):
 
         异常分类见模块 docstring；成功路径一定会留下 ``task_started`` 与
         ``task_finished`` 两条事件（``artifact_written`` 由 ``ArtifactStore`` 发）。
+
+        2026-11 可观测性改造：进入即设置 :class:`TraceContext`（contextvar，
+        按协程隔离），使执行期所有 ``llm_call`` 记账能带上 ``task_id`` /
+        ``attempt``——同一角色并发多任务时 token / 成本 / 延迟可精确归因。
+        ``finally`` 恢复上下文，业务逻辑原样移入 :meth:`_execute_traced`。
         """
+        token = set_trace(TraceContext(
+            task_id=task.id, role=self.spec.key, attempt=task.attempts))
+        try:
+            return await self._execute_traced(task, pack, fix_hints=fix_hints)
+        finally:
+            reset_trace(token)
+
+    async def _execute_traced(
+        self,
+        task: Task,
+        pack: ContextPack,
+        *,
+        fix_hints: Sequence[str] = (),
+    ) -> TaskResult:
+        """:meth:`execute` 的原始执行体（追踪上下文已就位）。"""
         started_at = datetime.now()
         self._ledger.emit(
             "task_started",
