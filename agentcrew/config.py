@@ -72,6 +72,7 @@ _ENV_TO_FIELD: dict[str, str] = {
     "AGENTCREW_EMBEDDING_DIM": "embedding_dim",
     "AGENTCREW_RETRIEVAL_VECTOR_WEIGHT": "retrieval_vector_weight",
     "AGENTCREW_APPROVAL_MODE": "approval_mode",
+    "AGENTCREW_APPROVAL_TIMEOUT_SECONDS": "approval_timeout_seconds",
     "AGENTCREW_PEER_DIALOGUE_ENABLED": "peer_dialogue_enabled",
     "AGENTCREW_DEBUG_STEP": "debug_step",
     "AGENTCREW_MAX_PEER_MESSAGES": "max_peer_messages",
@@ -99,6 +100,8 @@ _YAML_SCALAR_KEYS = (
     "max_concurrency", "context_budget_tokens", "gate", "roles_dir",
     # R3：两个能力开关都是顶层标量，走与 max_concurrency 同一条读取/合并路径。
     "tools_enabled", "entity_memory_enabled", "approval_mode",
+    # R30：审批单等待窗口（秒，0 = 永不超时）。
+    "approval_timeout_seconds",
     # R27：向量检索通道与混合权重。
     "embedding_enabled", "embedding_model", "embedding_dim",
     "retrieval_vector_weight",
@@ -714,6 +717,14 @@ class Settings(BaseModel):
     为本次 run 装配一份注册表：4 个本地沙箱工具 + ``write_file`` / ``web_fetch``，
     Agent 进入 ReAct 循环；``tool_permissions`` 与 ``mcp_servers`` 中前者同步生效。
     环境变量 ``AGENTCREW_TOOLS_ENABLED=true``，或 YAML 顶层 ``tools_enabled: true``。
+    """
+    approval_timeout_seconds: int = 0
+    """R30：审批单等待窗口（秒）；``0`` = 永不超时（默认，与 R30 之前一致）。
+
+    超过窗口仍无人裁决的单会被标记 ``expired``（status / serve 启动时扫描），
+    之后再 `approve` 会收到明确拒绝而不是静默接受一张失效裁决。run 结局不变，
+    仍是 ``interrupted``——过期只是「这张单不能再用了」。
+    环境变量 ``AGENTCREW_APPROVAL_TIMEOUT_SECONDS``。
     """
     approval_mode: Literal["interactive", "deferred"] = "interactive"
     """R4：人工卡点的实现方式（默认 ``interactive``，行为与 R4 之前一致）。

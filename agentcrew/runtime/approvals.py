@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
@@ -47,7 +47,7 @@ DELIVERY_ACTIONS = frozenset(("accept", "abort", "rework"))
 STEP_ACTIONS = frozenset(("step", "run", "abort"))
 
 ApprovalCheckpoint = Literal["plan", "delivery", "step"]
-ApprovalStatus = Literal["pending", "decided", "consumed"]
+ApprovalStatus = Literal["pending", "decided", "consumed", "expired"]
 
 
 class ApprovalError(ValueError):
@@ -85,6 +85,13 @@ class ApprovalRequest(BaseModel):
     created_at: datetime
     decided_at: datetime | None = None
     consumed_at: datetime | None = None
+    expires_at: datetime | None = None
+    """R30：超过这个时刻仍未裁决 → 视为过期（``status="expired"``）。
+
+    ``None`` = 不设超时（``approval_timeout_seconds=0`` 时的默认行为），
+    与 R30 之前逐字一致。
+    """
+    expired_at: datetime | None = None
 
 
 def _validate_decision(checkpoint: str, decision: Any) -> dict[str, Any]:
@@ -136,14 +143,25 @@ class ApprovalStore:
         *,
         context: dict[str, Any] | None = None,
         run_id: str = "",
+        timeout_seconds: int = 0,
     ) -> ApprovalRequest:
-        """创建一张 ``pending`` 审批单并落盘。"""
+        """创建一张 ``pending`` 审批单并落盘。
+
+        R30：``timeout_seconds > 0`` 时写入 ``expires_at``——由
+        :meth:`expire_overdue` 在 status / serve 启动时判定过期。
+        """
+        now = datetime.now()
+        expires_at = (
+            now + timedelta(seconds=int(timeout_seconds))
+            if int(timeout_seconds or 0) > 0 else None
+        )
         request = ApprovalRequest(
             id="AP-" + uuid4().hex[:12],
             run_id=run_id or self._path.parent.name,
             checkpoint=checkpoint,
             context=context or {},
-            created_at=datetime.now(),
+            created_at=now,
+            expires_at=expires_at,
         )
         self._append("create", **request.model_dump(mode="json"))
         return request
@@ -155,6 +173,13 @@ class ApprovalStore:
         request = self.get(request_id)
         if request is None:
             raise ApprovalError(f"审批单不存在：{request_id}")
+        # R30：过期排在通用状态检查之前——「已过期」要给出可操作提示，
+        # 而不是一句「已 expired」把人晾在那儿。
+        if request.status == "expired" or self.is_expired(request):
+            raise ApprovalError(
+                f"审批单 {request_id} 已过期（{request.expires_at}），"
+                "请先重新触发该卡点或调大 approval_timeout_seconds"
+            )
         if request.status != "pending":
             raise ApprovalError(
                 f"审批单 {request_id} 已 {request.status}，不能重复裁决"
@@ -231,6 +256,12 @@ class ApprovalStore:
                         "decided_at": datetime.fromisoformat(payload["decided_at"])
                         if payload.get("decided_at") else None,
                     })
+                elif op == "expire" and request_id in merged:
+                    merged[request_id] = merged[request_id].model_copy(update={
+                        "status": "expired",
+                        "expired_at": datetime.fromisoformat(payload["expired_at"])
+                        if payload.get("expired_at") else None,
+                    })
                 elif op == "consume" and request_id in merged:
                     merged[request_id] = merged[request_id].model_copy(update={
                         "status": "consumed",
@@ -250,6 +281,32 @@ class ApprovalStore:
     def pending(self) -> list[ApprovalRequest]:
         """所有仍在等人的审批单。"""
         return [item for item in self.all() if item.status == "pending"]
+
+    def is_expired(self, request: ApprovalRequest,
+                   *, now: datetime | None = None) -> bool:
+        """这张单是否已过等待窗口（``expires_at`` 为空 = 永不超时）。"""
+        if request.expires_at is None or request.status != "pending":
+            return False
+        return (now or datetime.now()) >= request.expires_at
+
+    def expire_overdue(self, *, now: datetime | None = None) -> list[ApprovalRequest]:
+        """把**已过期且仍 pending** 的单标记为 ``expired``，返回本次过期的单。
+
+        调用点：``status`` 查询与 ``serve`` 启动 reconcile。过期不改 run 结局——
+        run 仍是 ``interrupted``，只是审批人再裁决会收到「已过期」而不是静默
+        接受一张早已失去时效的裁决。
+        """
+        moment = now or datetime.now()
+        expired: list[ApprovalRequest] = []
+        for request in self.pending():
+            if not self.is_expired(request, now=moment):
+                continue
+            self._append("expire", id=request.id,
+                         expired_at=moment.isoformat())
+            refreshed = self.get(request.id)
+            if refreshed is not None:
+                expired.append(refreshed)
+        return expired
 
     def open_for(self, checkpoint: ApprovalCheckpoint) -> ApprovalRequest | None:
         """该卡点上最新一张**尚未被引擎消费**的审批单（pending 或 decided）。

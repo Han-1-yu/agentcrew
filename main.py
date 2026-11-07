@@ -476,6 +476,47 @@ def _print_bare_invocation(parser: argparse.ArgumentParser) -> None:
 # ── run / resume ──────────────────────────────────────────────────────────
 
 
+def _expire_overdue_approvals(settings: Settings) -> int:
+    """R30：扫描所有挂起 run 的审批单，把超窗口的标记为 ``expired``。
+
+    只警告不改变 run 结局（仍是 interrupted）；每张过期单会在对应 run 的 ledger
+    里留一条 ``approval_expired``——有接 Webhook 的部署据此告警。返回本次过期数量。
+    扫描失败一律不阻断调用方（status / serve 启动是只读入口，不该被清理拖死）。
+    """
+    from agentcrew.runtime.approvals import ApprovalStore
+    from agentcrew.runtime.checkpoint import CheckpointStore
+    from agentcrew.runtime.ledger import Ledger
+
+    expired_total = 0
+    try:
+        run_ids = CheckpointStore.list_runs(settings.output_dir)
+    except (OSError, ValueError):
+        return 0
+    for run_id in run_ids:
+        run_dir = settings.output_dir / run_id
+        try:
+            store = ApprovalStore(run_dir)
+            expired = store.expire_overdue()
+        except (OSError, ValueError):
+            continue
+        if not expired:
+            continue
+        ledger = Ledger(run_dir / "ledger.jsonl", run_id=run_id)
+        for request in expired:
+            ledger.emit("approval_expired", request_id=request.id,
+                        checkpoint=request.checkpoint,
+                        expires_at=request.expires_at.isoformat()
+                        if request.expires_at else None)
+            expired_total += 1
+        print(
+            f"run {run_id}：{len(expired)} 张审批单已超时（"
+            f"approval_timeout_seconds={settings.approval_timeout_seconds}），"
+            "需要重新触发卡点或调大窗口后重跑",
+            file=sys.stderr,
+        )
+    return expired_total
+
+
 def _reconcile_on_startup(settings: Settings) -> None:
     """R17：启动时收敛孤儿 RUNNING；只警告，绝不因为清理失败阻断本次启动。
 
@@ -745,6 +786,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
     """
     try:
         settings = _settings_from(args)
+        _expire_overdue_approvals(settings)   # R30：先结算超时审批单
         run_dir = _run_dir(settings, args.run_id)
         checkpoint = CheckpointStore(run_dir)
         record = checkpoint.load_record()
@@ -823,7 +865,9 @@ def _cmd_approvals(args: argparse.Namespace) -> int:
         run_dir = _run_dir(settings, args.run_id)
     except (OSError, ValueError) as exc:
         return _fail(f"无法读取 run {args.run_id}：{exc}")
-    requests = ApprovalStore(run_dir).all()
+    store = ApprovalStore(run_dir)
+    store.expire_overdue()          # R30：先结算超时，展示的才是真实状态
+    requests = store.all()
     if not requests:
         print(f"run {args.run_id} 没有审批单")
         return EXIT_CODES["ok"]
@@ -831,10 +875,17 @@ def _cmd_approvals(args: argparse.Namespace) -> int:
     _out(console, f"━━━ 审批单 · {args.run_id} ━━━")
     for item in requests:
         action = item.decision.get("action") or "-"
+        suffix = ""
+        if item.status == "pending" and item.expires_at is not None:
+            remaining = int((item.expires_at - datetime.now()).total_seconds())
+            suffix = (f"  · 剩余 {remaining}s" if remaining > 0
+                      else "  · 已超时（下次 status 会标记 expired）")
+        elif item.status == "expired" and item.expires_at is not None:
+            suffix = f"  · 超时于 {item.expires_at.isoformat(timespec='seconds')}"
         _out(
             console,
             f"{item.id}  {item.checkpoint:<9} {item.status:<9} "
-            f"action={action:<10} by={item.decided_by or '-'}",
+            f"action={action:<10} by={item.decided_by or '-'}{suffix}",
         )
     return EXIT_CODES["ok"]
 
@@ -1460,6 +1511,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         except (OSError, ValueError) as exc:
             return _fail(f"serve：配置错误：{exc}")
         _reconcile_on_startup(settings)
+        _expire_overdue_approvals(settings)   # R30：启动时结算超时审批单
         # E-3：按配置装配认证 / 限流；两者默认关闭，缺省时与改造前行为一致。
         api_keys = list(settings.api_keys)
         cli_key = getattr(args, "api_key", None)

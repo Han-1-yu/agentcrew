@@ -2840,3 +2840,23 @@ R27 把经验库接上向量通道时，实体记忆（`entities.jsonl`）还是
 价值（「同一个东西换个说法」也能对上）。权重仍由 `retrieval_vector_weight`
 统一控制，0 时行为与 R27 之前逐字一致。
 
+
+## R30 审批单超时与告警
+
+挂起等审批的 run 此前可以无限期等着——单子永远 `pending`，没人知道它已经凉了。
+R30 给它一个窗口：
+
+```bash
+AGENTCREW_APPROVAL_TIMEOUT_SECONDS=86400 python main.py run --goal "…" \
+  --approval-mode deferred --gate plan
+python main.py status <run_id>       # 顺手结算超时单
+python main.py approvals <run_id>    # 显示「剩余 3600s」或「超时于 …」
+```
+
+- `approval_timeout_seconds`（默认 `0` = 永不超时，**与之前行为逐字一致**）；
+- 超窗口未裁决 → `status` / `serve` 启动时把单标记 `expired`，并往该 run 的
+  ledger 写一条 `approval_expired`（接 Webhook 的部署据此告警）；
+- 之后再 `approve` 会得到明确拒绝与处置建议，而不是静默接受一张失效裁决；
+- **run 结局不变**（仍 `interrupted`）：过期只表示「这张单不能用了」，要不要重跑
+  由人决定——引擎不替人做这个决定。
+

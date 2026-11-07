@@ -582,6 +582,12 @@ python main.py diff <run_a> <run_b> --json
 画布可「一键起跑」：`python main.py run --flow <名字|文件>`，或 `POST /runs`
 带 `options.flow` / `options.flow_name`（见 README R28）。
 
+**审批单超时（R30）**：`approval_timeout_seconds`（默认 0 = 永不超时）给挂起单
+设等待窗口；`status` 与 `serve` 启动时把超窗口的单标记 `expired` 并写
+`approval_expired` 事件（Webhook 可告警）。之后再 `approve` 会被明确拒绝——
+run 仍是 `interrupted`，是否重跑由人决定。排障时先看 `approvals <run_id>` 的
+剩余时间。
+
 **单工具试跑（R24）**：`python main.py tools` 列工具，`python main.py tool
 <name> --args '{"path":"a.txt"}'` 在 `<output>/_tool_trial/` 沙箱里试跑一个工具；
 HTTP 等价物是 `GET /tools` 与 `POST /tools/{name}/test`，看板首页「工具」标签页

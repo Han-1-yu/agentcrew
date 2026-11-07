@@ -37,10 +37,13 @@ from agentcrew.task.task import Task
 class DeferredPrompter:
     """满足 ``Prompter`` Protocol：不读 stdin，只读写审批单。"""
 
-    def __init__(self, run_dir: Path | None = None) -> None:
+    def __init__(self, run_dir: Path | None = None, *,
+                 timeout_seconds: int = 0) -> None:
         self._store: ApprovalStore | None = (
             ApprovalStore(run_dir) if run_dir is not None else None
         )
+        #: R30：审批单等待窗口（0 = 永不超时，与 R30 之前一致）。
+        self.timeout_seconds = int(timeout_seconds or 0)
 
     def bind_approvals(self, run_dir: Path) -> None:
         """由 ``Crew`` 在 run 目录就绪后注入；也可库调用方直接传 run_dir 构造。"""
@@ -66,6 +69,7 @@ class DeferredPrompter:
                     "task_count": len(tasks),
                     "titles": [task.title for task in tasks][:20],
                 },
+                timeout_seconds=self.timeout_seconds,
             )
             raise ApprovalPending(request)
         if opened.status == "pending":
@@ -82,6 +86,7 @@ class DeferredPrompter:
                     "project_goal": (record.project_goal if record else "")[:200],
                     "stats": (record.stats.model_dump(mode="json") if record else {}),
                 },
+                timeout_seconds=self.timeout_seconds,
             )
             raise ApprovalPending(request)
         if opened.status == "pending":

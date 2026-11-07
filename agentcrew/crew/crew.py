@@ -745,6 +745,10 @@ class Crew:
         prompter = self._prompter
         if prompter is not None and hasattr(prompter, "bind_approvals"):
             prompter.bind_approvals(checkpoint.run_dir)
+            # R30：审批等待窗口来自配置；prompter 自己没有设置时不覆盖。
+            if hasattr(prompter, "timeout_seconds"):
+                prompter.timeout_seconds = int(
+                    self._settings.approval_timeout_seconds)
         # 多 agent：启动期解析编排计划并落事件，配置错误在此 fail fast（退出码 3）。
         # 运行中切换的落盘结果：resume 时先恢复，再解析计划（顺序不能反）
         run.agents.import_bindings(_load_binding_overrides(
