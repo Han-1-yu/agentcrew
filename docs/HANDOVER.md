@@ -13,7 +13,7 @@
 |---|---|
 | 已提交 | R3–R18；R18 是最新提交（具体 hash 以 `git log -1` 为准） |
 | **未提交** | **无，工作区干净**（R18 已于 2026-11-07 提交） |
-| 测试 | R33 后全量 **2621 passed / 1 skipped / 0 failed**（2622 collected；分 5 批实测） |
+| 测试 | R34 后全量 **2626 passed / 1 skipped / 0 failed**（2627 collected；分 5 批实测） |
 | 静态检查 | `ruff check .` 全绿 · `mypy agentcrew/` 114 文件零错误（本机 3.12 首次跑通 CI 等价检查链） |
 | 离线样例 | `todo` 9/9 · `linear` 5/5 · `hierarchy` 7/7，全部 `completed` |
 | 一句话定位 | 8 角色多 Agent 编排器：规划 → 执行 → 三层门禁 → 交付；可完全离线（mock）跑通 |
@@ -251,7 +251,8 @@ R14 最值钱的一课：`WebhookConfig` 的多接收端逻辑全绿，但 `Crew
 
 | 现象 | 处理 |
 |---|---|
-| 分 5 批跑测试偶发 `access violation` / `SystemError: bad format string` | 本机 pytest 在大量用例下的内存问题，**不是回归**。重跑或逐文件跑 |
+| 分 5 批跑测试偶发 `access violation` / `SystemError: bad format string` | **已用 `scripts/test.py` 解决**（R34）：逐批隔离 + 崩溃自动重试 + 汇总。不要再手工分批加总；单进程全量只作为 CI 的路径 |
+| 崩溃/失败一次一次变（同一批换个文件挂）| 本机进程级随机故障。**判定方法**：单独重跑该文件能过 → 环境噪音；连续三次都挂在同一用例 → 才是回归 |
 | 报 `SystemError: Negative size passed to PyUnicode_New` / `SyntaxError: invalid syntax`（代码本身没问题）| **`__pycache__` 里的 .pyc 被写坏**（R28 期间连续踩到：同一用例单跑过、整文件跑挂，且失败点每次漂移）。处置：`find . -name __pycache__ -type d -not -path "./studio/*" -exec rm -rf {} +` 后重跑；本项目所有验证命令都带 `PYTHONDONTWRITEBYTECODE=1` 就是为了少制造这种文件 |
 | `SandboxError: center 规则快照不可用` | 环境问题，命令实际会执行（输出标注 bypassed），重试即可 |
 | `api/server.py` 写入偶发被独占锁 | 用「写临时文件 → os.replace」原子替换 |
@@ -367,6 +368,7 @@ PROJECT-STATE §3.19–§3.23 与本文 §0 的状态口径已对齐，工作区
 | R31 | 条件边否定/兜底（`!label`、`*`，不引表达式引擎） | 已提交（2026-11-07） |
 | R32 | 控制台 UI 重构（设计令牌 / 明暗主题 / 侧栏 / 组件化） | 已提交（2026-11-07） |
 | R33 | 多级主管链（`supervisor_chain` + 逐级短路 + 每级留痕） | 已提交（2026-11-07） |
+| R34 | 本机环境修复（崩溃隔离跑器 `scripts/test.py`） | 已提交（2026-11-07） |
 
 R3–R8 之所以合并成一个提交：`config.py` / `crew.py` / `main.py` / `api/server.py` 四个文件
 被多轮同时改，`git add` 是文件粒度，按轮切分会把不同轮的改动硬塞进一个提交。

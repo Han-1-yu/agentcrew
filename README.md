@@ -2915,3 +2915,29 @@ AGENTCREW_SUPERVISOR_CHAIN=product_manager,qa_engineer \
   （`already_in_g2`）——跳过是为了不重复烧钱，不是静默吞掉；
 - **默认空链 = 单层**，与 R7/R9 逐字一致。
 
+
+## 本机测试：崩溃隔离跑器（R34）
+
+本机（Windows + 安全软件 / 沙箱注入）跑大型测试会出现**随机进程级崩溃**：
+`access violation`、`Segmentation fault`、退出码 139，崩溃点每次不同、单文件重跑又能过。
+这是环境问题，不是回归——但把整套测试塞进一个进程里，一次崩溃就让整轮作废。
+
+```bash
+python scripts/test.py                 # 逐批跑全部，自动重试并汇总
+python scripts/test.py --batch 1       # 最彻底隔离（每文件一个进程）
+python scripts/test.py --retry-failed 1 -k rbac   # 失败也重试一次，只跑匹配文件
+python scripts/test.py --python .venv/Scripts/python.exe -- -x
+```
+
+它做的事：
+
+- **自动清 `__pycache__`** 并固定 `PYTHONDONTWRITEBYTECODE=1`——本机多次读到写坏的
+  `.pyc`（`SystemError: Negative size passed to PyUnicode_New`、`SyntaxError`）；
+- 按批（默认 4 个文件）起子进程：**崩溃只影响那批**，自动重试（默认 2 次）；
+- 汇总四类结果，并把「重试后恢复」与「首次失败但重试通过（疑似环境抖动）」分开打印——
+  环境噪音可见，但不冒充回归；
+- 退出码只反映**最终**结论：有真失败或重试后仍崩 → 1，否则 0。
+
+CI 仍然用 `pytest -q`（Linux 单进程稳定，且要的就是一次跑完）。跑器的目的只是让
+**本机**也能给出一个可信结论，而不是拿「分 5 批手工加总」凑数。
+
