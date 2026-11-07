@@ -1636,18 +1636,26 @@ class Crew:
                     vector_weight=self._settings.retrieval_vector_weight))
         if self._entity_memory_enabled:
             entities = EntityMemoryStore(self._settings.output_dir)
-            matched_entities = entities.query(run.goal, limit=8)
+            entity_vectors = await self._retrieval_vectors(
+                run, entities, kind="entity")
+            matched_entities = entities.query(
+                run.goal, limit=8, doc_vectors=entity_vectors[0],
+                query_vector=entity_vectors[1],
+                vector_weight=self._settings.retrieval_vector_weight)
             if matched_entities:
                 run.ledger.emit(
                     "entity_memory_reused",
                     goal=run.goal,
                     matched_entities=len(matched_entities),
                 )
-                blocks.append(entities.inject_context(run.goal, limit=8))
+                blocks.append(entities.inject_context(
+                    run.goal, limit=8, doc_vectors=entity_vectors[0],
+                    query_vector=entity_vectors[1],
+                    vector_weight=self._settings.retrieval_vector_weight))
         return "\n\n".join(blocks)
 
     async def _retrieval_vectors(
-        self, run: _Run, store: ExperienceStore
+        self, run: _Run, store: object, *, kind: str = "experience"
     ) -> tuple[list[list[float]] | None, list[float] | None]:
         """R27：为经验库与当前目标准备向量；不可用返回 ``(None, None)``。
 
@@ -1665,17 +1673,17 @@ class Crew:
         if embedder is None:
             return None, None
         try:
-            experiences = store.all()
-            if not experiences:
+            documents = store.all()          # type: ignore[attr-defined]
+            if not documents:
                 return None, None
             doc_vectors = await embedder.embed(
-                [store.haystack(exp) for exp in experiences])
+                [store.haystack(item) for item in documents])  # type: ignore[attr-defined]
             query_vectors = await embedder.embed([run.goal])
         except EmbeddingError as exc:
             run.ledger.emit("embedding_fallback",
-                            reason=str(exc), embedder=embedder.name)
+                            reason=str(exc), embedder=embedder.name, kind=kind)
             return None, None
-        run.ledger.emit("embedding_used", embedder=embedder.name,
+        run.ledger.emit("embedding_used", embedder=embedder.name, kind=kind,
                         documents=len(doc_vectors),
                         dim=len(doc_vectors[0]) if doc_vectors else 0,
                         vector_weight=self._settings.retrieval_vector_weight)

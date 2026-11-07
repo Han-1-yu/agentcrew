@@ -2798,8 +2798,8 @@ AGENTCREW_EMBEDDING_ENABLED=true AGENTCREW_EMBEDDING_MODEL=openai:text-embedding
 打分：BM25 分按本批最大值归一到 [0,1]，再与余弦相似度按权重线性加权——
 两种分量级差几个数量级，不归一的话权重参数等于假的。
 
-**实体记忆**仍是 BM25（`entities.jsonl` 的检索走原路径），这是本轮的已知边界：
-把实体也向量化需要给实体库加向量列与迁移，留作后续。
+**实体记忆**同样支持向量混合（R29，见下）——不需要给库加列：向量由调用方按
+`haystack` 现算、按文本哈希缓存，库里始终只有原始记录。
 
 
 ## R28 从画布起跑
@@ -2826,4 +2826,17 @@ python main.py run --flow todo-app --goal "补一句目标"   # 流程库里的�
 
 **参数校验**：`options.flow` 与 `options.flow_name` 互斥；类型在 API 入口检查
 （400），坏流程同样 400——不带病起跑。
+
+
+## R29 实体记忆向量化
+
+R27 把经验库接上向量通道时，实体记忆（`entities.jsonl`）还是纯关键词。R29 补齐，
+并且**没有给库加列、没有迁移**——向量按 `name + kind + context` 现算，缓存按
+文本哈希（与经验库共用 `<output>/_cache/embeddings.jsonl`），库文件格式不变，
+旧库直接可用。
+
+与经验库的区别只有一条召回规则：实体关键词分要过 `min_score=2` 的降噪阈值，
+而**余弦 ≥ 0.15 的实体即使关键词完全没过阈值也会被召回**——这正是向量通道的
+价值（「同一个东西换个说法」也能对上）。权重仍由 `retrieval_vector_weight`
+统一控制，0 时行为与 R27 之前逐字一致。
 

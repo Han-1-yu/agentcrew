@@ -10,7 +10,9 @@ PM 拆解新目标时能看到「上次用的是 FastAPI、`src/api.py`、SSE」
 
 - **纯规则抽取**，不调 LLM：反引号内标识符、路径、``@role``、书名号/方括号概念、
   全大写缩写、常用技术词表。多一条噪音比多一次模型调用便宜，且结果确定。
-- **不引入向量库**（与本仓库经验库同一口径）：关键词命中 + 实体名加权排序。
+- **不引入向量库**：默认「关键词命中 + 实体名加权排序」；R29 起可由调用方
+  注入 embedding 向量走混合打分（与经验库同一套 embedder 与权重），
+  默认关闭时行为与之前逐字一致。
 - **追加写、读取时按名字归并**：与 ``ledger.jsonl`` / ``experiences.jsonl`` 一样
   「写入严、读取宽」，不会因一次崩溃留下半行就毁掉整库；``mentions`` 在归并时累加。
 - 位于 ``knowledge`` 层，**不 import** ``runtime`` / ``crew`` / ``agents`` /
@@ -27,6 +29,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from agentcrew.knowledge.embeddings import cosine
 from agentcrew.knowledge.experience import Experience
 
 _logger = logging.getLogger(__name__)
@@ -209,29 +212,82 @@ class EntityMemoryStore:
             })
         return sorted(merged.values(), key=lambda item: (-item.mentions, item.name))
 
-    def query(self, text: str, *, limit: int = 5, min_score: int = 2) -> list[EntityRecord]:
+    @staticmethod
+    def haystack(record: EntityRecord) -> str:
+        """一个实体参与向量化的文本：名字 + 类别 + 上下文。
+
+        与经验库的 ``haystack`` 对称——换 embedding 通道时不用改这一层。
+        """
+        return "\n".join((record.name, record.kind, record.context))
+
+    def query(
+        self,
+        text: str,
+        *,
+        limit: int = 5,
+        min_score: int = 2,
+        doc_vectors: Sequence[Sequence[float]] | None = None,
+        query_vector: Sequence[float] | None = None,
+        vector_weight: float = 0.5,
+        min_similarity: float = 0.15,
+    ) -> list[EntityRecord]:
         """按关键词检索相关实体：名字命中 +3 分，上下文每命中一个 token +1 分。
 
         ``min_score=2`` 是降噪阈值：中文单字分词下，只沾上一个字的实体不该被
         塞进 PM 上下文。无任何命中时返回空列表，而不是把整库端上来。
+
+        R29 向量混合：给了 ``doc_vectors``（与 :meth:`all` 同序）与
+        ``query_vector`` 时，关键词分归一到 [0,1] 后与余弦按 ``vector_weight``
+        加权。**关键词没过阈值（名字/上下文都没沾上）但余弦 ≥
+        ``min_similarity`` 的实体也会被召回**——这正是向量通道的价值：
+        「同一个东西换个说法」也能对上。权重 0 时行为与 R29 之前一致。
         """
         tokens = _tokenize(text or "")
+        records = self.all()
         if not tokens:
             return []
         scored: list[tuple[int, EntityRecord]] = []
-        for record in self.all():
+        for record in records:
             name = record.name.lower()
             score = 3 if any(token in name for token in tokens) else 0
             context_tokens = _tokenize(record.context)
             score += sum(1 for token in tokens if token in context_tokens)
             if score >= min_score:
                 scored.append((score, record))
-        scored.sort(key=lambda item: (-item[0], -item[1].mentions, item[1].name))
-        return [record for _, record in scored[: max(0, limit)]]
+        if (doc_vectors is None or query_vector is None
+                or len(doc_vectors) != len(records)):
+            scored.sort(key=lambda item: (-item[0], -item[1].mentions, item[1].name))
+            return [record for _, record in scored[: max(0, limit)]]
 
-    def inject_context(self, text: str, *, limit: int = 5) -> str:
+        weight = min(1.0, max(0.0, float(vector_weight)))
+        ceiling = max((item[0] for item in scored), default=0) or 1
+        combined: list[tuple[float, EntityRecord]] = []
+        keyword_ids = {id(record) for _, record in scored}
+        for index, record in enumerate(records):
+            keyword_score = 0.0
+            if id(record) in keyword_ids:
+                raw = next(score for score, item in scored if item is record)
+                keyword_score = raw / ceiling
+            semantic = max(0.0, cosine(query_vector, doc_vectors[index]))
+            if semantic >= min_similarity or keyword_score > 0:
+                total = (1.0 - weight) * keyword_score + weight * semantic
+                combined.append((total, record))
+        combined.sort(key=lambda item: (-item[0], -item[1].mentions, item[1].name))
+        return [record for _, record in combined[: max(0, limit)]]
+
+    def inject_context(
+        self,
+        text: str,
+        *,
+        limit: int = 5,
+        doc_vectors: Sequence[Sequence[float]] | None = None,
+        query_vector: Sequence[float] | None = None,
+        vector_weight: float = 0.5,
+    ) -> str:
         """渲染成可直接拼进 PM ``context_hint`` 的文本；无命中返回空串。"""
-        records = self.query(text, limit=limit)
+        records = self.query(
+            text, limit=limit, doc_vectors=doc_vectors,
+            query_vector=query_vector, vector_weight=vector_weight)
         if not records:
             return ""
         lines = [

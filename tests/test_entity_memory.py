@@ -7,6 +7,7 @@ sources/context）、坏行宽容、名字加权检索与降噪、上下文渲�
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -229,3 +230,62 @@ def test_capture_entities_noop_without_records(tmp_path: Path):
     crew._capture_entities(run, [])  # type: ignore[arg-type]
     assert run.ledger.count("entity_memory_updated") == 0
     assert not EntityMemoryStore(tmp_path).path.exists()
+
+
+# ── R29：向量混合 ─────────────────────────────────────────────────────
+
+def test_haystack_includes_name_kind_and_context():
+    record = _record("FastAPI", context="FastAPI 提供 REST 接口")
+    text = EntityMemoryStore.haystack(record)
+    assert "FastAPI" in text and "technology" in text and "REST" in text
+
+
+def test_hybrid_weight_zero_matches_keyword_only(tmp_path):
+    store = EntityMemoryStore(tmp_path)
+    store.append([_record("FastAPI", context="FastAPI 提供 REST 接口"),
+                  _record("Redis", context="Redis 做缓存")])
+    baseline = store.query("FastAPI")
+    vectors = [[1.0, 0.0], [1.0, 0.0]]
+    mixed = store.query("FastAPI", doc_vectors=vectors,
+                        query_vector=[0.0, 1.0], vector_weight=0.0)
+    assert [r.name for r in mixed] == [r.name for r in baseline]
+
+
+def test_vector_recalls_entity_below_keyword_threshold(tmp_path):
+    """关键词完全没过阈值（只提一个泛词）时，向量仍能把近义实体召回来。"""
+    store = EntityMemoryStore(tmp_path)
+    store.append([_record("FastAPI", context="FastAPI 提供 REST 接口"),
+                  _record("同步阻塞", context="同步调用会阻塞事件循环")])
+    # 「接口」在两个上下文里都出现 → 关键词路径命中的是 FastAPI
+    assert [r.name for r in store.query("接口")] == ["FastAPI"]
+    # 「导出」与两个实体都不沾字面 → 关键词零命中
+    assert store.query("导出") == []
+    vectors = [[0.0, 1.0], [1.0, 0.0]]
+    recalled = store.query("导出", doc_vectors=vectors,
+                           query_vector=[1.0, 0.0], vector_weight=1.0)
+    assert [r.name for r in recalled] == ["同步阻塞"]
+
+
+def test_hybrid_falls_back_when_vectors_missing_or_mismatched(tmp_path):
+    store = EntityMemoryStore(tmp_path)
+    store.append([_record("FastAPI", context="FastAPI 提供 REST 接口")])
+    baseline = [r.name for r in store.query("FastAPI")]
+    assert [r.name for r in store.query(
+        "FastAPI", doc_vectors=[[1.0], [1.0]], query_vector=[1.0],
+        vector_weight=0.5)] == baseline
+
+
+async def test_crew_passes_entity_vectors_when_embedding_enabled(tmp_path):
+    """embedding 开启（本地哈希退化）时，实体块照常注入且不炸。"""
+    settings = Settings.load(output_dir=tmp_path, entity_memory_enabled=True,
+                             embedding_enabled=True, embedding_model="")
+    EntityMemoryStore(tmp_path).append([
+        _record("FastAPI", context="FastAPI 提供 REST 接口")])
+    run = _run_stub(tmp_path, goal="FastAPI 待办清单")
+    hint = await Crew(settings, entity_memory_enabled=True,
+                      reuse_knowledge=False)._prepare_knowledge_context(run)
+    assert "## 实体记忆" in hint and "`FastAPI`" in hint
+    events = [json.loads(line) for line in (tmp_path / "crew.jsonl").read_text(
+        encoding="utf-8").splitlines() if line.strip()]
+    used = [event for event in events if event.get("event") == "embedding_used"]
+    assert used and used[0]["data"]["kind"] == "entity"
