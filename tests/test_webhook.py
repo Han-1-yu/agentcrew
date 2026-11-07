@@ -26,6 +26,7 @@ from agentcrew.runtime.webhook import (
     TIMESTAMP_HEADER,
     WebhookConfig,
     WebhookDispatcher,
+    WebhookTarget,
     verify_signature,
 )
 
@@ -324,3 +325,292 @@ def test_delivery_result_lands_in_ledger(tmp_path, hook_server):
 
     assert ledger.count("webhook_delivered") == 1
     assert ledger.count("webhook_failed") == 0
+
+
+# ── R14：多接收端与条件过滤 ──────────────────────────────────────────────
+
+def _write_yaml(tmp_path, body: str) -> None:
+    """写配置文件（用 ``dedent`` 保住缩进，避免转义字符串被写坏）。"""
+    from textwrap import dedent
+
+    (tmp_path / "agentcrew.yaml").write_text(dedent(body).strip() + "\n",
+                                             encoding="utf-8")
+
+
+
+@pytest.fixture
+def server_factory():
+    """按需启动多个本地接收端；退出时统一关闭。
+
+    多接收端必须用**互不相同**的端口才能验证「各收各的」，单例 fixture 做不到。
+    """
+    started: list[ThreadingHTTPServer] = []
+
+    def _make() -> tuple[str, dict[str, object]]:
+        state: dict[str, object] = {"received": [], "fail_times": 0}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                length = int(self.headers.get("Content-Length") or 0)
+                body = self.rfile.read(length)
+                state["received"].append({          # type: ignore[union-attr]
+                    "headers": {k.lower(): v for k, v in self.headers.items()},
+                    "body": body,
+                })
+                remaining = state["fail_times"]
+                if isinstance(remaining, int) and remaining > 0:
+                    state["fail_times"] = remaining - 1
+                    self.send_response(500)
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.end_headers()
+
+            def log_message(self, *args: object) -> None:
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        started.append(server)
+        return f"http://127.0.0.1:{server.server_address[1]}/hook", state
+
+    try:
+        yield _make
+    finally:
+        for server in started:
+            server.shutdown()
+            server.server_close()
+
+
+def _multi(url_a: str, url_b: str, **kw) -> tuple[WebhookDispatcher, list]:
+    sink_events: list[tuple[str, dict]] = []
+    config = WebhookConfig(targets=(
+        WebhookTarget(name="a", url=url_a, **kw),
+        WebhookTarget(name="b", url=url_b, **kw),
+    ))
+    return WebhookDispatcher(
+        config, sink=lambda n, d: sink_events.append((n, d))), sink_events
+
+
+def test_each_target_receives(server_factory):
+    url_a, state_a = server_factory()
+    url_b, state_b = server_factory()
+    dispatcher, _ = _multi(url_a, url_b, events=("run_finished",))
+
+    dispatcher.emit("run_finished", {"run_id": "R1"})
+    dispatcher.close()
+
+    assert len(state_a["received"]) == 1
+    assert len(state_b["received"]) == 1
+    # 同一次事件共享 delivery id，接收方之间可对账
+    id_a = state_a["received"][0]["headers"][DELIVERY_HEADER.lower()]
+    id_b = state_b["received"][0]["headers"][DELIVERY_HEADER.lower()]
+    assert id_a == id_b
+
+
+def test_target_event_filters_are_independent(server_factory):
+    url_all, state_all = server_factory()
+    url_only_failed, state_only = server_factory()
+    sink_events: list[tuple[str, dict]] = []
+    config = WebhookConfig(targets=(
+        WebhookTarget(name="all", url=url_all, events=("*",)),
+        WebhookTarget(name="fin", url=url_only_failed, events=("run_finished",)),
+    ))
+    dispatcher = WebhookDispatcher(
+        config, sink=lambda n, d: sink_events.append((n, d)))
+
+    dispatcher.emit("run_started", {"run_id": "R1"})
+    dispatcher.emit("run_finished", {"run_id": "R1"})
+    dispatcher.close()
+
+    assert len(state_all["received"]) == 2
+    # 只订阅 run_finished 的那个收不到 run_started
+    assert len(state_only["received"]) == 1
+
+
+def test_only_failures_skips_success(server_factory):
+    url, state = server_factory()
+    sink_events: list[tuple[str, dict]] = []
+    config = WebhookConfig(targets=(
+        WebhookTarget(name="alerts", url=url, only_failures=True),
+    ))
+    dispatcher = WebhookDispatcher(
+        config, sink=lambda n, d: sink_events.append((n, d)))
+
+    dispatcher.emit("run_finished", {"status": "completed"})
+    dispatcher.emit("run_finished", {"status": "failed"})
+    dispatcher.close()
+
+    bodies = [json.loads(item["body"]) for item in state["received"]]
+    assert [b["data"]["status"] for b in bodies] == ["failed"]
+
+
+def test_only_failures_accepts_incident_events(server_factory):
+    """deadlock / run_stalled / error 一律算坏消息，即使 payload 没有 status。"""
+    url, state = server_factory()
+    sink_events: list[tuple[str, dict]] = []
+    config = WebhookConfig(targets=(
+        WebhookTarget(name="alerts", url=url, only_failures=True),
+    ))
+    dispatcher = WebhookDispatcher(
+        config, sink=lambda n, d: sink_events.append((n, d)))
+
+    dispatcher.emit("deadlock", {})
+    dispatcher.emit("run_finished", {"status": "cancelled"})
+    dispatcher.close()
+
+    assert len(state["received"]) == 2
+
+
+def test_targets_override_legacy_single_url(server_factory):
+    """同时配旧字段与 targets：以 targets 为准，避免同一地址被推两遍。"""
+    url_legacy, state_legacy = server_factory()
+    url_new, state_new = server_factory()
+    config = WebhookConfig(
+        url=url_legacy,
+        events=("run_finished",),
+        targets=(WebhookTarget(name="new", url=url_new, events=("run_finished",)),
+                 ),
+    )
+    dispatcher = WebhookDispatcher(config)
+
+    dispatcher.emit("run_finished", {"run_id": "R1"})
+    dispatcher.close()
+
+    assert len(state_new["received"]) == 1
+    assert state_legacy["received"] == []
+
+
+def test_each_target_signs_with_own_secret(server_factory):
+    url_a, state_a = server_factory()
+    url_b, state_b = server_factory()
+    config = WebhookConfig(targets=(
+        WebhookTarget(name="a", url=url_a, secret="secret-a",
+                      events=("run_finished",)),
+        WebhookTarget(name="b", url=url_b, secret="secret-b",
+                      events=("run_finished",)),
+    ))
+    dispatcher = WebhookDispatcher(config)
+
+    dispatcher.emit("run_finished", {"run_id": "R1"})
+    dispatcher.close()
+
+    for state, secret in ((state_a, "secret-a"), (state_b, "secret-b")):
+        item = state["received"][0]
+        headers = item["headers"]
+        assert verify_signature(
+            secret, headers[TIMESTAMP_HEADER.lower()], item["body"],
+            headers[SIGNATURE_HEADER.lower()])
+        # 拿别人的密钥验不过
+        other = "secret-b" if secret == "secret-a" else "secret-a"
+        assert not verify_signature(
+            other, headers[TIMESTAMP_HEADER.lower()], item["body"],
+            headers[SIGNATURE_HEADER.lower()])
+
+
+def test_one_target_failure_does_not_block_other(server_factory):
+    url_ok, state_ok = server_factory()
+    url_bad, state_bad = server_factory()
+    state_bad["fail_times"] = 99
+    sink_events: list[tuple[str, dict]] = []
+    config = WebhookConfig(
+        max_retries=0,
+        targets=(
+            WebhookTarget(name="bad", url=url_bad, events=("run_finished",)),
+            WebhookTarget(name="ok", url=url_ok, events=("run_finished",)),
+        ),
+    )
+    dispatcher = WebhookDispatcher(
+        config, sink=lambda n, d: sink_events.append((n, d)))
+
+    dispatcher.emit("run_finished", {"run_id": "R1"})
+    dispatcher.close()
+
+    assert len(state_ok["received"]) == 1, "好接收端不该被坏的拖累"
+    names = {name for name, _ in sink_events}
+    assert names == {"webhook_failed", "webhook_delivered"}
+    # 台账里带接收端名，能看出是哪一条失败
+    failed = [data for name, data in sink_events if name == "webhook_failed"]
+    assert failed[0]["target"] == "bad"
+
+
+def test_settings_validate_webhooks_shape(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTCREW_OUTPUT_DIR", str(tmp_path / "o"))
+    monkeypatch.setenv("AGENTCREW_CONFIG", str(tmp_path / "agentcrew.yaml"))
+    _write_yaml(tmp_path, """
+        webhooks:
+          - name: a
+        """)
+
+    with pytest.raises(ValueError, match="缺少 url"):
+        Settings.load()
+
+
+def test_settings_reject_bad_scheme_in_webhooks(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTCREW_OUTPUT_DIR", str(tmp_path / "o"))
+    monkeypatch.setenv("AGENTCREW_CONFIG", str(tmp_path / "agentcrew.yaml"))
+    _write_yaml(tmp_path, """
+        webhooks:
+          - name: a
+            url: ftp://h/h
+        """)
+
+    with pytest.raises(ValueError, match="http/https"):
+        Settings.load()
+
+
+def test_settings_normalize_webhooks(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTCREW_OUTPUT_DIR", str(tmp_path / "o"))
+    monkeypatch.setenv("AGENTCREW_CONFIG", str(tmp_path / "agentcrew.yaml"))
+    _write_yaml(tmp_path, """
+        webhooks:
+          - name: slack
+            url: https://h/h
+            only_failures: true
+            events: [run_finished, deadlock]
+        """)
+
+    target = Settings.load().webhooks[0]
+
+    assert target["name"] == "slack"
+    assert target["only_failures"] is True
+    assert target["events"] == ["run_finished", "deadlock"]
+
+
+def test_crew_builds_dispatcher_from_webhooks_only(tmp_path, monkeypatch):
+    """回归：``_build_webhook`` 曾只看 ``webhook_url``，只配 ``webhooks`` 时整条
+    链路静默失效（端到端实跑时才暴露：接收端一条都收不到）。
+
+    单测层面必须覆盖 Crew 的入口判断——直接构造 ``WebhookConfig`` 发现不了它。
+    """
+    from agentcrew.crew.crew import Crew
+    from agentcrew.runtime.ledger import Ledger
+
+    monkeypatch.setenv("AGENTCREW_MOCK", "true")
+    monkeypatch.setenv("AGENTCREW_OUTPUT_DIR", str(tmp_path / "o"))
+    settings = Settings.load().model_copy(update={
+        "webhooks": [{"name": "slack", "url": "https://h/hook",
+                      "only_failures": True, "events": [], "secret": ""}],
+    })
+    ledger = Ledger(tmp_path / "l.jsonl", run_id="R")
+
+    dispatcher = Crew(settings)._build_webhook(ledger)
+
+    assert dispatcher is not None
+    assert dispatcher.enabled
+    events = list(ledger.events("webhook_enabled"))
+    assert events[0].data["targets"][0]["name"] == "slack"
+    assert events[0].data["targets"][0]["only_failures"] is True
+    dispatcher.close()
+
+
+def test_crew_without_any_target_returns_none(tmp_path, monkeypatch):
+    from agentcrew.crew.crew import Crew
+    from agentcrew.runtime.ledger import Ledger
+
+    monkeypatch.setenv("AGENTCREW_MOCK", "true")
+    monkeypatch.setenv("AGENTCREW_OUTPUT_DIR", str(tmp_path / "o"))
+    ledger = Ledger(tmp_path / "l.jsonl", run_id="R")
+
+    assert Crew(Settings.load())._build_webhook(ledger) is None
+    assert ledger.count("webhook_enabled") == 0

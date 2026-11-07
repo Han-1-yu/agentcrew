@@ -481,13 +481,19 @@
 ## 10. 出站通知（R12）
 
 ### `webhook_enabled`
-- **触发时机**：run 装配期配了 `webhook_url`，分发器就绪后。**URL 已打码**（只留 `scheme://host/path`，查询串丢弃——那里常带 token）。
+- **触发时机**：run 装配期有可用接收端（`webhook_url` 或 `webhooks`），分发器就绪后。**URL 已打码**（只留 `scheme://host/path`，查询串丢弃——那里常带 token）。
 - **data**：
   | 字段 | 类型 | 必填 | 含义 |
   |---|---|---|---|
-  | `url` | string | 是 | 打码后的地址。 |
-  | `events` | string[] | 是 | 订阅的事件名（`["*"]` = 全推）。 |
-  | `signed` | boolean | 是 | 是否配了签名密钥。 |
+  | `targets` | object[] | 是 | 每个接收端一条（R14 起为数组；此前是单个 `url`/`events`/`signed`）。 |
+  | `targets[].name` | string | 是 | 配置里的 `name`；单接收端简写时为 `default`。 |
+  | `targets[].url` | string | 是 | 打码后的地址。 |
+  | `targets[].events` | string[] | 是 | 订阅的事件名（空数组 = 不限；`["*"]` = 全推）。 |
+  | `targets[].signed` | boolean | 是 | 该接收端是否配了签名密钥。 |
+  | `targets[].only_failures` | boolean | 是 | 是否只推坏消息。 |
+
+> R14 把 `webhook_enabled` 的 data 从扁平字段改成了 `targets` 数组——多接收端下
+> 扁平结构无法表达「哪个地址订了哪些事件」。消费方按数组遍历即可。
 
 ### `webhook_delivered`
 - **触发时机**：一次投递拿到 2xx。重试后成功也记这一条，`attempts` 是实际次数。

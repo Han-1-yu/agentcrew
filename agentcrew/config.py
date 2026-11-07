@@ -101,7 +101,7 @@ _YAML_SCALAR_KEYS = (
     "max_subtask_corrections", "supervisor_scope", "supervisor_role",
     "max_supervisor_reassignments",
     "webhook_url", "webhook_secret", "webhook_events", "webhook_timeout_seconds",
-    "webhook_max_retries",
+    "webhook_max_retries", "webhooks",
 )
 
 #: 分层合并时按 key 覆盖（映射型）/ 按序合并去重（列表型）而非整体替换的字段。
@@ -243,6 +243,22 @@ def _default_gate() -> GateMode:
         return "none"
 
 
+def _validate_webhook_target_url(url: str, *, where: str = "webhook_url") -> str:
+    """校验一个 Webhook 目标地址；非法时抛 ``ValueError``（带位置信息）。
+
+    空串不在这里处理——调用方负责区分「没配」与「配错」。**不做内网 IP 判断**：
+    这是运维显式配置的目标，企业内网服务是最常见的接收方。
+    """
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https"):
+        raise ValueError(f"{where} 必须是 http/https 地址")
+    if not parts.netloc:
+        raise ValueError(f"{where} 缺少主机名")
+    if "@" in parts.netloc:
+        raise ValueError(f"{where} 不能带用户名密码：请改用 secret 做 HMAC 签名")
+    return url
+
+
 def _yaml_values() -> dict[str, object]:
     """读取 ``AGENTCREW_CONFIG`` 或 ``./agentcrew.yaml``；缺失则返回空。"""
     path = Path(os.environ.get("AGENTCREW_CONFIG") or "agentcrew.yaml")
@@ -314,6 +330,30 @@ def _yaml_values() -> dict[str, object]:
         if not isinstance(tool_permissions, dict):
             raise ValueError(f"配置文件 tool_permissions 段必须是映射：{path}")
         values["tool_permissions"] = dict(tool_permissions)
+    webhooks = data.get("webhooks")
+    if webhooks is not None:
+        if not isinstance(webhooks, list):
+            raise ValueError(f"配置文件 webhooks 段必须是列表：{path}")
+        # 形状在这里就校验完：让配置错误在加载期就炸，而不是等 run 跑到一半
+        # 才发现某条 url 是 ftp://。
+        normalized_targets: list[dict[str, Any]] = []
+        for index, item in enumerate(webhooks):
+            if not isinstance(item, dict):
+                raise ValueError(
+                    f"配置文件 webhooks[{index}] 必须是映射：{path}")
+            url = str(item.get("url") or "").strip()
+            if not url:
+                raise ValueError(f"配置文件 webhooks[{index}] 缺少 url：{path}")
+            _validate_webhook_target_url(url, where=f"webhooks[{index}]")
+            normalized_targets.append({
+                "name": str(item.get("name") or ""),
+                "url": url,
+                "secret": str(item.get("secret") or ""),
+                "events": [str(e) for e in (item.get("events") or [])
+                           if str(e).strip()],
+                "only_failures": bool(item.get("only_failures", False)),
+            })
+        values["webhooks"] = normalized_targets
     role_fallback = data.get("role_fallback")
     if role_fallback:
         if not isinstance(role_fallback, dict):
@@ -798,6 +838,16 @@ class Settings(BaseModel):
     总耗时受 ``max_retries`` 与退避上限共同约束；run 结束等待队列排空最多 5 秒，
     排不完的部分记 ``webhook_failed(shutdown_timeout)`` 而不是无限等。
     """
+    webhooks: list[dict[str, Any]] = Field(default_factory=list)
+    """R14：多接收端配置（``webhooks`` YAML 段）。**非空时旧的单接收端字段被忽略。**
+
+    每条形状：``{name, url, secret, events, only_failures}``，只有 ``url`` 必填。
+    ``events`` 为空 = 不限事件；``only_failures: true`` 再叠一层「只推坏消息」——
+    两个条件是**与**关系，所以「Slack 只收失败、内部系统全收」配成两条即可。
+
+    为什么保留旧的 ``webhook_url``：单人部署只推一个地址时，五个扁平字段比一个
+    列表更好写；改成必须写列表是纯破坏性变更，没有收益。
+    """
 
     @field_validator("webhook_url")
     @classmethod
@@ -810,15 +860,22 @@ class Settings(BaseModel):
         url = (value or "").strip()
         if not url:
             return ""
-        parts = urlsplit(url)
-        if parts.scheme not in ("http", "https"):
-            raise ValueError("webhook_url 必须是 http/https 地址")
-        if not parts.netloc:
-            raise ValueError("webhook_url 缺少主机名")
-        if "@" in parts.netloc:
-            raise ValueError(
-                "webhook_url 不能带用户名密码：请改用 webhook_secret 做 HMAC 签名")
-        return url
+        return _validate_webhook_target_url(url)
+
+    @field_validator("webhooks")
+    @classmethod
+    def _validate_webhooks(
+        cls, value: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """每条都必须有合法 url——配置错误该在加载期炸，不是跑到一半才炸。"""
+        for index, item in enumerate(value or []):
+            if not isinstance(item, dict):
+                raise ValueError(f"webhooks[{index}] 必须是映射")
+            url = str(item.get("url") or "").strip()
+            if not url:
+                raise ValueError(f"webhooks[{index}] 缺少 url")
+            _validate_webhook_target_url(url, where=f"webhooks[{index}]")
+        return value
 
     @field_validator("webhook_timeout_seconds")
     @classmethod

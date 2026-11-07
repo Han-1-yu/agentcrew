@@ -1,6 +1,6 @@
 # AgentCrew 项目状态
 
-> **最后更新：2026-11-06** · 本文是仓库**唯一状态源**。
+> **最后更新：2026-11-07** · 本文是仓库**唯一状态源**。
 > 历次交接文档、验收/审查/测试报告、一次性工作提示词已在本日汇总并入本文后删除，
 > 原文备份见 `.workbuddy/archive/reports-2026-11-02/`（git 亦可通过历史恢复）。
 
@@ -8,16 +8,16 @@
 
 ## 0. 一句话现状
 
-**引擎与管线健康，无 P0/P1 阻断项。** 全量测试 **2346 passed / 1 skipped / 0 failed**（2347 用例收集，2026-11-06 R13 后分 5 批实测），三个预设样例 100% 通过，真实模型通道可用（`doctor` 6/6 通过）；Studio 架构检查 / e2e 28/28 / selftest 16/16 全绿。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链。
+**引擎与管线健康，无 P0/P1 阻断项。** 全量测试 **2358 passed / 1 skipped / 0 failed**（2359 用例收集，2026-11-06 R14 后分 5 批实测），三个预设样例 100% 通过，真实模型通道可用（`doctor` 6/6 通过）；Studio 架构检查 / e2e 28/28 / selftest 16/16 全绿。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」。
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | 2347 collected / 2346 passed / 1 skipped / 0 failed（3.12.10 + pytest 9.1.1，`--assert=plain`；R4 +38、R5 +16、R6 +21、R7 +14、R8 +9、R9 +6、R10 +13、R11 +17、R12 +21、R13 +12，本机断言重写 segfault 后按 §6 分 5 批累计） |
+| 全量测试 | 2359 collected / 2358 passed / 1 skipped / 0 failed（3.12.10 + pytest 9.1.1，`--assert=plain`；R4 +38、R5 +16、R6 +21、R7 +14、R8 +9、R9 +6、R10 +13、R11 +17、R12 +21、R13 +12、R14 +12，本机断言重写 segfault 后按 §6 分 5 批累计） |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
 | Studio | `npm run check` **63** 模块 / 37 分片通过、selftest 16/16、e2e 28/28、probe 24/24 |
-| Git | `master` 领先 `origin/master` 161 个提交；**R3 / R4 / R5 / R6 / R7 五轮改动均尚未提交** |
+| Git | `master` 领先 `origin/master` 169 个提交（含 R14，均为本地提交、未推送）；**工作区干净，无未提交改动** |
 | 角色 | 8 个内置岗位角色 + 执行体（Agent Profile）可多绑 |
 
 ```bash
@@ -533,9 +533,41 @@ MCP 工具交给 Agent**——`mcp_servers` 因此是死配置，Agent 永远只
 **红线遵守**：默认 `mcp_servers={}` 或 `tools_enabled=false` → `_attach_mcp_tools`
 立刻返回，零子进程、零网络；工具调用仍受 `tool_permissions` 约束、结果照常进 ledger。
 
-**刻意未做**：MCP 服务器的热更新（run 中途变更配置无效）→ 工具级权限细到单个 MCP
-工具（当前按角色白名单整体放行）→ MCP 资源（resources/prompts）支持（当前只用 tools）
-→ 反向暴露（把 agentcrew 自己做成 MCP server）→ 拖拽编排画布。
+**刻意未做**：MCP 服务器的热更新（run 中途变更配置无效）→ MCP 资源（resources/prompts）
+支持（当前只用 tools）→ 反向暴露（把 agentcrew 自己做成 MCP server）→ 拖拽编排画布。
+
+> **更正**：R13 最初把「权限细到单个 MCP 工具」列为遗留，这是误判——``tool_permissions``
+> 走的是 ``is_allowed(role, tool_name)`` 精确匹配，而 MCP 工具的注册名（``fs__read_file``）
+> 本身就是唯一的，配置里直接写全名即可精确授权，无需改动。
+
+### 3.19 R14：Webhook 多接收端与「只推失败」（2026-11-06）
+
+R12 的 Webhook 只能配一个地址、只能按事件名订阅。真实团队要的是「Slack 只收失败、
+内部系统全收」——一条 `webhook_url` 表达不了这个。
+
+| 层 | 落地 | 解决的问题 |
+| --- | --- | --- |
+| 多接收端 | `webhooks: [{name, url, secret, events, only_failures}]`；`WebhookConfig.resolved()` 统一展开 | 一个团队多个接收方；旧的 `webhook_url` 五个扁平字段原样保留作简写 |
+| 条件过滤 | `only_failures` 与 `events` 是**与**关系 | `status ∈ {failed, cancelled}` 或多类告警事件才算坏消息；`cancelled` 也算——对接收方而言「没跑完」就该知道 |
+| 独立投递 | 每个 target 单独重试、单独 `secret` | 一个挂了不拖累另一个；共用一个密钥等于把凭证发给所有人 |
+| 台账 | `webhook_delivered`/`webhook_failed` 带 `target` 名（打码） | 「哪一条失败了」不用猜；不写完整 URL（查询串可能带 token） |
+
+**实测抓到的 bug**：`Crew._build_webhook` 早退条件只看 `webhook_url`，只配 `webhooks`
+时整条链路**静默失效**——单测全绿（`WebhookConfig` 的多 target 逻辑没问题），端到端实跑
+才发现两个接收端一条都没收到。修法是把 `webhooks` 纳入早退判断，并补两条 Crew 层回归。
+
+**验证**：`tests/test_webhook.py` 21 → 33 例（多 target 各收各的、delivery id 跨接收端
+共享、事件过滤互不影响、只推失败、告警事件无 status 也算坏消息、targets 覆盖旧字段、
+各自密钥签名、一坏一好不影响、配置形状与非法 scheme、Crew 只配 webhooks 能建出分发器）。
+端到端实跑：`all` 收到 `run_started` + `run_finished`，`alerts`（only_failures）收到 0 条。
+全量 **2358 passed / 1 skipped / 0 failed**；三样例 9/9、5/5、7/7。
+
+**兼容性**：不配 `webhooks` 时行为与 R12 逐字一致（21 个原用例一行未改全过）；
+`webhooks` 与 `webhook_url` 同时配时以后者为准，避免同一地址被推两遍；导出时逐条剔除
+`secret`。
+
+**刻意未做**：投递的持久化重放队列（进程退出即丢未投部分）→ 事件级表达式过滤
+（当前只有「只推失败」这一个开关）→ 接收端回调触发补偿动作 → 拖拽编排画布。
 
 ---
 
@@ -548,7 +580,7 @@ MCP 工具交给 Agent**——`mcp_servers` 因此是死配置，Agent 永远只
 | **HANDOFF**（初版交接） | 2026-10-06 | SDD 会话完成 34 个任务实现/评审，并用真实 DeepSeek 跑 6 次端到端验收，每次暴露一个 mock 无法暴露的缺陷并修掉 | 已被 11-01 交接取代，结论并入本文 |
 | **V7-HANDOFF** | 2026-10-10 | V7 增强落地：P0 数据脱敏（`redact.py`）、配额、循环检测等，21 项脱敏用例全绿 | 能力已并入 §2，P2.5 脱敏已实施 |
 | **HANDOFF-2026-11-01** | 2026-11-01 | 自包含交接：架构、模块地图、命令、退出码、环境坑、13 项待办；声明"护城河是测试" | 本文继承其结论；待办见 §7 |
-| **HANDOVER-BASELINE** | 2026-11-01 | 实测 1946 passed / 1 skipped；两个风险：Git 提交清单不完整（真实 168 文件而非文档所说 65）、真实模型 Key 失效；查明 segfault 实为 `PYTHONPATH` 污染而非解释器不稳 | Key 已恢复（`doctor` 6/6 通过）；提交随 R1/R2 推进（现领先远端 157） |
+| **HANDOVER-BASELINE** | 2026-11-01 | 实测 1946 passed / 1 skipped；两个风险：Git 提交清单不完整（真实 168 文件而非文档所说 65）、真实模型 Key 失效；查明 segfault 实为 `PYTHONPATH` 污染而非解释器不稳 | Key 已恢复（`doctor` 6/6 通过）；提交随 R1–R14 推进（现领先远端 169） |
 | **V4 质量审查报告** | 2026-10-10 | 引擎侧修 6 项：密钥环境变量名硬编码、模型发现错误结果被缓存 60s 无法重试等 | 全部闭环 |
 | **V4 深度审查报告** | 2026-10-10 | 追加 15 项（D-01…D-15）：`api_key_env` 形状校验、空 model id 收录、重名 provider、CSP、弹窗状态清理等，逐项独立 commit | 全部闭环 |
 | **V4-FE 只读问题清单** | 2026-10-10 | 前端边界问题（深色模式 DAG 文字不可见、内联边框硬编码、主题缓存闪烁等），只读审查不改码 | 已由后续 F4–F7 提交修复 |
@@ -584,7 +616,8 @@ MCP 工具交给 Agent**——`mcp_servers` 因此是死配置，Agent 永远只
 | R10 | 主管驳回后换人做（见 §3.15） | 2296 |
 | R11 | 经验检索换 BM25 + 中文二元组（见 §3.16） | 2313 |
 | R12 | 出站 Webhook：关键节点推给外部（见 §3.17） | 2334 |
-| R13 | MCP 服务器接进生产工具链（见 §3.18） | **2346（当前）** |
+| R13 | MCP 服务器接进生产工具链（见 §3.18） | 2346 |
+| R14 | Webhook 多接收端 + 只推失败（见 §3.19） | **2358（当前）** |
 
 ---
 
@@ -635,9 +668,9 @@ MCP 工具交给 Agent**——`mcp_servers` 因此是死配置，Agent 永远只
 **小项（0.2–0.5 人日，不动架构即可清）**
 
 1. ✅ **R3 已闭环**：工具参数 JSON Schema 强校验（见 §3.8）
-2. MCP SSE/HTTP transport 资源关闭（消除 unclosed warning）；`mcp_servers` 仍未接入生产 run
-3. CI 首次实跑（remote 已配，本地领先 161 提交；需验证 3.10–3.13 矩阵）
-4. 功能测试报告汇总（2346 用例按模块/场景出覆盖矩阵）
+2. MCP SSE/HTTP transport 资源关闭（消除 unclosed warning；`mcp_servers` 接入生产 run 已由 R13 闭环）
+3. CI 首次实跑（remote 已配，本地领先 169 提交；需验证 3.10–3.13 矩阵）
+4. 功能测试报告汇总（2358 用例按模块/场景出覆盖矩阵）
 
 **大项（建议单独立项）**
 
@@ -731,6 +764,7 @@ MCP 工具交给 Agent**——`mcp_servers` 因此是死配置，Agent 永远只
 | --- | --- |
 | `README.md` | 项目介绍、8 角色说明、V2–V5 与 R3–R13 能力完善、配置与用法全文 |
 | `PROJECT-STATE.md` | 本文，唯一状态源 |
+| `docs/HANDOVER.md` | **接手必读**：当前状态、代码从哪读起、已知的坑、排障手册、剩余工作 |
 | `artifacts/contracts/state-enums.md` · `event-types.md` · `openapi.yaml` · `schemas/*.json` | R4 同步后的状态枚举、事件、HTTP 接口与落盘结构契约 |
 | `docs/role-agent-binding-design.md` | 「角色 = 职责 + 权限，执行体可多绑」设计方案（v1 草案，部分已落地） |
 | `docs/MAGPIE_COMPARISON.md` | 供应商韧性设计参考（故障转移/冷却/限流/循环检测的来源与取舍） |

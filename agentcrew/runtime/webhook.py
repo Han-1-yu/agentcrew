@@ -33,6 +33,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 #: 接收方可据此分发，不必解析 body 才知道事件类型。
@@ -50,12 +51,51 @@ DEFAULT_CLOSE_TIMEOUT = 5.0
 #: 重试退避的上限；到顶后不再增长，避免 2^n 把收尾拖长。
 _MAX_BACKOFF_SECONDS = 2.0
 
+#: 语义上就是「出了事」的事件：``only_failures`` 的接收端一律收。
+_FAILURE_EVENTS = frozenset({"error", "deadlock", "run_stalled", "budget_exhausted"})
+#: ``payload["status"]`` 落在这些值时算「没跑成」。
+_FAILURE_STATUSES = frozenset({"failed", "cancelled"})
+
+
+def _is_failure(event: str, payload: dict[str, Any]) -> bool:
+    """这条事件是不是「坏消息」。
+
+    只看 ``status`` 字段与几个固定事件名，不做语义推断：``cancelled`` 也算——对
+    接收方来说「没跑完」比「成功」更值得知道，取消只是原因不同。
+    """
+    if event in _FAILURE_EVENTS:
+        return True
+    return str(payload.get("status") or "").lower() in _FAILURE_STATUSES
+
+
+@dataclass(frozen=True)
+class WebhookTarget:
+    """一个接收端。
+
+    ``events`` 为空 = 不限事件；``only_failures`` 再叠一层「只推坏消息」——两者是
+    **与**关系，这样「Slack 只收失败、内部系统全收」可以配成两个 target。
+    """
+
+    name: str = ""
+    url: str = ""
+    secret: str = ""
+    events: tuple[str, ...] = ()
+    only_failures: bool = False
+
+    def matches(self, event: str, payload: dict[str, Any]) -> bool:
+        if self.events and "*" not in self.events and event not in self.events:
+            return False
+        if self.only_failures and not _is_failure(event, payload):
+            return False
+        return True
+
 
 @dataclass(frozen=True)
 class WebhookConfig:
-    """一份 Webhook 目标配置（值来自 :class:`agentcrew.config.Settings`）。
+    """Webhook 配置：一个或多个接收端。
 
-    ``events`` 含 ``"*"`` 时全推。``max_retries=0`` 表示不重试（仍会投递一次）。
+    ``targets`` 非空时以它为准；否则退回单接收端字段（``url`` / ``secret`` /
+    ``events`` / ``only_failures``）——旧配置因此一字不用改。
     """
 
     url: str = ""
@@ -66,14 +106,28 @@ class WebhookConfig:
     )
     timeout_seconds: float = 5.0
     max_retries: int = 2
+    only_failures: bool = False
+    targets: tuple[WebhookTarget, ...] = ()
+
+    def resolved(self) -> tuple[WebhookTarget, ...]:
+        """展开成实际要投递的接收端列表（已剔除没有 URL 的）。"""
+        if self.targets:
+            return tuple(t for t in self.targets if t.url)
+        if self.url:
+            return (WebhookTarget(
+                name="default", url=self.url, secret=self.secret,
+                events=self.events, only_failures=self.only_failures),)
+        return ()
 
     @property
     def enabled(self) -> bool:
-        """只有配了 URL 才算启用——空 URL 下整个分发器是零开销的。"""
-        return bool(self.url)
+        """有任一可用接收端才算启用——全空时整个分发器零开销。"""
+        return bool(self.resolved())
 
-    def matches(self, event: str) -> bool:
-        return "*" in self.events or event in self.events
+    def matches(self, event: str, payload: dict[str, Any] | None = None) -> bool:
+        """是否有**任一**接收端想要这条事件（分发器据此决定是否入队）。"""
+        data = payload or {}
+        return any(target.matches(event, data) for target in self.resolved())
 
 
 class WebhookDispatcher:
@@ -116,9 +170,11 @@ class WebhookDispatcher:
         self._drain()
         if self._closed or not self._config.enabled:
             return
-        if not self._config.matches(event):
+        data = dict(payload or {})
+        # 入队前先按接收端过滤：没有任何接收端想要这条事件时，不必占用队列。
+        if not self._config.matches(event, data):
             return
-        self._queue.put((event, dict(payload or {})))
+        self._queue.put((event, data))
 
     def close(self, *, timeout: float = DEFAULT_CLOSE_TIMEOUT) -> None:
         """停止接收新事件、等队列排空（最多 ``timeout`` 秒），并落最后一批结果。
@@ -154,27 +210,51 @@ class WebhookDispatcher:
             self._deliver(event, payload)
 
     def _deliver(self, event: str, payload: dict[str, Any]) -> None:
-        """投递一条事件；重试 ``max_retries`` 次后放弃。
+        """把一条事件投给**所有**想要它的接收端；每个接收端独立重试。
 
-        ``delivery`` id 在重试之间保持不变——接收方可以据此去重，避免「第一次
-        其实收到了、只是响应慢」被当成失败而重复处理。
+        ``delivery`` id 在所有接收端之间**共享**、重试之间也保持不变：它是「这次
+        事件」的标识，接收方可以据此对账；各接收端自己的幂等由它自己的重试语义
+        保证（同一 id 反复到达即视为同一次投递）。
         """
+        targets = [t for t in self._config.resolved()
+                   if t.matches(event, payload)]
+        if not targets:
+            return
         delivery = uuid.uuid4().hex
         # 时间戳只取一次：body 里写它、签名也用它。两处各取一次会在跨秒时
         # 对不上，接收方校验 body.timestamp == header.timestamp 就会失败。
         timestamp = str(int(time.time()))
         body = self._encode(event, payload, timestamp)
+        for target in targets:
+            self._deliver_to(target, event, delivery, timestamp, body)
+
+    def _deliver_to(
+        self,
+        target: WebhookTarget,
+        event: str,
+        delivery: str,
+        timestamp: str,
+        body: bytes,
+    ) -> None:
+        """向单个接收端投递，重试 ``max_retries`` 次后放弃。
+
+        一个接收端失败不影响另一个：它们是独立的接收方，不该因为 Slack 挂了就
+        不推内部系统。
+        """
+        label = _target_label(target)
         last_error = ""
         for attempt in range(self._config.max_retries + 1):
-            ok, detail = self._post(event, delivery, timestamp, body)
+            ok, detail = self._post(target, event, delivery, timestamp, body)
             if ok:
                 self._record({"ok": True, "webhook_event": event,
-                              "delivery": delivery, "attempts": attempt + 1})
+                              "target": label, "delivery": delivery,
+                              "attempts": attempt + 1})
                 return
             last_error = detail
             if attempt < self._config.max_retries:
                 time.sleep(min(0.2 * (2 ** attempt), _MAX_BACKOFF_SECONDS))
-        self._record({"ok": False, "webhook_event": event, "delivery": delivery,
+        self._record({"ok": False, "webhook_event": event, "target": label,
+                      "delivery": delivery,
                       "attempts": self._config.max_retries + 1,
                       "error": last_error})
 
@@ -188,7 +268,12 @@ class WebhookDispatcher:
         return json.dumps(envelope, ensure_ascii=False).encode("utf-8")
 
     def _post(
-        self, event: str, delivery: str, timestamp: str, body: bytes
+        self,
+        target: WebhookTarget,
+        event: str,
+        delivery: str,
+        timestamp: str,
+        body: bytes,
     ) -> tuple[bool, str]:
         """发一次 POST；返回 ``(是否 2xx, 失败说明)``。
 
@@ -203,11 +288,12 @@ class WebhookDispatcher:
             DELIVERY_HEADER: delivery,
             TIMESTAMP_HEADER: timestamp,
         }
-        if self._config.secret:
+        # 每个接收端用自己的密钥：多接收端下共用一个 secret 等于把凭证发给所有人。
+        if target.secret:
             headers[SIGNATURE_HEADER] = _sign(
-                self._config.secret, timestamp, body)
+                target.secret, timestamp, body)
         request = Request(
-            self._config.url, data=body, headers=headers, method="POST")
+            target.url, data=body, headers=headers, method="POST")
         try:
             with urlopen(request, timeout=self._config.timeout_seconds) as response:
                 status = getattr(response, "status", 200)
@@ -269,3 +355,16 @@ def verify_signature(
         return False
     return hmac.compare_digest(_sign(secret, timestamp, body), signature)
 
+
+def _target_label(target: WebhookTarget) -> str:
+    """接收端在台账里的名字：优先显式 ``name``，否则用 ``scheme://host``。
+
+    绝不写完整 URL——查询串里可能有 token，落进 ledger 就是泄露。
+    """
+    if target.name:
+        return target.name
+    try:
+        parts = urlsplit(target.url)
+    except ValueError:
+        return "target"
+    return f"{parts.scheme}://{parts.netloc}" if parts.netloc else "target"

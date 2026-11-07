@@ -1695,6 +1695,36 @@ webhook_max_retries: 2
 任务就是 9 个请求，多数接收方只关心「跑完了没有、卡在哪」。要细粒度就配
 `["*"]`。
 
+### 1.1 多接收端与「只推失败」（R14）
+
+一个人用，上面五个扁平字段就够；要给团队用，通常需要「Slack 只收失败、内部系统
+全收」。这时换成列表：
+
+```yaml
+webhooks:
+  - name: slack
+    url: https://hooks.slack.com/services/…
+    only_failures: true          # 只推坏消息
+  - name: internal
+    url: https://ops.example/agentcrew
+    secret: ${INTERNAL_HOOK_SECRET}
+    events: [run_started, run_finished]
+```
+
+| 规则 | 行为 |
+|---|---|
+| `events` 为空 | 不限事件（该接收端收全部） |
+| `only_failures: true` | 只推 `status ∈ {failed, cancelled}` 或 `error` / `deadlock` / `run_stalled` / `budget_exhausted` |
+| 两个条件同时给 | **与**关系 |
+| `webhooks` 与 `webhook_url` 同时配 | 以 `webhooks` 为准（避免同一地址被推两遍） |
+| 各接收端的 `secret` | 各自独立签名，互不通用 |
+
+投递时每个接收端**独立重试**：一个挂了不影响另一个——它们是独立的接收方，不该因为
+Slack 不通就不推内部系统。同一次事件在所有接收端之间共享 `delivery` id，便于对账。
+
+`webhooks` 只认配置文件与环境变量，不进 `POST /runs` 的 `options`：per-run 覆盖一组
+接收端是运维决策，不该由单次调用临时改。
+
 ### 2. 协议
 
 ```

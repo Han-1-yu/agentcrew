@@ -1391,8 +1391,15 @@ def _cmd_config_export(args: argparse.Namespace) -> int:
     if (snap.get("supervisor_role")
             and snap["supervisor_role"] != "project_manager"):
         export_doc["supervisor_role"] = snap["supervisor_role"]
+    # R14：多接收端优先——配了它就不再导出单接收端那组，避免两者同时出现让人
+    # 以为会推两遍。**每条 target 的 secret 一律剔除**，同 webhook_secret 的处理。
+    if snap.get("webhooks"):
+        export_doc["webhooks"] = [
+            {key: value for key, value in target.items() if key != "secret"}
+            for target in snap["webhooks"]
+        ]
     # R12：Webhook 只在配了 URL 时导出整组；密钥**永不导出**（它会随文件流传）。
-    if snap.get("webhook_url"):
+    elif snap.get("webhook_url"):
         export_doc["webhook_url"] = snap["webhook_url"]
         export_doc["webhook_events"] = list(snap.get("webhook_events") or [])
         if snap.get("webhook_timeout_seconds") not in (None, 5.0):
@@ -1518,6 +1525,7 @@ def _cmd_config_import(args: argparse.Namespace) -> int:
         "role_fallback", "max_supervisor_reassignments",  # R10 自动重派
         "webhook_url", "webhook_secret", "webhook_events",  # R12 出站 Webhook
         "webhook_timeout_seconds", "webhook_max_retries",
+        "webhooks",                                   # R14 多接收端
     ):
         if key in data:
             existing[key] = data[key]

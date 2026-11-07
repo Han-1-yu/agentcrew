@@ -80,7 +80,11 @@ from agentcrew.runtime.approvals import (
     ApprovalStore,
 )
 from agentcrew.runtime.ledger import Ledger
-from agentcrew.runtime.webhook import WebhookConfig, WebhookDispatcher
+from agentcrew.runtime.webhook import (
+    WebhookConfig,
+    WebhookDispatcher,
+    WebhookTarget,
+)
 from agentcrew.task.conditions import is_conditional_skip
 from agentcrew.task.planner import (
     MIN_PLAN_SCORE,
@@ -1199,7 +1203,9 @@ class Crew:
         启用时记一条 ``webhook_enabled``，但**只记打码后的 URL**：查询串里可能
         带 token，整条 URL 写进 ledger 就等于泄露。
         """
-        if not self._settings.webhook_url:
+        # 只看旧字段是不够的：只配 ``webhooks``（多接收端）时 ``webhook_url`` 是空的，
+        # 早退会让多接收端完全失效——实测踩过一次。
+        if not self._settings.webhook_url and not self._settings.webhooks:
             return None
         config = WebhookConfig(
             url=self._settings.webhook_url,
@@ -1207,14 +1213,36 @@ class Crew:
             events=tuple(self._settings.webhook_events),
             timeout_seconds=self._settings.webhook_timeout_seconds,
             max_retries=self._settings.webhook_max_retries,
+            # R14：多接收端。``webhooks`` 非空时 ``WebhookConfig.resolved()`` 以它
+            # 为准，旧的单接收端字段自动让位（避免同一地址被推两遍）。
+            targets=tuple(
+                WebhookTarget(
+                    name=str(raw.get("name") or ""),
+                    url=str(raw.get("url") or ""),
+                    secret=str(raw.get("secret") or ""),
+                    events=tuple(
+                        str(item) for item in (raw.get("events") or [])),
+                    only_failures=bool(raw.get("only_failures", False)),
+                )
+                for raw in self._settings.webhooks
+                if str(raw.get("url") or "").strip()
+            ),
         )
         dispatcher = WebhookDispatcher(
             config, sink=self._webhook_sink(ledger))
         ledger.emit(
             "webhook_enabled",
-            url=_redact_url(config.url),
-            events=list(config.events),
-            signed=bool(config.secret),
+            # 逐接收端记录，URL 一律打码：查询串里可能有 token。
+            targets=[
+                {
+                    "name": target.name,
+                    "url": _redact_url(target.url),
+                    "events": list(target.events),
+                    "signed": bool(target.secret),
+                    "only_failures": target.only_failures,
+                }
+                for target in config.resolved()
+            ],
         )
         return dispatcher
 
