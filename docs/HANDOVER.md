@@ -13,15 +13,16 @@
 |---|---|
 | 已提交 | R3–R18；R18 是最新提交（具体 hash 以 `git log -1` 为准） |
 | **未提交** | **无，工作区干净**（R18 已于 2026-11-07 提交） |
-| 测试 | R21 后全量 **2490 passed / 1 skipped / 0 failed**（2491 collected；分 5 批实测） |
+| 测试 | R22 后全量 **2500 passed / 1 skipped / 0 failed**（2501 collected；分 5 批实测） |
 | 静态检查 | `ruff check .` 全绿 · `mypy agentcrew/` 114 文件零错误（本机 3.12 首次跑通 CI 等价检查链） |
 | 离线样例 | `todo` 9/9 · `linear` 5/5 · `hierarchy` 7/7，全部 `completed` |
 | 一句话定位 | 8 角色多 Agent 编排器：规划 → 执行 → 三层门禁 → 交付；可完全离线（mock）跑通 |
 
 **接手第一件事**：跑一次三套样例确认环境（§5.1）。**第一档、第二档功能项均已
-闭环**（R17–R21：心跳收敛 / resume 锁、CI 检查链、限流窗口通道、主管建议通道、
-单步断点调试、API 契约守卫）；下一轮从 §7.4 里挑一项，或做 CI 的 GitHub
-Actions 3.10–3.13 四版本矩阵实跑（remote 已配、本地领先 177 提交）。
+闭环**（R17–R22：心跳收敛 / resume 锁、CI 检查链、限流窗口通道、主管建议通道、
+单步断点调试、API 契约守卫、resume 白名单 + MCP 管道关闭）；下一轮从 §7.4 里
+挑一项，或做 CI 的 GitHub Actions 3.10–3.13 四版本矩阵实跑（remote 已配、
+本地领先 178 提交）。
 
 ---
 
@@ -350,6 +351,7 @@ PROJECT-STATE §3.19–§3.23 与本文 §0 的状态口径已对齐，工作区
 | R19 | 主管 `suggestions` 通道（`supervisor_suggestions` 事件 + `status` 汇总） | 已提交（2026-11-07） |
 | R20 | 单步/断点调试（`debug_step` + `step` 审批卡点） | 已提交（2026-11-07） |
 | R21 | API 契约守卫（`API_ROUTES` ↔ openapi 双向锁死 + 真服务逐条探测） | 已提交（2026-11-07） |
+| R22 | resume 状态白名单 + MCP stdio 管道显式关闭 | 已提交（2026-11-07） |
 
 R3–R8 之所以合并成一个提交：`config.py` / `crew.py` / `main.py` / `api/server.py` 四个文件
 被多轮同时改，`git add` 是文件粒度，按轮切分会把不同轮的改动硬塞进一个提交。

@@ -233,6 +233,19 @@ def _artifacts(settings, run_id):
     return _run_dir(settings, run_id) / "artifacts"
 
 
+def _mark_interrupted(settings, run_id):
+    """夹具：把跑完的 run 标回可恢复状态。
+
+    R22 起 resume 拒绝 completed（终局成功不是崩溃产物）；这些用例拿跑完的
+    run 当夹具验修复机制（面板重挂、门禁补派、产物重建），与状态语义无关，
+    造假时同步把 run.json 改成 INTERRUPTED 保持自洽。
+    """
+    store = CheckpointStore(_run_dir(settings, run_id))
+    record = store.load_record()
+    record.status = RunStatus.INTERRUPTED
+    store.save_record(record)
+
+
 def _patch_tasks(settings, run_id, task_id, **fields):
     """就地改写 ``tasks.json`` 里某个任务的字段（模拟进程死亡那一刻的落盘状态）。"""
     path = _run_dir(settings, run_id) / "tasks.json"
@@ -436,6 +449,7 @@ async def test_registered_custom_role_reaches_menu_and_is_dispatched(
 async def test_resume_continues_interrupted_run(env):
     crew = Crew(env["settings"])
     rec = await crew.run("做一个 Todo 应用")
+    _mark_interrupted(env["settings"], rec.run_id)
     rs = Settings.load()
     resumed = Crew.resume_from(rs, rec.run_id)
     board = resumed.checkpoint.load_board()
@@ -669,6 +683,7 @@ async def test_resume_keeps_per_transition_checkpointing(env):
         env["settings"], rec.run_id, "T-FINAL",
         status="pending", attempts=0, result=None, reviews=[], status_history=[],
     )
+    _mark_interrupted(env["settings"], rec.run_id)
     seen: list[tuple[str, int]] = []
     tasks_path = _run_dir(env["settings"], rec.run_id) / "tasks.json"
 
@@ -720,6 +735,7 @@ async def test_resume_repairs_running_task_without_resetting_attempts(env):
         env["settings"], rec.run_id, "T-FINAL",
         status="pending", attempts=0, result=None, reviews=[], status_history=[],
     )
+    _mark_interrupted(env["settings"], rec.run_id)
     resumed = Crew.resume_from(Settings.load(), rec.run_id)
     out = await resumed.resume()
     assert out.status is RunStatus.COMPLETED
@@ -748,6 +764,7 @@ async def test_resume_regates_task_stuck_in_review(env):
         env["settings"], rec.run_id, "T-FINAL",
         status="pending", attempts=0, result=None, reviews=[], status_history=[],
     )
+    _mark_interrupted(env["settings"], rec.run_id)
     resumed = Crew.resume_from(Settings.load(), rec.run_id)
     out = await resumed.resume()
     assert resumed.stalled is False            # 不是停滞（退出码 4）
@@ -822,6 +839,7 @@ async def test_resume_rehydrates_artifact_records_from_manifest(env):
     art = _artifacts(env["settings"], rec.run_id)
     store = ArtifactStore(art, run_id=rec.run_id)
     assert store.records() == []  # 新进程：盘上有文件，内存里没有任何记录
+    _mark_interrupted(env["settings"], rec.run_id)
     resumed = Crew.resume_from(Settings.load(), rec.run_id, store=store)
     await resumed.resume()
     assert {record.path for record in store.records()} == {

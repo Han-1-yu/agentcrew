@@ -83,7 +83,12 @@ from agentcrew.runtime.checkpoint import (
     repair_statuses,
 )
 from agentcrew.runtime.ledger import Ledger
-from agentcrew.runtime.lifecycle import ResumeLock, RunHeartbeat
+from agentcrew.runtime.lifecycle import (
+    LIVENESS_STALE_AFTER,
+    ResumeLock,
+    RunHeartbeat,
+    read_heartbeat,
+)
 from agentcrew.runtime.webhook import (
     SPOOL_DIR_NAME,
     WebhookConfig,
@@ -542,6 +547,28 @@ class Crew:
         """
         checkpoint = CheckpointStore(settings.output_dir / run_id)
         record = checkpoint.load_record()  # schema_version 不匹配在这里就报错
+        # R22：resume 状态白名单（六层审计遗留——R17 只补了进程锁这一半）。
+        # 拒绝只有两种：completed（终局成功，续跑没有意义——成功不是崩溃产物，
+        # 不会需要恢复）；running 且心跳文件新鲜（R17+ 的活进程每 30s 写心跳，
+        # 这是「正被另一进程跑着」的明确信号，再 resume 会双写坏 checkpoint）。
+        # 其余全部放行——**failed 也是恢复路径**：未处理异常的兜底封版会把
+        # 「崩溃当场」记成 FAILED，拒了它就堵死崩溃恢复；无心跳文件的老 run
+        # （R17 之前 / 心跳写失败）无法区分死活，保留既有行为，与 reconcile
+        # 的 24h 判据口径一致。
+        if record.status is RunStatus.COMPLETED:
+            raise ValueError(
+                f"run {run_id!r} 已终局（completed），无需续跑；"
+                "要复用结果可直接读产物或用 diff 对比"
+            )
+        if record.status is RunStatus.RUNNING:
+            heartbeat = read_heartbeat(checkpoint.run_dir)
+            if (heartbeat is not None
+                    and datetime.now() - heartbeat < LIVENESS_STALE_AFTER):
+                raise ValueError(
+                    f"run {run_id!r} 正在另一进程运行（心跳新鲜）；"
+                    "若是强杀留下的孤儿，等心跳过期 15 分钟后 resume，"
+                    "或由 CLI 启动 reconcile 收敛为 interrupted"
+                )
         board = checkpoint.load_board()
         repair_statuses(board)
         # R20：断点开关属于 run 而不属于进程——首跑带着 debug_step 挂起的 run，

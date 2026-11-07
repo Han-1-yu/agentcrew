@@ -8,17 +8,17 @@
 
 ## 0. 一句话现状
 
-**引擎与管线健康，无 P0/P1 阻断项。** 全量测试 **2490 passed / 1 skipped / 0 failed**（2491 用例收集，2026-11-07 R21 后分 5 批实测），三个预设样例 100% 通过，真实模型通道可用（`doctor` 6/6 通过）；Studio 架构检查 / e2e 28/28 / selftest 16/16 全绿。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道；R19 给主管审核开了独立、不阻塞的 `suggestions` 建议通道；R20 补上单步/断点调试——每个任务派发前可挂起裁决，第二档功能项全部闭环；R21 给 API 契约装上守卫，openapi.yaml 与代码路由双向锁死、不再漏端点。
+**引擎与管线健康，无 P0/P1 阻断项。** 全量测试 **2500 passed / 1 skipped / 0 failed**（2501 用例收集，2026-11-07 R22 后分 5 批实测），三个预设样例 100% 通过，真实模型通道可用（`doctor` 6/6 通过）；Studio 架构检查 / e2e 28/28 / selftest 16/16 全绿。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道；R19 给主管审核开了独立、不阻塞的 `suggestions` 建议通道；R20 补上单步/断点调试——每个任务派发前可挂起裁决，第二档功能项全部闭环；R21 给 API 契约装上守卫，openapi.yaml 与代码路由双向锁死、不再漏端点；R22 补上 resume 状态白名单与 MCP 管道显式关闭。
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | 2491 collected / 2490 passed / 1 skipped / 0 failed（3.12.10 + pytest 9.1.1，`--assert=plain`；R4 +38、R5 +16、R6 +21、R7 +14、R8 +9、R9 +6、R10 +13、R11 +17、R12 +21、R13 +12、R14 +12、R15 +18、R16 +34、R17 +24、R18 +10、R19 +5、R20 +17、R21 +24，本机断言重写 segfault 后按 §6 分 5 批累计） |
+| 全量测试 | 2501 collected / 2500 passed / 1 skipped / 0 failed（3.12.10 + pytest 9.1.1，`--assert=plain`；R4 +38、R5 +16、R6 +21、R7 +14、R8 +9、R9 +6、R10 +13、R11 +17、R12 +21、R13 +12、R14 +12、R15 +18、R16 +34、R17 +24、R18 +10、R19 +5、R20 +17、R21 +24、R22 +10，本机断言重写 segfault 后按 §6 分 5 批累计） |
 | 静态检查 | `ruff check .` **全绿**（全仓，14 项历史告警清零）；`mypy agentcrew/` **114 文件零错误**（2.4.1）。CI 等价检查链在本机 3.12 首次跑通 |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
 | Studio | `npm run check` **63** 模块 / 37 分片通过、selftest 16/16、e2e 28/28、probe 24/24 |
-| Git | `master` 领先 `origin/master` 177 个提交（均为本地提交、未推送）；**工作区干净，无未提交改动** |
+| Git | `master` 领先 `origin/master` 178 个提交（均为本地提交、未推送）；**工作区干净，无未提交改动** |
 | 角色 | 8 个内置岗位角色 + 执行体（Agent Profile）可多绑 |
 
 ```bash
@@ -803,6 +803,27 @@ R16 封装 SDK 时发现 `openapi.yaml` 缺 `/providers` 族与执行体切换�
 **验证**：新增 **24 例**全过（清单比对、哨兵钉死、21 条路由逐条探测、405
 抽查）；API 四套件 96 例全过；`ruff` / `mypy agentcrew/` 全绿。全量见 §6 表末。
 
+### 3.27 R22：resume 状态白名单 + MCP 管道关闭（2026-11-07）
+
+两个六层审计遗留小项一起收口：
+
+- **resume 状态白名单**（R17 只补了进程锁一半）：`Crew.resume_from` 拒绝
+  completed（终局成功，续跑无意义）与 running 且**心跳文件新鲜**（R17+ 活进程
+  每 30s 写心跳——「正被另一进程跑着」的明确信号，此前 resume 会双写坏
+  checkpoint 且无任何拦截）。其余放行：**failed 也是恢复路径**（未处理异常的
+  兜底封版把崩溃当场记成 FAILED），无心跳老 run 保留既有行为（与 reconcile
+  24h 判据同口径）。拒绝走 `ValueError`，CLI / API 复用既有错误通道。
+  教训：第一版把 FAILED 也拒了，17 个既有用例当场炸——读 flows 才发现「兜底
+  封版 FAILED → resume 恢复」是真实支持的路径，白名单随之收窄。
+- **MCP stdio 管道关闭**：`StdioTransport.close()` 此前只 terminate 子进程，
+  三条管道的 asyncio 传输句柄留给 GC（每次 run 收尾报 unclosed transport）；
+  现在显式关闭。stdout/stderr 是 `StreamReader`，asyncio 子进程包装无公开
+  关闭口，经底层 `_transport` 关闭（与 asyncio 内部实现同源）。
+
+**验证**：新增 10 例（`tests/test_resume_whitelist.py` 9 例 + stdio 关闭 1 例）；
+test_crew 五个「拿跑完的 run 当夹具」的用例补 `_mark_interrupted` 保持自洽。
+`ruff` / `mypy agentcrew/` 全绿；全量见 §6 表末。
+
 ---
 
 ## 4. 历史报告汇总（已并入本文，原文归档）
@@ -814,7 +835,7 @@ R16 封装 SDK 时发现 `openapi.yaml` 缺 `/providers` 族与执行体切换�
 | **HANDOFF**（初版交接） | 2026-10-06 | SDD 会话完成 34 个任务实现/评审，并用真实 DeepSeek 跑 6 次端到端验收，每次暴露一个 mock 无法暴露的缺陷并修掉 | 已被 11-01 交接取代，结论并入本文 |
 | **V7-HANDOFF** | 2026-10-10 | V7 增强落地：P0 数据脱敏（`redact.py`）、配额、循环检测等，21 项脱敏用例全绿 | 能力已并入 §2，P2.5 脱敏已实施 |
 | **HANDOFF-2026-11-01** | 2026-11-01 | 自包含交接：架构、模块地图、命令、退出码、环境坑、13 项待办；声明"护城河是测试" | 本文继承其结论；待办见 §7 |
-| **HANDOVER-BASELINE** | 2026-11-01 | 实测 1946 passed / 1 skipped；两个风险：Git 提交清单不完整（真实 168 文件而非文档所说 65）、真实模型 Key 失效；查明 segfault 实为 `PYTHONPATH` 污染而非解释器不稳 | Key 已恢复（`doctor` 6/6 通过）；提交随 R1–R21 推进（现领先远端 177） |
+| **HANDOVER-BASELINE** | 2026-11-01 | 实测 1946 passed / 1 skipped；两个风险：Git 提交清单不完整（真实 168 文件而非文档所说 65）、真实模型 Key 失效；查明 segfault 实为 `PYTHONPATH` 污染而非解释器不稳 | Key 已恢复（`doctor` 6/6 通过）；提交随 R1–R22 推进（现领先远端 178） |
 | **V4 质量审查报告** | 2026-10-10 | 引擎侧修 6 项：密钥环境变量名硬编码、模型发现错误结果被缓存 60s 无法重试等 | 全部闭环 |
 | **V4 深度审查报告** | 2026-10-10 | 追加 15 项（D-01…D-15）：`api_key_env` 形状校验、空 model id 收录、重名 provider、CSP、弹窗状态清理等，逐项独立 commit | 全部闭环 |
 | **V4-FE 只读问题清单** | 2026-10-10 | 前端边界问题（深色模式 DAG 文字不可见、内联边框硬编码、主题缓存闪烁等），只读审查不改码 | 已由后续 F4–F7 提交修复 |
@@ -858,7 +879,8 @@ R16 封装 SDK 时发现 `openapi.yaml` 缺 `/providers` 族与执行体切换�
 | R18 | CI 就绪 + 限流窗口配置通道（见 §3.23） | 2444 |
 | R19 | 主管 `suggestions` 通道（见 §3.24） | 2449 |
 | R20 | 单步/断点调试（见 §3.25） | 2466 |
-| R21 | API 契约守卫（见 §3.26） | **2490（当前）** |
+| R21 | API 契约守卫（见 §3.26） | 2490 |
+| R22 | resume 白名单 + MCP 管道关闭（见 §3.27） | **2500（当前）** |
 
 ---
 
@@ -909,8 +931,8 @@ R16 封装 SDK 时发现 `openapi.yaml` 缺 `/providers` 族与执行体切换�
 **小项（0.2–0.5 人日，不动架构即可清）**
 
 1. ✅ **R3 已闭环**：工具参数 JSON Schema 强校验（见 §3.8）
-2. MCP SSE/HTTP transport 资源关闭（消除 unclosed warning；`mcp_servers` 接入生产 run 已由 R13 闭环）
-3. CI 首次实跑：本机 3.12 已跑通等价检查链（ruff / mypy / pytest 全绿）；**仍缺 GitHub Actions 上 3.10–3.13 四版本矩阵**（remote 已配，本地领先 177 提交）
+2. ~~MCP SSE/HTTP transport 资源关闭~~：✅ **R22 已闭环**（stdio 三条管道显式关闭，见 §3.27）；`mcp_servers` 接入生产 run 已由 R13 闭环
+3. CI 首次实跑：本机 3.12 已跑通等价检查链（ruff / mypy / pytest 全绿）；**仍缺 GitHub Actions 上 3.10–3.13 四版本矩阵**（remote 已配，本地领先 178 提交）
 4. 功能测试报告汇总（2444 用例按模块/场景出覆盖矩阵）
 5. ~~CI 前清理 `ruff check .` 的 14 项既存告警~~：✅ **R18 已闭环**（见 §3.23）；装 CI 同版本 mypy 后一并清掉 9 项类型错误，现在 `ruff check .` 全绿、`mypy agentcrew/` 114 文件零错误
 6. ~~`api_rate_limit_window` 配置通道~~：✅ **R18 已闭环**（env / YAML / `config export` / `config import` 四通道 + `ge=1` 校验，见 §3.23） |
@@ -945,7 +967,7 @@ R16 封装 SDK 时发现 `openapi.yaml` 缺 `/providers` 族与执行体切换�
 **本轮已闭环**：配额 `reserve` 异常泄漏与 `complete_structured` 无配额（见 §3.6）。
 
 **仍未纳入修复**（按 ROI，需各自单独设计）：
-`stream_call` 仍是「只记账不设防」（async generator + failover 循环，预扣/归还配对复杂）；`RunPythonTool` 无文件 / 导入隔离（本轮只补了 timeout 校验）；~~`resume` 缺状态白名单与进程锁~~（进程锁已由 R17 闭环；状态白名单仍缺）；~~过期 run 启动时自动 reconcile 仍缺~~（R17 已闭环，见 §3.22）。
+`stream_call` 仍是「只记账不设防」（async generator + failover 循环，预扣/归还配对复杂）；`RunPythonTool` 无文件 / 导入隔离（本轮只补了 timeout 校验）；~~`resume` 缺状态白名单与进程锁~~（均闭环：进程锁 R17，状态白名单 R22 §3.27）；~~过期 run 启动时自动 reconcile 仍缺~~（R17 已闭环，见 §3.22）。
 
 **11-06 已闭环**（见 §3.7）：`_max_review_attempts` 死字段接线、状态跃迁刷新停滞计时、内置工具逐段符号链接检查、`run_python` timeout、ledger 读端点越界归 400、`POST /runs` options 白名单、CLI 数值开关与坏 YAML、前端表单取值与三态反馈统一。
 

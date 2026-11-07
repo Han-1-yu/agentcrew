@@ -222,3 +222,27 @@ def test_stdio_transport_is_mcp_transport():
     client = MCPClient(["python", "-c", "pass"])
     assert isinstance(client._transport, StdioTransport)
     assert isinstance(client._transport, MCPTransport)
+
+
+# ── R22：stdio 管道显式关闭（消除 unclosed transport 警告） ───────────
+
+
+async def test_stdio_close_shuts_down_pipes():
+    """close() 必须把三条管道的 asyncio 传输一并关掉，不留 GC 警告。"""
+    import sys
+
+    transport = StdioTransport(
+        [sys.executable, "-c", "import time; time.sleep(60)"])
+    await transport.connect()
+    proc = transport._proc
+    assert proc is not None
+    await transport.close()
+    assert proc.returncode is not None          # 子进程已退出
+    assert transport._proc is None
+    for stream in (proc.stdin, proc.stdout, proc.stderr):
+        if stream is None:
+            continue
+        if hasattr(stream, "transport"):
+            assert stream.transport is None or stream.transport.is_closing()
+        else:
+            assert stream._transport is None or stream._transport.is_closing()

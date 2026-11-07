@@ -2641,4 +2641,24 @@ R16 封装 SDK 时发现 `openapi.yaml` 一直缺 ``/providers`` 族与执行体
 17 个方法不受影响；后续要封装新端点时契约先行的路径已经打通。
 
 
+## R22 resume 状态白名单 + MCP 管道资源关闭
+
+两个六层审计遗留小项一起收口：
+
+**resume 状态白名单**（R17 只补了进程锁那一半）。`Crew.resume_from` 现在拒绝
+两种状态：**completed**（终局成功不是崩溃产物，续跑没有意义）与 **running 且
+心跳文件新鲜**——R17+ 的活进程每 30s 写心跳，这是「正被另一进程跑着」的明确
+信号，再 resume 会双写坏 checkpoint（此前没有任何机制拦住）。其余状态全部放行，
+包括 **failed**（未处理异常的兜底封版会把崩溃当场记成 FAILED，拒了它就堵死
+崩溃恢复）与无心跳文件的老 run（无法区分死活，保留既有恢复行为，与 reconcile
+的 24h 判据口径一致）。拒绝走 `ValueError`：CLI `resume` 打印可读提示，
+API `/runs/{id}/resume` 转 4xx。
+
+**MCP stdio 管道显式关闭**。`StdioTransport.close()` 此前只 terminate 子进程，
+stdin/stdout/stderr 三条管道的 asyncio 传输句柄留给 GC，每次 run 收尾都报
+`unclosed transport` 警告；现在进程退出后立即关闭（stdout/stderr 是
+`StreamReader`，asyncio 子进程包装没有公开关闭口，需经其底层 transport）。
+
+
+
 

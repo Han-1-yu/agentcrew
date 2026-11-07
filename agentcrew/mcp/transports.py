@@ -121,6 +121,20 @@ class StdioTransport(MCPTransport):
                 await self._proc.wait()
             except (ProcessLookupError, asyncio.TimeoutError):
                 pass
+        finally:
+            # 管道显式关闭：进程退出并不会关掉 asyncio 侧的传输句柄，
+            # 留给 GC 会报 "unclosed transport" 警告（审计遗留小项）。
+            # stdin 是 StreamWriter（公开 close）；stdout/stderr 是
+            # StreamReader——asyncio 子进程包装没有暴露公开的关闭口，
+            # 只能用它持有的底层 transport（``_transport``，与 asyncio
+            # 内部实现同源，3.10–3.13 均稳定存在）。
+            for stream in (self._proc.stdin, self._proc.stdout, self._proc.stderr):
+                if stream is None:
+                    continue
+                if hasattr(stream, "close"):
+                    stream.close()
+                elif getattr(stream, "_transport", None) is not None:
+                    stream._transport.close()  # type: ignore[attr-defined]
         self._proc = None
 
 
