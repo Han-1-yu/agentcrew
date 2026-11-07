@@ -36,6 +36,11 @@ CONDITIONAL_SKIP_REASONS = frozenset(
     (CONDITION_SKIP_REASON, CONDITION_SKIP_PROPAGATED)
 )
 
+#: R31：条件边的两个特殊写法。``!label`` = 否定（没有任何上游声明该标签），
+#: ``*`` = 兜底（只要有上游就算命中）。仍是枚举，不引表达式引擎。
+NEGATION_PREFIX = "!"
+FALLBACK_LABEL = "*"
+
 _OUTCOME_RE = re.compile(
     r"<outcome>\s*([^<]{1,64}?)\s*</outcome>", re.IGNORECASE
 )
@@ -56,6 +61,23 @@ def normalize_outcome(raw: Any) -> str | None:
     if not label or _OUTCOME_LABEL_RE.fullmatch(label) is None:
         return None
     return label
+
+
+def normalize_condition(raw: Any) -> str | None:
+    """把 ``when_outcomes`` 的一项收敛成 ``"label"`` / ``"!label"`` / ``"*"``。
+
+    非法项返回 ``None``（由校验层报错）。与 :func:`normalize_outcome` 分开：
+    结果标签本身不允许否定或通配（``<outcome>!x</outcome>`` 是无效标签）。
+    """
+    if not isinstance(raw, str):
+        return None
+    text = raw.strip().lower()
+    if text == FALLBACK_LABEL:
+        return FALLBACK_LABEL
+    if text.startswith(NEGATION_PREFIX):
+        label = normalize_outcome(text[len(NEGATION_PREFIX):])
+        return f"{NEGATION_PREFIX}{label}" if label else None
+    return normalize_outcome(text)
 
 
 def parse_outcome(text: str) -> str | None:
@@ -87,20 +109,39 @@ def is_conditional_skip(task: Task) -> bool:
 
 
 def condition_matches(task: Task, upstream_outcomes: list[str | None]) -> bool:
-    """``task`` 的条件边是否被上游结果命中。
+    """``task`` 的条件边是否被上游结果命中（三项之间是 **OR**）。
 
     ``upstream_outcomes`` 按 ``task.dependencies`` 顺序给出每个上游的
     ``TaskResult.outcome``（未声明为 ``None``）。无 ``when_outcomes`` 的任务
     恒为 True（无条件任务）。
+
+    R31 起，``when_outcomes`` 的每一项可以是：
+
+    - ``label``：任一上游声明了该标签 → 命中（R4 原语义）；
+    - ``!label``：**没有任何**上游声明该标签 → 命中（否定边，表达「除了 X 都走」）；
+    - ``*``：只要有上游 → 命中（兜底边，常与否定标签组合表达 else 分支）。
+
+    否定边要求「上游已到终局」这一点由调用方保证（``task_board`` 只在全部依赖
+    ``SETTLED_STATUSES`` 后判条件），所以这里不需要再等。
     """
     if not task.when_outcomes:
         return True
-    declared = {normalize_outcome(item) for item in task.when_outcomes}
+    declared = {normalize_condition(item) for item in task.when_outcomes}
     declared.discard(None)
     if not declared:
         return True
+    if FALLBACK_LABEL in declared:
+        return bool(upstream_outcomes)
     observed = {
         normalize_outcome(item) for item in upstream_outcomes
     }
     observed.discard(None)
-    return bool(declared & observed)
+    positives = {item for item in declared if not item.startswith(NEGATION_PREFIX)}
+    negations = {
+        item[len(NEGATION_PREFIX):]
+        for item in declared if item.startswith(NEGATION_PREFIX)
+    }
+    if positives & observed:
+        return True
+    # 否定边：**所有**否定项都要成立（``!a`` + ``!b`` = 既不是 a 也不是 b）。
+    return bool(negations) and not (negations & observed)

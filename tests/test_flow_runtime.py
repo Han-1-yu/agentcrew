@@ -173,6 +173,51 @@ def test_condition_matches():
     assert condition_matches(_task("C"), [None]) is True  # 无条件任务恒通过
 
 
+# ── R31：否定边与兜底边 ────────────────────────────────────────────────
+
+def test_negated_condition_hits_when_label_absent():
+    negated = _task("B", deps=["A"], when=["!auth-required"])
+    assert condition_matches(negated, ["no-auth"]) is True
+    assert condition_matches(negated, ["auth-required"]) is False
+    assert condition_matches(negated, [None]) is True   # 上游没声明 → 不等于该标签
+
+
+def test_multiple_negations_are_all_required():
+    """``!a`` + ``!b`` = 既不是 a 也不是 b（否定项之间是 AND）。"""
+    task = _task("B", deps=["A"], when=["!a", "!b"])
+    assert condition_matches(task, ["c"]) is True
+    assert condition_matches(task, ["a"]) is False
+    assert condition_matches(task, ["b"]) is False
+
+
+def test_positive_and_negated_are_or_combined():
+    task = _task("B", deps=["A"], when=["ok", "!failed"])
+    assert condition_matches(task, ["ok"]) is True
+    assert condition_matches(task, ["other"]) is True    # 命中否定项
+    assert condition_matches(task, ["failed"]) is False  # 两条件都不成立
+
+
+def test_fallback_label_matches_any_upstream():
+    task = _task("B", deps=["A"], when=["*"])
+    assert condition_matches(task, ["anything"]) is True
+    assert condition_matches(task, [None]) is True
+    assert condition_matches(task, []) is False          # 没有上游 = 兜底也不成立
+
+
+def test_condition_validation_accepts_negation_and_rejects_bare_prefix():
+    from agentcrew.crew.crew import build_catalog
+    from agentcrew.task.planner import PlanValidationError, validate_plan
+
+    catalog = build_catalog(Settings.load())
+    upstream = _task("A")
+    ok = _task("B", deps=["A"], when=["!failed"])
+    validate_plan([upstream, ok], catalog)               # 不抛 = 接受
+
+    bad = _task("C", deps=["A"], when=["!"])
+    with pytest.raises(PlanValidationError, match="非法条件"):
+        validate_plan([upstream, bad], catalog)
+
+
 # ── TaskBoard：分支传播与汇合 ──────────────────────────────────────────
 
 def test_condition_branch_only_runs_matching_tasks():

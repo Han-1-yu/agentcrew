@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from agentcrew.artifacts.spec import ArtifactSpec
 from agentcrew.roles.catalog import RoleCatalog
-from agentcrew.task.conditions import normalize_outcome
+from agentcrew.task.conditions import normalize_condition, normalize_outcome
 from agentcrew.task.graph import TaskGraph
 from agentcrew.task.task import Task
 
@@ -176,10 +176,11 @@ def _check_condition_edges(tasks: Sequence[Task]) -> list[str]:
                 "条件边必须挂在至少一个上游任务之后"
             )
         for raw in task.when_outcomes:
-            if normalize_outcome(raw) is None:
+            if normalize_condition(raw) is None:
                 errors.append(
-                    f"任务 {task.id!r} 的 when_outcomes 含非法标签 {raw!r}："
-                    "只允许小写字母/数字/下划线/连字符，长度 1–64"
+                    f"任务 {task.id!r} 的 when_outcomes 含非法条件 {raw!r}："
+                    "允许小写字母/数字/下划线/连字符的标签（1–64），"
+                    "或否定写法 !label，或兜底写法 *"
                 )
     return errors
 

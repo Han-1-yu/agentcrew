@@ -13,7 +13,7 @@
 |---|---|
 | 已提交 | R3–R18；R18 是最新提交（具体 hash 以 `git log -1` 为准） |
 | **未提交** | **无，工作区干净**（R18 已于 2026-11-07 提交） |
-| 测试 | R30 后全量 **2603 passed / 1 skipped / 0 failed**（2604 collected；分 5 批实测） |
+| 测试 | R31 后全量 **2608 passed / 1 skipped / 0 failed**（2609 collected；分 5 批实测） |
 | 静态检查 | `ruff check .` 全绿 · `mypy agentcrew/` 114 文件零错误（本机 3.12 首次跑通 CI 等价检查链） |
 | 离线样例 | `todo` 9/9 · `linear` 5/5 · `hierarchy` 7/7，全部 `completed` |
 | 一句话定位 | 8 角色多 Agent 编排器：规划 → 执行 → 三层门禁 → 交付；可完全离线（mock）跑通 |
@@ -364,6 +364,7 @@ PROJECT-STATE §3.19–§3.23 与本文 §0 的状态口径已对齐，工作区
 | R28 | 从画布起跑（流程直通规划 + `run --flow` + `options.flow`） | 已提交（2026-11-07） |
 | R29 | 实体记忆向量化（混合打分，不加列不迁移） | 已提交（2026-11-07） |
 | R30 | 审批单超时与告警（`approval_timeout_seconds` + `expired` + 事件） | 已提交（2026-11-07） |
+| R31 | 条件边否定/兜底（`!label`、`*`，不引表达式引擎） | 已提交（2026-11-07） |
 
 R3–R8 之所以合并成一个提交：`config.py` / `crew.py` / `main.py` / `api/server.py` 四个文件
 被多轮同时改，`git add` 是文件粒度，按轮切分会把不同轮的改动硬塞进一个提交。
