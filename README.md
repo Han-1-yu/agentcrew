@@ -2767,3 +2767,37 @@ python main.py flow list                    # 已保存流程
 条件边（`when_outcomes`）在画布上以橙色连线 + 标签呈现，与引擎的
 「上游 `<outcome>` 命中才执行」语义一致。
 
+
+## R27 向量检索
+
+经验检索从「BM25 单通道」升级为「BM25 + 向量」混合，**默认关闭**——不配就是
+R11 的行为，与改造前逐字一致。
+
+```bash
+# 用真实 embedding（密钥复用该 provider 的 *_API_KEY）
+AGENTCREW_EMBEDDING_ENABLED=true AGENTCREW_EMBEDDING_MODEL=openai:text-embedding-3-small python main.py recall "幂等的重试应该怎么做"
+```
+
+| 配置 | 作用 |
+|---|---|
+| `embedding_enabled` | 总开关（默认 false） |
+| `embedding_model` | `<provider>:<model>` 别名；空串 = 只用本地哈希向量 |
+| `embedding_dim` | 维度，0 = 自动推断（本地退化 512） |
+| `retrieval_vector_weight` | 混合权重，0 = 纯 BM25，1 = 纯向量，默认 0.5 |
+
+**三条诚实边界**：
+
+1. **没网络也能跑**：缺密钥 / 端点失败时自动降级为**本地哈希向量**（字符
+   n-gram 哈希到 512 维、确定性、零成本），但它在输出与事件里都标明
+   `cached:hash`——它只捕捉字面重合，不捕捉近义，语义质量明显弱于真实模型；
+2. **不重复计费**：向量按 `sha256(model+text)` 落盘缓存在
+   `<output>/_cache/embeddings.jsonl`，同一文本第二次检索不再打网络；
+3. **失败可见**：端点错误降级回纯 BM25 并发 `embedding_fallback` 事件
+   （带原因），不静默假装用了向量。
+
+打分：BM25 分按本批最大值归一到 [0,1]，再与余弦相似度按权重线性加权——
+两种分量级差几个数量级，不归一的话权重参数等于假的。
+
+**实体记忆**仍是 BM25（`entities.jsonl` 的检索走原路径），这是本轮的已知边界：
+把实体也向量化需要给实体库加向量列与迁移，留作后续。
+

@@ -16,11 +16,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
+from agentcrew.knowledge.embeddings import cosine
 from agentcrew.knowledge.retrieval import BM25Index
 
 
@@ -80,24 +82,48 @@ class ExperienceStore:
         *,
         role: str | None = None,
         limit: int = 5,
+        doc_vectors: Sequence[Sequence[float]] | None = None,
+        query_vector: Sequence[float] | None = None,
+        vector_weight: float = 0.5,
     ) -> list[Experience]:
-        """按任务描述检索相关经验，返回 BM25 得分最高的前 ``limit`` 条。
+        """按任务描述检索相关经验，返回得分最高的前 ``limit`` 条。
 
         ``role`` 给定时先按角色过滤——这是硬约束，索引也只建在过滤后的候选上，
         免得某个角色独有的词把 IDF 带偏。零命中时返回空列表，而不是把整库端上来：
         「相关」必须至少真的沾边。
+
+        R27 向量混合：给了 ``doc_vectors``（与 ``self.all()`` 同序）和
+        ``query_vector`` 时按 ``(1-w)*BM25归一 + w*余弦`` 打分；权重 0 等价于
+        纯 BM25（行为与 R11 一致）。向量通道不可用时调用方不传这两个参数即可。
         """
-        candidates = self.all()
-        if role is not None:
-            candidates = [exp for exp in candidates if exp.role == role]
+        all_experiences = self.all()
+        candidates = [
+            (offset, exp) for offset, exp in enumerate(all_experiences)
+            if role is None or exp.role == role
+        ]
         if not candidates:
             return []
-        index = BM25Index([self._haystack(exp) for exp in candidates])
-        return [candidates[offset]
-                for offset, _ in index.search(task_description, max(0, limit))]
+        index = BM25Index([self.haystack(exp) for _, exp in candidates])
+        bm25_hits = index.search(task_description, max(0, limit) * 4 or 0)
+        bm25_scores = {offset: score for offset, score in bm25_hits}
+        if (doc_vectors is None or query_vector is None
+                or len(doc_vectors) != len(all_experiences)):
+            return [candidates[offset][1] for offset, _ in bm25_hits[:max(0, limit)]]
+
+        weight = min(1.0, max(0.0, float(vector_weight)))
+        ceiling = max(bm25_scores.values(), default=0.0) or 1.0
+        scored: list[tuple[int, float]] = []
+        for offset, _exp in candidates:
+            text_score = bm25_scores.get(offset, 0.0) / ceiling
+            semantic = max(0.0, cosine(query_vector, doc_vectors[offset]))
+            total = (1.0 - weight) * text_score + weight * semantic
+            if total > 0:
+                scored.append((offset, total))
+        scored.sort(key=lambda item: (-item[1], item[0]))
+        return [candidates[offset][1] for offset, _ in scored[:max(0, limit)]]
 
     @staticmethod
-    def _haystack(exp: Experience) -> str:
+    def haystack(exp: Experience) -> str:
         """一条经验参与检索的全文：任务描述 + 解决方案 + 关键决策。
 
         产物路径不参与：它们区分度低（大量 ``utils.py`` 之类），又容易让同一批
@@ -108,7 +134,15 @@ class ExperienceStore:
              " ".join(exp.key_decisions))
         )
 
-    def inject_context(self, goal: str, *, limit: int = 3) -> str:
+    def inject_context(
+        self,
+        goal: str,
+        *,
+        limit: int = 3,
+        doc_vectors: Sequence[Sequence[float]] | None = None,
+        query_vector: Sequence[float] | None = None,
+        vector_weight: float = 0.5,
+    ) -> str:
         """检索与项目目标相关的历史经验，渲染成可直接拼进 PM 上下文的文本。
 
         无相关经验（空库或零命中）时返回空串——调用方据此不注入任何内容，行为与
@@ -122,7 +156,8 @@ class ExperienceStore:
         - 关键决策：<key_decisions>
         ```
         """
-        exps = self.query(goal, limit=limit)
+        exps = self.query(goal, limit=limit, doc_vectors=doc_vectors,
+                         query_vector=query_vector, vector_weight=vector_weight)
         if not exps:
             return ""
         lines = ["## 历史经验（来自之前的成功 run）"]

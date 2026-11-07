@@ -67,6 +67,10 @@ _ENV_TO_FIELD: dict[str, str] = {
     "AGENTCREW_AFFINITY_MODE": "affinity_mode",
     "AGENTCREW_TOOLS_ENABLED": "tools_enabled",
     "AGENTCREW_ENTITY_MEMORY_ENABLED": "entity_memory_enabled",
+    "AGENTCREW_EMBEDDING_ENABLED": "embedding_enabled",
+    "AGENTCREW_EMBEDDING_MODEL": "embedding_model",
+    "AGENTCREW_EMBEDDING_DIM": "embedding_dim",
+    "AGENTCREW_RETRIEVAL_VECTOR_WEIGHT": "retrieval_vector_weight",
     "AGENTCREW_APPROVAL_MODE": "approval_mode",
     "AGENTCREW_PEER_DIALOGUE_ENABLED": "peer_dialogue_enabled",
     "AGENTCREW_DEBUG_STEP": "debug_step",
@@ -95,6 +99,9 @@ _YAML_SCALAR_KEYS = (
     "max_concurrency", "context_budget_tokens", "gate", "roles_dir",
     # R3：两个能力开关都是顶层标量，走与 max_concurrency 同一条读取/合并路径。
     "tools_enabled", "entity_memory_enabled", "approval_mode",
+    # R27：向量检索通道与混合权重。
+    "embedding_enabled", "embedding_model", "embedding_dim",
+    "retrieval_vector_weight",
     # R5：跨角色咨询的能力开关与配额。
     "peer_dialogue_enabled", "max_peer_messages",
     # R6：动态委派的治理参数。
@@ -736,6 +743,26 @@ class Settings(BaseModel):
     关闭时既不写实体库、也不发任何相关事件，PM 提示词与 R3 之前一致。
     环境变量 ``AGENTCREW_ENTITY_MEMORY_ENABLED=true``，或 YAML 顶层
     ``entity_memory_enabled: true``。
+    """
+    embedding_enabled: bool = False
+    """R27：向量检索通道（默认**关闭**）。
+
+    关闭时检索与 R11 完全一致（纯 BM25）；开启后经验检索走「BM25 + 余弦」混合
+    打分，embedding 端点从 ``embedding_model``（``"<provider>:<model>"``）解析，
+    密钥复用该 provider 的 ``*_API_KEY``。**没配端点或没有密钥时降级为本地
+    哈希向量**（确定、可复现，但只捕捉字面重合，语义质量明显弱于真实模型）。
+    环境变量 ``AGENTCREW_EMBEDDING_ENABLED=true``。
+    """
+    embedding_model: str = ""
+    """R27：embedding 模型别名，如 ``"openai:text-embedding-3-small"``；
+    空串表示只用本地哈希向量。"""
+    embedding_dim: int = 0
+    """R27：向量维度；``0`` = 由第一次响应自动推断（本地退化为 512）。"""
+    retrieval_vector_weight: float = 0.5
+    """R27：混合权重，``0`` = 纯 BM25，``1`` = 纯向量；默认 0.5。
+
+    BM25 分先按本批最大值归一到 [0,1] 再加权——两种分的量纲差几个数量级，
+    不归一的话权重参数等于假的。
     """
     peer_dialogue_enabled: bool = False
     """R5：Agent 间真实咨询（``<message to="…">``）——默认**关闭**。

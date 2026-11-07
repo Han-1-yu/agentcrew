@@ -160,35 +160,35 @@ def test_query_and_inject_context(tmp_path: Path):
 
 # ── Crew 接线 ──────────────────────────────────────────────────────────
 
-def test_crew_switch_defaults_off(tmp_path: Path):
+async def test_crew_switch_defaults_off(tmp_path: Path):
     # output_dir 必须隔离到 tmp_path，否则会读到仓库 output/ 里的真实历史经验库
     crew = Crew(Settings.load(output_dir=tmp_path))
     assert crew._entity_memory_enabled is False
     run = _run_stub(tmp_path)
-    assert crew._prepare_knowledge_context(run) == ""  # type: ignore[arg-type]
+    assert await crew._prepare_knowledge_context(run) == ""  # type: ignore[arg-type]
     assert run.ledger.count("entity_memory_reused") == 0
 
 
-def test_crew_explicit_override(tmp_path: Path):
+async def test_crew_explicit_override(tmp_path: Path):
     crew = Crew(Settings.load(output_dir=tmp_path), entity_memory_enabled=True)
     assert crew._entity_memory_enabled is True
 
 
-def test_prepare_context_injects_entities_when_enabled(tmp_path: Path):
+async def test_prepare_context_injects_entities_when_enabled(tmp_path: Path):
     EntityMemoryStore(tmp_path).append([
         _record("FastAPI", context="FastAPI 提供 REST 接口")
     ])
     crew = Crew(Settings.load(output_dir=tmp_path),
                 entity_memory_enabled=True, reuse_knowledge=False)
     run = _run_stub(tmp_path, goal="用 FastAPI 做接口")
-    hint = crew._prepare_knowledge_context(run)  # type: ignore[arg-type]
+    hint = await crew._prepare_knowledge_context(run)  # type: ignore[arg-type]
     assert "## 实体记忆" in hint
     assert "`FastAPI`" in hint
     assert run.ledger.count("entity_memory_reused") == 1
     assert run.ledger.count("knowledge_reused") == 0, "reuse_knowledge=False 应完全隔离经验块"
 
 
-def test_prepare_context_appends_entity_block_after_experience(tmp_path: Path):
+async def test_prepare_context_appends_entity_block_after_experience(tmp_path: Path):
     """两个开关同开时按「经验 → 实体」拼接；单独开经验时与改造前逐字一致。"""
     ExperienceStore(tmp_path).add(_exp())
     EntityMemoryStore(tmp_path).append([
@@ -196,13 +196,15 @@ def test_prepare_context_appends_entity_block_after_experience(tmp_path: Path):
     ])
     settings = Settings.load(output_dir=tmp_path)
     run_default = _run_stub(tmp_path, goal="FastAPI 待办清单")
-    legacy = Crew(settings, reuse_knowledge=True)._prepare_knowledge_context(
+    legacy = await Crew(
+        settings, reuse_knowledge=True)._prepare_knowledge_context(
         run_default)  # type: ignore[arg-type]
     assert legacy.startswith("## 历史经验")
     assert "实体记忆" not in legacy
 
     run_both = _run_stub(tmp_path, goal="FastAPI 待办清单")
-    both = Crew(settings, entity_memory_enabled=True)._prepare_knowledge_context(
+    both = await Crew(
+        settings, entity_memory_enabled=True)._prepare_knowledge_context(
         run_both)  # type: ignore[arg-type]
     assert both.startswith("## 历史经验")
     assert "## 实体记忆" in both

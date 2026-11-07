@@ -919,7 +919,7 @@ class Crew:
         feedback: tuple[str, ...] = ()
         errors: list[str] = []
         # P3-7：整个规划循环共享同一份历史经验参考（与具体 attempt 无关）。
-        context_hint = self._prepare_knowledge_context(run)
+        context_hint = await self._prepare_knowledge_context(run)
         attempts = max(1, self._settings.plan_max_attempts)
         for attempt in range(1, attempts + 1):
             try:
@@ -1562,24 +1562,34 @@ class Crew:
         )
         return registry
 
-    def _prepare_knowledge_context(self, run: _Run) -> str:
-        """P3-7 + R3：规划前检索历史经验与实体记忆，拼成 PM 的 ``context_hint``。
+    async def _prepare_knowledge_context(self, run: _Run) -> str:
+        """P3-7 + R3 + R27：规划前检索历史经验与实体记忆，拼成 PM 的 ``context_hint``。
 
         两块各自有独立开关与独立留痕。``entity_memory_enabled`` 默认关闭，此时
         返回值与改造前**逐字一致**（有经验命中就是经验块本身，无命中就是空串）——
         不会多一个换行、也不会多发一个事件。
+
+        R27：``embedding_enabled`` 时把经验库与查询词一起算成向量，走混合打分；
+        embedding 端点失败**不炸 run**——降级回纯 BM25 并留一条
+        ``embedding_fallback`` 事件（失败要可见，但不能让检索把整场 run 拖死）。
         """
         blocks: list[str] = []
         if self._reuse_knowledge_enabled:
             store = ExperienceStore(self._settings.output_dir)
-            matched = store.query(run.goal, limit=3)
+            vectors = await self._retrieval_vectors(run, store)
+            matched = store.query(run.goal, limit=3,
+                                  doc_vectors=vectors[0], query_vector=vectors[1],
+                                  vector_weight=self._settings.retrieval_vector_weight)
             if matched:
                 run.ledger.emit(
                     "knowledge_reused",
                     goal=run.goal,
                     matched_experiences=len(matched),
                 )
-                blocks.append(store.inject_context(run.goal, limit=3))
+                blocks.append(store.inject_context(
+                    run.goal, limit=3,
+                    doc_vectors=vectors[0], query_vector=vectors[1],
+                    vector_weight=self._settings.retrieval_vector_weight))
         if self._entity_memory_enabled:
             entities = EntityMemoryStore(self._settings.output_dir)
             matched_entities = entities.query(run.goal, limit=8)
@@ -1591,6 +1601,41 @@ class Crew:
                 )
                 blocks.append(entities.inject_context(run.goal, limit=8))
         return "\n\n".join(blocks)
+
+    async def _retrieval_vectors(
+        self, run: _Run, store: ExperienceStore
+    ) -> tuple[list[list[float]] | None, list[float] | None]:
+        """R27：为经验库与当前目标准备向量；不可用返回 ``(None, None)``。
+
+        端点失败 / 未配置都走降级：检索退回纯 BM25，并留一条
+        ``embedding_fallback`` 事件说明原因——静默降级会让人以为用了向量。
+        """
+        if not self._settings.embedding_enabled:
+            return None, None
+        from agentcrew.knowledge.embeddings import EmbeddingError, build_embedder
+        from agentcrew.models.embedding import embedding_target
+
+        embedder = build_embedder(
+            self._settings, output_dir=self._settings.output_dir,
+            target=embedding_target(self._settings))
+        if embedder is None:
+            return None, None
+        try:
+            experiences = store.all()
+            if not experiences:
+                return None, None
+            doc_vectors = await embedder.embed(
+                [store.haystack(exp) for exp in experiences])
+            query_vectors = await embedder.embed([run.goal])
+        except EmbeddingError as exc:
+            run.ledger.emit("embedding_fallback",
+                            reason=str(exc), embedder=embedder.name)
+            return None, None
+        run.ledger.emit("embedding_used", embedder=embedder.name,
+                        documents=len(doc_vectors),
+                        dim=len(doc_vectors[0]) if doc_vectors else 0,
+                        vector_weight=self._settings.retrieval_vector_weight)
+        return doc_vectors, query_vectors[0]
 
     def _make_consult_recorder(self, run: _Run) -> Callable[..., None]:
         """R6：把一次真实咨询的问答对写进全局经验库（默认关闭时不会构造）。

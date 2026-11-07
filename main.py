@@ -260,6 +260,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_flow_l = flow_sub.add_parser("list", help="列出已保存流程")
     p_flow_l.add_argument("--json", action="store_true", help="输出 JSON")
     flow_sub.add_parser("sample", help="打印示例流程 YAML（可重定向成文件）")
+    p_recall = sub.add_parser(
+        "recall", help="R27：按查询词检索历史经验（验证 BM25 / 向量混合排序）")
+    p_recall.add_argument("query", help="查询词 / 任务描述")
+    p_recall.add_argument("--role", default=None, help="只检索该角色的经验")
+    p_recall.add_argument("--limit", type=int, default=5, help="返回条数（默认 5）")
+    p_recall.add_argument("--json", action="store_true", help="输出 JSON")
     for _flow_parser in (p_flow_v, p_flow_l):
         _flow_parser.add_argument(
             "--output-dir", metavar="DIR", help="output 目录（定位 _flows/）")
@@ -1046,6 +1052,60 @@ def _cmd_flow(args: argparse.Namespace) -> int:
             _out(console, f"  - {error}")
         return EXIT_CODES["plan"]
     _out(console, f"流程合法：{spec.name} · {len(spec.tasks)} 个任务")
+    return EXIT_CODES["ok"]
+
+
+def _cmd_recall(args: argparse.Namespace) -> int:
+    """R27：检索历史经验，打印排序结果——手工核对 BM25 / 混合打分的入口。
+
+    ``embedding_enabled`` 时用与 run 内相同的混合打分（同一 ``build_embedder``
+    与权重）；未启用或端点失败时自动退回纯 BM25，并在输出里写明用了哪条通道。
+    """
+    from agentcrew.knowledge.embeddings import EmbeddingError, build_embedder
+    from agentcrew.knowledge.experience import ExperienceStore
+
+    try:
+        settings = Settings.load()
+    except (OSError, ValueError) as exc:
+        return _fail(f"配置错误：{exc}")
+    store = ExperienceStore(settings.output_dir)
+    experiences = store.all()
+    if not experiences:
+        _out(Console(), f"经验库为空：{settings.output_dir / 'knowledge'}")
+        return EXIT_CODES["ok"]
+
+    doc_vectors = query_vector = None
+    channel = "bm25"
+    from agentcrew.models.embedding import embedding_target
+
+    embedder = build_embedder(settings, output_dir=settings.output_dir,
+                              target=embedding_target(settings))
+    if embedder is not None:
+        try:
+            doc_vectors = asyncio.run(
+                embedder.embed([store.haystack(exp) for exp in experiences]))
+            query_vector = asyncio.run(embedder.embed([args.query]))[0]
+            channel = embedder.name
+        except EmbeddingError as exc:
+            print(f"embedding 降级为 BM25：{exc}", file=sys.stderr)
+
+    matches = store.query(
+        args.query, role=args.role, limit=max(1, args.limit),
+        doc_vectors=doc_vectors, query_vector=query_vector,
+        vector_weight=settings.retrieval_vector_weight)
+    if args.json:
+        print(json.dumps({
+            "channel": channel, "query": args.query,
+            "results": [{"task": exp.task_description, "role": exp.role,
+                         "solution": exp.solution_summary} for exp in matches],
+        }, ensure_ascii=False, indent=2))
+        return EXIT_CODES["ok"]
+    console = Console()
+    _out(console, f"检索「{args.query}」（通道 {channel} · 权重 "
+                  f"{settings.retrieval_vector_weight}）：{len(matches)} 条")
+    for index, exp in enumerate(matches, start=1):
+        _out(console, f"{index}. [{exp.role}] {exp.task_description}")
+        _out(console, f"   {exp.solution_summary}")
     return EXIT_CODES["ok"]
 
 
@@ -1899,6 +1959,7 @@ _HANDLERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "tool": _cmd_tool,
     "keys": _cmd_keys,
     "flow": _cmd_flow,
+    "recall": _cmd_recall,
     "agents": _cmd_agents,
     "switch": _cmd_switch,
     "samples": _cmd_samples,
