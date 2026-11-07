@@ -126,8 +126,8 @@ def condition_matches(task: Task, upstream_outcomes: list[str | None]) -> bool:
     """
     if not task.when_outcomes:
         return True
-    declared = {normalize_condition(item) for item in task.when_outcomes}
-    declared.discard(None)
+    raw_declared = {normalize_condition(item) for item in task.when_outcomes}
+    declared: set[str] = {item for item in raw_declared if item is not None}
     if not declared:
         return True
     if FALLBACK_LABEL in declared:

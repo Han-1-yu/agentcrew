@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from agentcrew.artifacts.spec import ArtifactSpec
 from agentcrew.roles.catalog import RoleCatalog
-from agentcrew.task.conditions import normalize_condition, normalize_outcome
+from agentcrew.task.conditions import normalize_condition
 from agentcrew.task.graph import TaskGraph
 from agentcrew.task.task import Task
 
