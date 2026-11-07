@@ -94,6 +94,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <button class="tab-btn active" onclick="switchTab('board', this)">看板</button>
   <button class="tab-btn" onclick="switchTab('ledger', this)">事件日志</button>
   <button class="tab-btn" onclick="switchTab('stats', this)">统计</button>
+  <button class="tab-btn" onclick="switchTab('tools', this)">工具</button>
 </div>
 <div class="tab-pane active" id="pane-board">
   <div class="board" id="board"></div>
@@ -110,6 +111,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <div class="tab-pane" id="pane-stats">
   <div id="stats-panel" style="color:#6e7681">连接一个 run 后显示统计</div>
 </div>
+<div class="tab-pane" id="pane-tools">
+  <div class="controls">
+    <span id="tools-state" style="color:#8b949e;font-size:12px"></span>
+    <button class="small" onclick="loadTools()">刷新工具</button>
+  </div>
+  <div id="tools-list" style="color:#6e7681;font-size:13px">加载中…</div>
+  <div id="tool-trial" style="display:none;margin-top:12px">
+    <h2 id="tool-trial-title" style="margin-bottom:6px"></h2>
+    <textarea id="tool-trial-args" spellcheck="false" style="width:100%;height:120px;background:#161b22;border:1px solid #30363d;color:#e1e4e8;border-radius:6px;padding:8px;font-family:ui-monospace,Consolas,monospace;font-size:13px"></textarea>
+    <div class="controls" style="margin-top:8px">
+      <button class="small" onclick="runToolTrial()">运行</button>
+      <button class="small" id="tool-trial-close" onclick="closeToolTrial()">关闭</button>
+      <span id="tool-trial-status" style="color:#8b949e;font-size:12px"></span>
+    </div>
+    <pre id="tool-trial-result" class="log" style="height:240px;white-space:pre-wrap"></pre>
+  </div>
+</div>
 
 <script>
 const STATUSES = ["pending", "ready", "running", "review", "rework", "succeeded", "failed", "blocked", "cancelled", "skipped"];
@@ -124,6 +142,7 @@ function switchTab(name, btn) {
   btn.classList.add("active");
   if (name === "ledger" && currentRun) loadLedger();
   if (name === "stats" && currentRun) loadStats();
+  if (name === "tools") loadTools();
 }
 
 // ── Run 列表（P2-10）───────────────────────────────────────────────────
@@ -453,6 +472,123 @@ async function switchModel() {
       alert(`切换失败（${resp.status}）：${data.error || resp.statusText}`);
     }
   } catch (e) { alert(`请求失败：${e}`); }
+}
+
+// ── R24：工具管理 + 单工具试跑 ──────────────────────────────────────
+let toolsCache = null;
+let trialTool = null;
+
+async function loadTools() {
+  const box = document.getElementById("tools-list");
+  const state = document.getElementById("tools-state");
+  if (!box) return;
+  try {
+    const resp = await fetch("/tools");
+    const data = await resp.json();
+    if (!resp.ok) {
+      box.textContent = `加载失败（${resp.status}）：${data.error || ""}`;
+      return;
+    }
+    toolsCache = data.tools || [];
+    state.textContent = data.tools_enabled
+      ? `工具执行已开启 · 试跑沙箱：${data.trial_dir}/（相对 output 目录）`
+      : "工具执行未开启（AGENTCREW_TOOLS_ENABLED=true）——可查看，不能试跑";
+    renderTools();
+  } catch (e) {
+    box.textContent = `请求失败：${e}`;
+  }
+}
+
+function renderTools() {
+  const box = document.getElementById("tools-list");
+  if (!toolsCache || !toolsCache.length) { box.textContent = "没有工具"; return; }
+  box.innerHTML = "";
+  for (const tool of toolsCache) {
+    const schema = tool.input_schema || {};
+    const req = (schema.required || []).join("、") || "无必填";
+    const row = document.createElement("div");
+    row.className = "run-card";
+    row.style.marginBottom = "8px";
+    const head = document.createElement("div");
+    head.style.cssText = "display:flex;justify-content:space-between;align-items:center";
+    const title = document.createElement("strong");
+    title.textContent = tool.name;
+    const right = document.createElement("span");
+    right.style.cssText = "display:flex;gap:8px;align-items:center";
+    const kind = document.createElement("span");
+    kind.className = "status-badge status-pending";
+    kind.textContent = tool.kind;
+    const btn = document.createElement("button");
+    btn.className = "small";
+    btn.textContent = "试跑";
+    btn.onclick = () => openToolTrial(tool.name);
+    right.append(kind, btn);
+    head.append(title, right);
+    const desc = document.createElement("div");
+    desc.style.cssText = "color:#8b949e;font-size:12px;margin-top:4px";
+    desc.textContent = tool.description;
+    const meta = document.createElement("div");
+    meta.style.cssText = "color:#6e7681;font-size:12px;margin-top:2px";
+    meta.textContent = `必填：${req}`;
+    row.append(head, desc, meta);
+    box.appendChild(row);
+  }
+}
+
+function openToolTrial(name) {
+  trialTool = name;
+  const tool = (toolsCache || []).find(item => item.name === name);
+  document.getElementById("tool-trial").style.display = "block";
+  document.getElementById("tool-trial-title").textContent = `试跑 ${name}`;
+  document.getElementById("tool-trial-status").textContent = "";
+  document.getElementById("tool-trial-result").textContent = "";
+  const sample = {};
+  const props = (tool && tool.input_schema && tool.input_schema.properties) || {};
+  for (const key of Object.keys(props)) {
+    const rule = props[key] || {};
+    if (rule.type === "string") sample[key] = "";
+    else if (rule.type === "integer" || rule.type === "number") sample[key] = 0;
+    else if (rule.type === "boolean") sample[key] = false;
+    else sample[key] = null;
+  }
+  document.getElementById("tool-trial-args").value = JSON.stringify(sample, null, 2);
+}
+
+function closeToolTrial() {
+  document.getElementById("tool-trial").style.display = "none";
+  trialTool = null;
+}
+
+async function runToolTrial() {
+  if (!trialTool) return;
+  const status = document.getElementById("tool-trial-status");
+  const out = document.getElementById("tool-trial-result");
+  let args;
+  try {
+    args = JSON.parse(document.getElementById("tool-trial-args").value || "{}");
+  } catch (e) {
+    status.textContent = `入参不是合法 JSON：${e}`;
+    return;
+  }
+  status.textContent = "运行中…";
+  out.textContent = "";
+  try {
+    const resp = await fetch(`/tools/${encodeURIComponent(trialTool)}/test`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ args })
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      status.textContent = `失败（${resp.status}）`;
+      out.textContent = data.error || "";
+      return;
+    }
+    status.textContent = `${data.ok ? "成功" : "工具报错"} · ${data.duration_ms}ms · 沙箱 ${data.sandbox}`;
+    out.textContent = data.ok ? (data.result || "") : (data.error || "");
+  } catch (e) {
+    status.textContent = `请求失败：${e}`;
+  }
 }
 
 initBoard();

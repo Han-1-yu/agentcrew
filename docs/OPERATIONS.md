@@ -542,6 +542,12 @@ python main.py diff <run_a> <run_b> --json
 `status` / `approvals` / ledger 负责看「任务为什么做成这样」。开关默认关闭，
 关闭时执行路径与开启前逐字一致。
 
+**单工具试跑（R24）**：`python main.py tools` 列工具，`python main.py tool
+<name> --args '{"path":"a.txt"}'` 在 `<output>/_tool_trial/` 沙箱里试跑一个工具；
+HTTP 等价物是 `GET /tools` 与 `POST /tools/{name}/test`，看板首页「工具」标签页
+也能跑。**需要 `tools_enabled=true`**（未开时试跑回 409/退出码 3，清单仍可看）；
+试跑只写自己的沙箱，不碰 run 目录与仓库文件。
+
 ### 7.5 已知环境问题（Windows + Git Bash）
 
 | 现象 | 处理 |

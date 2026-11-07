@@ -243,6 +243,8 @@ API_ROUTES: tuple[tuple[str, str], ...] = (
     ("GET", "/providers"),
     ("GET", "/providers/{name}/models"),
     ("POST", "/providers/{name}/test"),
+    ("GET", "/tools"),
+    ("POST", "/tools/{name}/test"),
 )
 
 
@@ -498,6 +500,9 @@ class ApiServer:
         if p == "/runs":
             await self._list_runs(writer)
             return
+        if p == "/tools":
+            await self._list_tools(writer)
+            return
         segments = [unquote(s) for s in p.split("/") if s]
         # A5：/providers 目录与 /providers/{name}/models
         if segments and segments[0] == "providers":
@@ -662,6 +667,10 @@ class ApiServer:
             query = parse_qs(parsed.query)
             mode = query.get("mode", ["completion"])[0]
             await self._provider_test(segments[1], writer, mode=mode)
+            return
+        # R24：POST /tools/{name}/test —— 单工具试跑（沙箱隔离）
+        if len(segments) == 3 and segments[0] == "tools" and segments[2] == "test":
+            await self._tool_test(segments[1], body, writer)
             return
         # 任务级覆盖：POST /runs/{id}/tasks/{task_id}/agent
         if (len(segments) == 5 and segments[0] == "runs"
@@ -1083,6 +1092,66 @@ class ApiServer:
         self._run_tasks[resumed_id] = task
         await self._send_json(
             writer, 202, {"run_id": resumed_id, "status": "running"})
+
+    async def _list_tools(self, writer: asyncio.StreamWriter) -> None:
+        """``GET /tools``：R24 工具清单（管理页 / CLI 共用同一份元数据）。
+
+        元数据读取不建目录、不执行工具；``tools_enabled`` 一并返回，管理页据此
+        决定试跑表单是否可用（关闭时后端对试跑回 409）。
+        """
+        if self._settings is None:
+            await self._send_json(writer, 503, {"error": "server 未配置 settings"})
+            return
+        from agentcrew.tools.lab import TRIAL_DIR_NAME, describe_tools
+
+        await self._send_json(writer, 200, {
+            "tools_enabled": bool(self._settings.tools_enabled),
+            "trial_dir": TRIAL_DIR_NAME,
+            "tools": describe_tools(),
+        })
+
+    async def _tool_test(
+        self, name: str, body: bytes, writer: asyncio.StreamWriter
+    ) -> None:
+        """``POST /tools/{name}/test``：单工具试跑（沙箱隔离，R24）。
+
+        受两个开关保护：``tools_enabled`` 未开回 409（调试页不得扩大执行面）；
+        入参非法回 400、未知工具回 404。工具运行时失败仍是 200 + ``ok=false``
+        ——「工具报错」是试跑的**结果**，不是请求错误。
+        """
+        if self._settings is None:
+            await self._send_json(writer, 503, {"error": "server 未配置 settings"})
+            return
+        if not self._settings.tools_enabled:
+            await self._send_json(writer, 409, {
+                "error": "工具执行未开启：设置 tools_enabled=true（或 "
+                         "AGENTCREW_TOOLS_ENABLED=true）后可用",
+            })
+            return
+        if self._output_dir is None:
+            await self._send_json(writer, 503, {"error": "output_dir 未配置"})
+            return
+        try:
+            data = json.loads(body.decode("utf-8")) if body else {}
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            await self._send_json(writer, 400, {"error": "invalid JSON"})
+            return
+        if not isinstance(data, dict):
+            await self._send_json(writer, 400, {"error": "body 必须是 JSON 对象"})
+            return
+        args = data.get("args", {})
+        if not isinstance(args, dict):
+            await self._send_json(writer, 400, {"error": "args 必须是 JSON 对象"})
+            return
+        from agentcrew.tools.lab import ToolLabError, run_trial
+
+        try:
+            result = await run_trial(name, args, output_dir=self._output_dir)
+        except ToolLabError as exc:
+            status = 404 if str(exc).startswith("未知工具") else 400
+            await self._send_json(writer, status, {"error": str(exc)})
+            return
+        await self._send_json(writer, 200, result)
 
     async def _list_runs(self, writer: asyncio.StreamWriter) -> None:
         """``GET /runs``：盘上 run.json 列表 + 内存中运行中状态叠加。"""

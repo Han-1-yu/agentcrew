@@ -213,6 +213,17 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--output-dir", metavar="DIR", help="run 输出根目录")
 
     sub.add_parser("roles", help="列出 8 个内置角色（职责 / 边界 / 产出）")
+    p_tools = sub.add_parser(
+        "tools", help="R24：列出内置工具（名称 / 类别 / 入参 schema）")
+    p_tools.add_argument("--json", action="store_true", help="输出机器可读 JSON")
+    p_tool = sub.add_parser(
+        "tool", help="R24：单工具试跑（沙箱目录隔离，需工具执行已开启）")
+    p_tool.add_argument("name", help="工具名（见 tools 命令）")
+    p_tool.add_argument(
+        "--args", default="{}", metavar="JSON",
+        help='入参 JSON 对象，如 \'{"path": "a.txt"}\'')
+    p_tool.add_argument("--json", action="store_true", help="输出机器可读 JSON")
+    p_tool.add_argument("--output-dir", metavar="DIR", help="试跑沙箱根目录")
     p_agents = sub.add_parser("agents", help="列出执行体档案与角色绑定（--json 供 Studio 读取）")
     p_agents.add_argument("--json", action="store_true", help="输出机器可读 JSON")
     p_switch = sub.add_parser("switch", help="给一个 run 写入执行体切换（下次 resume 生效）")
@@ -789,6 +800,77 @@ def _cmd_roles(args: argparse.Namespace) -> int:
         f"共 {len(BUILTIN_ROLES)} 个内置角色；用 --gate plan 可在执行前人工确认拆解。",
     )
     return EXIT_CODES["ok"]
+
+
+def _cmd_tools(args: argparse.Namespace) -> int:
+    """R24：列出内置工具（名称 / 类别 / 必填入参）。管理页与 API 共用同一份元数据。"""
+    from agentcrew.tools.lab import describe_tools
+
+    tools = describe_tools()
+    if args.json:
+        print(json.dumps({"tools": tools}, ensure_ascii=False, indent=2))
+        return EXIT_CODES["ok"]
+    console = Console()
+    for item in tools:
+        required = (item["input_schema"] or {}).get("required") or []
+        params = "、".join(required) if required else "无必填"
+        _out(console, f"[{item['name']}] {item['kind']} —— 必填：{params}")
+        _out(console, f"  {item['description']}")
+    _out(
+        console,
+        "单工具试跑：python main.py tool <名称> --args '{\"path\": \"a.txt\"}'"
+        "（需先开启工具执行：AGENTCREW_TOOLS_ENABLED=true）",
+    )
+    return EXIT_CODES["ok"]
+
+
+def _cmd_tool(args: argparse.Namespace) -> int:
+    """R24：单工具试跑——沙箱目录隔离，与 Agent 调用同一条入参校验。
+
+    退出码：``ok``=0；工具运行时失败=1（试跑结果本身，不是 CLI 错误）；
+    未开工具执行 / 入参非法 / 未知工具=3（配置类，与其他 ``_fail`` 一致）。
+    """
+    from agentcrew.config import Settings
+    from agentcrew.tools.lab import ToolLabError, run_trial
+
+    try:
+        settings = (
+            Settings.load(output_dir=Path(args.output_dir))
+            if args.output_dir else Settings.load()
+        )
+    except (OSError, ValueError) as exc:
+        return _fail(f"配置错误：{exc}")
+    if not settings.tools_enabled:
+        return _fail(
+            "工具执行未开启：设置 AGENTCREW_TOOLS_ENABLED=true（或 YAML "
+            "tools_enabled: true）后重试；调试页不扩大执行面"
+        )
+    try:
+        payload = json.loads(args.args)
+    except json.JSONDecodeError as exc:
+        return _fail(f"--args 不是合法 JSON：{exc}")
+    if not isinstance(payload, dict):
+        return _fail("--args 必须是 JSON 对象")
+    try:
+        result = asyncio.run(
+            run_trial(args.name, payload, output_dir=settings.output_dir))
+    except ToolLabError as exc:
+        return _fail(str(exc))
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        console = Console()
+        state = "成功" if result["ok"] else "失败"
+        _out(
+            console,
+            f"{result['tool']}  {state}  {result['duration_ms']}ms  "
+            f"沙箱 {result['sandbox']}",
+        )
+        if result["result"]:
+            _out(console, result["result"])
+        if result["error"]:
+            _out(console, f"错误：{result['error']}")
+    return EXIT_CODES["ok"] if result["ok"] else EXIT_CODES["failed"]
 
 
 def _cmd_switch(args: argparse.Namespace) -> int:
@@ -1623,6 +1705,8 @@ _HANDLERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "approvals": _cmd_approvals,
     "approve": _cmd_approve,
     "roles": _cmd_roles,
+    "tools": _cmd_tools,
+    "tool": _cmd_tool,
     "agents": _cmd_agents,
     "switch": _cmd_switch,
     "samples": _cmd_samples,

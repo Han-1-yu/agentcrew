@@ -783,6 +783,101 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /tools:
+    get:
+      tags: [tools]
+      summary: R24 内置工具清单（管理页 / CLI 共用元数据）
+      description: >
+        返回 6 个内置工具的名称、说明、类别（sandbox / network）与入参 JSON Schema，
+        以及 `tools_enabled` 开关。元数据读取不建目录、不执行工具；开关为 false
+        时仍可查看清单，但试跑端点会回 409。
+      responses:
+        '200':
+          description: 工具清单与执行开关
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tools_enabled, tools]
+                properties:
+                  tools_enabled: { type: boolean }
+                  trial_dir: { type: string, description: 试跑沙箱目录名（相对 output） }
+                  tools:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, description, kind, input_schema]
+                      properties:
+                        name: { type: string }
+                        description: { type: string }
+                        kind: { type: string, enum: [sandbox, network] }
+                        input_schema: { type: object }
+        '503':
+          description: server 未配置 settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /tools/{name}/test:
+    post:
+      tags: [tools]
+      summary: R24 单工具试跑（沙箱目录隔离）
+      description: |
+        body：`{"args": {...}}`（缺省 `{}`），入参按该工具的 JSON Schema 校验，
+        与 Agent `<tool_call>` 路径同一份实现。试跑在
+        `<output_dir>/_tool_trial/<时间戳-id>/` 的独立沙箱里执行：
+        读类工具以沙箱为根，`write_file` 只写其 `workspace/`，碰不到 run 目录与
+        仓库文件。**需要 `tools_enabled=true`**，否则回 409——调试页不扩大执行面。
+        工具运行时失败仍是 200 + `ok=false`（那是试跑结果，不是请求错误）。
+      parameters:
+        - in: path
+          name: name
+          required: true
+          schema: { type: string }
+          description: 工具名（见 GET /tools）
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                args: { type: object, description: 工具入参，按 input_schema 校验 }
+      responses:
+        '200':
+          description: 试跑结果（ok 可为 false）
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tool, ok, duration_ms, sandbox]
+                properties:
+                  tool: { type: string }
+                  ok: { type: boolean }
+                  result: { type: string, nullable: true }
+                  error: { type: string, nullable: true }
+                  duration_ms: { type: number }
+                  sandbox: { type: string, description: 沙箱相对 output 的路径 }
+        '400':
+          description: body 不是 JSON 对象 / args 非对象 / 入参 schema 校验失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 未知工具
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: 工具执行未开启（tools_enabled=false）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   ##########################################################################
   # 兜底：未匹配路径 → 404；未实现方法 → 405
   ##########################################################################

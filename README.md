@@ -2679,6 +2679,36 @@ stdin/stdout/stderr 三条管道的 asyncio 传输句柄留给 GC，每次 run �
 CI 覆盖 Linux 四版本而 Windows 只在 3.12 本机验证。
 
 
+## R24 工具管理页与单工具试跑
+
+第三档「可视化工具注册与在线调试」。tool 注册表此前只服务于 Agent 的 ReAct
+循环——想单独验证一个工具（参数对不对、返回值长什么样），只能跑整轮 run。
+R24 补上三个入口，共用同一份实现（`agentcrew/tools/lab.py`）：
+
+```bash
+python main.py tools                         # 列出 6 个内置工具（名称/类别/必填）
+python main.py tool write_file --args '{"path":"demo.txt","content":"hi"}'
+python main.py tool run_python --args '{"code":"print(6*7)"}' --json
+# HTTP：GET /tools · POST /tools/{name}/test   （body: {"args": {...}}）
+# 看板：浏览器打开 serve 的首页 → 「工具」标签页 → 点「试跑」填参运行
+```
+
+四条边界：
+
+- **同一条校验**：试跑用 Agent `<tool_call>` 路径的 `validate_tool_args`，
+  「页面上能跑」与「Agent 能跑」不会出现两套语义；
+- **沙箱隔离**：每次试跑在 `<output>/_tool_trial/<时间戳-id>/` 建空目录，
+  读类工具以它为根、写工具只写其 `workspace/`——碰不到 run 目录与仓库文件；
+- **默认关闭**：`tools_enabled=false` 时清单可看、试跑被拒（CLI 退出码 3 /
+  API 409）。调试页**不扩大执行面**，这是安全红线；
+- **失败分流**：未知工具 404、入参不合法 400、工具运行时报错 200+`ok=false`
+  ——「工具报错」是试跑结果，不是请求错误。
+
+契约同步：`openapi.yaml` 两个端点、`API_ROUTES` 清单（R21 守卫会自动比对并
+逐条探测）；`docs/OPERATIONS.md` §7.4 记录了排查用的一条命令。
+
+
+
 
 
 
