@@ -80,6 +80,25 @@ def test_cycle_detection_mentions_path():
     assert "A" in next(error for error in errors if "成环" in error)
 
 
+def test_reserved_task_id_and_delivery_path_are_rejected():
+    """引擎保留的 T-FINAL / DELIVERY.md 在流程侧提前挡住（R28）。"""
+    from agentcrew.task.planner import TaskDraft
+
+    final = TaskDraft(id="T-FINAL", title="f", description="d",
+                      role="technical_writer", acceptance_criteria=["a"],
+                      deliverables=[])
+    errors = validate_flow(FlowSpec(name="x", tasks=[_draft("A"), final]))
+    assert any("保留" in error for error in errors)
+
+    clash = TaskDraft(
+        id="A", title="a", description="d", role="backend_dev",
+        acceptance_criteria=["ok"],
+        deliverables=[{"path": "DELIVERY.md", "kind": "markdown",
+                       "description": "d"}])
+    errors = validate_flow(FlowSpec(name="x", tasks=[clash]))
+    assert any("engine" in error or "保留" in error for error in errors)
+
+
 def test_flow_without_entry_is_rejected():
     spec = FlowSpec(name="x", tasks=[
         _draft("A", deps=["B"]), _draft("B", deps=["A"])])

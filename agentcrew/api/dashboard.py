@@ -162,6 +162,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <button class="small" onclick="flowSave()">保存</button>
     <button class="small" onclick="flowSample()">示例</button>
     <button class="small" onclick="flowToggleYaml()">YAML</button>
+    <input id="flow-goal" placeholder="起跑目标（可空）" style="width:180px">
+    <button class="small" onclick="flowStartRun()">起跑</button>
     <select id="flow-select" onchange="flowLoadSelected()" style="background:#161b22;border:1px solid #30363d;color:#e1e4e8;padding:6px;border-radius:6px">
       <option value="">载入…</option>
     </select>
@@ -1169,6 +1171,32 @@ async function flowApplyYaml() {
       ? `YAML 已应用 · ${data.view.nodes.length} 节点`
       : `YAML 已应用（图有错误：${data.errors.join("；")}）`;
     status.style.color = data.ok ? "#3fb950" : "#d29922";
+  } catch (e) { status.textContent = `请求失败：${e}`; }
+}
+
+// R28：按当前画布起跑——把流程内联进 options.flow，跳过 PM 规划。
+async function flowStartRun() {
+  if (!flowState) flowEnsureState();
+  if (!flowState.tasks.length) { alert("画布是空的：先加节点"); return; }
+  const status = document.getElementById("flow-status");
+  const goalInput = document.getElementById("flow-goal");
+  const goal = (goalInput.value || "").trim()
+    || flowState.name || "未命名流程";
+  status.textContent = "起跑中…";
+  try {
+    const resp = await fetch("/runs", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ goal: goal, options: { flow: flowJson() } })
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      status.textContent = `起跑失败（${resp.status}）：${data.error || ""}`;
+      status.style.color = "#f85149";
+      return;
+    }
+    status.textContent = `已起跑 ${data.run_id || ""}（跳过 PM 规划）`;
+    status.style.color = "#3fb950";
+    loadRuns();
   } catch (e) { status.textContent = `请求失败：${e}`; }
 }
 

@@ -81,11 +81,19 @@ def _validate_run_options(options: Mapping[str, Any]) -> str | None:
         # R12：出站 Webhook（密钥不经 HTTP 接口传，只认配置文件/环境变量）。
         "webhook_url", "webhook_events", "webhook_timeout_seconds",
         "webhook_max_retries",
+        # R28：流程直通——flow 是内联流程对象，flow_name 指向流程库里的名字。
+        "flow", "flow_name",
     }
     unknown = sorted(set(options) - allowed)
     if unknown:
         return ("options 含不支持的键：" + "、".join(unknown)
                 + "；可用：" + "、".join(sorted(allowed)))
+    if "flow" in options and "flow_name" in options:
+        return "options.flow 与 options.flow_name 只能给一个"
+    if "flow" in options and not isinstance(options["flow"], Mapping):
+        return "options.flow 必须是对象（{version, name, tasks}）"
+    if "flow_name" in options and not isinstance(options["flow_name"], str):
+        return "options.flow_name 必须是字符串"
     for key, value in options.items():
         if value is None:
             if key not in {"default_model", "max_cost_usd", "max_llm_calls"}:
@@ -161,6 +169,12 @@ def _validate_run_options(options: Mapping[str, Any]) -> str | None:
                 return "options.max_cost_usd 必须是数值"
             if not math.isfinite(value) or value < 0:
                 return "options.max_cost_usd 必须是 >= 0 的有限数"
+        elif key == "flow":
+            if not isinstance(value, dict):
+                return "options.flow 必须是对象（{version, name, tasks}）"
+        elif key == "flow_name":
+            if not isinstance(value, str) or not value.strip():
+                return "options.flow_name 必须是非空字符串"
         elif not isinstance(value, dict):
             return f"options.{key} 必须是对象"
     return None
@@ -904,11 +918,20 @@ class ApiServer:
             return None
         from agentcrew.crew.crew import Crew
 
+        # R28：flow / flow_name 不是 Settings 字段，先摘出来再 model_copy
+        # （否则 Settings 的 extra="forbid" 会把它们当非法配置炸掉）。
+        preset_tasks = None
+        flow_options = {key: options[key]
+                        for key in ("flow", "flow_name") if key in options}
+        if flow_options:
+            preset_tasks = self._preset_tasks_from_options(flow_options)
+        effective = {key: value for key, value in options.items()
+                     if key not in ("flow", "flow_name")}
         # options 已在 _create_run 过白名单与类型校验；这里不再用 except Exception
         # 静默吞掉装配失败（那会让请求回 202 而用户以为配置生效了）。
         settings = (
-            self._settings.model_copy(update=dict(options))
-            if options else self._settings)
+            self._settings.model_copy(update=dict(effective))
+            if effective else self._settings)
         # R4：deferred 模式把「问人」外包给审批单，run 挂起而不是等 stdin。
         # 这是 API 通道上第一次真正允许人工卡点存在。
         if settings.approval_mode == "deferred":
@@ -919,10 +942,44 @@ class ApiServer:
             )
             settings = settings.model_copy(update={"gate": gate})
             return Crew(settings, on_event=self.on_event,
-                        prompter=DeferredPrompter())
+                        prompter=DeferredPrompter(),
+                        preset_tasks=preset_tasks)
         # 其余情况：API 服务器无人值守，人工卡点会在 await prompter 上永久挂起。
         settings = settings.model_copy(update={"gate": "none"})
-        return Crew(settings, on_event=self.on_event)
+        return Crew(settings, on_event=self.on_event, preset_tasks=preset_tasks)
+
+    def _preset_tasks_from_options(
+        self, flow_options: Mapping[str, Any]
+    ) -> list[Any]:
+        """R28：``options.flow`` / ``flow_name`` → 任务草案列表。
+
+        图不合法直接抛 ``ValueError``（``_create_run`` 会映射成 400）——**不带着
+        坏流程起跑**；这也是画布「起跑」按钮的错误来源。
+        """
+        from agentcrew.flow.spec import (
+            FlowError,
+            FlowSpec,
+            load_flow,
+            validate_flow,
+        )
+
+        if "flow" in flow_options:
+            try:
+                spec = FlowSpec(**dict(flow_options["flow"]))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"options.flow 结构不合法：{exc}") from exc
+        else:
+            if self._output_dir is None:
+                raise ValueError("output_dir 未配置，无法按名字载入流程")
+            try:
+                spec = load_flow(self._output_dir,
+                                 str(flow_options["flow_name"]))
+            except FlowError as exc:
+                raise ValueError(str(exc)) from exc
+        errors = validate_flow(spec)
+        if errors:
+            raise ValueError("流程不合法：" + "；".join(errors))
+        return list(spec.tasks)
 
     async def _run_crew(
         self,

@@ -260,6 +260,7 @@ class Crew:
         reuse_knowledge: bool = True,
         tool_registry: ToolRegistry | None = None,
         entity_memory_enabled: bool | None = None,
+        preset_tasks: Sequence[Any] | None = None,
     ) -> None:
         """``catalog`` / ``store`` 缺省由本类按需构造；``prompter`` **原样透传**。
 
@@ -290,6 +291,11 @@ class Crew:
         Agent 走「单次调用」原路径；开启则 Crew 自动装配 6 个内置工具并绑定
         ``tool_permissions``。库调用方可用这个参数绕过配置直接跑带工具的 run。
 
+        R28：``preset_tasks`` 给定时**跳过 PM 规划调用**，直接用它作为任务表
+        （仍走同一套 ``with_final_task`` / ``validate_plan`` / 评分与留痕）——
+        这是「从画布起跑」的通道：人画好的流程不该再让模型重拆一遍。校验失败
+        直接 ``PlanFailedError``，不做「回灌重拆」：流程是人写的，重试没有意义。
+
         ``entity_memory_enabled``：``None``（默认）时取
         ``settings.entity_memory_enabled``；显式传 True/False 可覆盖。开启后经验
         沉淀时同步抽取实体、规划阶段注入实体参考块。
@@ -306,6 +312,8 @@ class Crew:
         self._mcp_clients: list[MCPClient] = []
         self._injected_store = store
         self._capture_experiences_enabled = capture_experiences
+        #: R28：人给的流程任务（None = 正常走 PM 规划）。
+        self._preset_tasks = list(preset_tasks) if preset_tasks else None
         self._reuse_knowledge_enabled = reuse_knowledge
         #: R3：显式注入的工具注册表优先于配置自动装配（None = 看配置）。
         self._tool_registry_override = tool_registry
@@ -909,12 +917,68 @@ class Crew:
         run.checkpoint.save_tasks(board)
         return board
 
+    def _decompose_preset(self, run: _Run) -> list[Task]:
+        """R28：流程直通——不调用 PM，但仍走同一套追加/校验/评分/留痕。
+
+        校验失败抛 :class:`PlanFailedError` 而**不回灌重试**：流程是人写的，
+        「让模型重拆」既违背意图也没意义；错误照常进 ledger，画布侧能读到。
+        """
+        from agentcrew.task.planner import PlanOutput
+
+        assert self._preset_tasks is not None
+        run.ledger.emit("flow_plan_loaded",
+                        task_count=len(self._preset_tasks))
+        try:
+            tasks = with_final_task(
+                to_tasks(PlanOutput(tasks=list(self._preset_tasks))))
+            validate_plan(tasks, self._catalog)
+        except PlanValidationError as exc:
+            errors = list(exc.errors)
+            run.ledger.emit("plan_rejected", attempt=1, errors=errors,
+                            source="flow")
+            raise PlanFailedError(errors) from exc
+        run.ledger.emit(
+            "plan_created",
+            task_count=len(tasks),
+            roles=sorted({task.role for task in tasks}),
+            planner_attempts=0,
+            source="flow",
+        )
+        self._score_and_log(run, tasks)
+        return tasks
+
+    def _score_and_log(self, run: _Run, tasks: list[Task]) -> None:
+        """计划质量评分与留痕（P2-6）；PM 规划与流程直通共用。"""
+        score = score_plan(tasks, run.goal)
+        run.ledger.emit(
+            "plan_scored",
+            total=round(score.total, 4),
+            coverage=round(score.coverage, 4),
+            specificity=round(score.specificity, 4),
+            dependency_quality=round(score.dependency_quality, 4),
+            deliverable_clarity=round(score.deliverable_clarity, 4),
+        )
+        if score.total < MIN_PLAN_SCORE:
+            run.ledger.emit(
+                "plan_low_quality",
+                total=round(score.total, 4),
+                min_score=MIN_PLAN_SCORE,
+                coverage=round(score.coverage, 4),
+                specificity=round(score.specificity, 4),
+                dependency_quality=round(score.dependency_quality, 4),
+                deliverable_clarity=round(score.deliverable_clarity, 4),
+            )
+
     async def _decompose(self, run: _Run) -> list[Task]:
         """规划循环：失败就把 ``errors`` 回灌重拆，上限 ``plan_max_attempts``。
 
         校验的是 ``with_final_task`` 之后的列表：``T-FINAL`` 与 ``DELIVERY.md``
         是引擎追加的保留资源，PM 若也声明，冲突只在追加后可见。
+
+        R28：``preset_tasks`` 给定时走 :meth:`_decompose_preset`，完全不碰 PM。
         """
+        if self._preset_tasks is not None:
+            return self._decompose_preset(run)
         pm = cast(ProjectManagerAgent, run.agents.get("project_manager"))
         feedback: tuple[str, ...] = ()
         errors: list[str] = []
@@ -945,28 +1009,8 @@ class Crew:
                 roles=sorted({task.role for task in tasks}),
                 planner_attempts=attempt,
             )
-            # P2-6：校验通过后做质量评分。低分只警告不阻断 —— 二元校验已放行，
-            # 评分是观测信号：回灌 PM 重拆的额度已用尽再拦，只会把「能用的计划」
-            # 退成 PlanFailedError。
-            score = score_plan(tasks, run.goal)
-            run.ledger.emit(
-                "plan_scored",
-                total=round(score.total, 4),
-                coverage=round(score.coverage, 4),
-                specificity=round(score.specificity, 4),
-                dependency_quality=round(score.dependency_quality, 4),
-                deliverable_clarity=round(score.deliverable_clarity, 4),
-            )
-            if score.total < MIN_PLAN_SCORE:
-                run.ledger.emit(
-                    "plan_low_quality",
-                    total=round(score.total, 4),
-                    min_score=MIN_PLAN_SCORE,
-                    coverage=round(score.coverage, 4),
-                    specificity=round(score.specificity, 4),
-                    dependency_quality=round(score.dependency_quality, 4),
-                    deliverable_clarity=round(score.deliverable_clarity, 4),
-                )
+            # P2-6：校验通过后做质量评分（低分只警告不阻断——评分是观测信号）。
+            self._score_and_log(run, tasks)
             return tasks
         raise PlanFailedError(errors)
 

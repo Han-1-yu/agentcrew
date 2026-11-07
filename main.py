@@ -180,6 +180,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--demo", action="store_true",
         help="使用 examples/todo_web_project.py 的内置 Todo Web 目标（与 --goal 二选一）")
+    run.add_argument(
+        "--flow", metavar="NAME|FILE",
+        help="R28：用流程定义起跑（output/_flows 里的名字，或 .yaml 文件路径）——"
+             "跳过 PM 规划，直接按画布/文件里的任务表执行；缺省目标取流程描述")
     _add_run_flags(run)
 
     resume = sub.add_parser("resume", help="续跑一个中断或未完成的 run")
@@ -516,8 +520,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
         goal = sample_goal
     else:
         goal = args.goal
-    if not goal:
-        return _fail("run：必须给 --goal / --demo / --sample 之一。")
+    flow_arg = getattr(args, "flow", None)
+    if not goal and not flow_arg:
+        return _fail("run：必须给 --goal / --demo / --sample / --flow 之一。")
     invalid = _invalid_numbers(args)
     if invalid is not None:
         return _fail(invalid)
@@ -543,10 +548,51 @@ def _cmd_run(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
     settings = settings.model_copy(update={"gate": gate})
+    preset_tasks = None
+    if flow_arg:
+        try:
+            flow_spec = _load_flow_definition(settings, flow_arg)
+        except ValueError as exc:
+            return _fail(f"run --flow：{exc}")
+        preset_tasks = flow_spec.tasks
+        if not goal:
+            goal = flow_spec.description or f"流程 {flow_spec.name}"
+        _out(console, f"按流程 {flow_spec.name} 起跑：{len(preset_tasks)} 个任务"
+                      "（跳过 PM 规划）")
+    assert goal is not None
     hook = _BoardHook(goal, enabled=not args.no_live, console=console)
-    crew = Crew(settings, catalog=catalog, prompter=prompter, on_event=hook)
+    crew = Crew(settings, catalog=catalog, prompter=prompter, on_event=hook,
+                preset_tasks=preset_tasks)
     hook.bind(crew)
     return _drive(crew, lambda: crew.run(goal), hook=hook, console=console)
+
+
+def _load_flow_definition(settings: Settings, source: str):
+    """R28：``--flow`` 参数 → ``FlowSpec``（先按文件，再按流程库名字）。
+
+    文件支持 ``.yaml`` / ``.yml``；否则当流程名去 ``<output>/_flows/<name>.yaml``
+    找。两条路径都不通时抛 ``ValueError``（CLI 映射退出码 3）。图不合法同样抛
+    ``ValueError``——**不带着坏流程起跑**，错误在开跑前就要看得见。
+    """
+    from agentcrew.flow.spec import (
+        FlowError,
+        load_flow,
+        parse_flow_yaml,
+        validate_flow,
+    )
+
+    try:
+        candidate = Path(source)
+        if candidate.suffix in (".yaml", ".yml") and candidate.is_file():
+            spec = parse_flow_yaml(candidate.read_text(encoding="utf-8"))
+        else:
+            spec = load_flow(settings.output_dir, source)
+    except (OSError, FlowError) as exc:
+        raise ValueError(str(exc)) from exc
+    errors = validate_flow(spec)
+    if errors:
+        raise ValueError("流程不合法：" + "；".join(errors))
+    return spec
 
 
 def _cmd_resume(args: argparse.Namespace) -> int:

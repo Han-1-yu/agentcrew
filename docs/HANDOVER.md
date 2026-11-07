@@ -13,7 +13,7 @@
 |---|---|
 | 已提交 | R3–R18；R18 是最新提交（具体 hash 以 `git log -1` 为准） |
 | **未提交** | **无，工作区干净**（R18 已于 2026-11-07 提交） |
-| 测试 | R27 后全量 **2584 passed / 1 skipped / 0 failed**（2585 collected；分 5 批实测） |
+| 测试 | R28 后全量 **2592 passed / 1 skipped / 0 failed**（2593 collected；分 5 批实测） |
 | 静态检查 | `ruff check .` 全绿 · `mypy agentcrew/` 114 文件零错误（本机 3.12 首次跑通 CI 等价检查链） |
 | 离线样例 | `todo` 9/9 · `linear` 5/5 · `hierarchy` 7/7，全部 `completed` |
 | 一句话定位 | 8 角色多 Agent 编排器：规划 → 执行 → 三层门禁 → 交付；可完全离线（mock）跑通 |
@@ -21,7 +21,7 @@
 **接手第一件事**：跑一次三套样例确认环境（§5.1）。**第一档、第二档功能项与
 全部小项均已闭环**（R17–R23：心跳收敛 / resume 锁、CI 检查链、限流窗口通道、
 主管建议通道、单步断点调试、API 契约守卫、resume 白名单 + MCP 管道关闭、
-测试覆盖矩阵、工具管理页与试跑、多用户 RBAC、可视化编排、向量检索），提交已推送到远端（CI 四版本矩阵全绿）；
+测试覆盖矩阵、工具管理页与试跑、多用户 RBAC、可视化编排、向量检索、画布起跑），提交已推送到远端（CI 四版本矩阵全绿）；
 下一轮只剩 §7.4 的整块工程（多用户 RBAC / 拖拽画布 / 向量检索），
 需要先定范围；工具管理页与试跑已由 R24 闭环。
 
@@ -252,6 +252,7 @@ R14 最值钱的一课：`WebhookConfig` 的多接收端逻辑全绿，但 `Crew
 | 现象 | 处理 |
 |---|---|
 | 分 5 批跑测试偶发 `access violation` / `SystemError: bad format string` | 本机 pytest 在大量用例下的内存问题，**不是回归**。重跑或逐文件跑 |
+| 报 `SystemError: Negative size passed to PyUnicode_New` / `SyntaxError: invalid syntax`（代码本身没问题）| **`__pycache__` 里的 .pyc 被写坏**（R28 期间连续踩到：同一用例单跑过、整文件跑挂，且失败点每次漂移）。处置：`find . -name __pycache__ -type d -not -path "./studio/*" -exec rm -rf {} +` 后重跑；本项目所有验证命令都带 `PYTHONDONTWRITEBYTECODE=1` 就是为了少制造这种文件 |
 | `SandboxError: center 规则快照不可用` | 环境问题，命令实际会执行（输出标注 bypassed），重试即可 |
 | `api/server.py` 写入偶发被独占锁 | 用「写临时文件 → os.replace」原子替换 |
 | 从宿主机继承 `os.environ` 起子进程时 `import ssl` 崩 / 127.0.0.1 请求极慢 | 宿主机注入的 `PYTHONPATH` shim 与 `HTTP_PROXY`。子进程用**白名单环境**（剔除 `PYTHON*` / `*PROXY*`），主进程设 `NO_PROXY=127.0.0.1,localhost`；R16 的 serve 端到端用例实测从 3 分 51 秒降到 3.19 秒 |
@@ -360,6 +361,7 @@ PROJECT-STATE §3.19–§3.23 与本文 §0 的状态口径已对齐，工作区
 | R25 | 多用户与 RBAC（密钥库 / 角色×作用域 / run 归属 / 审计身份） | 已提交（2026-11-07） |
 | R26 | 拖拽式可视化编排（SVG 画布 + YAML 双向 + 图校验 + 流程库） | 已提交（2026-11-07） |
 | R27 | 向量检索（embedding 通道 / 混合打分 / 磁盘缓存 / 本地退化） | 已提交（2026-11-07） |
+| R28 | 从画布起跑（流程直通规划 + `run --flow` + `options.flow`） | 已提交（2026-11-07） |
 
 R3–R8 之所以合并成一个提交：`config.py` / `crew.py` / `main.py` / `api/server.py` 四个文件
 被多轮同时改，`git add` 是文件粒度，按轮切分会把不同轮的改动硬塞进一个提交。

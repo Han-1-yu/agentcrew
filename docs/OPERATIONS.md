@@ -579,7 +579,8 @@ python main.py diff <run_a> <run_b> --json
 **可视化编排（R26）**：看板「编排」标签页拖节点连线，或
 `python main.py flow validate <file>` 在 CI / 提交前校验流程 YAML（不合法退出码 2）。
 流程存 `<output>/_flows/`，与 run 目录互不影响；`flow list` 列出已保存流程。
-画布产出的是流程定义，尚未接入「一键起跑」（见 PROJECT-STATE §3.31 的边界说明）。
+画布可「一键起跑」：`python main.py run --flow <名字|文件>`，或 `POST /runs`
+带 `options.flow` / `options.flow_name`（见 README R28）。
 
 **单工具试跑（R24）**：`python main.py tools` 列工具，`python main.py tool
 <name> --args '{"path":"a.txt"}'` 在 `<output>/_tool_trial/` 沙箱里试跑一个工具；

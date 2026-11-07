@@ -30,6 +30,10 @@ FLOW_VERSION = 1
 #: 流程目录名（相对 output_dir）。
 FLOWS_DIR_NAME = "_flows"
 
+#: 引擎保留的任务 id 与产物路径（R28：流程校验提前挡住，别等跑到 T-FINAL 才炸）。
+RESERVED_TASK_ID = "T-FINAL"
+RESERVED_ARTIFACT_PATH = "DELIVERY.md"
+
 #: 流程名允许的字符：ASCII 字母数字开头，后接字母数字/点/下划线/连字符。
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
@@ -113,6 +117,15 @@ def validate_flow(spec: FlowSpec) -> list[str]:
                     f"任务 {task.id!r} 的依赖 {dependency!r} 不存在")
             if dependency == task.id:
                 errors.append(f"任务 {task.id!r} 依赖了自己")
+    for task in spec.tasks:
+        if task.id == RESERVED_TASK_ID:
+            errors.append(
+                f"任务 id {RESERVED_TASK_ID!r} 是引擎保留的交付任务，不能自己声明")
+        for deliverable in task.deliverables:
+            if deliverable.path == RESERVED_ARTIFACT_PATH:
+                errors.append(
+                    f"{RESERVED_ARTIFACT_PATH} 是引擎保留的交付产物（由 {RESERVED_TASK_ID} "
+                    "生成），流程里不能重复声明")
     cycle = _find_cycle(spec)
     if cycle:
         errors.append("依赖成环：" + " → ".join(cycle))
@@ -296,11 +309,12 @@ def sample_flow() -> FlowSpec:
             dependencies=["T-001"], priority=6,
         ),
         TaskDraft(
-            id="T-003", title="交付说明", role="tech_writer",
-            description="写 DELIVERY.md",
+            id="T-003", title="交付说明", role="technical_writer",
+            description="写交付说明补充文档",
             acceptance_criteria=["含启动方式"],
-            deliverables=[ArtifactSpec(path="DELIVERY.md", kind="markdown",
-                                      description="交付说明",
+            deliverables=[ArtifactSpec(path="docs/DELIVERY-NOTES.md",
+                                      kind="markdown",
+                                      description="交付说明补充",
                                       must_contain=["运行"])],
             dependencies=["T-001", "T-002"], priority=4,
             when_outcomes=["ready"],

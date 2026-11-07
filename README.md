@@ -2801,3 +2801,29 @@ AGENTCREW_EMBEDDING_ENABLED=true AGENTCREW_EMBEDDING_MODEL=openai:text-embedding
 **实体记忆**仍是 BM25（`entities.jsonl` 的检索走原路径），这是本轮的已知边界：
 把实体也向量化需要给实体库加向量列与迁移，留作后续。
 
+
+## R28 从画布起跑
+
+R26 的画布只能产出流程定义，还得手工转成 run。R28 把最后一段接上：**流程直通
+规划**——人画好的任务表不再让模型重拆一遍。
+
+```bash
+python main.py flow sample > my-flow.yaml
+python main.py run --flow my-flow.yaml          # 跳过 PM，按流程执行
+python main.py run --flow todo-app --goal "补一句目标"   # 流程库里的名字
+# HTTP：POST /runs {"goal": "...", "options": {"flow": {...}}}  或 {"flow_name": "todo-app"}
+# 画布：「编排」页填目标 → 点「起跑」
+```
+
+**语义**（三条都与 PM 规划路径严格对齐）：
+
+- 仍走同一套 `with_final_task`（追加 T-FINAL）→ `validate_plan` → 质量评分 →
+  `plan_created` 留痕，只是 `planner_attempts=0` 且 `source="flow"`；
+- **校验失败不回灌重试**：流程是人写的，让模型"重拆"既违背意图也没意义，
+  直接 `PlanFailedError` 并把错误写进 ledger；
+- 预留资源前置拦截：流程里声明的 `T-FINAL` 与 `DELIVERY.md` 在 `flow validate`
+  阶段就报错，不必等跑到交付任务才发现路径冲突。
+
+**参数校验**：`options.flow` 与 `options.flow_name` 互斥；类型在 API 入口检查
+（400），坏流程同样 400——不带病起跑。
+
