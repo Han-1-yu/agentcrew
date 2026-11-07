@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentcrew-sdk"
+version = "1.0.0"
+description = "AgentCrew HTTP/SSE API 的零依赖同步 Python 客户端"
+readme = "README.md"
+requires-python = ">=3.10"
+# 刻意留空：只用标准库 urllib，不把服务端依赖拖进调用方环境。
+dependencies = []
+
+[tool.setuptools]
+packages = ["agentcrew_sdk"]

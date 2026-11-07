@@ -11,14 +11,14 @@
 
 | 项 | 值 |
 |---|---|
-| 已提交 | R3–R15；R15 是最新提交（具体 hash 以 `git log -1` 为准） |
-| **未提交** | **无，工作区干净**（R15 已于 2026-11-07 提交） |
-| 测试 | R15 后全量 **2376 passed / 1 skipped / 0 failed**（2377 collected；分 5 批实测 448 + 547 + 300 + 710 + 371） |
+| 已提交 | R3–R16；R16 是最新提交（具体 hash 以 `git log -1` 为准） |
+| **未提交** | **无，工作区干净**（R16 已于 2026-11-07 提交） |
+| 测试 | R16 后全量 **2410 passed / 1 skipped / 0 failed**（2411 collected；分 5 批实测 448 + 547 + 300 + 710 + 405） |
 | 离线样例 | `todo` 9/9 · `linear` 5/5 · `hierarchy` 7/7，全部 `completed` |
 | 一句话定位 | 8 角色多 Agent 编排器：规划 → 执行 → 三层门禁 → 交付；可完全离线（mock）跑通 |
 
-**接手第一件事**：跑一次三套样例确认环境（§5.1），然后从 §7.2 里挑一项推进。
-R14 / R15 的回归与提交均已闭环，不需要再补跑。
+**接手第一件事**：跑一次三套样例确认环境（§5.1），然后从 §7.3 第二档里挑一项推进。
+第一档清单（Webhook 重放 / 运维手册 / 官方 SDK）已全部闭环，不需要再补跑或补文档。
 
 ---
 
@@ -44,11 +44,12 @@ python main.py run --sample todo --no-live --auto
 **接真实模型**：`AGENTCREW_API_KEY`（或 `OPENAI_API_KEY` / `DASHSCOPE_API_KEY` …）
 + `AGENTCREW_DEFAULT_MODEL=openai:gpt-4o-mini`。`python main.py doctor` 会告诉你缺什么。
 
-**三种对外形态**：
+**四种对外形态**：
 
 ```bash
 python main.py run "目标"          # CLI
 python main.py serve               # HTTP API + Web 面板（默认 127.0.0.1:8765）
+pip install -e ./sdk               # 官方 Python SDK（零依赖，给别的程序调）
 # MCP：作为客户端连别人的服务器（mcp_servers 配置）
 #      ——注意目前**不是** MCP server，不能反过来被别的 agent 调用
 ```
@@ -164,8 +165,8 @@ PYTHONPATH= "$PY" -m pytest tests/test_[a-b]*.py -q --assert=plain   # 448 passe
 PYTHONPATH= "$PY" -m pytest tests/test_[c-e]*.py -q --assert=plain   # 547
 PYTHONPATH= "$PY" -m pytest tests/test_[f-l]*.py -q --assert=plain   # 300
 PYTHONPATH= "$PY" -m pytest tests/test_[m-r]*.py -q --assert=plain   # 710
-PYTHONPATH= "$PY" -m pytest tests/test_[s-z]*.py -q --assert=plain   # 371
-# 累计 2376 passed / 1 skipped / 0 failed（2377 collected）
+PYTHONPATH= "$PY" -m pytest tests/test_[s-z]*.py -q --assert=plain   # 405
+# 累计 2410 passed / 1 skipped / 0 failed（2411 collected）
 
 python main.py run --sample todo --no-live --auto       # 三套离线样例，各 1–3 秒
 python main.py doctor               # 配置 / 依赖 / Provider 连通性
@@ -242,6 +243,7 @@ R14 最值钱的一课：`WebhookConfig` 的多接收端逻辑全绿，但 `Crew
 | 分 5 批跑测试偶发 `access violation` / `SystemError: bad format string` | 本机 pytest 在大量用例下的内存问题，**不是回归**。重跑或逐文件跑 |
 | `SandboxError: center 规则快照不可用` | 环境问题，命令实际会执行（输出标注 bypassed），重试即可 |
 | `api/server.py` 写入偶发被独占锁 | 用「写临时文件 → os.replace」原子替换 |
+| 从宿主机继承 `os.environ` 起子进程时 `import ssl` 崩 / 127.0.0.1 请求极慢 | 宿主机注入的 `PYTHONPATH` shim 与 `HTTP_PROXY`。子进程用**白名单环境**（剔除 `PYTHON*` / `*PROXY*`），主进程设 `NO_PROXY=127.0.0.1,localhost`；R16 的 serve 端到端用例实测从 3 分 51 秒降到 3.19 秒 |
 
 ### 6.8 spool 里的记录不认「旧配置」
 
@@ -259,15 +261,20 @@ payload 前必须走 `secret_values()` 递归脱敏，别绕过 Ledger 已有的
 R14 的第 3–5 批回归已补跑（5 批累计 2358 passed / 1 skipped / 0 failed），改动已提交；
 随后按第一档清单完成 R15（Webhook 持久化重放队列）：新增 18 例、全量
 2376 passed / 1 skipped / 0 failed、三套离线样例 9/9 5/5 7/7，含两次真实 CLI run 的
-端到端验证。PROJECT-STATE §3.19 / §3.20 与本文 §0 的状态口径已对齐，工作区干净。
+端到端验证。随后完成 R16（官方 Python SDK）：新增 34 例、全量
+2410 passed / 1 skipped / 0 failed，含一次真 `serve` + 真 mock run 的端到端。
+PROJECT-STATE §3.19–§3.21 与本文 §0 的状态口径已对齐，工作区干净。
 
 ### 7.2 第一档（投入小、直接影响可用性）
 
 | 项 | 预估 | 理由 |
 |---|---|---|
 | ~~运维部署/排障手册~~ | — | ✅ **已闭环**：`docs/OPERATIONS.md`（端口/认证/反代、配置与密钥、数据与备份、监控、升级、排障、上线清单） |
-| 官方 SDK + 示例 | 3 人日 | `artifacts/contracts/openapi.yaml` 已稳定，封装 Python client 边际成本很低 |
+| ~~官方 SDK + 示例~~ | — | ✅ **R16 已闭环**：`sdk/README.md` + `sdk/agentcrew_sdk/` + 两个示例（见 PROJECT-STATE §3.21） |
 | ~~Webhook 持久化重放队列~~ | — | ✅ **R15 已闭环**（见 PROJECT-STATE §3.20）：入队前落盘、启动补投、24h / 5 次淘汰；仍不保证「恰好一次」 |
+
+**第一档已全部闭环（2026-11-07）**：三项均已完成并提交。下一轮从 §7.3 第二档
+开始；另有一个 0.1 人日的小缺口见 §7.3 表末。
 
 ### 7.3 第二档（价值明确、改动面中等）
 
@@ -314,6 +321,7 @@ R14 的第 3–5 批回归已补跑（5 批累计 2358 passed / 1 skipped / 0 fa
 | R14 | Webhook 多接收端 + 只推失败 | 已提交（2026-11-07，`git log -1` 看 hash） |
 | R15 | Webhook 持久化重放队列 | 已提交（2026-11-07） |
 | 文档 | 运维部署/排障手册 `docs/OPERATIONS.md`；勘误 serve 端口（8000 → 8765）与 `clean` 保护默认值注释 | 已提交（2026-11-07） |
+| R16 | 官方 Python SDK + 示例（`sdk/`） | 已提交（2026-11-07） |
 
 R3–R8 之所以合并成一个提交：`config.py` / `crew.py` / `main.py` / `api/server.py` 四个文件
 被多轮同时改，`git add` 是文件粒度，按轮切分会把不同轮的改动硬塞进一个提交。

@@ -11,6 +11,7 @@
 
 import asyncio
 import os
+import sys
 from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +23,10 @@ from agentcrew.config import Settings
 from agentcrew.crew.crew import Crew
 from agentcrew.runtime.checkpoint import RunRecord
 from agentcrew.runtime.ledger import Ledger
+
+#: R16：官方 SDK 是 ``sdk/`` 下的独立可安装包，测试从这里把它加入搜索路径
+#: （CI 直接跑仓库根的 pytest，不会先 pip install -e ./sdk）。
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "sdk"))
 
 #: 仓库内的演示夹具根目录（``examples/fixtures``，spec §16.1）。
 DEMO_FIXTURES_DIR: Path = (

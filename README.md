@@ -128,6 +128,9 @@ python main.py run --demo
 > **部署到服务器 / 常驻服务 / 排障**：见 [docs/OPERATIONS.md](docs/OPERATIONS.md)
 > ——真实端口与认证、systemd / 反代示例、配置三通道与生产必配、日志与备份、
 > 扩容边界、监控告警、升级步骤和上线前检查清单。
+>
+> **在别的 Python 程序里调用 AgentCrew**：见 [sdk/README.md](sdk/README.md)
+> ——官方零依赖 SDK（HTTP + SSE，含可直接运行的示例）。
 
 ---
 
@@ -2468,3 +2471,45 @@ reject 即短路：
 每条门禁裁决都会写入任务历史（`board.record_review`），并落一条 `gate_result`
 审计事件（含层、裁决、分数、问题列表），`status` 命令的「G1 拦截 / G2 驳回 /
 人工打回」统计即来自这些事件。
+
+---
+
+## R16 官方 Python SDK：让外部系统直接调 AgentCrew
+
+`artifacts/contracts/openapi.yaml` 稳定后，外部系统不必再手拼 HTTP 请求。
+[`sdk/`](sdk/README.md) 提供一个**零依赖同步客户端**（只用标准库 `urllib`，不
+import `agentcrew`，因此不会把服务端依赖拖进调用方环境），可独立安装：
+
+```bash
+pip install -e ./sdk
+python sdk/examples/quickstart.py                              # 只读巡检
+python sdk/examples/quickstart.py --goal "做一个 Todo 应用" --mock
+python sdk/examples/stream_events.py <run_id> --max-events 30
+```
+
+```python
+from agentcrew_sdk import AgentCrewClient
+
+with AgentCrewClient("http://127.0.0.1:8765", api_key="…") as client:
+    print(client.health())
+    run_id = client.create_run("做一个 Todo 应用", options={"mock": True})["run_id"]
+    print(client.wait_for_run(run_id)["status"])
+    for event in client.iter_events(run_id):     # SSE，首帧是 connected
+        print(event.name, event.data)
+        if event.name == "run_finished":
+            break
+```
+
+| 设计取舍 | 做法 |
+|---|---|
+| 零依赖 | 标准库 `urllib`；不引 requests / httpx |
+| 契约来源 | 按 `openapi.yaml` 封装，服务端与 SDK 可各自升级；未纳入契约的端点用 `client.request(method, path)` |
+| 认证 | `api_key` → 所有请求（含 `/health`）带 `Authorization: Bearer` |
+| 错误 | `TransportError` 与 `APIError` 两族，401/404/409/429 各有子类，429 带 `Retry-After` |
+| 不隐式重试 | 客户端重试会把一次 `POST /runs` 变成可能创建多个 run；429 交给调用方决定 |
+| 长连接 | `iter_events` 是惰性生成器，跳过 `: ping` 心跳，关闭时释放响应 |
+| 便利方法 | `iter_ledger` 自动翻页、`wait_for_run` 轮询到终态（`awaiting_approval` 是非终态） |
+
+完整方法表、异常层次、已知限制与两个示例见 [`sdk/README.md`](sdk/README.md)。
+认证与反代配置见 [`docs/OPERATIONS.md`](docs/OPERATIONS.md) §2.2。
+

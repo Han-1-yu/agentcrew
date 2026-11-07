@@ -8,16 +8,16 @@
 
 ## 0. 一句话现状
 
-**引擎与管线健康，无 P0/P1 阻断项。** 全量测试 **2376 passed / 1 skipped / 0 failed**（2377 用例收集，2026-11-07 R15 后分 5 批实测），三个预设样例 100% 通过，真实模型通道可用（`doctor` 6/6 通过）；Studio 架构检查 / e2e 28/28 / selftest 16/16 全绿。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`。
+**引擎与管线健康，无 P0/P1 阻断项。** 全量测试 **2410 passed / 1 skipped / 0 failed**（2411 用例收集，2026-11-07 R16 后分 5 批实测），三个预设样例 100% 通过，真实模型通道可用（`doctor` 6/6 通过）；Studio 架构检查 / e2e 28/28 / selftest 16/16 全绿。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例。
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | 2377 collected / 2376 passed / 1 skipped / 0 failed（3.12.10 + pytest 9.1.1，`--assert=plain`；R4 +38、R5 +16、R6 +21、R7 +14、R8 +9、R9 +6、R10 +13、R11 +17、R12 +21、R13 +12、R14 +12、R15 +18，本机断言重写 segfault 后按 §6 分 5 批累计） |
+| 全量测试 | 2411 collected / 2410 passed / 1 skipped / 0 failed（3.12.10 + pytest 9.1.1，`--assert=plain`；R4 +38、R5 +16、R6 +21、R7 +14、R8 +9、R9 +6、R10 +13、R11 +17、R12 +21、R13 +12、R14 +12、R15 +18、R16 +34，本机断言重写 segfault 后按 §6 分 5 批累计） |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
 | Studio | `npm run check` **63** 模块 / 37 分片通过、selftest 16/16、e2e 28/28、probe 24/24 |
-| Git | `master` 领先 `origin/master` 171 个提交（均为本地提交、未推送）；**工作区干净，无未提交改动** |
+| Git | `master` 领先 `origin/master` 172 个提交（均为本地提交、未推送）；**工作区干净，无未提交改动** |
 | 角色 | 8 个内置岗位角色 + 执行体（Agent Profile）可多绑 |
 
 ```bash
@@ -78,6 +78,7 @@ contracts.py（零依赖契约层：EventSink / TaskLike）
 | 知识（R3/R11） | 经验库（R11 起为中文二元组 + BM25 检索：IDF 压虚词、长度归一、单字命中不算相关）+ 实体记忆（纯规则抽取五类实体、跨 run 追加归并、加权检索注入 PM 上下文）；`entity_memory_enabled` 默认关闭 |
 | 对外通知（R12/R14/R15） | 出站 Webhook：后台线程投递（不阻塞 run）、HMAC-SHA256 签名（时间戳纳入签名防重放）、`delivery` id 重试不变、失败重试有上限且不改 run 结局；默认推五个 run 级节点；密钥不导出/不进快照/进脱敏词表；默认关闭。R14 支持多接收端各自 `secret`/`events`/`only_failures`。R15 起每条「事件 × 接收端」入队前落盘、成功即删，进程退出或收尾超时的遗留记录由下一次启用 Webhook 的 run 补投（at-least-once，24h / 5 次淘汰），spool 不存 URL 与密钥 |
 | 接口 | CLI（`run/resume/status/roles/agents/switch/samples/clean/cancel/delete/serve/doctor/diff/providers/models/config`）；HTTP API + SSE + Web UI；API Key 认证 + IP 限流；并发 run 上限 `AGENTCREW_MAX_CONCURRENT_RUNS=8` |
+| 对外 SDK（R16） | `sdk/agentcrew_sdk`：零依赖同步 HTTP/SSE 客户端，独立可安装（`pip install -e ./sdk`）；API Key 认证、按状态码分型的异常、SSE 惰性生成器、ledger 自动翻页、`wait_for_run`；两个可直接运行的示例 |
 | 桌面端 | Studio 九页（运行列表 / 看板 / 事件流 / 任务详情 / 产物 / 图表 / 供应商 / 设置…）；明暗主题；e2e + 视觉回归 |
 
 ---
@@ -603,6 +604,46 @@ ledger 里留一条 `shutdown_timeout`。
 **刻意未做**：跨进程文件锁下的「恰好一次」（收益不抵复杂度）→ 事件级表达式过滤
 （当前只有「只推失败」）→ 接收端回调触发补偿动作 → 拖拽编排画布。
 
+### 3.21 R16：官方 Python SDK + 示例（2026-11-07）
+
+第一档清单最后一项。`openapi.yaml`（由 `api/server.py` 逆向得到）稳定后，外部系统
+不必再手拼 HTTP 请求与 SSE 帧。
+
+| 层 | 落地 | 理由 |
+|---|---|---|
+| 落点 | `sdk/` 顶层独立包 `agentcrew_sdk`，自带 `pyproject.toml` 可 `pip install -e ./sdk`；**不 import `agentcrew`** | 架构守卫只扫 `agentcrew/` 包；SDK 是消费方，不该把服务端依赖与分层约束传染给调用方 |
+| 依赖 | **零新增**：标准库 `urllib` / `json` / `time` | 不把 openai / pydantic / rich 拖进调用方环境；Python 3.10+ |
+| 契约 | 按 `openapi.yaml` 封装 17 个方法 + `request()` 逃生口（给未纳入契约的 `/providers` 等端点） | 服务端与 SDK 可各自升级；不为凑完整度去猜未稳定的端点 |
+| 错误 | `TransportError` / `APIError` 两族，401/404/409/429 各有子类，429 带 `Retry-After`；2xx 非 JSON 记 `ResponseError` | 调用方不必解析 `{"error": ...}` 原始体 |
+| SSE | `iter_events` 惰性生成器，跳过 `: ping`，`finally` 关响应 | 长连接不缓存整条流、不泄漏句柄 |
+| 便利 | `iter_ledger` 按 offset/limit 自动翻页；`wait_for_run` 轮询到终态（`awaiting_approval` 明确不算终态） | 运维脚本最常见的两件事 |
+| 示例 | `sdk/examples/quickstart.py`（默认只读巡检，`--goal` 才创建 run）与 `stream_events.py` | 默认对生产无害、无需模型 Key |
+
+**刻意未做**：异步 / 线程池客户端（调用方自己开线程，每线程一个实例）· 强类型响应
+模型（契约里大量可选字段与自由形状，加字段就失真）· 隐式重试（会把一次
+`POST /runs` 变成可能创建多个 run）· 封装 `openapi.yaml` 之外的端点（用
+`request()` 逃生口）。
+
+**验证**：`tests/test_sdk.py` 34 例，全部跑真实本地 HTTP 服务（请求方法 / 路径 /
+查询串 / 头 / body / 错误映射 / SSE 帧 / 翻页 / 等待终态 / 示例 `--help`），外加
+**一次真 `main.py serve` + 真 mock run 的端到端**（health → create → wait → ledger
+→ stats → approvals）。全量 **2410 passed / 1 skipped / 0 failed**；`ruff check`
+对新增文件全绿（根仓库另有 14 项**既存**告警，见 §7，本轮未扩大改动面）。
+
+**端到端踩坑（值得记住）**：从 pytest 进程继承 `os.environ` 起子进程，宿主机注入的
+`PYTHONPATH` shim 会让子进程 `import ssl` 直接崩（`_TLSMessageType` 只读），
+`HTTP_PROXY` 又会把 127.0.0.1 的健康检查拖到超时（一次用例跑 3 分 51 秒）。
+子进程改用**白名单环境**（剔除所有 `PYTHON*` / `*PROXY*`）+ 主进程设
+`NO_PROXY=127.0.0.1,localhost` 后 3.19 秒通过。R15 的 CLI 端到端不受影响是因为
+`main.py run` 路径没有触发同一组合。
+
+**红线遵守**：不 import `agentcrew`、不新增第三方依赖、不改配置合并顺序、
+`tests/test_architecture.py` 的分层表未动；`tests/conftest.py` 仅加一行把 `sdk/`
+加入测试搜索路径（CI 直接跑仓库根 pytest，不会先装 SDK）。
+
+**刻意未做（下一轮再定）**：把 `/providers` 等端点补进 `openapi.yaml` 后再封装 ·
+异步客户端 · 发布到 PyPI。
+
 ---
 
 ## 4. 历史报告汇总（已并入本文，原文归档）
@@ -614,7 +655,7 @@ ledger 里留一条 `shutdown_timeout`。
 | **HANDOFF**（初版交接） | 2026-10-06 | SDD 会话完成 34 个任务实现/评审，并用真实 DeepSeek 跑 6 次端到端验收，每次暴露一个 mock 无法暴露的缺陷并修掉 | 已被 11-01 交接取代，结论并入本文 |
 | **V7-HANDOFF** | 2026-10-10 | V7 增强落地：P0 数据脱敏（`redact.py`）、配额、循环检测等，21 项脱敏用例全绿 | 能力已并入 §2，P2.5 脱敏已实施 |
 | **HANDOFF-2026-11-01** | 2026-11-01 | 自包含交接：架构、模块地图、命令、退出码、环境坑、13 项待办；声明"护城河是测试" | 本文继承其结论；待办见 §7 |
-| **HANDOVER-BASELINE** | 2026-11-01 | 实测 1946 passed / 1 skipped；两个风险：Git 提交清单不完整（真实 168 文件而非文档所说 65）、真实模型 Key 失效；查明 segfault 实为 `PYTHONPATH` 污染而非解释器不稳 | Key 已恢复（`doctor` 6/6 通过）；提交随 R1–R15 推进（现领先远端 171） |
+| **HANDOVER-BASELINE** | 2026-11-01 | 实测 1946 passed / 1 skipped；两个风险：Git 提交清单不完整（真实 168 文件而非文档所说 65）、真实模型 Key 失效；查明 segfault 实为 `PYTHONPATH` 污染而非解释器不稳 | Key 已恢复（`doctor` 6/6 通过）；提交随 R1–R16 推进（现领先远端 172） |
 | **V4 质量审查报告** | 2026-10-10 | 引擎侧修 6 项：密钥环境变量名硬编码、模型发现错误结果被缓存 60s 无法重试等 | 全部闭环 |
 | **V4 深度审查报告** | 2026-10-10 | 追加 15 项（D-01…D-15）：`api_key_env` 形状校验、空 model id 收录、重名 provider、CSP、弹窗状态清理等，逐项独立 commit | 全部闭环 |
 | **V4-FE 只读问题清单** | 2026-10-10 | 前端边界问题（深色模式 DAG 文字不可见、内联边框硬编码、主题缓存闪烁等），只读审查不改码 | 已由后续 F4–F7 提交修复 |
@@ -652,7 +693,8 @@ ledger 里留一条 `shutdown_timeout`。
 | R12 | 出站 Webhook：关键节点推给外部（见 §3.17） | 2334 |
 | R13 | MCP 服务器接进生产工具链（见 §3.18） | 2346 |
 | R14 | Webhook 多接收端 + 只推失败（见 §3.19） | 2358 |
-| R15 | Webhook 持久化重放队列：入队前落盘、启动补投（见 §3.20） | **2376（当前）** |
+| R15 | Webhook 持久化重放队列：入队前落盘、启动补投（见 §3.20） | 2376 |
+| R16 | 官方 Python SDK + 示例：零依赖 HTTP/SSE 客户端（见 §3.21） | **2410（当前）** |
 
 ---
 
@@ -704,8 +746,9 @@ ledger 里留一条 `shutdown_timeout`。
 
 1. ✅ **R3 已闭环**：工具参数 JSON Schema 强校验（见 §3.8）
 2. MCP SSE/HTTP transport 资源关闭（消除 unclosed warning；`mcp_servers` 接入生产 run 已由 R13 闭环）
-3. CI 首次实跑（remote 已配，本地领先 171 提交；需验证 3.10–3.13 矩阵）
-4. 功能测试报告汇总（2376 用例按模块/场景出覆盖矩阵）
+3. CI 首次实跑（remote 已配，本地领先 172 提交；需验证 3.10–3.13 矩阵）
+4. 功能测试报告汇总（2410 用例按模块/场景出覆盖矩阵）
+5. CI 前清理 `ruff check .` 的 **14 项既存告警**（I001×9 / F401 / UP037 / UP028 / B905×2，分布在 `agentcrew/agents/team.py`、`crew/crew.py`、`runtime/approvals.py`、`runtime/ledger.py`、`task/planner.py`、`task/task_board.py` 与 6 个旧测试文件）。本轮新增的 `sdk/` / `tests/test_sdk.py` / `tests/conftest.py` 单独跑 ruff 全绿；没顺手全仓修是因为 B905 的 `zip(strict=)` 与 UP028 会改变行为，不该混进 SDK 提交 |
 
 **大项（建议单独立项）**
 
@@ -716,7 +759,7 @@ ledger 里留一条 `shutdown_timeout`。
 | 单步/断点调试 | 5 人日 | ✅ R4 已实现「卡点挂起 → 跨进程恢复」这一半；仍缺任意任务处暂停/单步与变量查看 |
 | 可视化工具注册与在线调试 | 5 人日 | 工具管理页 + 单工具试跑 |
 | ~~实体记忆~~ | — | ✅ **R3 已闭环**：纯规则实体抽取 + 全局库归并检索（见 §3.8）；向量化 / RAG 仍缺 |
-| 官方 SDK + 示例 | 3 人日 | 基于 `openapi.yaml` 封装 Python client |
+| ~~官方 SDK + 示例~~ | — | ✅ **R16 已闭环**（见 §3.21）：`sdk/agentcrew_sdk` 零依赖同步客户端 + 两个示例 + 34 例回归（含真 serve 端到端） |
 | `web_search` | 1 人日 | ✅ `web_fetch`（SSRF 防护）与 `write_file`（受控工作区）已由 R3 闭环；`web_search` 需外部搜索 API 与密钥，待单独设计 |
 | ~~出站 Webhook~~ | — | ✅ **R12 / R14 / R15 已闭环**：后台投递 + HMAC 签名 + 重试上限（§3.17）、多接收端与只推失败（§3.19）、持久化重放队列（§3.20）；仍缺投递的「恰好一次」保证与事件级表达式过滤 |
 | ~~MCP 服务器生产接线~~ | — | ✅ **R13 已闭环**：`tools_enabled` 时连接 `mcp_servers`、发现工具、带前缀登记、收尾关连接（见 §3.18） |
@@ -799,10 +842,11 @@ ledger 里留一条 `shutdown_timeout`。
 
 | 文档 | 用途 |
 | --- | --- |
-| `README.md` | 项目介绍、8 角色说明、V2–V5 与 R3–R13 能力完善、配置与用法全文 |
+| `README.md` | 项目介绍、8 角色说明、V2–V5 与 R3–R16 能力完善、配置与用法全文 |
 | `PROJECT-STATE.md` | 本文，唯一状态源 |
 | `docs/HANDOVER.md` | **接手必读**：当前状态、代码从哪读起、已知的坑、开发者视角排障、剩余工作 |
 | `docs/OPERATIONS.md` | **运维部署/排障手册**：五种运行形态（CLI / serve / Studio / 库 / MCP 客户端）、配置三通道与生产必配、密钥与网络边界、`output_dir` 数据与备份、监控告警、升级、按症状排障、上线前检查清单 |
+| `sdk/README.md` · `sdk/agentcrew_sdk/` · `sdk/examples/` | **R16 官方 Python SDK**：安装与方法表、异常层次、SSE、刻意不做的事与已知限制；客户端源码与两个可运行示例 |
 | `artifacts/contracts/state-enums.md` · `event-types.md` · `openapi.yaml` · `schemas/*.json` | R4 同步后的状态枚举、事件、HTTP 接口与落盘结构契约 |
 | `docs/role-agent-binding-design.md` | 「角色 = 职责 + 权限，执行体可多绑」设计方案（v1 草案，部分已落地） |
 | `docs/MAGPIE_COMPARISON.md` | 供应商韧性设计参考（故障转移/冷却/限流/循环检测的来源与取舍） |

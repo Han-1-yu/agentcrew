@@ -70,6 +70,9 @@ python main.py doctor --json
 
 > 方向别搞反：`agentcrew/mcp` 是客户端，**本项目不是 MCP server**，不能被别的 Agent
 > 反向调用。要被外部系统驱动，用 HTTP API 或 CLI。
+>
+> R16 的官方 SDK（`sdk/`）不是第六种运行形态，它只是 `serve` 的客户端：服务仍按
+> 上表五种之一部署，SDK 装在调用方那一侧。
 
 ### 2.1 CLI 一次性（cron / CI）
 
@@ -146,6 +149,10 @@ curl -H "Authorization: Bearer <key>" http://127.0.0.1:8765/health
 
 请求体上限 **4 MiB**（`http.MAX_BODY_BYTES`），超限回 413。`POST /runs` 的 `options`
 是白名单，不接受 `webhook_secret`、`api_keys` 这类运维级配置。
+
+**不想手拼请求**：用官方 SDK（`pip install -e ./sdk`，见 `sdk/README.md`）。
+`AgentCrewClient` 封装了上表全部端点、认证、按状态码分型的异常、SSE 事件流与
+ledger 自动翻页，适合写巡检脚本或把 AgentCrew 接进别的系统。
 
 **进程托管示例**（Linux systemd，按实际路径调整）：
 
@@ -256,6 +263,7 @@ python main.py config import /etc/agentcrew/new.yaml
 | `AGENTCREW_LOG_LEVEL` / `AGENTCREW_LOG_JSON` | `INFO` / 关 | 生产开 JSON | 结构化日志进采集系统，已脱敏 |
 | `AGENTCREW_WEBHOOK_URL` 或 `webhooks` | 空 | 按需 | 关键节点外推；R15 起失败会落盘补投 |
 | `AGENTCREW_MAX_CONCURRENCY` | 4 | 按 Provider 配额调 | 峰值并发受 DAG 宽度约束 |
+| `AGENTCREW_MAX_CONCURRENT_RUNS` | 8 | 按内存与 Provider 配额调 | `serve` 同时运行的 run 数上限，超限 `POST /runs` 回 429 |
 | `AGENTCREW_GATE` | `both`（TTY）/ 非 TTY 降级 `none` | 无人值守加 `--auto` | 非 TTY 降级会在 stderr 明说，不会偷偷放行 |
 
 大多数能力开关默认关闭是刻意的（升级不该静默改变成本结构），完整清单见
@@ -369,6 +377,18 @@ python main.py status <run_id>               # 任务表 + 统计 + 待审批条
 python main.py diff <run_a> <run_b> --json   # 两次 run 的配置 / 产物 / 事件差异
 curl -H "Authorization: Bearer <key>" \
   "http://127.0.0.1:8765/runs/<run_id>/stats"
+```
+
+巡检脚本可以直接用 SDK（省掉 curl 拼头与错误处理）：
+
+```python
+from agentcrew_sdk import AgentCrewClient, AgentCrewError
+
+with AgentCrewClient("http://127.0.0.1:8765", api_key="<key>") as client:
+    try:
+        print(client.health(), len(client.list_runs()))
+    except AgentCrewError as exc:
+        print("巡检失败：", exc.status_code, exc)
 ```
 
 ### 5.2 建议的告警规则
