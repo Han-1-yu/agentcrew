@@ -36,6 +36,15 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from agentcrew.api import http as http_transport
 from agentcrew.api.auth import APIKeyAuth, RateLimiter
+from agentcrew.api.rbac import (
+    ALL_SCOPES,
+    Principal,
+    current_principal,
+    read_owner,
+    required_scope,
+    set_current,
+    write_owner,
+)
 from agentcrew.models.config import PROVIDER_PRESETS as PROVIDER_PRESETS_NAMES
 
 
@@ -245,6 +254,9 @@ API_ROUTES: tuple[tuple[str, str], ...] = (
     ("POST", "/providers/{name}/test"),
     ("GET", "/tools"),
     ("POST", "/tools/{name}/test"),
+    ("GET", "/keys"),
+    ("POST", "/keys"),
+    ("DELETE", "/keys/{key_id}"),
 )
 
 
@@ -373,7 +385,8 @@ class ApiServer:
                 return
             # E-3 中间件链（路由分发前）：先限流后认证。任一拦截直接回响应并
             # return，不再读 body / 不再分发——被拒请求不该再触发任何业务逻辑。
-            if await self._apply_middleware(request.path, request.headers, writer):
+            if await self._apply_middleware(
+                    request.method, request.path, request.headers, writer):
                 return
             if request.method == "GET":
                 await self._handle_get(request.path, writer)
@@ -427,16 +440,21 @@ class ApiServer:
 
     async def _apply_middleware(
         self,
+        method: str,
         path: str,
         headers: dict[str, str],
         writer: asyncio.StreamWriter,
     ) -> bool:
         """路由分发前的保护层；返回 ``True`` 表示已拦截（调用方停止分发）。
 
-        顺序固定为「先限流、后认证」：被刷爆的客户端不该再消耗认证比对，也不该
-        通过 401 探知端点是否存在。两者都写 :attr:`security_events`——事件名与
-        data 只含 client_ip / path / remaining，**绝不回显客户端发来的 key**
-        （key 只参与布尔比对，不进任何持久化结构）。
+        顺序固定为「先限流、后认证、再授权」：被刷爆的客户端不该再消耗认证比对，
+        被拒的调用也不该触达业务逻辑。三者都写 :attr:`security_events`——事件名与
+        data 只含 client_ip / path / remaining / 主体名与作用域，**绝不回显客户端
+        发来的 key**（key 只参与哈希比对，不进任何持久化结构）。
+
+        R25：认证成功后解析出主体（admin 角色 / 密钥身份 / legacy 单密钥），写进
+        ContextVar 供 handler 读；随后按 :func:`required_scope` 校验作用域，缺权限
+        回 403（不是 401——身份是有效的，只是没被授权）。
         """
         client_ip = self._client_ip(headers, writer)
         # 1) 速率限制（基于 IP 的滑动窗口）
@@ -453,10 +471,20 @@ class ApiServer:
                     extra_headers={"Retry-After": str(limiter.window_seconds)},
                 )
                 return True
-        # 2) API Key 认证（Bearer / X-API-Key）
+        # 2) API Key 认证（Bearer / X-API-Key）+ 3) 作用域授权
         auth = self._auth
+        principal: Any = None
         if auth is not None and auth.enabled:
-            if not auth.authenticate(headers):
+            resolver = getattr(auth, "principal", None)
+            if resolver is not None:
+                principal = resolver(headers)
+            else:
+                principal = (
+                    Principal(name="legacy-key", role="admin",
+                              scopes=ALL_SCOPES, key_id="legacy")
+                    if auth.authenticate(headers) else None
+                )
+            if principal is None:
                 self._record_security("api_auth_failed", {
                     "client_ip": client_ip, "path": path,
                 })
@@ -466,7 +494,53 @@ class ApiServer:
                     extra_headers={"WWW-Authenticate": 'Bearer realm="agentcrew"'},
                 )
                 return True
+            scope = required_scope(method, urlsplit(path).path.rstrip("/") or "/")
+            if not principal.allows(scope):
+                self._record_security("api_forbidden", {
+                    "client_ip": client_ip, "path": path,
+                    "principal": principal.name, "role": principal.role,
+                    "required_scope": scope,
+                })
+                await self._send_json(
+                    writer, 403,
+                    {"error": f"权限不足：需要作用域 {scope}（当前角色 "
+                              f"{principal.role} 不具备）"},
+                )
+                return True
+        set_current(principal)
         return False
+
+    # ── R25：run 可见性守卫 ──────────────────────────────────────────────
+
+    def _run_owner_name(self, run_id: str) -> str | None:
+        """run 目录里的所有者名；非法 run_id / 无标记一律 ``None``。"""
+        if self._output_dir is None:
+            return None
+        from agentcrew.runtime.checkpoint import _validated_run_id
+
+        try:
+            rid = _validated_run_id(run_id)   # 防路径穿越，与各 handler 同一校验
+        except ValueError:
+            return None
+        return read_owner(self._output_dir / rid)
+
+    async def _deny_if_run_hidden(
+        self, run_id: str, writer: asyncio.StreamWriter
+    ) -> bool:
+        """非 admin 只能碰自己创建的 / 白名单里的 run；不可见回 **404**。
+
+        用 404 而不是 403：403 会泄露「这个 run 存在但不属于你」，等于让人枚举
+        别人的 run_id。返回 ``True`` 表示已拒绝（调用方 return）。
+        """
+        principal = current_principal()
+        if principal.can_see_run(self._run_owner_name(run_id)):
+            return False
+        self._record_security("api_forbidden", {
+            "path": f"/runs/{run_id}", "principal": principal.name,
+            "role": principal.role, "required_scope": "run-visibility",
+        })
+        await self._send_json(writer, 404, {"error": "run not found"})
+        return True
 
     @staticmethod
     def _client_ip(
@@ -503,6 +577,9 @@ class ApiServer:
         if p == "/tools":
             await self._list_tools(writer)
             return
+        if p == "/keys":
+            await self._list_keys(writer)
+            return
         segments = [unquote(s) for s in p.split("/") if s]
         # A5：/providers 目录与 /providers/{name}/models
         if segments and segments[0] == "providers":
@@ -514,6 +591,8 @@ class ApiServer:
                 await self._handle_sse(run_id, writer)
                 return
             if action == "status":
+                if await self._deny_if_run_hidden(run_id, writer):
+                    return
                 run = self.runs.get(run_id)
                 if run is not None:
                     await self._send_json(writer, 200, {
@@ -585,6 +664,8 @@ class ApiServer:
         self, run_id: str, writer: asyncio.StreamWriter
     ) -> None:
         """R4：列出一个 run 的全部审批单（服务重启后仍从盘上可读）。"""
+        if await self._deny_if_run_hidden(run_id, writer):
+            return
         if self._output_dir is None:
             await self._send_json(writer, 503, {"error": "output_dir 未配置"})
             return
@@ -608,6 +689,8 @@ class ApiServer:
         self, run_id: str, body: bytes, writer: asyncio.StreamWriter
     ) -> None:
         """R4：在 HTTP 通道写裁决；引擎侧 resume 后消费这张单继续。"""
+        if await self._deny_if_run_hidden(run_id, writer):
+            return
         if self._output_dir is None:
             await self._send_json(writer, 503, {"error": "output_dir 未配置"})
             return
@@ -626,7 +709,13 @@ class ApiServer:
             return
         request_id = data.get("request_id")
         decision = data.get("decision")
-        decided_by = data.get("decided_by", "api")
+        # R25：审计身份取主体名（真实密钥身份），不再信任 body 的自由文本；
+        # 未启用 RBAC（anonymous）或 legacy 单密钥时才回退到 body。
+        principal = current_principal()
+        if principal.name not in ("anonymous", "legacy-key"):
+            decided_by = principal.name
+        else:
+            decided_by = data.get("decided_by", "api")
         if (not isinstance(request_id, str) or not request_id
                 or not isinstance(decision, dict)
                 or not isinstance(decided_by, str)):
@@ -671,6 +760,10 @@ class ApiServer:
         # R24：POST /tools/{name}/test —— 单工具试跑（沙箱隔离）
         if len(segments) == 3 and segments[0] == "tools" and segments[2] == "test":
             await self._tool_test(segments[1], body, writer)
+            return
+        # R25：POST /keys —— 新建密钥（明文只回这一次）
+        if p == "/keys":
+            await self._create_key(body, writer)
             return
         # 任务级覆盖：POST /runs/{id}/tasks/{task_id}/agent
         if (len(segments) == 5 and segments[0] == "runs"
@@ -760,6 +853,9 @@ class ApiServer:
             self._run_crew(crew, lambda: crew.run(goal), started))
         try:
             run_id = await asyncio.wait_for(started, timeout=30)
+            # R25：记录 run 归属（key_id + 身份名），非 admin 只能看自己的 run。
+            write_owner(self._output_dir / run_id, current_principal()) \
+                if self._output_dir is not None else None
         except asyncio.CancelledError:
             # handler 被取消时 CancelledError 不属于 Exception，若不显式收口，
             # 后台 run 会继续跑且永远不进 active_crews/_run_tasks 注册表（幽灵 run）。
@@ -887,6 +983,8 @@ class ApiServer:
 
         ``reset`` 是幂等的：没切过也返回 200，``changed=false``。
         """
+        if await self._deny_if_run_hidden(run_id, writer):
+            return
         try:
             payload = json.loads(body.decode("utf-8")) if body else {}
         except (json.JSONDecodeError, UnicodeDecodeError):
@@ -956,6 +1054,8 @@ class ApiServer:
         body: ``{"agent": "backend_fast"}`` 或 ``{"reset": true}``；
         ``role`` 可省略——能从 run 的任务状态里查到就自动补。
         """
+        if await self._deny_if_run_hidden(run_id, writer):
+            return
         try:
             payload = json.loads(body.decode("utf-8")) if body else {}
         except (json.JSONDecodeError, UnicodeDecodeError):
@@ -1004,6 +1104,8 @@ class ApiServer:
 
     async def _cancel_run(self, run_id: str, writer: asyncio.StreamWriter) -> None:
         """``POST /runs/{id}/cancel``：软取消运行中的 run（202）。"""
+        if await self._deny_if_run_hidden(run_id, writer):
+            return
         crew = self.active_crews.get(run_id)
         if crew is None:
             await self._send_json(
@@ -1022,6 +1124,8 @@ class ApiServer:
 
     async def _resume_run(self, run_id: str, writer: asyncio.StreamWriter) -> None:
         """``POST /runs/{id}/resume``：从 checkpoint 恢复 run 并后台执行（202）。"""
+        if await self._deny_if_run_hidden(run_id, writer):
+            return
         # resume 会 load_board → repair_statuses → 写盘，是**写**路径。CLI 的
         # resume 走 _run_dir() 收口、DELETE 走 _validated_run_id()，这里此前是
         # 唯一一条直接把 run_id 拼进 output_dir 的路径。
@@ -1093,6 +1197,99 @@ class ApiServer:
         await self._send_json(
             writer, 202, {"run_id": resumed_id, "status": "running"})
 
+    # ── R25：密钥管理（RBAC）──────────────────────────────────────────────
+
+    def _key_store(self) -> Any:
+        """当前认证器背后的密钥库；未启用多密钥时 ``None``。"""
+        return getattr(self._auth, "store", None)
+
+    async def _list_keys(self, writer: asyncio.StreamWriter) -> None:
+        """``GET /keys``：密钥清单（**不含哈希与盐**）+ 角色/作用域说明。"""
+        store = self._key_store()
+        if store is None:
+            await self._send_json(writer, 503, {
+                "error": "未启用多密钥：配置密钥库（python main.py keys add ...）后可用"})
+            return
+        from agentcrew.api.rbac import ROLE_SCOPES, describe_scopes
+
+        keys = []
+        for record in store.load():
+            data = record.model_dump(mode="json")
+            data.pop("key_hash", None)   # 哈希与盐永不出服务端
+            data.pop("salt", None)
+            keys.append(data)
+        await self._send_json(writer, 200, {
+            "keys": keys,
+            "roles": {role: sorted(scopes) for role, scopes in ROLE_SCOPES.items()},
+            "scopes": describe_scopes(),
+        })
+
+    async def _create_key(
+        self, body: bytes, writer: asyncio.StreamWriter
+    ) -> None:
+        """``POST /keys``：新建密钥，返回明文（**仅此一次**）。"""
+        store = self._key_store()
+        if store is None:
+            await self._send_json(writer, 503, {
+                "error": "未启用多密钥：配置密钥库后可用"})
+            return
+        try:
+            data = json.loads(body.decode("utf-8")) if body else {}
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            await self._send_json(writer, 400, {"error": "invalid JSON"})
+            return
+        if not isinstance(data, dict):
+            await self._send_json(writer, 400, {"error": "body 必须是 JSON 对象"})
+            return
+        try:
+            record, plaintext = store.add(
+                name=str(data.get("name") or ""),
+                role=str(data.get("role") or "operator"),
+                scopes=[str(s) for s in (data.get("scopes") or [])],
+                run_ids=[str(r) for r in (data.get("run_ids") or [])],
+                expires_at=(str(data["expires_at"])
+                            if data.get("expires_at") else None),
+                note=str(data.get("note") or ""),
+            )
+        except ValueError as exc:
+            await self._send_json(writer, 400, {"error": str(exc)})
+            return
+        payload = record.model_dump(mode="json")
+        payload.pop("key_hash", None)
+        payload.pop("salt", None)
+        self._record_security("api_key_created", {
+            "principal": current_principal().name, "key_id": record.id,
+            "name": record.name, "role": record.role,
+        })
+        await self._send_json(writer, 201, {
+            "key": plaintext,
+            "record": payload,
+            "notice": "密钥明文只显示这一次，请立即保存；服务端只存哈希",
+        })
+
+    async def _revoke_key(
+        self, ident: str, writer: asyncio.StreamWriter
+    ) -> None:
+        """``DELETE /keys/{id|name}``：吊销密钥（幂等，已吊销重复调用仍 200）。"""
+        store = self._key_store()
+        if store is None:
+            await self._send_json(writer, 503, {
+                "error": "未启用多密钥：配置密钥库后可用"})
+            return
+        try:
+            record = store.revoke(ident)
+        except ValueError as exc:
+            await self._send_json(writer, 404, {"error": str(exc)})
+            return
+        self._record_security("api_key_revoked", {
+            "principal": current_principal().name,
+            "key_id": record.id, "name": record.name,
+        })
+        await self._send_json(writer, 200, {
+            "revoked": record.model_dump(mode="json", exclude={
+                "key_hash", "salt"}),
+        })
+
     async def _list_tools(self, writer: asyncio.StreamWriter) -> None:
         """``GET /tools``：R24 工具清单（管理页 / CLI 共用同一份元数据）。
 
@@ -1154,12 +1351,20 @@ class ApiServer:
         await self._send_json(writer, 200, result)
 
     async def _list_runs(self, writer: asyncio.StreamWriter) -> None:
-        """``GET /runs``：盘上 run.json 列表 + 内存中运行中状态叠加。"""
+        """``GET /runs``：盘上 run.json 列表 + 内存中运行中状态叠加。
+
+        R25：按主体可见性过滤——非 admin 只看到自己创建的（或 ``run_ids``
+        白名单里的）run；无主 run（CLI 建的）只有 admin 看得到。过滤发生在
+        叠内存状态**之前**，避免通过「运行中」条目泄露别人的 run_id。
+        """
         from agentcrew.runtime.checkpoint import CheckpointStore
 
+        principal = current_principal()
         runs: list[dict[str, Any]] = []
         if self._output_dir is not None and self._output_dir.is_dir():
             for rid in CheckpointStore.list_runs(self._output_dir):
+                if not principal.can_see_run(self._run_owner_name(rid)):
+                    continue
                 try:
                     record = CheckpointStore(
                         self._output_dir / rid).load_record()
@@ -1174,6 +1379,8 @@ class ApiServer:
                 })
         # 运行中的 crew 以实时状态覆盖盘上记录（run 可能已被取消/收尾）。
         for rid in self.active_crews:
+            if not principal.can_see_run(self._run_owner_name(rid)):
+                continue
             existing = next((r for r in runs if r["run_id"] == rid), None)
             if existing is not None:
                 existing["status"] = "running"
@@ -1200,6 +1407,8 @@ class ApiServer:
         返回 404；run 存在但从未 emit（空 ledger.jsonl）返回 200 空列表——
         「没有事件」是诚实答案，不是错误。
         """
+        if await self._deny_if_run_hidden(run_id, writer):
+            return
         if self._output_dir is None:
             await self._send_json(writer, 500, {"error": "server 未配置 output_dir"})
             return
@@ -1241,6 +1450,8 @@ class ApiServer:
 
         空 ledger 返回各项为零的统计对象（200），只有 run 目录不存在才 404。
         """
+        if await self._deny_if_run_hidden(run_id, writer):
+            return
         if self._output_dir is None:
             await self._send_json(writer, 500, {"error": "server 未配置 output_dir"})
             return
@@ -1277,6 +1488,8 @@ class ApiServer:
 
     async def _get_model(self, run_id: str, writer: asyncio.StreamWriter) -> None:
         """``GET /runs/{id}/model``：当前模型绑定（仅运行中的 run 可读）。"""
+        if await self._deny_if_run_hidden(run_id, writer):
+            return
         crew = self.active_crews.get(run_id)
         if crew is None:
             await self._send_json(
@@ -1294,6 +1507,8 @@ class ApiServer:
         self, run_id: str, body: bytes, writer: asyncio.StreamWriter,
     ) -> None:
         """``PUT /runs/{id}/model``：body ``{"alias": ..., "role": ...}`` 切换模型。"""
+        if await self._deny_if_run_hidden(run_id, writer):
+            return
         try:
             data = json.loads(body.decode("utf-8")) if body else {}
         except (json.JSONDecodeError, UnicodeDecodeError):
@@ -1332,10 +1547,15 @@ class ApiServer:
         """
         parsed = urlsplit(path)
         segments = [unquote(s) for s in parsed.path.split("/") if s]
+        if len(segments) == 2 and segments[0] == "keys":
+            await self._revoke_key(segments[1], writer)
+            return
         if len(segments) != 2 or segments[0] != "runs":
             await self._send_json(writer, 404, {"error": "Not Found"})
             return
         run_id = segments[1]
+        if await self._deny_if_run_hidden(run_id, writer):
+            return
         query = parse_qs(parsed.query)
         if query.get("confirm", ["0"])[0] != "1":
             await self._send_json(writer, 400, {
@@ -1595,6 +1815,8 @@ class ApiServer:
         })
 
     async def _handle_sse(self, run_id: str, writer: asyncio.StreamWriter) -> None:
+        if await self._deny_if_run_hidden(run_id, writer):
+            return
         await http_transport.sse_headers(writer)
         queue = self.bus.subscribe()
         try:

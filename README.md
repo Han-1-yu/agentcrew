@@ -2708,6 +2708,40 @@ python main.py tool run_python --args '{"code":"print(6*7)"}' --json
 逐条探测）；`docs/OPERATIONS.md` §7.4 记录了排查用的一条命令。
 
 
+## R25 多用户与 RBAC：密钥 / 角色 / 归属 / 审计
+
+此前一个共享 API Key，谁都能删别人的 run。R25 把认证升级为完整的身份体系，
+**单密钥部署零改动**（legacy `api_keys` 等价 admin，与改造前行为一致）。
+
+```bash
+python main.py keys add --name alice --role operator --runs R-1,R-2
+# → 密钥（只显示这一次）：ac_xxx…    之后服务端只存 scrypt 哈希
+python main.py keys list          # id / 角色 / 状态 / 最后使用 / 可见 run
+python main.py keys revoke alice  # 吊销：下一次请求立即 401（无需重启）
+```
+
+**三层模型**：
+
+| 层 | 内容 |
+|---|---|
+| 密钥 | 名称（审计身份）· 角色 · 附加作用域 · 可见 run 白名单 · 过期时间 · 吊销 |
+| 角色 | `viewer`（读 runs/tools）· `operator`（+ 建 run、审批、试跑工具）· `admin`（全部 + 删 run、改绑定、管密钥）· `custom`（显式给作用域） |
+| 作用域 | `runs:read` `runs:write` `runs:admin` `approvals:write` `tools:read` `tools:test` `config:read` `keys:read` `keys:write` |
+
+**授权在中间件一处完成**：`required_scope(method, path)` 声明每条路由要什么
+作用域（缺声明默认「登录即可」），缺权限回 **403**（身份有效、只是没被授权）。
+
+**归属与隔离**：API 创建的 run 在 run 目录写 `owner.json`；非 admin 只能看
+自己创建的（或 `run_ids` 白名单里的）run，别人的 run 一律回 **404**——不用 403，
+避免泄露「这个 run 存在但不属于你」。CLI 建的 run 视作 `local`，只有 admin 可见。
+
+**审计**：审批裁决的 `decided_by` 一律取密钥身份名，body 里写什么都覆盖不掉；
+建密钥 / 吊销 / 越权拒绝都进安全事件（不含密钥本身，密钥只参与哈希比对）。
+
+看板「密钥」标签页可直接建/吊销密钥（admin），明文创建后只显示一次。
+
+
+
 
 
 

@@ -95,6 +95,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <button class="tab-btn" onclick="switchTab('ledger', this)">事件日志</button>
   <button class="tab-btn" onclick="switchTab('stats', this)">统计</button>
   <button class="tab-btn" onclick="switchTab('tools', this)">工具</button>
+  <button class="tab-btn" onclick="switchTab('keys', this)">密钥</button>
 </div>
 <div class="tab-pane active" id="pane-board">
   <div class="board" id="board"></div>
@@ -128,6 +129,28 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <pre id="tool-trial-result" class="log" style="height:240px;white-space:pre-wrap"></pre>
   </div>
 </div>
+<div class="tab-pane" id="pane-keys">
+  <div class="controls">
+    <span id="keys-hint" style="color:#8b949e;font-size:12px"></span>
+    <button class="small" onclick="loadKeys()">刷新</button>
+  </div>
+  <div id="keys-list" style="color:#6e7681;font-size:13px">加载中…</div>
+  <div style="margin-top:12px">
+    <h2 style="margin-bottom:6px">新建密钥</h2>
+    <div class="controls">
+      <input id="key-name" placeholder="身份名，如 alice" style="width:160px">
+      <select id="key-role" style="background:#161b22;border:1px solid #30363d;color:#e1e4e8;padding:6px 10px;border-radius:6px">
+        <option value="viewer">viewer</option>
+        <option value="operator" selected>operator</option>
+        <option value="admin">admin</option>
+      </select>
+      <input id="key-runs" placeholder="可见 run（逗号分隔，可空）" style="width:260px">
+      <input id="key-expires" placeholder="过期 ISO 时间（可空）" style="width:200px">
+      <button class="small" onclick="createKey()">创建</button>
+    </div>
+    <pre id="key-created" class="log" style="display:none;height:120px;white-space:pre-wrap;margin-top:8px"></pre>
+  </div>
+</div>
 
 <script>
 const STATUSES = ["pending", "ready", "running", "review", "rework", "succeeded", "failed", "blocked", "cancelled", "skipped"];
@@ -143,6 +166,7 @@ function switchTab(name, btn) {
   if (name === "ledger" && currentRun) loadLedger();
   if (name === "stats" && currentRun) loadStats();
   if (name === "tools") loadTools();
+  if (name === "keys") loadKeys();
 }
 
 // ── Run 列表（P2-10）───────────────────────────────────────────────────
@@ -589,6 +613,95 @@ async function runToolTrial() {
   } catch (e) {
     status.textContent = `请求失败：${e}`;
   }
+}
+
+// ── R25：密钥管理（多用户 RBAC）─────────────────────────────────────
+async function loadKeys() {
+  const box = document.getElementById("keys-list");
+  const hint = document.getElementById("keys-hint");
+  if (!box) return;
+  try {
+    const resp = await fetch("/keys");
+    const data = await resp.json();
+    if (!resp.ok) {
+      hint.textContent = "";
+      box.textContent = resp.status === 403
+        ? "当前密钥没有 keys:read 作用域（需要 admin）"
+        : (data.error || `加载失败（${resp.status}）`);
+      return;
+    }
+    hint.textContent = `角色 ${Object.keys(data.roles || {}).join(" / ")} · ${data.keys.length} 条`;
+    if (!data.keys.length) {
+      box.textContent = "密钥库为空——用下方表单或 main.py keys add 新建";
+      return;
+    }
+    box.innerHTML = "";
+    for (const key of data.keys) {
+      const card = document.createElement("div");
+      card.className = "run-card";
+      card.style.marginBottom = "8px";
+      const head = document.createElement("div");
+      head.style.cssText = "display:flex;justify-content:space-between;align-items:center";
+      const title = document.createElement("strong");
+      title.textContent = `${key.name}（${key.role}）`;
+      const right = document.createElement("span");
+      right.style.cssText = "display:flex;gap:8px;align-items:center";
+      const state = document.createElement("span");
+      state.className = "status-badge " + (key.revoked_at ? "status-failed" : "status-completed");
+      state.textContent = key.revoked_at ? "已吊销" : "有效";
+      right.append(state);
+      if (!key.revoked_at) {
+        const btn = document.createElement("button");
+        btn.className = "small btn-danger";
+        btn.textContent = "吊销";
+        btn.onclick = () => revokeKey(key.id, key.name);
+        right.append(btn);
+      }
+      head.append(title, right);
+      const meta = document.createElement("div");
+      meta.style.cssText = "color:#6e7681;font-size:12px;margin-top:4px";
+      meta.textContent = `${key.id} · 建 ${key.created_at} · 用 ${key.last_used_at || "—"}`
+        + (key.expires_at ? ` · 过期 ${key.expires_at}` : "")
+        + (key.run_ids && key.run_ids.length ? ` · 可见 ${key.run_ids.join(",")}` : " · 仅自己的 run");
+      card.append(head, meta);
+      box.appendChild(card);
+    }
+  } catch (e) { box.textContent = `请求失败：${e}`; }
+}
+
+async function createKey() {
+  const name = document.getElementById("key-name").value.trim();
+  if (!name) { alert("先填身份名"); return; }
+  const body = {
+    name: name,
+    role: document.getElementById("key-role").value,
+    run_ids: document.getElementById("key-runs").value
+      .split(",").map(s => s.trim()).filter(Boolean),
+  };
+  const expires = document.getElementById("key-expires").value.trim();
+  if (expires) body.expires_at = expires;
+  try {
+    const resp = await fetch("/keys", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    const data = await resp.json();
+    if (!resp.ok) { alert(`创建失败（${resp.status}）：${data.error || ""}`); return; }
+    const box = document.getElementById("key-created");
+    box.style.display = "block";
+    box.textContent = `【只显示这一次，请立即保存】\n${data.key}\n\n` + data.notice;
+    loadKeys();
+  } catch (e) { alert(`请求失败：${e}`); }
+}
+
+async function revokeKey(id, name) {
+  if (!confirm(`吊销密钥「${name}」？之后用它的请求会立刻 401。`)) return;
+  try {
+    const resp = await fetch(`/keys/${encodeURIComponent(id)}`, { method: "DELETE" });
+    const data = await resp.json();
+    if (!resp.ok) { alert(`吊销失败（${resp.status}）：${data.error || ""}`); return; }
+    loadKeys();
+  } catch (e) { alert(`请求失败：${e}`); }
 }
 
 initBoard();

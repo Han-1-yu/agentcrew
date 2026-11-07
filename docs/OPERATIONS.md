@@ -134,6 +134,40 @@ curl -H "Authorization: Bearer <key>" http://127.0.0.1:8765/health
 # -> {"status": "ok"}
 ```
 
+### 2.2.1 多用户与 RBAC（R25）
+
+一个共享 key 在多人环境里等于没有权限边界（谁都能删别人的 run）。RBAC 用密钥
+文件替代共享 key，**单密钥部署不需要改任何配置**（legacy `api_keys` 等价 admin）。
+
+```bash
+# 建密钥：明文只打印这一次，之后服务端只有 scrypt 哈希
+python main.py keys add --name alice --role operator --runs R-1,R-2
+python main.py keys list
+python main.py keys revoke alice        # 立即生效（mtime 失效重读，无需重启）
+
+# 也可从看板「密钥」页操作（admin 身份）；HTTP 等价物：
+#   GET /keys · POST /keys · DELETE /keys/{id}
+```
+
+| 角色 | 作用域 | 典型用途 |
+|---|---|---|
+| `viewer` | `runs:read` `tools:read` | 看板只读、看日志 |
+| `operator` | + `runs:write` `approvals:write` `tools:test` | 日常跑单、批审批、试工具 |
+| `admin` | 全部（含 `runs:admin` `config:read` `keys:*`） | 删 run、改执行体绑定、管密钥 |
+| `custom` | 显式 `--scope` 列表 | 特例（如只给 approvals:write） |
+
+三条硬规则：
+
+1. **归属隔离**：API 建的 run 在 run 目录写 `owner.json`；非 admin 只能看
+   `--runs` 白名单里或自己创建的 run，别人的 run 一律回 **404**（不泄露存在性）。
+   CLI 建的 run 视作 `local`，只有 admin 可见。
+2. **审计身份**：审批裁决的 `decided_by` 取密钥名，body 里写什么都覆盖不掉。
+3. **越权回 403**（身份有效、作用域不足），与 401（未认证）分开——排障时先看
+   状态码就知道是「key 不对」还是「权限不够」。
+
+密钥库在 `<output>/_auth/keys.json`（0600）。它**不在 `clean` 的清理范围**
+（clean 只扫 run 目录），但备份 `output/` 时要把 `_auth` 一起带上。
+
 常用端点（完整契约见 `artifacts/contracts/openapi.yaml`）：
 
 | 端点 | 用途 |

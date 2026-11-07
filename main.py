@@ -224,6 +224,34 @@ def build_parser() -> argparse.ArgumentParser:
         help='入参 JSON 对象，如 \'{"path": "a.txt"}\'')
     p_tool.add_argument("--json", action="store_true", help="输出机器可读 JSON")
     p_tool.add_argument("--output-dir", metavar="DIR", help="试跑沙箱根目录")
+    p_keys = sub.add_parser(
+        "keys", help="R25：管理 API 密钥（多用户 RBAC：角色 / 作用域 / 归属）")
+    keys_sub = p_keys.add_subparsers(dest="keys_action", required=True)
+    p_keys_add = keys_sub.add_parser("add", help="新建密钥（明文只打印一次）")
+    p_keys_add.add_argument("--name", required=True, help="身份名（审计与归属用）")
+    p_keys_add.add_argument(
+        "--role", default="operator",
+        choices=("admin", "operator", "viewer", "custom"),
+        help="角色（默认 operator；custom 需配 --scope）")
+    p_keys_add.add_argument(
+        "--scope", action="append", default=[], metavar="SCOPE",
+        help="附加作用域，可多次：runs:read / runs:write / runs:admin / "
+             "approvals:write / tools:read / tools:test / config:read / "
+             "keys:read / keys:write")
+    p_keys_add.add_argument(
+        "--runs", default="", metavar="R1,R2",
+        help="可见 run 白名单（逗号分隔）；缺省=只看自己创建的 run")
+    p_keys_add.add_argument(
+        "--expires", default=None, metavar="ISO8601",
+        help="过期时间，如 2026-12-31T00:00:00")
+    p_keys_add.add_argument("--note", default="", help="备注")
+    p_keys_list = keys_sub.add_parser("list", help="列出密钥（不含哈希）")
+    p_keys_list.add_argument("--json", action="store_true", help="输出 JSON")
+    p_keys_revoke = keys_sub.add_parser("revoke", help="吊销密钥（id 或 name）")
+    p_keys_revoke.add_argument("ident", help="密钥 id 或 name")
+    for _keys_parser in (p_keys_add, p_keys_list, p_keys_revoke):
+        _keys_parser.add_argument(
+            "--output-dir", metavar="DIR", help="output 目录（定位 _auth/keys.json）")
     p_agents = sub.add_parser("agents", help="列出执行体档案与角色绑定（--json 供 Studio 读取）")
     p_agents.add_argument("--json", action="store_true", help="输出机器可读 JSON")
     p_switch = sub.add_parser("switch", help="给一个 run 写入执行体切换（下次 resume 生效）")
@@ -873,6 +901,77 @@ def _cmd_tool(args: argparse.Namespace) -> int:
     return EXIT_CODES["ok"] if result["ok"] else EXIT_CODES["failed"]
 
 
+def _cmd_keys(args: argparse.Namespace) -> int:
+    """R25：API 密钥管理（add / list / revoke），落盘 ``<output>/_auth/keys.json``。
+
+    明文只在 ``add`` 的输出里出现一次——之后服务端只有 scrypt 哈希。
+    """
+    from agentcrew.api.rbac import ROLE_SCOPES, default_key_store
+
+    try:
+        settings = (
+            Settings.load(output_dir=Path(args.output_dir))
+            if getattr(args, "output_dir", None) else Settings.load()
+        )
+    except (OSError, ValueError) as exc:
+        return _fail(f"配置错误：{exc}")
+    store = default_key_store(settings.output_dir)
+    action = args.keys_action
+    console = Console()
+
+    if action == "add":
+        run_ids = [item.strip() for item in (args.runs or "").split(",")
+                   if item.strip()]
+        try:
+            record, plaintext = store.add(
+                name=args.name, role=args.role, scopes=args.scope,
+                run_ids=run_ids, expires_at=args.expires, note=args.note)
+        except ValueError as exc:
+            return _fail(f"keys add 失败：{exc}")
+        _out(console, f"已创建密钥 [{record.name}] 角色 {record.role}（{record.id}）")
+        if record.run_ids:
+            _out(console, f"  可见 run：{', '.join(record.run_ids)}")
+        if record.expires_at:
+            _out(console, f"  过期时间：{record.expires_at}")
+        _out(console, f"  密钥（只显示这一次）：{plaintext}")
+        _out(console, f"  密钥库：{store.path}")
+        return EXIT_CODES["ok"]
+
+    if action == "list":
+        records = store.load()
+        if getattr(args, "json", False):
+            payload = [record.model_dump(mode="json", exclude={
+                "key_hash", "salt"}) for record in records]
+            print(json.dumps({"keys": payload}, ensure_ascii=False, indent=2))
+            return EXIT_CODES["ok"]
+        if not records:
+            _out(console, f"密钥库为空：{store.path}")
+            _out(console, "新建：python main.py keys add --name alice --role operator")
+            return EXIT_CODES["ok"]
+        for record in records:
+            state = "已吊销" if record.revoked_at else "有效"
+            _out(
+                console,
+                f"[{record.id}] {record.name}  {record.role}  {state}  "
+                f"建 {record.created_at}  用 {record.last_used_at or '—'}",
+            )
+            scopes = sorted(ROLE_SCOPES.get(record.role, set()) | set(record.scopes))
+            _out(console, f"  作用域 {' '.join(scopes)}")
+            if record.run_ids:
+                _out(console, f"  可见 run {', '.join(record.run_ids)}")
+            if record.expires_at:
+                _out(console, f"  过期 {record.expires_at}")
+        _out(console, f"（{len(records)} 条 · {store.path}）")
+        return EXIT_CODES["ok"]
+
+    try:
+        record = store.revoke(args.ident)
+    except ValueError as exc:
+        return _fail(f"keys revoke 失败：{exc}")
+    _out(console, f"已吊销 [{record.name}]（{record.id}）")
+    return EXIT_CODES["ok"]
+
+
 def _cmd_switch(args: argparse.Namespace) -> int:
     """把「某角色用哪个执行体」写进 run 目录，resume 时自动恢复。
 
@@ -1162,7 +1261,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     """启动 HTTP API + SSE 事件流服务器（V2 第 5 项；E-3 可选认证/限流）。"""
     import asyncio
 
-    from agentcrew.api.auth import APIKeyAuth, RateLimiter
+    from agentcrew.api.auth import RateLimiter
     from agentcrew.api.server import ApiServer
 
     # 端口由 argparse 保证是 int，但不保证落在合法区间：-1 / 70000 会让
@@ -1184,14 +1283,28 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         if cli_key:
             api_keys.append(cli_key)
         wants_auth = settings.api_auth_enabled or bool(cli_key)
-        # 显式开启认证却没有密钥时，旧逻辑的 ``and api_keys`` 会让 auth = None，
-        # 服务匿名可访问且不打印任何提示（fail-open）。这里改为 fail-closed：
-        # 要么补齐 api_keys，要么明确关闭认证，避免"以为开了认证"的错觉。
-        if wants_auth and not api_keys:
-            return _fail(
-                "serve：已启用 API 认证但未配置任何密钥，服务不会以匿名方式启动；"
-                "请配置 agentcrew.yaml 的 api_keys / --api-key，或关闭 api_auth_enabled。")
-        auth = APIKeyAuth(api_keys) if wants_auth else None
+        # R25：密钥库里有活跃密钥就启用多密钥认证（fail-closed）；legacy
+        # ``api_keys`` 仍等价于 admin——单密钥部署不需要改任何配置。
+        from agentcrew.api.rbac import MultiKeyAuth, default_key_store
+
+        store = default_key_store(settings.output_dir)
+        has_rbac_keys = any(
+            record.revoked_at is None for record in store.load())
+        if wants_auth or has_rbac_keys:
+            # 显式开启认证却既没有 legacy 密钥也没有 RBAC 密钥时 fail-closed，
+            # 避免「以为开了认证」的错觉（原逻辑会让 auth=None 匿名可访问）。
+            if not api_keys and not has_rbac_keys:
+                return _fail(
+                    "serve：已启用 API 认证但未配置任何密钥，服务不会以匿名方式启动；"
+                    "请配置 agentcrew.yaml 的 api_keys / --api-key，"
+                    "或用 python main.py keys add 建一个 RBAC 密钥。")
+            auth = MultiKeyAuth(store, legacy_keys=api_keys, required=True)
+        else:
+            auth = None
+        if auth is not None:
+            source = (f"RBAC 密钥库 {store.path}" if has_rbac_keys
+                      else "legacy api_keys")
+            print(f"  auth                      已启用（{source}）")
         if (settings.api_rate_limit_enabled
                 and settings.api_rate_limit_max > 0
                 and settings.api_rate_limit_window < 1):
@@ -1707,6 +1820,7 @@ _HANDLERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "roles": _cmd_roles,
     "tools": _cmd_tools,
     "tool": _cmd_tool,
+    "keys": _cmd_keys,
     "agents": _cmd_agents,
     "switch": _cmd_switch,
     "samples": _cmd_samples,

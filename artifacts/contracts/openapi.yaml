@@ -878,6 +878,156 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /keys:
+    get:
+      tags: [rbac]
+      summary: R25 密钥清单（不含哈希与盐）+ 角色/作用域说明
+      description: >
+        列出密钥库中全部记录（id / 名称 / 角色 / 作用域 / 可见 run / 创建、过期、
+        最后使用、吊销时间）与角色→作用域映射。**哈希与盐永不出服务端**。
+        需要 `keys:read`（admin 角色默认具备）。审计身份取密钥主体名。
+      responses:
+        '200':
+          description: 密钥清单与权限说明
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [keys, roles, scopes]
+                properties:
+                  keys:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, name, role]
+                      properties:
+                        id: { type: string }
+                        name: { type: string }
+                        role: { type: string, enum: [admin, operator, viewer, custom] }
+                        scopes:
+                          type: array
+                          items: { type: string }
+                        run_ids:
+                          type: array
+                          items: { type: string }
+                        created_at: { type: string }
+                        expires_at: { type: string, nullable: true }
+                        revoked_at: { type: string, nullable: true }
+                        last_used_at: { type: string, nullable: true }
+                        note: { type: string }
+                  roles:
+                    type: object
+                    additionalProperties:
+                      type: array
+                      items: { type: string }
+                  scopes:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        scope: { type: string }
+                        roles:
+                          type: array
+                          items: { type: string }
+        '403':
+          description: 缺少 keys:read 作用域
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: 未启用多密钥（没有密钥库）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      tags: [rbac]
+      summary: R25 新建密钥（明文只回这一次）
+      description: |
+        服务端只存 scrypt 哈希；响应里的 `key` 是唯一一次明文，必须立即保存。
+        需要 `keys:write`。同名重复、未知角色/作用域、custom 角色缺 scopes 均 400。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, description: 身份名（审计与归属用，唯一） }
+                role: { type: string, enum: [admin, operator, viewer, custom], default: operator }
+                scopes:
+                  type: array
+                  items: { type: string }
+                  description: 在角色基线上附加的作用域
+                run_ids:
+                  type: array
+                  items: { type: string }
+                  description: 可见 run 白名单；缺省=只看自己创建的 run
+                expires_at: { type: string, description: ISO8601 过期时间 }
+                note: { type: string }
+      responses:
+        '201':
+          description: 已创建（`key` 只出现这一次）
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [key, record, notice]
+                properties:
+                  key: { type: string, description: 明文密钥（仅此一次） }
+                  record: { type: object }
+                  notice: { type: string }
+        '400':
+          description: body 非法 / 重名 / 未知角色或作用域
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 缺少 keys:write 作用域
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /keys/{key_id}:
+    delete:
+      tags: [rbac]
+      summary: R25 吊销密钥（id 或 name，幂等）
+      description: |
+        吊销后该密钥的下一次请求立即 401（按 mtime 失效重读密钥库，无需重启）。
+        重复吊销同一把仍返回 200。需要 `keys:write`。
+      parameters:
+        - in: path
+          name: key_id
+          required: true
+          schema: { type: string }
+          description: 密钥 id（k_xxx）或名称
+      responses:
+        '200':
+          description: 已吊销
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [revoked]
+                properties:
+                  revoked: { type: object }
+        '403':
+          description: 缺少 keys:write 作用域
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 密钥不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   ##########################################################################
   # 兜底：未匹配路径 → 404；未实现方法 → 405
   ##########################################################################
