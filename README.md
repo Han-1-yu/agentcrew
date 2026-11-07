@@ -2876,3 +2876,21 @@ R4 的条件边只能写「命中这些标签才执行」。R31 补两个写法�
 画布属性面板里直接写进「条件标签」即可，非法写法（如孤零零的 `!`）在
 `validate_plan` 与 `flow validate` 阶段报错。
 
+
+## R32 控制台 UI 重构
+
+原来的看板是「一路加出来的」：顶部一排 tab、颜色写死在几十处内联样式里、只有深色。
+R32 把它整理成一套可维护的界面，**功能与接口一个没动**（所有 id、`switchTab` 名称、
+接口路径保持不变，`test_dashboard_ui.py` 逐条钉住）。
+
+- **设计令牌**：`:root` 里定义 `--bg / --surface / --border / --text / --accent /
+  --success / --danger / --warn / --radius / --mono`，页面与 SVG 画布都只引用令牌；
+- **明暗两套**：默认跟随系统 `prefers-color-scheme`，侧栏底部「明 / 暗」手动切换并
+  记进 `localStorage`；两套令牌表由测试断言「键集合一致」，漏一个就会被抓；
+- **布局**：左侧栏（品牌 + 六个导航项）+ 主区；窄屏（<860px）自动折叠成横向；
+- **组件统一**：`.toolbar` `.field` `.badge` `.card` `.empty` `.hint` `.ok-text /
+  .err-text / .warn-text`，动态创建的元素（运行卡片、工具、密钥）也改用类，
+  不再往 DOM 里塞颜色；
+- **可访问性**：所有可交互元素有 `:focus-visible` 描边，主题切换用 `color-scheme`
+  让原生控件（滚动条、下拉）跟着变。
+

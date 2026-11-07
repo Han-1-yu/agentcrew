@@ -14,91 +14,204 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AgentCrew 控制台</title>
 <style>
+  /* ── R32 设计令牌：颜色 / 圆角 / 间距 / 字体，明暗两套 ─────────────── */
+  :root {
+    color-scheme: dark;
+    --bg: #0f1117;
+    --surface: #161b22;
+    --surface-2: #0d1117;
+    --border: #30363d;
+    --text: #e1e4e8;
+    --muted: #8b949e;
+    --faint: #6e7681;
+    --accent: #58a6ff;
+    --accent-strong: #1f6feb;
+    --accent-soft: #1f6feb33;
+    --success: #3fb950;
+    --success-soft: #23863633;
+    --danger: #f85149;
+    --danger-strong: #da3633;
+    --danger-soft: #da363333;
+    --warn: #d29922;
+    --warn-strong: #9e6a03;
+    --neutral: #30363d;
+    --radius: 8px;
+    --radius-sm: 6px;
+    --mono: "Cascadia Code", Consolas, ui-monospace, monospace;
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #f6f8fa;
+    --surface: #ffffff;
+    --surface-2: #eef1f4;
+    --border: #d0d7de;
+    --text: #1f2328;
+    --muted: #57606a;
+    --faint: #8b949e;
+    --accent: #0969da;
+    --accent-strong: #1f6feb;
+    --accent-soft: #ddf4ff;
+    --success: #1a7f37;
+    --success-soft: #dafbe1;
+    --danger: #cf222e;
+    --danger-strong: #cf222e;
+    --danger-soft: #ffebe9;
+    --warn: #9a6700;
+    --warn-strong: #9a6700;
+    --neutral: #d0d7de;
+  }
+
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background: #0f1117; color: #e1e4e8; padding: 16px; }
-  header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid #30363d; }
+  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); }
   h1 { font-size: 20px; font-weight: 600; }
   h2 { font-size: 15px; font-weight: 600; }
-  .status-badge { padding: 4px 12px; border-radius: 12px; font-size: 13px; font-weight: 600; display: inline-block; }
-  .status-pending, .status-ready, .status-cancelled, .status-interrupted,
-  .status-review, .status-rework, .status-blocked, .status-succeeded, .status-skipped { background: #30363d; color: #8b949e; }
-  .status-running { background: #1f6feb33; color: #58a6ff; }
-  .status-completed { background: #23863633; color: #3fb950; }
-  .status-failed { background: #da363333; color: #f85149; }
-  .controls { margin-bottom: 16px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  input { background: #161b22; border: 1px solid #30363d; color: #e1e4e8; padding: 6px 12px; border-radius: 6px; font-size: 14px; width: 200px; }
-  button { background: #238636; color: #fff; border: none; padding: 6px 16px; border-radius: 6px; cursor: pointer; font-size: 14px; }
-  button:hover { background: #2ea043; }
-  button:disabled { background: #30363d; color: #6e7681; cursor: not-allowed; }
+  ::selection { background: var(--accent-soft); }
+
+  /* ── 布局：侧边栏 + 主区（窄屏折叠成横向） ────────────────────────── */
+  .shell { display: flex; min-height: 100vh; }
+  .sidebar { width: 200px; flex-shrink: 0; border-right: 1px solid var(--border); background: var(--surface); position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; padding: 14px 10px; }
+  .brand { font-size: 16px; font-weight: 700; padding: 4px 10px 14px; letter-spacing: .2px; }
+  .brand em { color: var(--accent); font-style: normal; }
+  .nav { display: flex; flex-direction: column; gap: 4px; flex: 1; }
+  .main { flex: 1; min-width: 0; padding: 16px 20px 32px; }
+  .topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; gap: 8px; }
+  @media (max-width: 860px) {
+    .shell { flex-direction: column; }
+    .sidebar { width: 100%; height: auto; position: static; flex-direction: row; flex-wrap: wrap; align-items: center; border-right: none; border-bottom: 1px solid var(--border); padding: 8px; }
+    .nav { flex-direction: row; flex-wrap: wrap; }
+    .brand { padding: 4px 8px; }
+  }
+
+  /* ── 组件：按钮 / 输入 / 徽标 / 卡片 ───────────────────────────────── */
+  .toolbar, .controls { margin-bottom: 14px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  input, select, textarea { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 6px 12px; border-radius: var(--radius-sm); font-size: 14px; width: 200px; font-family: inherit; }
+  textarea { width: 100%; }
+  input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button { background: var(--accent-strong); color: #fff; border: none; padding: 6px 16px; border-radius: var(--radius-sm); cursor: pointer; font-size: 14px; }
+  button:hover { filter: brightness(1.12); }
+  button:disabled { background: var(--neutral); color: var(--faint); cursor: not-allowed; filter: none; }
   button.small { padding: 4px 10px; font-size: 12px; }
-  .btn-danger { background: #da3633; }
-  .btn-danger:hover { background: #f85149; }
-  .btn-danger:disabled { background: #30363d; color: #6e7681; }
-  .btn-cancel { background: #9e6a03; }
-  .btn-cancel:hover { background: #d29922; }
+  .btn-danger { background: var(--danger-strong); }
+  .btn-cancel { background: var(--warn-strong); }
+  .btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--muted); }
+
+  .status-badge, .badge { padding: 4px 12px; border-radius: 12px; font-size: 13px; font-weight: 600; display: inline-block; }
+  .status-pending, .status-ready, .status-cancelled, .status-interrupted,
+  .status-review, .status-rework, .status-blocked, .status-succeeded, .status-skipped,
+  .badge.muted { background: var(--neutral); color: var(--muted); }
+  .status-running { background: var(--accent-soft); color: var(--accent); }
+  .status-completed { background: var(--success-soft); color: var(--success); }
+  .status-failed { background: var(--danger-soft); color: var(--danger); }
+
+  .card, .run-card, .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; }
   .run-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; margin-bottom: 16px; }
-  .run-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 10px; }
-  .run-card .rid { font-family: "Cascadia Code", Consolas, monospace; font-size: 13px; color: #58a6ff; }
-  .run-card .goal { font-size: 12px; color: #8b949e; margin: 6px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .run-card .actions { display: flex; gap: 6px; margin-top: 8px; }
-  .tabs { display: flex; gap: 4px; margin-bottom: 8px; }
-  .tab-btn { background: #21262d; color: #8b949e; }
-  .tab-btn.active { background: #1f6feb; color: #fff; }
+  .run-card .rid { font-family: var(--mono); font-size: 13px; color: var(--accent); }
+  .run-card .goal { font-size: 12px; color: var(--muted); margin: 6px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .run-card .actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .card-meta { color: var(--faint); font-size: 12px; margin-top: 4px; }
+  .card-title { color: var(--text); font-weight: 600; }
+  .card-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .card-side { display: flex; gap: 8px; align-items: center; }
+  .empty { color: var(--faint); font-size: 13px; padding: 8px 2px; }
+  .hint { color: var(--muted); font-size: 12px; }
+  .ok-text { color: var(--success); }
+  .err-text { color: var(--danger); }
+  .warn-text { color: var(--warn); }
+
+  /* ── 导航 / 面板 ─────────────────────────────────────────────────── */
+  .nav .tab-btn { background: transparent; color: var(--muted); text-align: left; border-left: 3px solid transparent; border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+  .nav .tab-btn.active { background: var(--accent-soft); color: var(--accent); border-left-color: var(--accent); }
   .tab-pane { display: none; }
   .tab-pane.active { display: block; }
+
+  /* ── 看板 / 日志 / 统计 ───────────────────────────────────────────── */
   .board { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin-bottom: 16px; }
-  .column { background: #161b22; border-radius: 8px; padding: 8px; min-height: 100px; }
-  .column h3 { font-size: 12px; text-transform: uppercase; color: #8b949e; margin-bottom: 8px; text-align: center; }
-  .task-card { background: #0d1117; border-radius: 6px; padding: 6px 8px; margin-bottom: 6px; font-size: 12px; border: 1px solid #30363d; }
-  .task-card .role { color: #58a6ff; font-size: 11px; }
-  .log { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 12px; height: 300px; overflow-y: auto; font-family: "Cascadia Code", Consolas, monospace; font-size: 12px; }
+  .column { background: var(--surface); border-radius: var(--radius); padding: 8px; min-height: 100px; }
+  .column h3 { font-size: 12px; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; text-align: center; }
+  .task-card { background: var(--surface-2); border-radius: var(--radius-sm); padding: 6px 8px; margin-bottom: 6px; font-size: 12px; border: 1px solid var(--border); }
+  .task-card .role { color: var(--accent); font-size: 11px; }
+  .log { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; height: 300px; overflow-y: auto; font-family: var(--mono); font-size: 12px; }
   .log-entry { margin-bottom: 4px; opacity: 0.9; }
-  .log-entry .ts { color: #8b949e; }
-  .log-entry .evt { color: #d2a8ff; font-weight: 600; }
+  .log-entry .ts { color: var(--muted); }
+  .log-entry .evt { color: var(--warn); font-weight: 600; }
   .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
-  .stat-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 12px; }
-  .stat-card .num { font-size: 22px; font-weight: 700; color: #58a6ff; }
-  .stat-card .label { font-size: 12px; color: #8b949e; margin-top: 4px; }
-  .connected { color: #3fb950; }
-  .disconnected { color: #f85149; }
+  .stat-card .num { font-size: 22px; font-weight: 700; color: var(--accent); }
+  .stat-card .label { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .connected { color: var(--success); }
+  .disconnected { color: var(--danger); }
+
+  /* ── 编排画布 ────────────────────────────────────────────────────── */
+  .flow-layout { display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
+  .flow-canvas-wrap { flex: 1; min-width: 420px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); overflow: auto; }
+  .flow-props { width: 250px; color: var(--muted); font-size: 12px; display: flex; flex-direction: column; gap: 2px; }
+  .flow-prop-input { width: 100%; margin: 2px 0 6px; font-size: 12px; padding: 4px 8px; }
+  .flow-props label { color: var(--muted); font-size: 11px; }
+  .mono-field { width: 100%; font-family: var(--mono); font-size: 12px; }
+  .card-desc { color: var(--muted); font-size: 12px; margin-top: 4px; }
 </style>
+<script>
+  // 主题在渲染前初始化（放 head 里避免闪一下错误的配色）：
+  // localStorage 显式选择 > 系统偏好；默认（无属性）= 暗色。
+  (function initTheme() {
+    try {
+      const saved = localStorage.getItem("agentcrew-theme");
+      const light = saved ? saved === "light"
+        : window.matchMedia("(prefers-color-scheme: light)").matches;
+      if (light) document.documentElement.dataset.theme = "light";
+    } catch (e) { /* localStorage 被禁时按默认暗色 */ }
+  })();
+  function toggleTheme() {
+    const root = document.documentElement;
+    const next = root.dataset.theme === "light" ? "dark" : "light";
+    if (next === "dark") delete root.dataset.theme;
+    else root.dataset.theme = next;
+    try { localStorage.setItem("agentcrew-theme", next); } catch (e) { /* 同上 */ }
+    flowRender && typeof flowRender === "function" && flowRender();
+  }
+</script>
 </head>
 <body>
-<header>
-  <h1>AgentCrew 控制台</h1>
-  <span id="conn-status" class="status-badge status-pending">未连接</span>
-</header>
-<div class="controls">
-  <input id="run-id" placeholder="Run ID（如 20261006-xxxxxx-ab12）" value="">
-  <button onclick="connect()">连接</button>
-  <button id="btn-delete" class="btn-danger" onclick="deleteRun()" disabled>删除当前 Run</button>
-  <span id="run-status" class="status-badge status-pending">pending</span>
-</div>
-<div class="controls">
-  <span style="opacity:.7">模型：</span>
-  <input id="model-alias" placeholder="别名 openai:gpt-4o-mini" style="width:200px">
-  <input id="model-role" placeholder="角色(可选)" style="width:130px">
-  <button onclick="switchModel()">切换模型</button>
-  <span id="model-current" class="status-badge status-pending">未连接</span>
-</div>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand">Agent<em>Crew</em></div>
+    <nav class="nav">
+      <button class="tab-btn active" onclick="switchTab('board', this)">看板</button>
+      <button class="tab-btn" onclick="switchTab('ledger', this)">事件日志</button>
+      <button class="tab-btn" onclick="switchTab('stats', this)">统计</button>
+      <button class="tab-btn" onclick="switchTab('tools', this)">工具</button>
+      <button class="tab-btn" onclick="switchTab('keys', this)">密钥</button>
+      <button class="tab-btn" onclick="switchTab('flow', this)">编排</button>
+    </nav>
+    <button class="btn-ghost small" style="width:100%" onclick="toggleTheme()">明 / 暗</button>
+  </aside>
+  <main class="main">
+    <header class="topbar">
+      <h1>AgentCrew 控制台</h1>
+      <span id="conn-status" class="status-badge status-pending">未连接</span>
+    </header>
+    <div class="toolbar">
+      <input id="run-id" placeholder="Run ID（如 20261006-xxxxxx-ab12）" value="">
+      <button onclick="connect()">连接</button>
+      <button id="btn-delete" class="btn-danger" onclick="deleteRun()" disabled>删除当前 Run</button>
+      <span id="run-status" class="status-badge status-pending">pending</span>
+    </div>
+    <div class="toolbar">
+      <span class="hint">模型：</span>
+      <input id="model-alias" placeholder="别名 openai:gpt-4o-mini" style="width:200px">
+      <input id="model-role" placeholder="角色(可选)" style="width:130px">
+      <button onclick="switchModel()">切换模型</button>
+      <span id="model-current" class="status-badge status-pending">未连接</span>
+    </div>
 
-<section>
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-    <h2>运行列表</h2>
-    <button class="small" onclick="loadRuns()">刷新列表</button>
-  </div>
-  <div class="run-list" id="run-list"><div style="color:#6e7681;font-size:13px">加载中…</div></div>
-</section>
+    <section>
+      <div class="card-head" style="margin-bottom:8px">
+        <h2>运行列表</h2>
+        <button class="small" onclick="loadRuns()">刷新列表</button>
+      </div>
+      <div class="run-list" id="run-list"><div class="empty">加载中…</div></div>
+    </section>
 
-<div class="tabs">
-  <button class="tab-btn active" onclick="switchTab('board', this)">看板</button>
-  <button class="tab-btn" onclick="switchTab('ledger', this)">事件日志</button>
-  <button class="tab-btn" onclick="switchTab('stats', this)">统计</button>
-  <button class="tab-btn" onclick="switchTab('tools', this)">工具</button>
-  <button class="tab-btn" onclick="switchTab('keys', this)">密钥</button>
-  <button class="tab-btn" onclick="switchTab('flow', this)">编排</button>
-</div>
-<div class="tab-pane active" id="pane-board">
+    <div class="tab-pane active" id="pane-board">
   <div class="board" id="board"></div>
   <div class="log" id="log"></div>
 </div>
@@ -106,41 +219,41 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <div class="controls">
     <input id="ledger-event-filter" placeholder="事件类型过滤，如 llm_call" style="width:220px">
     <button class="small" onclick="loadLedger()">查询</button>
-    <span id="ledger-total" style="color:#8b949e;font-size:12px"></span>
+    <span id="ledger-total" class="hint"></span>
   </div>
   <div class="log" id="ledger-list" style="height:420px"></div>
 </div>
 <div class="tab-pane" id="pane-stats">
-  <div id="stats-panel" style="color:#6e7681">连接一个 run 后显示统计</div>
+  <div id="stats-panel" class="empty">连接一个 run 后显示统计</div>
 </div>
 <div class="tab-pane" id="pane-tools">
   <div class="controls">
-    <span id="tools-state" style="color:#8b949e;font-size:12px"></span>
+    <span id="tools-state" class="hint"></span>
     <button class="small" onclick="loadTools()">刷新工具</button>
   </div>
-  <div id="tools-list" style="color:#6e7681;font-size:13px">加载中…</div>
+  <div id="tools-list" class="empty">加载中…</div>
   <div id="tool-trial" style="display:none;margin-top:12px">
     <h2 id="tool-trial-title" style="margin-bottom:6px"></h2>
-    <textarea id="tool-trial-args" spellcheck="false" style="width:100%;height:120px;background:#161b22;border:1px solid #30363d;color:#e1e4e8;border-radius:6px;padding:8px;font-family:ui-monospace,Consolas,monospace;font-size:13px"></textarea>
+    <textarea id="tool-trial-args" spellcheck="false" class="mono-field" style="height:120px"></textarea>
     <div class="controls" style="margin-top:8px">
       <button class="small" onclick="runToolTrial()">运行</button>
       <button class="small" id="tool-trial-close" onclick="closeToolTrial()">关闭</button>
-      <span id="tool-trial-status" style="color:#8b949e;font-size:12px"></span>
+      <span id="tool-trial-status" class="hint"></span>
     </div>
     <pre id="tool-trial-result" class="log" style="height:240px;white-space:pre-wrap"></pre>
   </div>
 </div>
 <div class="tab-pane" id="pane-keys">
   <div class="controls">
-    <span id="keys-hint" style="color:#8b949e;font-size:12px"></span>
+    <span id="keys-hint" class="hint"></span>
     <button class="small" onclick="loadKeys()">刷新</button>
   </div>
-  <div id="keys-list" style="color:#6e7681;font-size:13px">加载中…</div>
+  <div id="keys-list" class="empty">加载中…</div>
   <div style="margin-top:12px">
     <h2 style="margin-bottom:6px">新建密钥</h2>
     <div class="controls">
       <input id="key-name" placeholder="身份名，如 alice" style="width:160px">
-      <select id="key-role" style="background:#161b22;border:1px solid #30363d;color:#e1e4e8;padding:6px 10px;border-radius:6px">
+      <select id="key-role">
         <option value="viewer">viewer</option>
         <option value="operator" selected>operator</option>
         <option value="admin">admin</option>
@@ -164,24 +277,27 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <button class="small" onclick="flowToggleYaml()">YAML</button>
     <input id="flow-goal" placeholder="起跑目标（可空）" style="width:180px">
     <button class="small" onclick="flowStartRun()">起跑</button>
-    <select id="flow-select" onchange="flowLoadSelected()" style="background:#161b22;border:1px solid #30363d;color:#e1e4e8;padding:6px;border-radius:6px">
+    <select id="flow-select" onchange="flowLoadSelected()">
       <option value="">载入…</option>
     </select>
-    <span id="flow-status" style="color:#8b949e;font-size:12px"></span>
+    <span id="flow-status" class="hint"></span>
   </div>
-  <div style="display:flex;gap:10px">
-    <div style="flex:1;min-width:420px;background:#0d1117;border:1px solid #30363d;border-radius:8px;overflow:auto">
+  <div class="flow-layout">
+    <div class="flow-canvas-wrap">
       <svg id="flow-canvas" width="100%" height="520" style="display:block"></svg>
     </div>
-    <div id="flow-props" style="width:250px;color:#8b949e;font-size:12px"></div>
+    <div id="flow-props" class="flow-props"></div>
   </div>
   <div id="flow-yaml-box" style="display:none;margin-top:8px">
-    <textarea id="flow-yaml" spellcheck="false" style="width:100%;height:180px;background:#161b22;border:1px solid #30363d;color:#e1e4e8;border-radius:6px;padding:8px;font-family:ui-monospace,Consolas,monospace;font-size:12px"></textarea>
+    <textarea id="flow-yaml" spellcheck="false" class="mono-field" style="height:180px"></textarea>
     <div class="controls" style="margin-top:6px">
       <button class="small" onclick="flowApplyYaml()">应用 YAML</button>
-      <span style="color:#6e7681;font-size:12px">导入 / 导出都走 /flows/validate 的规范化 YAML，与引擎同一份 schema</span>
+      <span class="hint">导入 / 导出都走 /flows/validate 的规范化 YAML，与引擎同一份 schema</span>
     </div>
   </div>
+</div>
+
+  </main>
 </div>
 
 <script>
@@ -210,14 +326,14 @@ async function loadRuns() {
     renderRunList(data.runs || []);
   } catch (e) {
     document.getElementById("run-list").innerHTML =
-      '<div style="color:#f85149;font-size:13px">运行列表加载失败：' + e + "</div>";
+      '<div class="empty err-text">运行列表加载失败：' + e + "</div>";
   }
 }
 
 function renderRunList(runs) {
   const wrap = document.getElementById("run-list");
   if (!runs.length) {
-    wrap.innerHTML = '<div style="color:#6e7681;font-size:13px">暂无 run</div>';
+    wrap.innerHTML = '<div class="empty">暂无 run</div>';
     return;
   }
   wrap.innerHTML = "";
@@ -232,7 +348,7 @@ function renderRunList(runs) {
       ? `<button class="small btn-danger" onclick="deleteRunById('${r.run_id}')">删除</button>`
       : "";
     card.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center">
+      <div class="card-head">
         <span class="rid">${r.run_id}</span>
         <span class="status-badge status-${status}">${status}</span>
       </div>
@@ -303,12 +419,12 @@ async function loadLedger() {
     const resp = await fetch(url);
     const data = await resp.json();
     if (!resp.ok) {
-      list.innerHTML = `<div style="color:#f85149">${data.error || resp.statusText}</div>`;
+      list.innerHTML = `<div class="err-text">${data.error || resp.statusText}</div>`;
       return;
     }
     document.getElementById("ledger-total").textContent = `共 ${data.total} 条`;
     if (!(data.events || []).length) {
-      list.innerHTML = '<div style="color:#6e7681">（无事件）</div>';
+      list.innerHTML = '<div class="empty">（无事件）</div>';
       return;
     }
     list.innerHTML = "";
@@ -321,7 +437,7 @@ async function loadLedger() {
     });
     list.scrollTop = 0;
   } catch (e) {
-    list.innerHTML = `<div style="color:#f85149">事件日志加载失败：${e}</div>`;
+    list.innerHTML = `<div class="err-text">事件日志加载失败：${e}</div>`;
   }
 }
 
@@ -333,7 +449,7 @@ async function loadStats() {
     const resp = await fetch(`/runs/${currentRun}/stats`);
     const data = await resp.json();
     if (!resp.ok) {
-      panel.innerHTML = `<div style="color:#f85149">${data.error || resp.statusText}</div>`;
+      panel.innerHTML = `<div class="err-text">${data.error || resp.statusText}</div>`;
       return;
     }
     const llm = data.llm || {};
@@ -350,11 +466,11 @@ async function loadStats() {
         <div class="stat-card"><div class="num">${avg}</div><div class="label">平均任务时长</div></div>
         <div class="stat-card"><div class="num">${tools.calls || 0}</div><div class="label">工具调用（成功 ${tools.success || 0} / 失败 ${tools.failed || 0}）</div></div>
       </div>
-      <h3 style="font-size:13px;margin:14px 0 8px;color:#8b949e">事件分布</h3>
+      <h3 class="hint" style="font-size:13px;margin:14px 0 8px">事件分布</h3>
       <div>${Object.entries(data.event_counts || {}).map(([k, v]) =>
         `<span class="status-badge" style="margin:2px">${k}: ${v}</span>`).join("")}</div>`;
   } catch (e) {
-    panel.innerHTML = `<div style="color:#f85149">统计加载失败：${e}</div>`;
+    panel.innerHTML = `<div class="err-text">统计加载失败：${e}</div>`;
   }
 }
 
@@ -565,13 +681,14 @@ function renderTools() {
     const req = (schema.required || []).join("、") || "无必填";
     const row = document.createElement("div");
     row.className = "run-card";
+    row.classList.add("card");
     row.style.marginBottom = "8px";
     const head = document.createElement("div");
-    head.style.cssText = "display:flex;justify-content:space-between;align-items:center";
+    head.classList.add("card-head");
     const title = document.createElement("strong");
     title.textContent = tool.name;
     const right = document.createElement("span");
-    right.style.cssText = "display:flex;gap:8px;align-items:center";
+    right.classList.add("card-side");
     const kind = document.createElement("span");
     kind.className = "status-badge status-pending";
     kind.textContent = tool.kind;
@@ -582,10 +699,10 @@ function renderTools() {
     right.append(kind, btn);
     head.append(title, right);
     const desc = document.createElement("div");
-    desc.style.cssText = "color:#8b949e;font-size:12px;margin-top:4px";
+    desc.classList.add("card-desc");
     desc.textContent = tool.description;
     const meta = document.createElement("div");
-    meta.style.cssText = "color:#6e7681;font-size:12px;margin-top:2px";
+    meta.classList.add("card-meta");
     meta.textContent = `必填：${req}`;
     row.append(head, desc, meta);
     box.appendChild(row);
@@ -672,13 +789,14 @@ async function loadKeys() {
     for (const key of data.keys) {
       const card = document.createElement("div");
       card.className = "run-card";
+      card.classList.add("card");
       card.style.marginBottom = "8px";
       const head = document.createElement("div");
-      head.style.cssText = "display:flex;justify-content:space-between;align-items:center";
+      head.classList.add("card-head");
       const title = document.createElement("strong");
       title.textContent = `${key.name}（${key.role}）`;
       const right = document.createElement("span");
-      right.style.cssText = "display:flex;gap:8px;align-items:center";
+      right.classList.add("card-side");
       const state = document.createElement("span");
       state.className = "status-badge " + (key.revoked_at ? "status-failed" : "status-completed");
       state.textContent = key.revoked_at ? "已吊销" : "有效";
@@ -692,7 +810,7 @@ async function loadKeys() {
       }
       head.append(title, right);
       const meta = document.createElement("div");
-      meta.style.cssText = "color:#6e7681;font-size:12px;margin-top:4px";
+      meta.classList.add("card-meta");
       meta.textContent = `${key.id} · 建 ${key.created_at} · 用 ${key.last_used_at || "—"}`
         + (key.expires_at ? ` · 过期 ${key.expires_at}` : "")
         + (key.run_ids && key.run_ids.length ? ` · 可见 ${key.run_ids.join(",")}` : " · 仅自己的 run");
@@ -743,6 +861,13 @@ let flowState = null;   // {name, description, tasks:[], pos:{id:{x,y}}}
 let flowSelected = null;
 let flowConnectFrom = null;
 let flowDrag = null;
+
+// 画布里的颜色从设计令牌取，明暗主题切换后 flowRender() 重绘即生效。
+function flowToken(name, fallback) {
+  const value = getComputedStyle(document.documentElement)
+    .getPropertyValue(name).trim();
+  return value || fallback;
+}
 
 function flowNewTask(id) {
   return {
@@ -824,9 +949,19 @@ function flowRender() {
   if (!svg) return;
   flowEnsureState();
   const ns = "http://www.w3.org/2000/svg";
+  const palette = {
+    accent: flowToken("--accent", "#58a6ff"),
+    surface: flowToken("--surface", "#161b22"),
+    surface2: flowToken("--surface-2", "#0d1117"),
+    border: flowToken("--border", "#30363d"),
+    text: flowToken("--text", "#e1e4e8"),
+    muted: flowToken("--muted", "#8b949e"),
+    faint: flowToken("--faint", "#6e7681"),
+    warn: flowToken("--warn", "#d29922"),
+  };
   svg.innerHTML = "";
   const defs = document.createElementNS(ns, "defs");
-  defs.innerHTML = '<marker id="flow-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#58a6ff"/></marker>';
+  defs.innerHTML = `<marker id="flow-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="${palette.accent}"/></marker>`;
   svg.appendChild(defs);
 
   for (const task of flowState.tasks) {
@@ -839,7 +974,7 @@ function flowRender() {
       const mid = Math.max(40, Math.abs(x2 - x1) / 2);
       const path = document.createElementNS(ns, "path");
       path.setAttribute("d", `M ${x1} ${y1} C ${x1 + mid} ${y1}, ${x2 - mid} ${y2}, ${x2} ${y2}`);
-      path.setAttribute("stroke", (task.when_outcomes || []).length ? "#d29922" : "#58a6ff");
+      path.setAttribute("stroke", (task.when_outcomes || []).length ? palette.warn : palette.accent);
       path.setAttribute("stroke-width", "1.6");
       path.setAttribute("fill", "none");
       path.setAttribute("marker-end", "url(#flow-arrow)");
@@ -855,7 +990,7 @@ function flowRender() {
         const label = document.createElementNS(ns, "text");
         label.setAttribute("x", (x1 + x2) / 2);
         label.setAttribute("y", (y1 + y2) / 2 - 4);
-        label.setAttribute("fill", "#d29922");
+        label.setAttribute("fill", palette.warn);
         label.setAttribute("font-size", "10");
         label.setAttribute("text-anchor", "middle");
         label.textContent = task.when_outcomes.join(",");
@@ -873,30 +1008,30 @@ function flowRender() {
     rect.setAttribute("width", FLOW_NODE_W);
     rect.setAttribute("height", FLOW_NODE_H);
     rect.setAttribute("rx", "8");
-    rect.setAttribute("fill", "#161b22");
-    rect.setAttribute("stroke", flowSelected === task.id ? "#58a6ff" : "#30363d");
+    rect.setAttribute("fill", palette.surface);
+    rect.setAttribute("stroke", flowSelected === task.id ? palette.accent : palette.border);
     rect.setAttribute("stroke-width", flowSelected === task.id ? "2" : "1");
     g.appendChild(rect);
     const idText = document.createElementNS(ns, "text");
     idText.setAttribute("x", "10"); idText.setAttribute("y", "18");
-    idText.setAttribute("fill", "#e1e4e8"); idText.setAttribute("font-size", "12");
+    idText.setAttribute("fill", palette.text); idText.setAttribute("font-size", "12");
     idText.setAttribute("font-weight", "600");
     idText.textContent = task.id;
     g.appendChild(idText);
     const title = document.createElementNS(ns, "text");
     title.setAttribute("x", "10"); title.setAttribute("y", "34");
-    title.setAttribute("fill", "#8b949e"); title.setAttribute("font-size", "11");
+    title.setAttribute("fill", palette.muted); title.setAttribute("font-size", "11");
     title.textContent = (task.title || "").slice(0, 18);
     g.appendChild(title);
     const role = document.createElementNS(ns, "text");
     role.setAttribute("x", "10"); role.setAttribute("y", "48");
-    role.setAttribute("fill", "#6e7681"); role.setAttribute("font-size", "10");
+    role.setAttribute("fill", palette.faint); role.setAttribute("font-size", "10");
     role.textContent = `${task.role} · p${task.priority}`;
     g.appendChild(role);
     const portIn = document.createElementNS(ns, "circle");
     portIn.setAttribute("cx", "0"); portIn.setAttribute("cy", String(FLOW_NODE_H / 2));
-    portIn.setAttribute("r", "5"); portIn.setAttribute("fill", "#30363d");
-    portIn.setAttribute("stroke", "#58a6ff");
+    portIn.setAttribute("r", "5"); portIn.setAttribute("fill", palette.border);
+    portIn.setAttribute("stroke", palette.accent);
     portIn.style.cursor = "crosshair";
     portIn.addEventListener("click", (event) => { event.stopPropagation(); flowConnect(task.id); });
     g.appendChild(portIn);
@@ -904,8 +1039,8 @@ function flowRender() {
     portOut.setAttribute("cx", String(FLOW_NODE_W));
     portOut.setAttribute("cy", String(FLOW_NODE_H / 2));
     portOut.setAttribute("r", "5");
-    portOut.setAttribute("fill", flowConnectFrom === task.id ? "#d29922" : "#30363d");
-    portOut.setAttribute("stroke", "#58a6ff");
+    portOut.setAttribute("fill", flowConnectFrom === task.id ? palette.warn : palette.border);
+    portOut.setAttribute("stroke", palette.accent);
     portOut.style.cursor = "crosshair";
     portOut.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -931,20 +1066,20 @@ function flowRenderProps() {
   if (!flowState) flowEnsureState();
   const task = flowState.tasks.find(t => t.id === flowSelected);
   if (!task) {
-    box.innerHTML = `<div style="margin-bottom:8px;color:#e1e4e8">${flowState.tasks.length} 个节点</div><div>拖节点移动；点右端口再点左端口连线；点连线删除。</div>`;
+    box.innerHTML = `<div class="card-title" style="margin-bottom:8px">${flowState.tasks.length} 个节点</div><div class="hint">拖节点移动；点右端口再点左端口连线；点连线删除。</div>`;
     return;
   }
   box.innerHTML = `
-    <div style="margin-bottom:6px;color:#e1e4e8;font-weight:600">属性 · ${task.id}</div>
-    <label>id</label><input id="fp-id" value="${task.id}" style="width:100%;margin:2px 0 6px">
-    <label>标题</label><input id="fp-title" value="${(task.title || "").replace(/"/g, "&quot;")}" style="width:100%;margin:2px 0 6px">
-    <label>角色</label><input id="fp-role" value="${task.role}" style="width:100%;margin:2px 0 6px">
-    <label>优先级 1-9</label><input id="fp-priority" type="number" min="1" max="9" value="${task.priority}" style="width:100%;margin:2px 0 6px">
-    <label>描述</label><textarea id="fp-desc" style="width:100%;height:52px;margin:2px 0 6px">${task.description || ""}</textarea>
-    <label>依赖（逗号）</label><input id="fp-deps" value="${task.dependencies.join(",")}" style="width:100%;margin:2px 0 6px">
-    <label>条件标签（逗号，可空）</label><input id="fp-when" value="${(task.when_outcomes || []).join(",")}" style="width:100%;margin:2px 0 6px">
-    <label>产物（每行 path|kind|说明）</label><textarea id="fp-deliv" style="width:100%;height:52px;margin:2px 0 6px">${(task.deliverables || []).map(d => `${d.path}|${d.kind}|${d.description || ""}`).join("\n")}</textarea>
-    <label>验收标准（每行一条）</label><textarea id="fp-accept" style="width:100%;height:44px;margin:2px 0 6px">${(task.acceptance_criteria || []).join("\n")}</textarea>
+    <div class="card-title" style="margin-bottom:6px">属性 · ${task.id}</div>
+    <label>id</label><input id="fp-id" class="flow-prop-input" value="${task.id}">
+    <label>标题</label><input id="fp-title" class="flow-prop-input" value="${(task.title || "").replace(/"/g, "&quot;")}" style="width:100%;margin:2px 0 6px">
+    <label>角色</label><input id="fp-role" class="flow-prop-input" value="${task.role}" style="width:100%;margin:2px 0 6px">
+    <label>优先级 1-9</label><input id="fp-priority" class="flow-prop-input" type="number" min="1" max="9" value="${task.priority}" style="width:100%;margin:2px 0 6px">
+    <label>描述</label><textarea id="fp-desc" class="flow-prop-input" style="width:100%;height:52px;margin:2px 0 6px">${task.description || ""}</textarea>
+    <label>依赖（逗号）</label><input id="fp-deps" class="flow-prop-input" value="${task.dependencies.join(",")}" style="width:100%;margin:2px 0 6px">
+    <label>条件标签（逗号，可空）</label><input id="fp-when" class="flow-prop-input" value="${(task.when_outcomes || []).join(",")}" style="width:100%;margin:2px 0 6px">
+    <label>产物（每行 path|kind|说明）</label><textarea id="fp-deliv" class="flow-prop-input" style="width:100%;height:52px;margin:2px 0 6px">${(task.deliverables || []).map(d => `${d.path}|${d.kind}|${d.description || ""}`).join("\n")}</textarea>
+    <label>验收标准（每行一条）</label><textarea id="fp-accept" class="flow-prop-input" style="width:100%;height:44px;margin:2px 0 6px">${(task.acceptance_criteria || []).join("\n")}</textarea>
     <button class="small" onclick="flowApplyProps()">应用</button>
   `;
 }
@@ -1029,7 +1164,7 @@ async function flowValidate() {
     status.textContent = data.ok
       ? `合法 · ${data.view.nodes.length} 节点 / ${data.view.edges.length} 边`
       : `不合法：${data.errors.join("；")}`;
-    status.style.color = data.ok ? "#3fb950" : "#f85149";
+    status.className = data.ok ? "ok-text" : "err-text";
     return data;
   } catch (e) { status.textContent = `请求失败：${e}`; return null; }
 }
@@ -1047,7 +1182,7 @@ async function flowSave() {
     const data = await resp.json();
     if (!resp.ok) { status.textContent = `保存失败（${resp.status}）：${data.error || ""}`; return; }
     status.textContent = `已保存 ${data.saved}`;
-    status.style.color = "#3fb950";
+    status.className = "ok-text";
     flowRefreshList();
   } catch (e) { status.textContent = `请求失败：${e}`; }
 }
@@ -1161,7 +1296,7 @@ async function flowApplyYaml() {
     const data = await resp.json();
     if (!resp.ok || !data.view) {
       status.textContent = `YAML 不合法：${(data.errors || [data.error || resp.status]).join("；")}`;
-      status.style.color = "#f85149";
+      status.className = "err-text";
       return;
     }
     flowHydrate(data.view);
@@ -1170,7 +1305,7 @@ async function flowApplyYaml() {
     status.textContent = data.ok
       ? `YAML 已应用 · ${data.view.nodes.length} 节点`
       : `YAML 已应用（图有错误：${data.errors.join("；")}）`;
-    status.style.color = data.ok ? "#3fb950" : "#d29922";
+    status.className = data.ok ? "ok-text" : "warn-text";
   } catch (e) { status.textContent = `请求失败：${e}`; }
 }
 
@@ -1191,11 +1326,11 @@ async function flowStartRun() {
     const data = await resp.json();
     if (!resp.ok) {
       status.textContent = `起跑失败（${resp.status}）：${data.error || ""}`;
-      status.style.color = "#f85149";
+      status.className = "err-text";
       return;
     }
     status.textContent = `已起跑 ${data.run_id || ""}（跳过 PM 规划）`;
-    status.style.color = "#3fb950";
+    status.className = "ok-text";
     loadRuns();
   } catch (e) { status.textContent = `请求失败：${e}`; }
 }
