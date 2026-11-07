@@ -48,7 +48,7 @@ python main.py run --sample todo --no-live --auto
 
 ```bash
 python main.py run "目标"          # CLI
-python main.py serve               # HTTP API + Web 面板（:8000）
+python main.py serve               # HTTP API + Web 面板（默认 127.0.0.1:8765）
 # MCP：作为客户端连别人的服务器（mcp_servers 配置）
 #      ——注意目前**不是** MCP server，不能反过来被别的 agent 调用
 ```
@@ -149,7 +149,10 @@ Crew.run(goal)
 
 ---
 
-## 5. 排障手册
+## 5. 排障手册（开发者视角）
+
+> 这一节回答「代码/流程为什么不对」。部署、进程托管、日志采集、备份扩容、升级、
+> 上线前检查是运维视角，见 [OPERATIONS.md](OPERATIONS.md)；本文 §0 与 §7 只给状态与清单。
 
 ### 5.1 单条命令速查
 
@@ -262,7 +265,7 @@ R14 的第 3–5 批回归已补跑（5 批累计 2358 passed / 1 skipped / 0 fa
 
 | 项 | 预估 | 理由 |
 |---|---|---|
-| 运维部署/排障手册 | 1.5 人日 | 本文只覆盖了交接视角，缺“怎么部署到服务器、日志怎么收、怎么扩容” |
+| ~~运维部署/排障手册~~ | — | ✅ **已闭环**：`docs/OPERATIONS.md`（端口/认证/反代、配置与密钥、数据与备份、监控、升级、排障、上线清单） |
 | 官方 SDK + 示例 | 3 人日 | `artifacts/contracts/openapi.yaml` 已稳定，封装 Python client 边际成本很低 |
 | ~~Webhook 持久化重放队列~~ | — | ✅ **R15 已闭环**（见 PROJECT-STATE §3.20）：入队前落盘、启动补投、24h / 5 次淘汰；仍不保证「恰好一次」 |
 
@@ -274,6 +277,7 @@ R14 的第 3–5 批回归已补跑（5 批累计 2358 passed / 1 skipped / 0 fa
 | 过期 run 自动 reconcile | 1 人日 | 已有“僵尸 RUNNING 可删”兜底，缺启动时自动标记与心跳 |
 | resume 锁文件 | 0.5 人日 | 防双进程同跑一板，写坏 checkpoint |
 | 主管 `suggestions` 通道 | 1 人日 | 主管现在只能 approve/reject，建议无处可去 |
+| `api_rate_limit_window` 配置通道 | 0.1 人日 | 字段存在（默认 60s）但既无 `AGENTCREW_*` 映射、也不在 YAML 标量白名单，运维只能调 `_MAX`；OPERATIONS §2.2 已如实注明。补通道要守住「配置合并顺序」红线 |
 
 ### 7.4 第三档（整块工程，需要先定范围）
 
@@ -309,6 +313,7 @@ R14 的第 3–5 批回归已补跑（5 批累计 2358 passed / 1 skipped / 0 fa
 | R13 | MCP 接进生产工具链 | `c327df2` |
 | R14 | Webhook 多接收端 + 只推失败 | 已提交（2026-11-07，`git log -1` 看 hash） |
 | R15 | Webhook 持久化重放队列 | 已提交（2026-11-07） |
+| 文档 | 运维部署/排障手册 `docs/OPERATIONS.md`；勘误 serve 端口（8000 → 8765）与 `clean` 保护默认值注释 | 已提交（2026-11-07） |
 
 R3–R8 之所以合并成一个提交：`config.py` / `crew.py` / `main.py` / `api/server.py` 四个文件
 被多轮同时改，`git add` 是文件粒度，按轮切分会把不同轮的改动硬塞进一个提交。

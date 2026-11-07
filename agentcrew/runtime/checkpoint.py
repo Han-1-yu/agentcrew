@@ -538,7 +538,7 @@ def clean(
     ``RuntimeError`` 且**一个都不删**——调用方拿到的语义是「什么都没删」，而不是
     「删了一半然后抛异常」。    ``dry_run`` 同样跑校验：干跑要能预告真跑会拒绝什么。
 
-    ``protect_running=True``（CLI 默认开启）时额外跳过活 run：批量清理误删一个
+    ``protect_running=True``（CLI 需显式 ``--protect-running``）时额外跳过活 run：批量清理误删一个
     正在写盘的 run 等于中途拔电源。超过 :data:`STALE_RUNNING_AFTER` 无心跳的
     僵尸 RUNNING 仍可删，避免死 run 永远清不掉。默认值 ``False`` 保持库层
     ``clean(keep=N)`` 的既有契约不变。

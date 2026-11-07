@@ -125,6 +125,10 @@ python main.py run --demo
   值守就加 `--auto`。
 - 想看实时看板直接运行；想关掉看板（CI 友好）加 `--no-live`。
 
+> **部署到服务器 / 常驻服务 / 排障**：见 [docs/OPERATIONS.md](docs/OPERATIONS.md)
+> ——真实端口与认证、systemd / 反代示例、配置三通道与生产必配、日志与备份、
+> 扩容边界、监控告警、升级步骤和上线前检查清单。
+
 ---
 
 ## 离线演示
