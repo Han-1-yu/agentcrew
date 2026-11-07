@@ -478,7 +478,7 @@
 
 ---
 
-## 10. 出站通知（R12）
+## 10. 出站通知（R12 / R14 / R15）
 
 ### `webhook_enabled`
 - **触发时机**：run 装配期有可用接收端（`webhook_url` 或 `webhooks`），分发器就绪后。**URL 已打码**（只留 `scheme://host/path`，查询串丢弃——那里常带 token）。
@@ -491,6 +491,7 @@
   | `targets[].events` | string[] | 是 | 订阅的事件名（空数组 = 不限；`["*"]` = 全推）。 |
   | `targets[].signed` | boolean | 是 | 该接收端是否配了签名密钥。 |
   | `targets[].only_failures` | boolean | 是 | 是否只推坏消息。 |
+  | `spool_enabled` | boolean | 否 | R15：本次 run 是否启用了持久化重放队列（由 `Crew._start` 传入 spool 目录）。库层直接构造分发器时为 `false`。 |
 
 > R14 把 `webhook_enabled` 的 data 从扁平字段改成了 `targets` 数组——多接收端下
 > 扁平结构无法表达「哪个地址订了哪些事件」。消费方按数组遍历即可。
@@ -503,10 +504,19 @@
   | `webhook_event` | string | 是 | 被推送的事件名。**不叫 `event`**：与 `Ledger.emit` 的位置参数同名会撞成 `TypeError`。 |
   | `delivery` | string | 是 | 投递 id（重试之间不变，接收方据此幂等）。 |
   | `attempts` | integer | 是 | 实际尝试次数。 |
+  | `target` | string | 是 | 接收端名（R14 起；打码，不含完整 URL）。 |
+  | `replayed` | boolean | 否 | R15：这条是上次进程遗留、本次启动时补投的。仅补投时为 `true`。 |
 
 ### `webhook_failed`
 - **触发时机**：重试耗尽仍失败，或收尾时队列没排空（`error="shutdown_timeout"`）。
-- **data**：`webhook_event`、`delivery`、`attempts`、`error`（`HTTP 500` / `URLError: …` / `shutdown_timeout`）。
+- **data**：`webhook_event`、`delivery`、`attempts`、`target`、`error`；补投相关记录另带 `replayed=true`。
+  `error` 取值：`HTTP 500` / `URLError: …` / `shutdown_timeout` /
+  `replay_target_missing`（配置里的地址已变，旧记录被丢弃）/ `replay_discarded: expired|max_attempts|corrupt|bad_shape`。
+
+> R15 起「失败」不等于「丢了」：记录仍在 `<output_dir>/_webhook_spool/` 里，下一次
+> 启用 Webhook 的 run 会按原 `delivery` / `timestamp` 补投，成功才删文件。语义是
+> **at-least-once**——多进程同时补投可能重复到达，接收方必须用
+> `X-AgentCrew-Delivery` 幂等。spool 文件不含 URL 与密钥，只存 URL 的短哈希。
 
 > 这三条只描述「通知有没有发出去」，不影响 run 结局：投递失败不会让任务失败，也不会改退出码。
 

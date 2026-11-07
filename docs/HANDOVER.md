@@ -11,14 +11,14 @@
 
 | 项 | 值 |
 |---|---|
-| 已提交 | R3–R14；R14 是最新提交（具体 hash 以 `git log -1` 为准） |
-| **未提交** | **无，工作区干净**（R14 已于 2026-11-07 收口提交） |
-| 测试 | R14 后全量 **2358 passed / 1 skipped / 0 failed**（2359 collected；分 5 批实测 448 + 547 + 300 + 710 + 353） |
+| 已提交 | R3–R15；R15 是最新提交（具体 hash 以 `git log -1` 为准） |
+| **未提交** | **无，工作区干净**（R15 已于 2026-11-07 提交） |
+| 测试 | R15 后全量 **2376 passed / 1 skipped / 0 failed**（2377 collected；分 5 批实测 448 + 547 + 300 + 710 + 371） |
 | 离线样例 | `todo` 9/9 · `linear` 5/5 · `hierarchy` 7/7，全部 `completed` |
 | 一句话定位 | 8 角色多 Agent 编排器：规划 → 执行 → 三层门禁 → 交付；可完全离线（mock）跑通 |
 
-**接手第一件事**：跑一次三套样例确认环境（§5.1），然后从 §7.2 第一档里挑一项推进。
-R14 的回归与提交已闭环，不需要再补跑。
+**接手第一件事**：跑一次三套样例确认环境（§5.1），然后从 §7.2 里挑一项推进。
+R14 / R15 的回归与提交均已闭环，不需要再补跑。
 
 ---
 
@@ -161,8 +161,8 @@ PYTHONPATH= "$PY" -m pytest tests/test_[a-b]*.py -q --assert=plain   # 448 passe
 PYTHONPATH= "$PY" -m pytest tests/test_[c-e]*.py -q --assert=plain   # 547
 PYTHONPATH= "$PY" -m pytest tests/test_[f-l]*.py -q --assert=plain   # 300
 PYTHONPATH= "$PY" -m pytest tests/test_[m-r]*.py -q --assert=plain   # 710
-PYTHONPATH= "$PY" -m pytest tests/test_[s-z]*.py -q --assert=plain   # 353
-# 累计 2358 passed / 1 skipped / 0 failed（2359 collected）
+PYTHONPATH= "$PY" -m pytest tests/test_[s-z]*.py -q --assert=plain   # 371
+# 累计 2376 passed / 1 skipped / 0 failed（2377 collected）
 
 python main.py run --sample todo --no-live --auto       # 三套离线样例，各 1–3 秒
 python main.py doctor               # 配置 / 依赖 / Provider 连通性
@@ -191,6 +191,7 @@ python main.py diff <run_a> <run_b> # 配置/任务/产物/事件差异
 | `awaiting_approval` 一直挂起 | 审批单在等裁决：`python main.py approvals <run_id>` 列单，`approve` 写裁决（可在另一个进程） |
 | resume 报“状态非法” | checkpoint 与 ledger 不一致。`run.json` 的 status 是权威，`python main.py doctor` 会提示 |
 | Webhook 一条都没收到 | 检查 `webhook_enabled` 事件里的 `targets`；R14 修过一个“只配 `webhooks` 时不生效”的 bug，见 §6.5 |
+| 通知重复到达 / 一直没补投 | R15 是 at-least-once：多进程同时补投会重复，接收方按 `X-AgentCrew-Delivery` 幂等。没补投就看 `<output_dir>/_webhook_spool/` 有没有残留文件、ledger 里有没有 `replay_target_missing` / `replay_discarded` |
 | MCP 工具没出现在提示词里 | `tools_enabled` 必须为 true；看 `mcp_connected` / `mcp_failed` |
 
 ---
@@ -239,15 +240,23 @@ R14 最值钱的一课：`WebhookConfig` 的多接收端逻辑全绿，但 `Crew
 | `SandboxError: center 规则快照不可用` | 环境问题，命令实际会执行（输出标注 bypassed），重试即可 |
 | `api/server.py` 写入偶发被独占锁 | 用「写临时文件 → os.replace」原子替换 |
 
+### 6.8 spool 里的记录不认「旧配置」
+
+R15 的补投按 `sha256(url)[:16]` 匹配**当前**配置里的接收端，文件里不存 URL 与密钥。
+改了接收端地址，旧记录会被丢弃并记 `replay_target_missing`——这是刻意的，不要「顺手」
+改成按名字匹配：那样会把上个进程的事件推到一个全新的地址上。同理，往 spool 写
+payload 前必须走 `secret_values()` 递归脱敏，别绕过 Ledger 已有的防护。
+
 ---
 
 ## 7. 剩余工作
 
 ### 7.1 已收口（2026-11-07）
 
-R14 的第 3–5 批回归已补跑，5 批累计 2358 passed / 1 skipped / 0 failed；
-三套离线样例 9/9、5/5、7/7 全部 `completed`；改动已提交，工作区干净。
-PROJECT-STATE §3.19 与本文 §0 的状态口径已对齐。
+R14 的第 3–5 批回归已补跑（5 批累计 2358 passed / 1 skipped / 0 failed），改动已提交；
+随后按第一档清单完成 R15（Webhook 持久化重放队列）：新增 18 例、全量
+2376 passed / 1 skipped / 0 failed、三套离线样例 9/9 5/5 7/7，含两次真实 CLI run 的
+端到端验证。PROJECT-STATE §3.19 / §3.20 与本文 §0 的状态口径已对齐，工作区干净。
 
 ### 7.2 第一档（投入小、直接影响可用性）
 
@@ -255,7 +264,7 @@ PROJECT-STATE §3.19 与本文 §0 的状态口径已对齐。
 |---|---|---|
 | 运维部署/排障手册 | 1.5 人日 | 本文只覆盖了交接视角，缺“怎么部署到服务器、日志怎么收、怎么扩容” |
 | 官方 SDK + 示例 | 3 人日 | `artifacts/contracts/openapi.yaml` 已稳定，封装 Python client 边际成本很低 |
-| Webhook 持久化重放队列 | 1 人日 | 现在进程一退，未投通知就丢（只记 `shutdown_timeout`），没有补投手段 |
+| ~~Webhook 持久化重放队列~~ | — | ✅ **R15 已闭环**（见 PROJECT-STATE §3.20）：入队前落盘、启动补投、24h / 5 次淘汰；仍不保证「恰好一次」 |
 
 ### 7.3 第二档（价值明确、改动面中等）
 
@@ -299,6 +308,7 @@ PROJECT-STATE §3.19 与本文 §0 的状态口径已对齐。
 | R12 | 出站 Webhook | `24194a4` |
 | R13 | MCP 接进生产工具链 | `c327df2` |
 | R14 | Webhook 多接收端 + 只推失败 | 已提交（2026-11-07，`git log -1` 看 hash） |
+| R15 | Webhook 持久化重放队列 | 已提交（2026-11-07） |
 
 R3–R8 之所以合并成一个提交：`config.py` / `crew.py` / `main.py` / `api/server.py` 四个文件
 被多轮同时改，`git add` 是文件粒度，按轮切分会把不同轮的改动硬塞进一个提交。

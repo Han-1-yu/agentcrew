@@ -18,6 +18,25 @@
 **不做内网 IP 黑名单**：与 ``tools/network.py`` 的 ``web_fetch`` 不同，这里是运维
 显式配置的目标，企业内网服务恰恰是最常见的接收方。``web_fetch`` 要防 SSRF，是因为
 它的目标由模型决定。
+
+R15：持久化重放队列
+-------------------
+
+R12/R14 的致命边界是「进程退出时队列里没投出去的通知直接丢」。现在把每条
+「事件 × 接收端」在**入队之前**就写成一个 JSON 文件（spool），投递成功才删除；
+进程被杀、收尾超时、对端长时间不可用，文件都留在盘上，下一次启用 Webhook 的
+run 启动时自动补投。
+
+几个刻意约束：
+
+* **密钥与 URL 都不落盘**。文件里只有 ``target_key = sha256(url)[:16]``，补投时
+  用当前配置重新解析接收端；secret 永远来自内存里的 Settings。payload 落盘前
+  按 ``secret_values()`` 递归脱敏，避免绕过 Ledger 已有的脱敏把密钥抄进 spool。
+* **at-least-once**。多进程/多 run 同时补投同一文件时可能双投，接收方用既有的
+  ``X-AgentCrew-Delivery`` 幂等（delivery 与 timestamp 跨重试、跨重放都不变）。
+* **有终止条件**：记录超过 24 小时或累计重放 5 次即丢弃并记
+  ``webhook_failed(replay_discarded)``，不让陈年事件无限重放。
+* **不启用 spool 时行为与 R14 逐字一致**：``spool_dir=None`` 零文件、零扫描。
 """
 
 from __future__ import annotations
@@ -25,12 +44,14 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
 import queue
 import threading
 import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -55,6 +76,15 @@ _MAX_BACKOFF_SECONDS = 2.0
 _FAILURE_EVENTS = frozenset({"error", "deadlock", "run_stalled", "budget_exhausted"})
 #: ``payload["status"]`` 落在这些值时算「没跑成」。
 _FAILURE_STATUSES = frozenset({"failed", "cancelled"})
+
+#: R15：spool 目录名（位于 ``output_dir`` 下）。``CheckpointStore._run_dirs`` 只认
+#: 含 ``run.json`` 的目录，所以 ``clean`` / ``delete_run`` 都不会误删它。
+SPOOL_DIR_NAME = "_webhook_spool"
+#: R15：待投记录的最长存活时间；超时丢弃，避免陈年事件无限重放。
+SPOOL_MAX_AGE_SECONDS = 24 * 3600.0
+#: R15：单条记录累计重放次数上限。
+SPOOL_MAX_ATTEMPTS = 5
+_SPOOL_SUFFIX = ".json"
 
 
 def _is_failure(event: str, payload: dict[str, Any]) -> bool:
@@ -130,11 +160,204 @@ class WebhookConfig:
         return any(target.matches(event, data) for target in self.resolved())
 
 
+def _target_key(url: str) -> str:
+    """接收端的落盘标识：只存 URL 的短哈希，不存 URL 本身。
+
+    补投时按当前配置重新算一遍哈希来匹配；URL 改了就匹配不上，那条记录会被
+    丢弃而不是发到新地址去。
+    """
+    return hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
+
+
+def _redact_value(value: Any, secrets: tuple[str, ...]) -> Any:
+    """递归替换字符串里的密钥；只在写 spool 文件时用。"""
+    if isinstance(value, str):
+        for secret in secrets:
+            value = value.replace(secret, "***")
+        return value
+    if isinstance(value, dict):
+        return {key: _redact_value(item, secrets) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact_value(item, secrets) for item in value]
+    return value
+
+
+@dataclass(frozen=True)
+class PendingDelivery:
+    """一条「事件 × 接收端」的待投记录（可跨进程存活）。
+
+    ``delivery`` / ``timestamp`` 在首次入队时就固定下来，重试与跨进程重放都不变——
+    接收方靠它们做幂等与重放校验。
+    """
+
+    event: str
+    payload: dict[str, Any]
+    delivery: str
+    timestamp: str
+    target_key: str
+    created_at: float
+    attempts: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "version": 1,
+            "event": self.event,
+            "payload": self.payload,
+            "delivery": self.delivery,
+            "timestamp": self.timestamp,
+            "target_key": self.target_key,
+            "created_at": self.created_at,
+            "attempts": self.attempts,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Any) -> PendingDelivery | None:
+        """坏形状 / 旧版本一律返回 ``None``，由调用方丢弃文件。"""
+        if not isinstance(data, dict) or data.get("version") != 1:
+            return None
+        if not isinstance(data.get("payload"), dict):
+            return None
+        if not all(isinstance(data.get(key), str) and data[key]
+                   for key in ("event", "delivery", "timestamp", "target_key")):
+            return None
+        try:
+            created_at = float(data["created_at"])
+            attempts = int(data.get("attempts", 0))
+        except (KeyError, TypeError, ValueError):
+            return None
+        if attempts < 0:
+            return None
+        return cls(
+            event=data["event"], payload=data["payload"],
+            delivery=data["delivery"], timestamp=data["timestamp"],
+            target_key=data["target_key"], created_at=created_at,
+            attempts=attempts,
+        )
+
+
+class WebhookSpool:
+    """待投队列的落盘实现：一条记录一个文件，成功即删。
+
+    为什么不用单个 JSONL 追加文件：删除「已投递」的那一行需要重写整个文件，
+    多 run 并发时会互相覆盖。一记录一文件后，``os.replace`` 写、``unlink`` 删
+    都是原子操作，天然容忍多进程。
+    """
+
+    def __init__(
+        self,
+        directory: Path | str,
+        *,
+        secrets: tuple[str, ...] = (),
+        max_age_seconds: float = SPOOL_MAX_AGE_SECONDS,
+        max_attempts: int = SPOOL_MAX_ATTEMPTS,
+    ) -> None:
+        self.directory = Path(directory)
+        # 太短的串会把正常文本误伤成 ***；Ledger 的脱敏也只关心真正的密钥。
+        self._secrets = tuple(s for s in secrets if isinstance(s, str) and len(s) >= 4)
+        self._max_age = max_age_seconds
+        self._max_attempts = max_attempts
+
+    def add(self, record: PendingDelivery) -> Path | None:
+        """写一条新记录；失败返回 ``None``（落盘是增强，不能让 run 挂掉）。"""
+        try:
+            self.directory.mkdir(parents=True, exist_ok=True)
+            stamp = int(record.created_at * 1_000_000)
+            path = self.directory / (
+                f"{stamp}-{record.delivery[:8]}-{record.target_key}"
+                f"-{uuid.uuid4().hex[:6]}{_SPOOL_SUFFIX}")
+            self._write(path, record)
+            return path
+        except (OSError, TypeError, ValueError):
+            return None
+
+    def _write(self, path: Path, record: PendingDelivery) -> None:
+        data = _redact_value(record.to_dict(), self._secrets)
+        text = json.dumps(data, ensure_ascii=False)
+        tmp = path.with_name(f".{uuid.uuid4().hex}.tmp")
+        try:
+            tmp.write_text(text, encoding="utf-8")
+            os.replace(tmp, path)
+        finally:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+    def remove(self, path: Path) -> None:
+        """投递成功后删除；文件已被别的进程删掉也是成功。"""
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+    def retry(self, path: Path, record: PendingDelivery) -> None:
+        """一次投递失败：累加 attempts 写回，超限则丢弃。"""
+        next_record = PendingDelivery(
+            event=record.event, payload=record.payload,
+            delivery=record.delivery, timestamp=record.timestamp,
+            target_key=record.target_key, created_at=record.created_at,
+            attempts=record.attempts + 1,
+        )
+        if next_record.attempts > self._max_attempts:
+            self.remove(path)
+            return
+        try:
+            self._write(path, next_record)
+        except (OSError, TypeError, ValueError):
+            pass
+
+    def load(self) -> tuple[list[tuple[Path, PendingDelivery]], list[tuple[str, str]]]:
+        """扫出待补投记录；顺手清理坏文件、过期记录与超次数的记录。
+
+        返回 ``(待投列表, 被丢弃的 (delivery, 原因) 列表)``。
+        """
+        pending: list[tuple[Path, PendingDelivery]] = []
+        discarded: list[tuple[str, str]] = []
+        try:
+            paths = sorted(self.directory.glob(f"*{_SPOOL_SUFFIX}"))
+        except OSError:
+            return pending, discarded
+        now = time.time()
+        for path in paths:
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                self.remove(path)
+                discarded.append(("", "corrupt"))
+                continue
+            record = PendingDelivery.from_dict(raw)
+            if record is None:
+                self.remove(path)
+                discarded.append(("", "bad_shape"))
+                continue
+            if now - record.created_at > self._max_age:
+                self.remove(path)
+                discarded.append((record.delivery, "expired"))
+                continue
+            if record.attempts > self._max_attempts:
+                self.remove(path)
+                discarded.append((record.delivery, "max_attempts"))
+                continue
+            pending.append((path, record))
+        return pending, discarded
+
+
+@dataclass(frozen=True)
+class _QueueItem:
+    """队列里的一个投递单元：一条记录 + 它此刻对应的接收端。"""
+
+    record: PendingDelivery
+    target: WebhookTarget
+    path: Path | None = None
+    replayed: bool = False
+
+
 class WebhookDispatcher:
     """事件 → POST 的后台投递器。
 
     ``sink`` 是投递结果的出口（形如 ``ledger.emit``），只在**主线程**被调用，
-    因此 ``sink`` 自身不需要考虑线程安全。
+    因此 ``sink`` 自身不需要考虑线程安全。``spool_dir`` 给定时启用 R15 的
+    持久化重放；不给定时行为与 R14 逐字一致。
     """
 
     def __init__(
@@ -142,13 +365,19 @@ class WebhookDispatcher:
         config: WebhookConfig,
         *,
         sink: Callable[[str, dict[str, Any]], None] | None = None,
+        spool_dir: Path | str | None = None,
+        secrets: tuple[str, ...] = (),
     ) -> None:
         self._config = config
         self._sink = sink
-        self._queue: queue.Queue[tuple[str, dict[str, Any]] | None] = queue.Queue()
+        self._queue: queue.Queue[_QueueItem | None] = queue.Queue()
         self._results: queue.Queue[dict[str, Any]] = queue.Queue()
         self._thread: threading.Thread | None = None
         self._closed = False
+        self._spool = (
+            WebhookSpool(spool_dir, secrets=tuple(secrets))
+            if spool_dir is not None else None
+        )
         #: 便于测试与收尾汇总的计数（只在主线程读）。
         self.delivered = 0
         self.failed = 0
@@ -156,16 +385,22 @@ class WebhookDispatcher:
             self._thread = threading.Thread(
                 target=self._run, name="agentcrew-webhook", daemon=True)
             self._thread.start()
+            self._replay_pending()
 
     @property
     def enabled(self) -> bool:
         return self._config.enabled
 
+    @property
+    def spool_enabled(self) -> bool:
+        return self._spool is not None
+
     def emit(self, event: str, payload: dict[str, Any]) -> None:
         """把一条事件交给后台投递；未启用 / 不订阅此事件时什么都不做。
 
         先 drain 上一批投递结果——这样「上一次失败」能在下一个事件点上及时落账，
-        而不必等到 run 收尾。
+        而不必等到 run 收尾。R15 起在**入队前**先落盘：即使进程立刻被杀，
+        未投出的通知也留在 spool 里等下次补投。
         """
         self._drain()
         if self._closed or not self._config.enabled:
@@ -174,13 +409,29 @@ class WebhookDispatcher:
         # 入队前先按接收端过滤：没有任何接收端想要这条事件时，不必占用队列。
         if not self._config.matches(event, data):
             return
-        self._queue.put((event, data))
+        delivery = uuid.uuid4().hex
+        # 时间戳只取一次：body 里写它、签名也用它。两处各取一次会在跨秒时
+        # 对不上，接收方校验 body.timestamp == header.timestamp 就会失败。
+        timestamp = str(int(time.time()))
+        created_at = time.time()
+        for target in self._config.resolved():
+            if not target.matches(event, data):
+                continue
+            record = PendingDelivery(
+                event=event, payload=data, delivery=delivery,
+                timestamp=timestamp, target_key=_target_key(target.url),
+                created_at=created_at,
+            )
+            # delivery id 在所有接收端之间共享（它是「这次事件」的标识）；
+            # 每个接收端独立重试、独立记一笔账。
+            path = self._spool.add(record) if self._spool is not None else None
+            self._queue.put(_QueueItem(record, target, path))
 
     def close(self, *, timeout: float = DEFAULT_CLOSE_TIMEOUT) -> None:
         """停止接收新事件、等队列排空（最多 ``timeout`` 秒），并落最后一批结果。
 
-        超时不是错误：记一条 ``shutdown_timeout`` 就放手。宁可少一次通知，
-        也不让收尾卡在网络抖动上。
+        超时不是错误：记一条 ``shutdown_timeout`` 就放手。R15 起超时的部分不会
+        丢——记录已在 spool 里，下次启动会补投。
         """
         if self._closed:
             return
@@ -199,6 +450,37 @@ class WebhookDispatcher:
             })
         self._drain()
 
+    # ---- 持久化重放（R15）----
+
+    def _replay_pending(self) -> None:
+        """把上次没投出去的记录重新放进本进程的投递队列。
+
+        用 ``target_key`` 而非名字/URL 匹配：配置里改了地址就当作「不再是同一个
+        接收端」，丢弃记录而不是把旧事件发到新地址。spool 未启用时零开销。
+        """
+        if self._spool is None or not self._config.enabled:
+            return
+        pending, discarded = self._spool.load()
+        targets = {_target_key(target.url): target
+                   for target in self._config.resolved()}
+        for delivery, reason in discarded:
+            self._record({
+                "ok": False, "webhook_event": "*", "delivery": delivery,
+                "attempts": 0, "error": f"replay_discarded: {reason}",
+                "replayed": True,
+            })
+        for path, record in pending:
+            target = targets.get(record.target_key)
+            if target is None:
+                self._spool.remove(path)
+                self._record({
+                    "ok": False, "webhook_event": record.event,
+                    "delivery": record.delivery, "attempts": record.attempts,
+                    "error": "replay_target_missing", "replayed": True,
+                })
+                continue
+            self._queue.put(_QueueItem(record, target, path, replayed=True))
+
     # ---- 后台线程 ----
 
     def _run(self) -> None:
@@ -206,57 +488,43 @@ class WebhookDispatcher:
             item = self._queue.get()
             if item is None:
                 return
-            event, payload = item
-            self._deliver(event, payload)
+            self._deliver_one(item)
 
-    def _deliver(self, event: str, payload: dict[str, Any]) -> None:
-        """把一条事件投给**所有**想要它的接收端；每个接收端独立重试。
-
-        ``delivery`` id 在所有接收端之间**共享**、重试之间也保持不变：它是「这次
-        事件」的标识，接收方可以据此对账；各接收端自己的幂等由它自己的重试语义
-        保证（同一 id 反复到达即视为同一次投递）。
-        """
-        targets = [t for t in self._config.resolved()
-                   if t.matches(event, payload)]
-        if not targets:
-            return
-        delivery = uuid.uuid4().hex
-        # 时间戳只取一次：body 里写它、签名也用它。两处各取一次会在跨秒时
-        # 对不上，接收方校验 body.timestamp == header.timestamp 就会失败。
-        timestamp = str(int(time.time()))
-        body = self._encode(event, payload, timestamp)
-        for target in targets:
-            self._deliver_to(target, event, delivery, timestamp, body)
-
-    def _deliver_to(
-        self,
-        target: WebhookTarget,
-        event: str,
-        delivery: str,
-        timestamp: str,
-        body: bytes,
-    ) -> None:
-        """向单个接收端投递，重试 ``max_retries`` 次后放弃。
-
-        一个接收端失败不影响另一个：它们是独立的接收方，不该因为 Slack 挂了就
-        不推内部系统。
-        """
+    def _deliver_one(self, item: _QueueItem) -> None:
+        """投给一个接收端，重试 ``max_retries`` 次；成功删 spool，失败留给下次。"""
+        record, target = item.record, item.target
         label = _target_label(target)
+        body = self._encode(record.event, record.payload, record.timestamp)
         last_error = ""
         for attempt in range(self._config.max_retries + 1):
-            ok, detail = self._post(target, event, delivery, timestamp, body)
+            ok, detail = self._post(
+                target, record.event, record.delivery, record.timestamp, body)
             if ok:
-                self._record({"ok": True, "webhook_event": event,
-                              "target": label, "delivery": delivery,
-                              "attempts": attempt + 1})
+                result: dict[str, Any] = {
+                    "ok": True, "webhook_event": record.event,
+                    "target": label, "delivery": record.delivery,
+                    "attempts": attempt + 1,
+                }
+                if item.replayed:
+                    result["replayed"] = True
+                self._record(result)
+                if item.path is not None and self._spool is not None:
+                    self._spool.remove(item.path)
                 return
             last_error = detail
             if attempt < self._config.max_retries:
                 time.sleep(min(0.2 * (2 ** attempt), _MAX_BACKOFF_SECONDS))
-        self._record({"ok": False, "webhook_event": event, "target": label,
-                      "delivery": delivery,
-                      "attempts": self._config.max_retries + 1,
-                      "error": last_error})
+        result = {
+            "ok": False, "webhook_event": record.event, "target": label,
+            "delivery": record.delivery,
+            "attempts": self._config.max_retries + 1,
+            "error": last_error,
+        }
+        if item.replayed:
+            result["replayed"] = True
+        self._record(result)
+        if item.path is not None and self._spool is not None:
+            self._spool.retry(item.path, record)
 
     def _encode(self, event: str, payload: dict[str, Any], timestamp: str) -> bytes:
         """组装 POST body：事件名 + 时间戳 + 原始 payload。"""

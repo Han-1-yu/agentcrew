@@ -1725,6 +1725,28 @@ Slack 不通就不推内部系统。同一次事件在所有接收端之间共�
 `webhooks` 只认配置文件与环境变量，不进 `POST /runs` 的 `options`：per-run 覆盖一组
 接收端是运维决策，不该由单次调用临时改。
 
+### 1.2 进程退出也不丢通知（R15）
+
+R12/R14 有个硬边界：收尾最多等 5 秒，进程被强杀或接收端长时间不可用时，队列里没投
+出去的通知**直接丢**，只在 ledger 里留一条 `shutdown_timeout`。现在每条「事件 × 接收端」
+在**入队之前**就写进 `<output_dir>/_webhook_spool/`（一条记录一个 JSON 文件）：
+
+| 情况 | 结果 |
+|---|---|
+| 投递拿到 2xx | 删除对应文件 |
+| 重试耗尽 / 连不上 / 进程退出 | 文件留着，下一次启用 Webhook 的 run 启动时自动补投 |
+| 超过 24 小时或累计重放 5 次 | 丢弃并记 `webhook_failed(replay_discarded: …)` |
+| 配置里的接收端地址变了 | 丢弃并记 `webhook_failed(replay_target_missing)`，不把旧事件发到新地址 |
+
+补投沿用原来的 `delivery` 与 `timestamp`（签名仍可校验），所以接收端用
+`X-AgentCrew-Delivery` 幂等即可。语义是 **at-least-once**：多个进程同时补投同一份
+spool 时可能重复到达，不要假设「恰好一次」。
+
+spool 文件只存 URL 的短哈希（`sha256(url)[:16]`）和脱敏后的 payload，**不存 URL、
+不存密钥**；补投时用当前配置重新解析接收端。`_run_dirs` 只认含 `run.json` 的目录，
+因此 `clean` / `delete_run` 不会误删 spool。不需要任何配置：启用了 Webhook 就自动启用
+重放，库层直接构造 `WebhookDispatcher` 且不传 `spool_dir` 时保持 R14 行为。
+
 ### 2. 协议
 
 ```
@@ -1754,6 +1776,7 @@ X-AgentCrew-Signature: sha256=<hex>
 | 不阻塞 run | 事件进队列，daemon 线程投递 | `on_event` 是同步回调，可能在事件循环里；直接发 HTTP 会让整个 run 卡在一个网络超时上 |
 | 失败不拖垮 run | 重试有上限、退避有上限；收尾最多等 5 秒排空 | 通知是辅助设施。排不完就记 `webhook_failed(shutdown_timeout)` 放手 |
 | 不碰 Ledger | 结果先进队列，由主线程 drain 后落账 | `Ledger.emit` 没有锁，从后台线程写会与主线程交错 |
+| 退出不丢（R15） | 入队前先落盘，成功才删 | 后台队列是进程内的；进程一退，没投出去的通知就再也找不回来了 |
 
 ### 4. 安全边界
 
@@ -1766,6 +1789,8 @@ X-AgentCrew-Signature: sha256=<hex>
   恰恰是最常见的接收方；`web_fetch` 要防 SSRF 是因为它的目标由模型决定。
 - **HTTP 接口不接收密钥**：`POST /runs` 的 `options` 只允许 url / events / timeout /
   retries，`webhook_secret` 只认配置文件与环境变量。
+- **落盘也不带密钥（R15）**：spool 里的 payload 按 `secret_values()` 递归脱敏，接收端
+  地址只留短哈希；否则绕过 Ledger 的脱敏把密钥抄进文件，等于把签名能力交出去。
 
 ### 5. 兼容性
 

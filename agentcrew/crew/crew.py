@@ -81,6 +81,7 @@ from agentcrew.runtime.approvals import (
 )
 from agentcrew.runtime.ledger import Ledger
 from agentcrew.runtime.webhook import (
+    SPOOL_DIR_NAME,
     WebhookConfig,
     WebhookDispatcher,
     WebhookTarget,
@@ -624,7 +625,11 @@ class Crew:
                 checkpoint.artifacts_dir, run_id=record.run_id, ledger=ledger
             )
         # R12：出站 Webhook。URL 为空时返回 None，整条链路零开销。
-        self._webhook = self._build_webhook(ledger)
+        # R15：spool 放在 output_dir 下、所有 run 共用一个目录——挂起/崩溃遗留的
+        # 通知由下一次启用 Webhook 的 run 补投；_run_dirs 只认含 run.json 的目录，
+        # 所以 clean / delete_run 不会碰它。
+        self._webhook = self._build_webhook(
+            ledger, spool_dir=checkpoint.run_dir.parent / SPOOL_DIR_NAME)
         goal = record.project_goal if goal is None else goal
         # R3：工具链装配。默认关闭时返回 None，AgentFactory 与改造前完全一致。
         tool_registry = self._build_tool_registry(checkpoint, ledger)
@@ -1197,11 +1202,14 @@ class Crew:
         if self._webhook is not None:
             self._webhook.emit(name, payload)
 
-    def _build_webhook(self, ledger: Ledger) -> WebhookDispatcher | None:
+    def _build_webhook(
+        self, ledger: Ledger, *, spool_dir: Path | None = None
+    ) -> WebhookDispatcher | None:
         """按配置构造分发器；URL 为空时返回 ``None``（默认关闭）。
 
         启用时记一条 ``webhook_enabled``，但**只记打码后的 URL**：查询串里可能
-        带 token，整条 URL 写进 ledger 就等于泄露。
+        带 token，整条 URL 写进 ledger 就等于泄露。``spool_dir`` 由 ``_start``
+        传入（R15）；库层直接调用不传时零落盘，行为与 R14 一致。
         """
         # 只看旧字段是不够的：只配 ``webhooks``（多接收端）时 ``webhook_url`` 是空的，
         # 早退会让多接收端完全失效——实测踩过一次。
@@ -1229,7 +1237,11 @@ class Crew:
             ),
         )
         dispatcher = WebhookDispatcher(
-            config, sink=self._webhook_sink(ledger))
+            config, sink=self._webhook_sink(ledger),
+            spool_dir=spool_dir,
+            # R15：payload 落盘前按同一套密钥表脱敏，不绕过 Ledger 的防护。
+            secrets=tuple(self._settings.secret_values()),
+        )
         ledger.emit(
             "webhook_enabled",
             # 逐接收端记录，URL 一律打码：查询串里可能有 token。
@@ -1243,6 +1255,7 @@ class Crew:
                 }
                 for target in config.resolved()
             ],
+            spool_enabled=spool_dir is not None,
         )
         return dispatcher
 
