@@ -80,6 +80,7 @@ from agentcrew.runtime.approvals import (
     ApprovalStore,
 )
 from agentcrew.runtime.ledger import Ledger
+from agentcrew.runtime.lifecycle import ResumeLock, RunHeartbeat
 from agentcrew.runtime.webhook import (
     SPOOL_DIR_NAME,
     WebhookConfig,
@@ -293,6 +294,8 @@ class Crew:
         self._on_event = on_event
         #: R12：出站 Webhook 分发器；``None`` = 未配置 URL（零开销）。
         self._webhook: WebhookDispatcher | None = None
+        #: R17：本次 run 的心跳线程；正常/异常收尾都会停掉并删掉心跳文件。
+        self._heartbeat: RunHeartbeat | None = None
         #: R13：本次 run 建立的 MCP 连接（收尾时逐个 stop，否则子进程泄漏）。
         self._mcp_clients: list[MCPClient] = []
         self._injected_store = store
@@ -565,6 +568,8 @@ class Crew:
             )
             return await self._start(checkpoint, goal=goal, resume_board=None)
         finally:
+            # R17：先停心跳，异常路径也一定走到（进程强杀则文件留作孤儿证据）。
+            self._stop_heartbeat()
             # R13：先关 MCP 连接——异常路径不走 ``_finalize``，不在这里关就会
             # 留下孤儿子进程。
             await self._close_mcp()
@@ -582,9 +587,16 @@ class Crew:
                 "resume() 需要先用 Crew.resume_from(settings, run_id, ...) 构造实例"
             )
         self._begin()
+        # R17：占锁必须覆盖整个 _start；acquire 失败时 release 是幂等空操作，
+        # 绝不会误删别的进程持有的锁。
+        lock = ResumeLock(checkpoint.run_dir)
         try:
+            lock.acquire()
             return await self._start(checkpoint, goal=None, resume_board=resume_board)
         finally:
+            lock.release()
+            # R17：先停心跳，异常路径也一定走到（进程强杀则文件留作孤儿证据）。
+            self._stop_heartbeat()
             # R13：先关 MCP 连接——异常路径不走 ``_finalize``，不在这里关就会
             # 留下孤儿子进程。
             await self._close_mcp()
@@ -624,6 +636,10 @@ class Crew:
             store = ArtifactStore(
                 checkpoint.artifacts_dir, run_id=record.run_id, ledger=ledger
             )
+        # R17：心跳独立于 Ledger（后台线程不写 ledger）与 run.json（不与调度器
+        # 的状态落盘竞争）。进程被强杀时留下的过期心跳就是 reconcile 的判据。
+        self._heartbeat = RunHeartbeat(checkpoint.run_dir)
+        self._heartbeat.start()
         # R12：出站 Webhook。URL 为空时返回 None，整条链路零开销。
         # R15：spool 放在 output_dir 下、所有 run 共用一个目录——挂起/崩溃遗留的
         # 通知由下一次启用 Webhook 的 run 补投；_run_dirs 只认含 run.json 的目录，
@@ -1334,6 +1350,13 @@ class Crew:
                 pass
 
         return sink
+
+    def _stop_heartbeat(self) -> None:
+        """R17：停心跳线程并删掉心跳文件（幂等；半构造实例也安全）。"""
+        heartbeat = getattr(self, "_heartbeat", None)
+        if heartbeat is not None:
+            heartbeat.stop()
+        self._heartbeat = None
 
     def _close_webhook(self) -> None:
         """收尾：等投递队列排空（最多 5 秒），随后丢弃引用。

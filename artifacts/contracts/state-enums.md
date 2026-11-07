@@ -14,13 +14,13 @@
 | 值 | 含义 | 触发条件 |
 |---|---|---|
 | `running` | run 正在执行（规划中或执行中）。 | `CheckpointStore.create()` 落盘初始状态；`_start()` 进入执行段时重置为 running。 |
-| `interrupted` | Ctrl-C / 计划卡点 `save_exit` 落盘后的**可恢复断点**（不是 cancelled）。 | `asyncio.CancelledError` 被捕获时 `_finalize(..., INTERRUPTED)`；G3 计划卡点选 `save_exit`。 |
+| `interrupted` | Ctrl-C / 计划卡点 `save_exit` 落盘后的**可恢复断点**（不是 cancelled）。 | `asyncio.CancelledError` 被捕获时 `_finalize(..., INTERRUPTED)`；G3 计划卡点选 `save_exit`；**R17** 启动时 `reconcile_stale_runs` 把孤儿 `running` 收敛为 `interrupted`。 |
 | `awaiting_approval` | R4 **非终态**：人工审批挂起，等待外部决策。 | `DeferredPrompter` 在 G3 卡点抛 `ApprovalPending` → `Crew._suspend()` 写状态、发 `run_paused` / `approval_requested`，**不封版、不发 `run_finished`**。 |
 | `completed` | 全部任务 SUCCEEDED 且交付卡点接受。 | `_final_status()` 在无 failed/blocked/skipped/cancelled 时返回 COMPLETED。退出码 0。 |
 | `failed` | 任一任务 failed/blocked/skipped，或规划失败（PlanFailedError）/ 预算耗尽 / 配置错误（ModelFactoryError）。 | `_final_status()`；异常路径见 `_start()` 的 except 分支。退出码 1（规划失败为 2、配置错误为 3、停滞为 4）。 |
 | `cancelled` | 用户主动取消（G3 `abort` / 软取消 / `cancel` 子命令打标）。 | `_finalize(..., CANCELLED)`。退出码 130。 |
 
-**RunStatus 没有显式跃迁表**——终局仍由 `_final_status()` 在收尾时一次性判定。R4 之后多了一条**非终局**路径：`running → awaiting_approval → running`，由 `_suspend()` 与 `resume()` 驱动；`awaiting_approval` 在删除/清理守卫里与 `running` 同等保护（不会被 `clean(protect_running=True)` 或 `delete_run` 抹掉）。
+**RunStatus 没有显式跃迁表**——终局仍由 `_final_status()` 在收尾时一次性判定。R4 之后多了一条**非终局**路径：`running → awaiting_approval → running`，由 `_suspend()` 与 `resume()` 驱动；`awaiting_approval` 在删除/清理守卫里与 `running` 同等保护（不会被 `clean(protect_running=True)` 或 `delete_run` 抹掉）。R17 再加一条**收敛**路径：`running → interrupted`，只在进程入口（CLI `run` / `serve`）启动时由 `reconcile_stale_runs` 判定，依据是该 run 的心跳已过期（或升级前的无心跳老 run 满足 `updated_at` + 24h）。`awaiting_approval` **不参与**收敛——它有审批单、进程本就该退出，不是僵尸。
 
 **RunPhase 不存在**：代码里没有独立的"阶段"枚举。规划/执行/交付三阶段是 `Crew._start()` 内的代码路径（`_plan_phase` / `_execute` / `human_delivery_gate`），不枚举。但 R4 把「挂起在哪个卡点」持久化成了 `approvals.jsonl` 里审批单的 `checkpoint ∈ {plan, delivery}`，`Crew.resume_from` 据此决定重入哪个卡点 —— 这是可恢复的路标，不是阶段枚举。
 

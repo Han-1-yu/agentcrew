@@ -81,6 +81,7 @@ from agentcrew.runtime.checkpoint import (
     delete_run,
 )
 from agentcrew.runtime.ledger import Ledger, LedgerEvent
+from agentcrew.runtime.lifecycle import ResumeLockError, reconcile_stale_runs
 from agentcrew.utils.logger import setup_logging
 from examples.todo_web_project import PROJECT_GOAL
 
@@ -411,6 +412,32 @@ def _print_bare_invocation(parser: argparse.ArgumentParser) -> None:
 # ── run / resume ──────────────────────────────────────────────────────────
 
 
+def _reconcile_on_startup(settings: Settings) -> None:
+    """R17：启动时收敛孤儿 RUNNING；只警告，绝不因为清理失败阻断本次启动。
+
+    库层直接调 ``Crew.run()`` 不走这里（程序化调用不该有隐性副作用），只有
+    CLI ``run`` 与 ``serve`` 这两个进程入口做一次全目录扫描。
+    """
+    try:
+        results = reconcile_stale_runs(settings.output_dir)
+    except (OSError, ValueError) as exc:
+        print(f"启动时 run 状态收敛跳过（{exc}）", file=sys.stderr)
+        return
+    for item in results:
+        run_id = item["run_id"]
+        if item.get("ok"):
+            print(
+                f"已把孤儿 run {run_id} 标记为 interrupted"
+                f"（{item['reason']}），可用 resume 续跑",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"run {run_id} 状态收敛失败：{item.get('error')}",
+                file=sys.stderr,
+            )
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     """``run --goal TEXT | --demo | --sample NAME``：三选一，否则退出码 3。"""
     chosen = [
@@ -438,6 +465,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         settings = _settings_from(args)
     except (OSError, ValueError) as exc:  # pydantic ValidationError / YAML 解析错误
         return _fail(f"配置错误：{exc}")
+    _reconcile_on_startup(settings)
     try:
         # 目录只建一次：CliPrompter 的编辑校验与 Crew 的调度必须看到同一批角色，
         # 否则编辑后的计划会被「角色未注册」误拒（roles.d 的自定义角色）。
@@ -509,6 +537,10 @@ def _cmd_resume(args: argparse.Namespace) -> int:
     hook.bind(crew)
     try:
         return _drive(crew, crew.resume, hook=hook, console=console)
+    except ResumeLockError as exc:
+        # R17：两个进程同时续跑同一个 run —— 给可读提示，不打印 traceback。
+        hook.stop()
+        return _fail(f"resume 冲突：{exc}")
     except (OSError, ValueError) as exc:
         # resume 的用户级失败模式是「run 目录与配置/清单不一致」（复制来的 run、
         # 手工改过的 run.json、被清掉一半的 artifacts/）：这类问题要在完整链路
@@ -1032,6 +1064,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
             settings = _settings_from(args)
         except (OSError, ValueError) as exc:
             return _fail(f"serve：配置错误：{exc}")
+        _reconcile_on_startup(settings)
         # E-3：按配置装配认证 / 限流；两者默认关闭，缺省时与改造前行为一致。
         api_keys = list(settings.api_keys)
         cli_key = getattr(args, "api_key", None)

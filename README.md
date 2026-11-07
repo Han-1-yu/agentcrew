@@ -2513,3 +2513,21 @@ with AgentCrewClient("http://127.0.0.1:8765", api_key="…") as client:
 完整方法表、异常层次、已知限制与两个示例见 [`sdk/README.md`](sdk/README.md)。
 认证与反代配置见 [`docs/OPERATIONS.md`](docs/OPERATIONS.md) §2.2。
 
+---
+
+## R17 run 生命周期加固：心跳 / 僵尸收敛 / resume 锁
+
+进程被强杀后，run 以前会永远停在 `running`；也没有任何东西阻止两个进程同时
+`resume` 同一个 run 写坏 checkpoint。现在三件事一起收口：
+
+| 机制 | 行为 |
+|---|---|
+| 心跳 | 活 run 由 daemon 线程每 30s 原子写 `heartbeat.json`（不碰 Ledger、不改 `run.json`） |
+| 启动时收敛 | CLI `run` / `serve` 启动时把「`running` 且心跳过期」的孤儿改成 `interrupted`，记 `run_reconciled`，stderr 提示可用 `resume` 续跑；**没有心跳文件的老 run 仍走 `updated_at` + 24h 旧判据** |
+| resume 锁 | `resume()` 用 `O_CREAT\|O_EXCL` 原子占锁，正常/异常路径都在 `finally` 释放；带 owner token，陈旧锁在无新鲜心跳且超过 15min 后可接管 |
+
+`awaiting_approval` 挂起的 run **不参与**收敛（它的进程本就该退出，不是僵尸）。
+CLI `resume` 遇到锁冲突给可读提示（退出码 3），HTTP `POST /runs/{id}/resume` 回 409。
+判定细节与设计取舍见 PROJECT-STATE §3.22，排障见
+[`docs/OPERATIONS.md`](docs/OPERATIONS.md) §7.3。
+

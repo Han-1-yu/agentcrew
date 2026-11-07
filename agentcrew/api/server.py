@@ -987,6 +987,7 @@ class ApiServer:
         # resume 走 _run_dir() 收口、DELETE 走 _validated_run_id()，这里此前是
         # 唯一一条直接把 run_id 拼进 output_dir 的路径。
         from agentcrew.runtime.checkpoint import _validated_run_id
+        from agentcrew.runtime.lifecycle import ResumeLockError
 
         try:
             _validated_run_id(run_id)
@@ -1038,6 +1039,11 @@ class ApiServer:
         except asyncio.CancelledError:
             task.cancel()
             raise
+        except ResumeLockError as exc:
+            # R17：别的进程正在续跑这个 run；与「run 已在运行中」同语义。
+            task.cancel()
+            await self._send_json(writer, 409, {"error": str(exc)})
+            return
         except Exception as exc:  # resume 启动失败
             task.cancel()
             await self._send_json(

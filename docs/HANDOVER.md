@@ -11,14 +11,15 @@
 
 | 项 | 值 |
 |---|---|
-| 已提交 | R3–R16；R16 是最新提交（具体 hash 以 `git log -1` 为准） |
-| **未提交** | **无，工作区干净**（R16 已于 2026-11-07 提交） |
-| 测试 | R16 后全量 **2410 passed / 1 skipped / 0 failed**（2411 collected；分 5 批实测 448 + 547 + 300 + 710 + 405） |
+| 已提交 | R3–R17；R17 是最新提交（具体 hash 以 `git log -1` 为准） |
+| **未提交** | **无，工作区干净**（R17 已于 2026-11-07 提交） |
+| 测试 | R17 后全量 **2434 passed / 1 skipped / 0 failed**（2435 collected；分 5 批实测 448 + 547 + 300 + 734 + 405） |
 | 离线样例 | `todo` 9/9 · `linear` 5/5 · `hierarchy` 7/7，全部 `completed` |
 | 一句话定位 | 8 角色多 Agent 编排器：规划 → 执行 → 三层门禁 → 交付；可完全离线（mock）跑通 |
 
-**接手第一件事**：跑一次三套样例确认环境（§5.1），然后从 §7.3 第二档里挑一项推进。
-第一档清单（Webhook 重放 / 运维手册 / 官方 SDK）已全部闭环，不需要再补跑或补文档。
+**接手第一件事**：跑一次三套样例确认环境（§5.1），然后从 §7.3 剩余两项
+（单步/断点调试、主管 `suggestions` 通道）或 §7.4 里挑一项推进。
+第一档三项与第二档的稳定性两项均已闭环，不需要再补跑或补文档。
 
 ---
 
@@ -164,9 +165,9 @@ PY="C:/Users/33793/AppData/Local/Microsoft/WindowsApps/python.exe"
 PYTHONPATH= "$PY" -m pytest tests/test_[a-b]*.py -q --assert=plain   # 448 passed, 1 skipped
 PYTHONPATH= "$PY" -m pytest tests/test_[c-e]*.py -q --assert=plain   # 547
 PYTHONPATH= "$PY" -m pytest tests/test_[f-l]*.py -q --assert=plain   # 300
-PYTHONPATH= "$PY" -m pytest tests/test_[m-r]*.py -q --assert=plain   # 710
+PYTHONPATH= "$PY" -m pytest tests/test_[m-r]*.py -q --assert=plain   # 734
 PYTHONPATH= "$PY" -m pytest tests/test_[s-z]*.py -q --assert=plain   # 405
-# 累计 2410 passed / 1 skipped / 0 failed（2411 collected）
+# 累计 2434 passed / 1 skipped / 0 failed（2435 collected）
 
 python main.py run --sample todo --no-live --auto       # 三套离线样例，各 1–3 秒
 python main.py doctor               # 配置 / 依赖 / Provider 连通性
@@ -252,6 +253,16 @@ R15 的补投按 `sha256(url)[:16]` 匹配**当前**配置里的接收端，文�
 改成按名字匹配：那样会把上个进程的事件推到一个全新的地址上。同理，往 spool 写
 payload 前必须走 `secret_values()` 递归脱敏，别绕过 Ledger 已有的防护。
 
+### 6.9 心跳与「进程还活着吗」的三个坑（R17）
+
+1. **后台心跳只写自己的 `heartbeat.json`**：`Ledger.emit` 无锁（§6.2），从心跳线程
+   写 ledger 会与主线程交错；写 `run.json` 则会和调度器的状态落盘竞争。
+2. **别用 `os.kill(pid, 0)` 判进程存活**：Windows 上它走 `TerminateProcess`，
+   「检查」可能直接把目标进程杀掉。存活一律看心跳时间戳，pid 只留作人工排查。
+3. **没有心跳文件的老 run 必须回退 24h 旧判据**：升级后第一次启动若按新阈值扫，
+   会把一批历史 `running` 全改成 `interrupted`。`awaiting_approval` 也不参与收敛——
+   它的进程本就该退出，不是僵尸。
+
 ---
 
 ## 7. 剩余工作
@@ -263,7 +274,9 @@ R14 的第 3–5 批回归已补跑（5 批累计 2358 passed / 1 skipped / 0 fa
 2376 passed / 1 skipped / 0 failed、三套离线样例 9/9 5/5 7/7，含两次真实 CLI run 的
 端到端验证。随后完成 R16（官方 Python SDK）：新增 34 例、全量
 2410 passed / 1 skipped / 0 failed，含一次真 `serve` + 真 mock run 的端到端。
-PROJECT-STATE §3.19–§3.21 与本文 §0 的状态口径已对齐，工作区干净。
+随后完成 R17（run 生命周期加固）：新增 24 例、全量
+2434 passed / 1 skipped / 0 failed，含一次真 CLI 启动的 reconcile 端到端。
+PROJECT-STATE §3.19–§3.22 与本文 §0 的状态口径已对齐，工作区干净。
 
 ### 7.2 第一档（投入小、直接影响可用性）
 
@@ -281,8 +294,8 @@ PROJECT-STATE §3.19–§3.21 与本文 §0 的状态口径已对齐，工作区
 | 项 | 预估 | 说明 |
 |---|---|---|
 | 单步/断点调试 | 5 人日 | R4 已实现“卡点挂起 → 跨进程恢复”，缺任意任务处暂停与变量查看 |
-| 过期 run 自动 reconcile | 1 人日 | 已有“僵尸 RUNNING 可删”兜底，缺启动时自动标记与心跳 |
-| resume 锁文件 | 0.5 人日 | 防双进程同跑一板，写坏 checkpoint |
+| ~~过期 run 自动 reconcile~~ | — | ✅ **R17 已闭环**（见 PROJECT-STATE §3.22）：30s 心跳 + CLI `run`/`serve` 启动时把孤儿 `running` 标为 `interrupted`，记 `run_reconciled` |
+| ~~resume 锁文件~~ | — | ✅ **R17 已闭环**：`O_EXCL` 原子锁 + owner token + 陈旧接管；CLI 给可读提示、API 回 409 |
 | 主管 `suggestions` 通道 | 1 人日 | 主管现在只能 approve/reject，建议无处可去 |
 | `api_rate_limit_window` 配置通道 | 0.1 人日 | 字段存在（默认 60s）但既无 `AGENTCREW_*` 映射、也不在 YAML 标量白名单，运维只能调 `_MAX`；OPERATIONS §2.2 已如实注明。补通道要守住「配置合并顺序」红线 |
 
@@ -322,6 +335,7 @@ PROJECT-STATE §3.19–§3.21 与本文 §0 的状态口径已对齐，工作区
 | R15 | Webhook 持久化重放队列 | 已提交（2026-11-07） |
 | 文档 | 运维部署/排障手册 `docs/OPERATIONS.md`；勘误 serve 端口（8000 → 8765）与 `clean` 保护默认值注释 | 已提交（2026-11-07） |
 | R16 | 官方 Python SDK + 示例（`sdk/`） | 已提交（2026-11-07） |
+| R17 | run 生命周期加固：心跳 / 僵尸收敛 / resume 锁 | 已提交（2026-11-07） |
 
 R3–R8 之所以合并成一个提交：`config.py` / `crew.py` / `main.py` / `api/server.py` 四个文件
 被多轮同时改，`git add` 是文件粒度，按轮切分会把不同轮的改动硬塞进一个提交。

@@ -29,6 +29,16 @@
   | `exit_code` | integer | 是 | 退出码（见 state-enums.md §5.6）。 |
   | `duration_ms` | integer | 是 | run 总耗时，毫秒。 |
 
+### `run_reconciled`（R17）
+- **触发时机**：CLI `run` / `serve` 启动时，`reconcile_stale_runs` 把「停在 `running` 且心跳已过期」的孤儿 run 标记为 `interrupted`。升级前的老 run 没有心跳文件，回退到 `run.json.updated_at` + 24h 的旧判据。
+- **data**：
+  | 字段 | 类型 | 必填 | 含义 |
+  |---|---|---|---|
+  | `from_status` | string | 是 | 恒为 `running`。 |
+  | `to_status` | string | 是 | 恒为 `interrupted`（可恢复断点，可用 `resume` 续跑）。 |
+  | `reason` | string | 是 | `heartbeat_expired`（有心跳但过期）/ `no_heartbeat_stale`（无心跳、走旧 24h 判据）。 |
+- **不是终局事件**：不发 `run_finished`、不封版、不动 `tasks.json` 与产物；只改 `run.json` 的 `status` / `updated_at`。
+
 ### `run_paused`（R4）
 - **触发时机**：`DeferredPrompter` 在 G3 卡点抛 `ApprovalPending`，`Crew._suspend()` 把 run 落成 `awaiting_approval` 后正常退出。**不是终局**，不发 `run_finished`、不封版。
 - **data**：

@@ -8,16 +8,16 @@
 
 ## 0. 一句话现状
 
-**引擎与管线健康，无 P0/P1 阻断项。** 全量测试 **2410 passed / 1 skipped / 0 failed**（2411 用例收集，2026-11-07 R16 后分 5 批实测），三个预设样例 100% 通过，真实模型通道可用（`doctor` 6/6 通过）；Studio 架构检查 / e2e 28/28 / selftest 16/16 全绿。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例。
+**引擎与管线健康，无 P0/P1 阻断项。** 全量测试 **2434 passed / 1 skipped / 0 failed**（2435 用例收集，2026-11-07 R17 后分 5 批实测），三个预设样例 100% 通过，真实模型通道可用（`doctor` 6/6 通过）；Studio 架构检查 / e2e 28/28 / selftest 16/16 全绿。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁。
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | 2411 collected / 2410 passed / 1 skipped / 0 failed（3.12.10 + pytest 9.1.1，`--assert=plain`；R4 +38、R5 +16、R6 +21、R7 +14、R8 +9、R9 +6、R10 +13、R11 +17、R12 +21、R13 +12、R14 +12、R15 +18、R16 +34，本机断言重写 segfault 后按 §6 分 5 批累计） |
+| 全量测试 | 2435 collected / 2434 passed / 1 skipped / 0 failed（3.12.10 + pytest 9.1.1，`--assert=plain`；R4 +38、R5 +16、R6 +21、R7 +14、R8 +9、R9 +6、R10 +13、R11 +17、R12 +21、R13 +12、R14 +12、R15 +18、R16 +34、R17 +24，本机断言重写 segfault 后按 §6 分 5 批累计） |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
 | Studio | `npm run check` **63** 模块 / 37 分片通过、selftest 16/16、e2e 28/28、probe 24/24 |
-| Git | `master` 领先 `origin/master` 172 个提交（均为本地提交、未推送）；**工作区干净，无未提交改动** |
+| Git | `master` 领先 `origin/master` 173 个提交（均为本地提交、未推送）；**工作区干净，无未提交改动** |
 | 角色 | 8 个内置岗位角色 + 执行体（Agent Profile）可多绑 |
 
 ```bash
@@ -79,6 +79,7 @@ contracts.py（零依赖契约层：EventSink / TaskLike）
 | 对外通知（R12/R14/R15） | 出站 Webhook：后台线程投递（不阻塞 run）、HMAC-SHA256 签名（时间戳纳入签名防重放）、`delivery` id 重试不变、失败重试有上限且不改 run 结局；默认推五个 run 级节点；密钥不导出/不进快照/进脱敏词表；默认关闭。R14 支持多接收端各自 `secret`/`events`/`only_failures`。R15 起每条「事件 × 接收端」入队前落盘、成功即删，进程退出或收尾超时的遗留记录由下一次启用 Webhook 的 run 补投（at-least-once，24h / 5 次淘汰），spool 不存 URL 与密钥 |
 | 接口 | CLI（`run/resume/status/roles/agents/switch/samples/clean/cancel/delete/serve/doctor/diff/providers/models/config`）；HTTP API + SSE + Web UI；API Key 认证 + IP 限流；并发 run 上限 `AGENTCREW_MAX_CONCURRENT_RUNS=8` |
 | 对外 SDK（R16） | `sdk/agentcrew_sdk`：零依赖同步 HTTP/SSE 客户端，独立可安装（`pip install -e ./sdk`）；API Key 认证、按状态码分型的异常、SSE 惰性生成器、ledger 自动翻页、`wait_for_run`；两个可直接运行的示例 |
+| 生命周期加固（R17） | `runtime/lifecycle.py`：30s 心跳（独立文件、不碰 Ledger）、CLI `run`/`serve` 启动时把孤儿 `running` 收敛为 `interrupted` 并记 `run_reconciled`、`resume()` 跨进程 `O_EXCL` 锁（owner token + 陈旧接管）；`awaiting_approval` 不参与收敛 |
 | 桌面端 | Studio 九页（运行列表 / 看板 / 事件流 / 任务详情 / 产物 / 图表 / 供应商 / 设置…）；明暗主题；e2e + 视觉回归 |
 
 ---
@@ -641,6 +642,45 @@ ledger 里留一条 `shutdown_timeout`。
 `tests/test_architecture.py` 的分层表未动；`tests/conftest.py` 仅加一行把 `sdk/`
 加入测试搜索路径（CI 直接跑仓库根 pytest，不会先装 SDK）。
 
+### 3.22 R17：run 生命周期加固——心跳 / 僵尸收敛 / resume 锁（2026-11-07）
+
+第二档的两项稳定性欠账合成一轮。此前只有 `is_stale_running`（`run.json.updated_at`
++ 24h）这一个**被动**判据，仅用于删除守卫：进程被强杀后 run 永远停在 `running`，
+`status` / `/runs` 都显示「正在跑」；同时没有任何机制阻止两个进程 `resume` 同一个
+run 写坏 checkpoint。
+
+| 层 | 落地 | 理由 |
+|---|---|---|
+| 心跳 | `runtime/lifecycle.py::RunHeartbeat`，daemon 线程每 30s 原子写 `heartbeat.json`（pid + 时间） | 不碰 `Ledger.emit`（无锁，后台线程写会交错）、不改 `run.json`（不与调度器状态落盘竞争）。长任务没有状态跃迁时 `updated_at` 会很旧，心跳是独立存活证据 |
+| 孤儿判定 | `is_orphaned_running`：有心跳只看心跳（15min 阈值）；**没有心跳的老 run 回退原 24h 判据** | 升级后第一次启动不能把历史 run 全改成 interrupted；`awaiting_approval` 与读不出 `run.json` 一律不收敛（fail-closed） |
+| 收敛 | `reconcile_stale_runs` 在 CLI `run` / `serve` 启动时扫一次，把孤儿 `running` 改成 `interrupted` + 记 `run_reconciled` | 只改 `run.json` 的 status/updated_at，不动 `tasks.json` / 产物；库层 `Crew.run()` 不做（程序化调用不该有隐性副作用） |
+| resume 锁 | `ResumeLock` 用 `O_CREAT\|O_EXCL` 原子占锁，`resume()` 的 `finally` 释放；带 owner token，release 只删自己的 | `exists()+write()` 两步有竞态；异常路径不解锁会让这个 run 永远无法续跑 |
+| 陈旧锁 | 无新鲜心跳且锁超过 15min 可接管；**有新鲜心跳一律不接管** | 进程强杀留下的锁必须能自愈，但不能抢活进程的锁 |
+| 跨平台 | **不用 `os.kill(pid, 0)` 判存活**：Windows 上它走 `TerminateProcess`，检查可能直接把进程杀掉；`pid` 只写进文件供人工排查 | 存活一律看心跳时间戳 |
+| 入口 | CLI `resume` 把 `ResumeLockError` 转可读提示（退出码 3）；API `/runs/{id}/resume` 转 409（与「run 已在运行中」同语义） | 不让用户对着 traceback 猜，也不把冲突伪装成 500 |
+
+**验证**：新增 `tests/test_run_lifecycle.py` 24 例——心跳读写/损坏/线程清理、无心跳回退
+24h、新鲜心跳压过旧 `updated_at`、过期心跳判孤儿、五种非 running 状态与坏 `run.json`
+不收敛、dry-run、只改孤儿并写 ledger 事件、坏 schema 上报不抛、锁互斥/幂等释放/
+陈旧接管/心跳保护/不删别人的锁/异常上下文释放、`Crew.resume()` 在 `_start` 抛异常时
+解锁，以及**一次真 CLI 启动**的端到端（造一个孤儿 + 一个带新鲜心跳的活 run，验证只
+收敛孤儿、新 run 的心跳文件被正常删除）。相关既有用例 191 例全过；全量
+**2434 passed / 1 skipped / 0 failed**；三样例 9/9、5/5、7/7。契约
+`event-types.md`（`run_reconciled`）、`state-enums.md`（新增收敛路径）、
+`openapi.yaml`（resume 409 语义）同步。
+
+**实测彩蛋**：第一次冒烟时，启动 reconcile 真的把仓库里两个 10 月遗留的
+`running` run 收敛成了 `interrupted`——不是模拟数据，是这条路径生效的直接证据。
+
+**红线遵守**：`schema_version=1` 与 10 态 TaskStatus 未动、配置合并顺序未动（没有加
+新配置项）、密钥不落盘（心跳/锁文件只有 pid / 时间 / owner）、`Ledger.emit` 仍只在
+主线程调用、测试只增不减。reconcile 固定启用且无 LLM 调用，不改变成本结构，因此
+没有加「默认关闭」的开关。
+
+**刻意未做**：分布式锁（项目是单进程 asyncio，不引入外部协调服务）· 按 pid 精确判活
+（跨平台代价与风险不值）· 收敛时自动 `resume`（状态修正与重跑是两件事，不该替用户
+决定）· 心跳写进 `run.json`（会与状态落盘竞争）。
+
 **刻意未做（下一轮再定）**：把 `/providers` 等端点补进 `openapi.yaml` 后再封装 ·
 异步客户端 · 发布到 PyPI。
 
@@ -655,7 +695,7 @@ ledger 里留一条 `shutdown_timeout`。
 | **HANDOFF**（初版交接） | 2026-10-06 | SDD 会话完成 34 个任务实现/评审，并用真实 DeepSeek 跑 6 次端到端验收，每次暴露一个 mock 无法暴露的缺陷并修掉 | 已被 11-01 交接取代，结论并入本文 |
 | **V7-HANDOFF** | 2026-10-10 | V7 增强落地：P0 数据脱敏（`redact.py`）、配额、循环检测等，21 项脱敏用例全绿 | 能力已并入 §2，P2.5 脱敏已实施 |
 | **HANDOFF-2026-11-01** | 2026-11-01 | 自包含交接：架构、模块地图、命令、退出码、环境坑、13 项待办；声明"护城河是测试" | 本文继承其结论；待办见 §7 |
-| **HANDOVER-BASELINE** | 2026-11-01 | 实测 1946 passed / 1 skipped；两个风险：Git 提交清单不完整（真实 168 文件而非文档所说 65）、真实模型 Key 失效；查明 segfault 实为 `PYTHONPATH` 污染而非解释器不稳 | Key 已恢复（`doctor` 6/6 通过）；提交随 R1–R16 推进（现领先远端 172） |
+| **HANDOVER-BASELINE** | 2026-11-01 | 实测 1946 passed / 1 skipped；两个风险：Git 提交清单不完整（真实 168 文件而非文档所说 65）、真实模型 Key 失效；查明 segfault 实为 `PYTHONPATH` 污染而非解释器不稳 | Key 已恢复（`doctor` 6/6 通过）；提交随 R1–R17 推进（现领先远端 173） |
 | **V4 质量审查报告** | 2026-10-10 | 引擎侧修 6 项：密钥环境变量名硬编码、模型发现错误结果被缓存 60s 无法重试等 | 全部闭环 |
 | **V4 深度审查报告** | 2026-10-10 | 追加 15 项（D-01…D-15）：`api_key_env` 形状校验、空 model id 收录、重名 provider、CSP、弹窗状态清理等，逐项独立 commit | 全部闭环 |
 | **V4-FE 只读问题清单** | 2026-10-10 | 前端边界问题（深色模式 DAG 文字不可见、内联边框硬编码、主题缓存闪烁等），只读审查不改码 | 已由后续 F4–F7 提交修复 |
@@ -694,7 +734,8 @@ ledger 里留一条 `shutdown_timeout`。
 | R13 | MCP 服务器接进生产工具链（见 §3.18） | 2346 |
 | R14 | Webhook 多接收端 + 只推失败（见 §3.19） | 2358 |
 | R15 | Webhook 持久化重放队列：入队前落盘、启动补投（见 §3.20） | 2376 |
-| R16 | 官方 Python SDK + 示例：零依赖 HTTP/SSE 客户端（见 §3.21） | **2410（当前）** |
+| R16 | 官方 Python SDK + 示例：零依赖 HTTP/SSE 客户端（见 §3.21） | 2410 |
+| R17 | run 生命周期加固：心跳 / 僵尸收敛 / resume 锁（见 §3.22） | **2434（当前）** |
 
 ---
 
@@ -746,8 +787,8 @@ ledger 里留一条 `shutdown_timeout`。
 
 1. ✅ **R3 已闭环**：工具参数 JSON Schema 强校验（见 §3.8）
 2. MCP SSE/HTTP transport 资源关闭（消除 unclosed warning；`mcp_servers` 接入生产 run 已由 R13 闭环）
-3. CI 首次实跑（remote 已配，本地领先 172 提交；需验证 3.10–3.13 矩阵）
-4. 功能测试报告汇总（2410 用例按模块/场景出覆盖矩阵）
+3. CI 首次实跑（remote 已配，本地领先 173 提交；需验证 3.10–3.13 矩阵）
+4. 功能测试报告汇总（2434 用例按模块/场景出覆盖矩阵）
 5. CI 前清理 `ruff check .` 的 **14 项既存告警**（I001×9 / F401 / UP037 / UP028 / B905×2，分布在 `agentcrew/agents/team.py`、`crew/crew.py`、`runtime/approvals.py`、`runtime/ledger.py`、`task/planner.py`、`task/task_board.py` 与 6 个旧测试文件）。本轮新增的 `sdk/` / `tests/test_sdk.py` / `tests/conftest.py` 单独跑 ruff 全绿；没顺手全仓修是因为 B905 的 `zip(strict=)` 与 UP028 会改变行为，不该混进 SDK 提交 |
 
 **大项（建议单独立项）**
@@ -775,12 +816,12 @@ ledger 里留一条 `shutdown_timeout`。
 
 **六层审计遗留建议（本轮未做，按 ROI 排序）**
 
-类型化调度事件协议 → `save_task_delta` 增量 checkpoint 接线（基础设施已实现未接线）→ ~~工具入参 schema 校验~~（R3 已闭环）→ Agent 级熔断（观测先行、开关默认关）→ resume 锁文件（防双进程同跑一板）→ 过期 run 自动 reconcile（本轮已做「僵尸 `RUNNING` 可删」兜底，仍缺启动时自动标记与心跳字段）。
+类型化调度事件协议 → `save_task_delta` 增量 checkpoint 接线（基础设施已实现未接线）→ ~~工具入参 schema 校验~~（R3 已闭环）→ Agent 级熔断（观测先行、开关默认关）→ ~~resume 锁文件~~ / ~~过期 run 自动 reconcile~~（均由 R17 闭环，见 §3.22）。
 
 **本轮已闭环**：配额 `reserve` 异常泄漏与 `complete_structured` 无配额（见 §3.6）。
 
 **仍未纳入修复**（按 ROI，需各自单独设计）：
-`stream_call` 仍是「只记账不设防」（async generator + failover 循环，预扣/归还配对复杂）；`RunPythonTool` 无文件 / 导入隔离（本轮只补了 timeout 校验）；`resume` 缺状态白名单与进程锁（多进程共写同一 run 目录）；过期 run 启动时自动 reconcile 仍缺（只有「僵尸 `RUNNING` 可删」兜底）。
+`stream_call` 仍是「只记账不设防」（async generator + failover 循环，预扣/归还配对复杂）；`RunPythonTool` 无文件 / 导入隔离（本轮只补了 timeout 校验）；~~`resume` 缺状态白名单与进程锁~~（进程锁已由 R17 闭环；状态白名单仍缺）；~~过期 run 启动时自动 reconcile 仍缺~~（R17 已闭环，见 §3.22）。
 
 **11-06 已闭环**（见 §3.7）：`_max_review_attempts` 死字段接线、状态跃迁刷新停滞计时、内置工具逐段符号链接检查、`run_python` timeout、ledger 读端点越界归 400、`POST /runs` options 白名单、CLI 数值开关与坏 YAML、前端表单取值与三态反馈统一。
 

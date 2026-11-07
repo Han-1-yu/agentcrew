@@ -295,6 +295,8 @@ HANDOVER §4 与 `python main.py config export`。
     run.json                   # 记录 + config_snapshot（权威状态）
     tasks.json                 # 任务表与状态
     ledger.jsonl               # 全事件审计（逐事件追加）
+    heartbeat.json             # R17：活 run 每 30s 刷新；正常收尾即删
+    resume.lock                # R17：resume 期间存在，正常/异常收尾即删
     artifacts/  context/  review/  diagnostics/
       stall-report.md          # 停滞诊断
     MANIFEST.json              # 产物清单 + sha256
@@ -333,6 +335,13 @@ python main.py clean --keep 20 --protect-running
 - 删除范围被限制在 `--output_dir` 之下，越界会整次拒绝。
 - `python main.py delete <run_id>` 删单个 run，不可恢复；`RUNNING` 状态会被拒绝。
 - 别用 `rm -rf output/<run_id>/` 手工删：`clean` / `delete_run` 带边界校验与状态保护。
+
+**R17 起，僵尸 `RUNNING` 不用等清理**：CLI `run` / `serve` 启动时会自动把
+「`running` 且心跳过期 15min」的孤儿改为 `interrupted`，记 `run_reconciled` 并在
+stderr 提示可 `resume`。升级前的老 run 没有 `heartbeat.json`，仍走 `updated_at` + 24h
+的旧判据（不会因一次升级被批量改状态）；`awaiting_approval` 挂起态不参与收敛。
+`clean --protect-running` 的删除守卫与这套收敛是两回事：前者决定「能不能删」，
+后者只修正状态、从不删目录。
 
 ### 4.4 容量与扩容
 
@@ -493,7 +502,8 @@ python main.py status <最近一次 run_id>
 | 任务反复返工到 FAILED | 对比每轮 `gate_result.issues`：在变 = 有进展（调 `max_reworks`），不变 = 提示词 / 评审标准问题 |
 | `awaiting_approval` 一直挂起 | `python main.py approvals <run_id>` 列单 → `approve` 写裁决 → `resume`（可跨进程） |
 | resume 报「状态非法」 | `run.json` 的 status 是权威；checkpoint 与 ledger 不一致时先 `doctor` |
-| 僵尸 `RUNNING` | `clean --protect-running` 会跳过活 run、清理僵尸；必要时 `cancel <run_id>` |
+| 僵尸 `RUNNING` | R17 起 CLI `run` / `serve` 启动会自动收敛为 `interrupted`（看 ledger 的 `run_reconciled`）；`clean --protect-running` 仍可清僵尸目录，必要时 `cancel <run_id>` |
+| `resume` 提示「另一个进程续跑」/ API 409 | 该 run 的 `resume.lock` 被占，或残留自被强杀的进程 | 先确认 `heartbeat.json` 不新鲜且确实没有活进程；等 15 分钟让锁自动过期，或人工删除 `resume.lock` 后重试。**别在活 run 上删锁**——那会让两个进程共写同一 checkpoint |
 | 退出码 4 / 卡住 | `diagnostics/stall-report.md`；任务级超时与停滞检测默认 300s |
 | Provider 报错 / 变慢 | `doctor --json` 的 `provider:*` 三级健康；故障转移与冷却矩阵（402 / 429 / 5xx）在模型层 |
 | Webhook 一条都没收到 | 先看 `webhook_enabled` 的 `targets`；R14 修过「只配 `webhooks` 不生效」的入口 bug |
