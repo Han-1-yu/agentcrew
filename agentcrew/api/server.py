@@ -216,6 +216,36 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+#: API 路由清单 ``(方法, 路径模板)``——对外契约的**唯一事实源**。
+#: 新增 / 删除路由必须同步改这里与 ``artifacts/contracts/openapi.yaml``；
+#: ``tests/test_api_contract.py`` 做双向比对，并在真服务上逐条探测每个条目
+#: 真的接得起来（未匹配路由统一回 ``404 {"error": "Not Found"}``，探测断言
+#: 以「响应不是哨兵」判定路由存在，与各 handler 的具体错误形状解耦）。
+API_ROUTES: tuple[tuple[str, str], ...] = (
+    ("GET", "/"),
+    ("GET", "/health"),
+    ("GET", "/runs"),
+    ("POST", "/runs"),
+    ("DELETE", "/runs/{run_id}"),
+    ("GET", "/runs/{run_id}/status"),
+    ("GET", "/runs/{run_id}/approvals"),
+    ("POST", "/runs/{run_id}/approvals"),
+    ("GET", "/runs/{run_id}/ledger"),
+    ("GET", "/runs/{run_id}/stats"),
+    ("POST", "/runs/{run_id}/cancel"),
+    ("POST", "/runs/{run_id}/resume"),
+    ("GET", "/runs/{run_id}/model"),
+    ("PUT", "/runs/{run_id}/model"),
+    ("GET", "/runs/{run_id}/events"),
+    ("POST", "/runs/{run_id}/events"),
+    ("POST", "/runs/{run_id}/agents"),
+    ("POST", "/runs/{run_id}/tasks/{task_id}/agent"),
+    ("GET", "/providers"),
+    ("GET", "/providers/{name}/models"),
+    ("POST", "/providers/{name}/test"),
+)
+
+
 class ApiServer:
     """轻量 async HTTP 服务器 + SSE 事件流。"""
 

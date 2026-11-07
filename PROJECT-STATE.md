@@ -8,17 +8,17 @@
 
 ## 0. 一句话现状
 
-**引擎与管线健康，无 P0/P1 阻断项。** 全量测试 **2466 passed / 1 skipped / 0 failed**（2467 用例收集，2026-11-07 R20 后分 5 批实测），三个预设样例 100% 通过，真实模型通道可用（`doctor` 6/6 通过）；Studio 架构检查 / e2e 28/28 / selftest 16/16 全绿。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道；R19 给主管审核开了独立、不阻塞的 `suggestions` 建议通道；R20 补上单步/断点调试——每个任务派发前可挂起裁决，第二档功能项全部闭环。
+**引擎与管线健康，无 P0/P1 阻断项。** 全量测试 **2490 passed / 1 skipped / 0 failed**（2491 用例收集，2026-11-07 R21 后分 5 批实测），三个预设样例 100% 通过，真实模型通道可用（`doctor` 6/6 通过）；Studio 架构检查 / e2e 28/28 / selftest 16/16 全绿。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道；R19 给主管审核开了独立、不阻塞的 `suggestions` 建议通道；R20 补上单步/断点调试——每个任务派发前可挂起裁决，第二档功能项全部闭环；R21 给 API 契约装上守卫，openapi.yaml 与代码路由双向锁死、不再漏端点。
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | 2467 collected / 2466 passed / 1 skipped / 0 failed（3.12.10 + pytest 9.1.1，`--assert=plain`；R4 +38、R5 +16、R6 +21、R7 +14、R8 +9、R9 +6、R10 +13、R11 +17、R12 +21、R13 +12、R14 +12、R15 +18、R16 +34、R17 +24、R18 +10、R19 +5、R20 +17，本机断言重写 segfault 后按 §6 分 5 批累计） |
+| 全量测试 | 2491 collected / 2490 passed / 1 skipped / 0 failed（3.12.10 + pytest 9.1.1，`--assert=plain`；R4 +38、R5 +16、R6 +21、R7 +14、R8 +9、R9 +6、R10 +13、R11 +17、R12 +21、R13 +12、R14 +12、R15 +18、R16 +34、R17 +24、R18 +10、R19 +5、R20 +17、R21 +24，本机断言重写 segfault 后按 §6 分 5 批累计） |
 | 静态检查 | `ruff check .` **全绿**（全仓，14 项历史告警清零）；`mypy agentcrew/` **114 文件零错误**（2.4.1）。CI 等价检查链在本机 3.12 首次跑通 |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
 | Studio | `npm run check` **63** 模块 / 37 分片通过、selftest 16/16、e2e 28/28、probe 24/24 |
-| Git | `master` 领先 `origin/master` 176 个提交（均为本地提交、未推送）；**工作区干净，无未提交改动** |
+| Git | `master` 领先 `origin/master` 177 个提交（均为本地提交、未推送）；**工作区干净，无未提交改动** |
 | 角色 | 8 个内置岗位角色 + 执行体（Agent Profile）可多绑 |
 
 ```bash
@@ -615,7 +615,7 @@ ledger 里留一条 `shutdown_timeout`。
 |---|---|---|
 | 落点 | `sdk/` 顶层独立包 `agentcrew_sdk`，自带 `pyproject.toml` 可 `pip install -e ./sdk`；**不 import `agentcrew`** | 架构守卫只扫 `agentcrew/` 包；SDK 是消费方，不该把服务端依赖与分层约束传染给调用方 |
 | 依赖 | **零新增**：标准库 `urllib` / `json` / `time` | 不把 openai / pydantic / rich 拖进调用方环境；Python 3.10+ |
-| 契约 | 按 `openapi.yaml` 封装 17 个方法 + `request()` 逃生口（给未纳入契约的 `/providers` 等端点） | 服务端与 SDK 可各自升级；不为凑完整度去猜未稳定的端点 |
+| 契约 | 按 `openapi.yaml` 封装 17 个方法 + `request()` 逃生口 | R21 起契约有守卫（§3.26）：`/providers` 族等端点已补入，SDK 扩封时契约先行 |
 | 错误 | `TransportError` / `APIError` 两族，401/404/409/429 各有子类，429 带 `Retry-After`；2xx 非 JSON 记 `ResponseError` | 调用方不必解析 `{"error": ...}` 原始体 |
 | SSE | `iter_events` 惰性生成器，跳过 `: ping`，`finally` 关响应 | 长连接不缓存整条流、不泄漏句柄 |
 | 便利 | `iter_ledger` 按 offset/limit 自动翻页；`wait_for_run` 轮询到终态（`awaiting_approval` 明确不算终态） | 运维脚本最常见的两件事 |
@@ -723,7 +723,7 @@ duck-type 对象，字段/getter/setter 放宽为 `Any | None`）· `registry` �
 3.12.10）；`zip(strict=)` 要求 3.10+，与 `pyproject.toml` 的下界一致。CI 的
 `pytest -q` 是单进程全量，本机 Windows 仍按 §6 分 5 批规避断言重写段错误。
 
-**刻意未做（下一轮再定）**：把 `/providers` 等端点补进 `openapi.yaml` 后再封装 ·
+**刻意未做（下一轮再定）**：SDK 扩封新端点（契约已由 R21 守卫锁死）·
 异步客户端 · 发布到 PyPI。
 
 ### 3.24 R19：主管 `suggestions` 通道（2026-11-07）
@@ -782,6 +782,27 @@ approve 端点的 step 卡点裁决说明。
 挂起-放行-解除断点三段式与 abort 取消）；审批 / 面板 / 调度 / Crew / 契约
 九个邻近套件 332 例全过；`ruff` 与 `mypy agentcrew/`（115 文件）全绿。
 
+### 3.26 R21：API 契约守卫（2026-11-07）
+
+R16 封装 SDK 时发现 `openapi.yaml` 缺 `/providers` 族与执行体切换端点，当时
+以「刻意未做」记录在案——缺口静默存在了四轮，因为契约是手写的，没有机制强制
+它与代码同步。本轮两步收口：
+
+- **`server.API_ROUTES`**：路由清单常量（21 条 `(方法, 路径模板)`），对外契约
+  的唯一事实源。
+- **`tests/test_api_contract.py`**：清单 ↔ openapi `paths` 双向集合比对 +
+  `ApiServer(port=0)` 上对每条路由发真实请求（断言响应不是未匹配哨兵
+  `404 {"error": "Not Found"}`）。探测用不存在的资源名 + 空 body，零副作用；
+  SSE 端点读响应头即断开，经 bus 连发事件让处理器撞 RST 退出（规避 3.12
+  `wait_closed()` 等在途连接把 teardown 拖到 60s 的坑，实测 0.2s）。
+
+补进契约的 5 条端点：`GET /providers`、`GET /providers/{name}/models`、
+`POST /providers/{name}/test`、`POST /runs/{id}/agents`（角色执行体热切换）、
+`POST /runs/{id}/tasks/{task_id}/agent`（任务级覆盖）。
+
+**验证**：新增 **24 例**全过（清单比对、哨兵钉死、21 条路由逐条探测、405
+抽查）；API 四套件 96 例全过；`ruff` / `mypy agentcrew/` 全绿。全量见 §6 表末。
+
 ---
 
 ## 4. 历史报告汇总（已并入本文，原文归档）
@@ -793,7 +814,7 @@ approve 端点的 step 卡点裁决说明。
 | **HANDOFF**（初版交接） | 2026-10-06 | SDD 会话完成 34 个任务实现/评审，并用真实 DeepSeek 跑 6 次端到端验收，每次暴露一个 mock 无法暴露的缺陷并修掉 | 已被 11-01 交接取代，结论并入本文 |
 | **V7-HANDOFF** | 2026-10-10 | V7 增强落地：P0 数据脱敏（`redact.py`）、配额、循环检测等，21 项脱敏用例全绿 | 能力已并入 §2，P2.5 脱敏已实施 |
 | **HANDOFF-2026-11-01** | 2026-11-01 | 自包含交接：架构、模块地图、命令、退出码、环境坑、13 项待办；声明"护城河是测试" | 本文继承其结论；待办见 §7 |
-| **HANDOVER-BASELINE** | 2026-11-01 | 实测 1946 passed / 1 skipped；两个风险：Git 提交清单不完整（真实 168 文件而非文档所说 65）、真实模型 Key 失效；查明 segfault 实为 `PYTHONPATH` 污染而非解释器不稳 | Key 已恢复（`doctor` 6/6 通过）；提交随 R1–R20 推进（现领先远端 176） |
+| **HANDOVER-BASELINE** | 2026-11-01 | 实测 1946 passed / 1 skipped；两个风险：Git 提交清单不完整（真实 168 文件而非文档所说 65）、真实模型 Key 失效；查明 segfault 实为 `PYTHONPATH` 污染而非解释器不稳 | Key 已恢复（`doctor` 6/6 通过）；提交随 R1–R21 推进（现领先远端 177） |
 | **V4 质量审查报告** | 2026-10-10 | 引擎侧修 6 项：密钥环境变量名硬编码、模型发现错误结果被缓存 60s 无法重试等 | 全部闭环 |
 | **V4 深度审查报告** | 2026-10-10 | 追加 15 项（D-01…D-15）：`api_key_env` 形状校验、空 model id 收录、重名 provider、CSP、弹窗状态清理等，逐项独立 commit | 全部闭环 |
 | **V4-FE 只读问题清单** | 2026-10-10 | 前端边界问题（深色模式 DAG 文字不可见、内联边框硬编码、主题缓存闪烁等），只读审查不改码 | 已由后续 F4–F7 提交修复 |
@@ -836,7 +857,8 @@ approve 端点的 step 卡点裁决说明。
 | R17 | run 生命周期加固：心跳 / 僵尸收敛 / resume 锁（见 §3.22） | 2434 |
 | R18 | CI 就绪 + 限流窗口配置通道（见 §3.23） | 2444 |
 | R19 | 主管 `suggestions` 通道（见 §3.24） | 2449 |
-| R20 | 单步/断点调试（见 §3.25） | **2466（当前）** |
+| R20 | 单步/断点调试（见 §3.25） | 2466 |
+| R21 | API 契约守卫（见 §3.26） | **2490（当前）** |
 
 ---
 
@@ -888,7 +910,7 @@ approve 端点的 step 卡点裁决说明。
 
 1. ✅ **R3 已闭环**：工具参数 JSON Schema 强校验（见 §3.8）
 2. MCP SSE/HTTP transport 资源关闭（消除 unclosed warning；`mcp_servers` 接入生产 run 已由 R13 闭环）
-3. CI 首次实跑：本机 3.12 已跑通等价检查链（ruff / mypy / pytest 全绿）；**仍缺 GitHub Actions 上 3.10–3.13 四版本矩阵**（remote 已配，本地领先 176 提交）
+3. CI 首次实跑：本机 3.12 已跑通等价检查链（ruff / mypy / pytest 全绿）；**仍缺 GitHub Actions 上 3.10–3.13 四版本矩阵**（remote 已配，本地领先 177 提交）
 4. 功能测试报告汇总（2444 用例按模块/场景出覆盖矩阵）
 5. ~~CI 前清理 `ruff check .` 的 14 项既存告警~~：✅ **R18 已闭环**（见 §3.23）；装 CI 同版本 mypy 后一并清掉 9 项类型错误，现在 `ruff check .` 全绿、`mypy agentcrew/` 114 文件零错误
 6. ~~`api_rate_limit_window` 配置通道~~：✅ **R18 已闭环**（env / YAML / `config export` / `config import` 四通道 + `ge=1` 校验，见 §3.23） |

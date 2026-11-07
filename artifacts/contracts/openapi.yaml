@@ -586,6 +586,203 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /runs/{run_id}/agents:
+    post:
+      tags: [run-actions]
+      summary: R11 热切换某个角色的执行体（运行中的 run）
+      description: |
+        两种用法（互斥）：
+        - `{"role": "...", "agent": "backend_fast", "reason": "..."}` —— 把该角色切到指定执行体；
+        - `{"role": "...", "reset": true}` —— 撤销该角色的运行中覆盖（回到配置绑定）。
+        `reset` 必须是布尔值（字符串 `"false"` 会按 true 处理，服务端显式拒绝）。
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role: { type: string, description: 角色 key，如 backend_dev }
+                agent: { type: string, description: 目标执行体 id；与 reset 互斥 }
+                reset: { type: boolean, description: 撤销运行中覆盖；与 agent 互斥 }
+                reason: { type: string, description: 切换原因（进 ledger 留痕） }
+      responses:
+        '200':
+          description: 切换生效（或已撤销）
+        '400':
+          description: body 不是 JSON / 缺 role / agent 与 reset 都缺 / reset 非布尔
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: run 不存在或不在运行中
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /runs/{run_id}/tasks/{task_id}/agent:
+    post:
+      tags: [run-actions]
+      summary: R11 只给这一个任务换执行体（任务级覆盖）
+      description: |
+        body: `{"agent": "backend_fast"}` 或 `{"reset": true}`；`role` 可省略——
+        能从 run 的任务状态里查到就自动补。与角色级切换互不干扰：任务级覆盖在
+        派发时优先（agent_for_task）。
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                agent: { type: string, description: 目标执行体 id；与 reset 互斥 }
+                reset: { type: boolean, description: 撤销该任务的覆盖 }
+                role: { type: string, description: 可省，自动从任务状态补全 }
+      responses:
+        '200':
+          description: 覆盖已写入（或已撤销）
+        '400':
+          description: body 不是 JSON / agent 与 reset 都缺 / reset 非布尔
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: run 或任务不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: run 不在运行中，无法覆盖
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /providers:
+    get:
+      tags: [providers]
+      summary: A5 Provider 目录（内置 + 自定义合并）
+      description: >
+        返回完整 provider 目录：名称、实现、base_url、密钥环境变量与是否已配置、
+        能力声明、建议模型、健康状态，以及 V5/V6 增补的分类/家族/价格/上下文窗口/
+        并发与 RPM 上限等元数据（仅增字段，向后兼容）。
+      responses:
+        '200':
+          description: 目录条目数组
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [providers]
+                properties:
+                  providers:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, kind, implementation]
+                      properties:
+                        name: { type: string }
+                        kind: { type: string, enum: [builtin, custom] }
+                        implementation: { type: string }
+                        base_url: { type: string }
+                        api_key_env: { type: string }
+                        key_configured: { type: boolean }
+                        capabilities: { type: object }
+                        suggested_models:
+                          type: array
+                          items: { type: string }
+                        health: { type: object }
+                        category: { type: string, nullable: true }
+                        family: { type: string, nullable: true }
+                        input_price: { type: number, nullable: true }
+                        output_price: { type: number, nullable: true }
+                        context_window: { type: integer, nullable: true }
+                        max_output_tokens: { type: integer, nullable: true }
+                        max_concurrency: { type: integer, nullable: true }
+                        max_rpm: { type: integer, nullable: true }
+        '503':
+          description: server 未配置 settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /providers/{name}/models:
+    get:
+      tags: [providers]
+      summary: 实时拉取某 provider 的模型列表（60s 缓存）
+      parameters:
+        - in: path
+          name: name
+          required: true
+          schema: { type: string }
+          description: provider 名称（内置或自定义）
+      responses:
+        '200':
+          description: 该 provider 当前可用的模型列表
+          content:
+            application/json:
+              schema:
+                type: object
+        '404':
+          description: 未知 provider
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: server 未配置 settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /providers/{name}/test:
+    post:
+      tags: [providers]
+      summary: V5 P2 按需测速（发 max_tokens=1 的 ping）
+      description: >
+        `mode=completion`（默认）走普通补全探测，返回 `{ok, latency_ms, error}`；
+        `?mode=stream` 走 SSE 流式探测，返回额外 `stream_ok` 字段。
+      parameters:
+        - in: path
+          name: name
+          required: true
+          schema: { type: string }
+          description: provider 名称
+        - in: query
+          name: mode
+          required: false
+          schema: { type: string, enum: [completion, stream], default: completion }
+      responses:
+        '200':
+          description: 探测结果（ok 可为 false，error 带原因）
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok: { type: boolean }
+                  latency_ms: { type: number, nullable: true }
+                  error: { type: string, nullable: true }
+                  stream_ok: { type: boolean, nullable: true }
+        '404':
+          description: 未知 provider
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   ##########################################################################
   # 兜底：未匹配路径 → 404；未实现方法 → 405
   ##########################################################################

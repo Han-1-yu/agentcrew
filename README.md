@@ -2619,3 +2619,26 @@ HTTP API 的 `POST /runs/{id}/approve` 同样接受 `step` / `run` / `abort`
 [`state-enums.md`](artifacts/contracts/state-enums.md)。
 
 
+## R21 API 契约守卫：openapi.yaml 不再漏端点
+
+R16 封装 SDK 时发现 `openapi.yaml` 一直缺 ``/providers`` 族与执行体切换端点——
+缺口静默存在了四轮，因为契约是手写的，没有东西强制它与代码同步。R21 两步收口：
+
+1. **`server.API_ROUTES`**：API 路由清单常量（21 条 `(方法, 路径模板)`），对外
+   契约的唯一事实源；新增/删除路由必须同步改它与 openapi.yaml。
+2. **`tests/test_api_contract.py`** 守卫：
+   - `API_ROUTES` ↔ `openapi.yaml` 的 `paths` **双向集合比对**——契约漏写、
+     多写当场炸；
+   - 在 `ApiServer(port=0)` 上对每条路由发**真实请求**，断言响应不是未匹配哨兵
+     （`404 {"error": "Not Found"}`）——清单声称存在的路由必须真的接得起来。
+     探测用不存在的资源名 + 空 body，只触发 400/404/503，零副作用；SSE 端点
+     读响应头即断开，再经 bus 连发几条事件让处理器撞上 RST 退出（否则 3.12 的
+     `wait_closed()` 会等在途连接拖慢 teardown）。
+
+本轮补进契约的 5 条端点：`GET /providers`、`GET /providers/{name}/models`、
+`POST /providers/{name}/test`、`POST /runs/{id}/agents`（角色执行体热切换）、
+`POST /runs/{id}/tasks/{task_id}/agent`（任务级覆盖）。SDK 此前按契约封装的
+17 个方法不受影响；后续要封装新端点时契约先行的路径已经打通。
+
+
+
