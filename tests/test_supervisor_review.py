@@ -560,3 +560,104 @@ def test_status_shows_supervisor_suggestions(tmp_path):
     assert "主管建议  2 条" in result.stdout
     assert "命名可以再统一" in result.stdout
     assert "建议补类型注解" in result.stdout
+
+
+# ── R33：多级主管链 ────────────────────────────────────────────────────
+
+class _SequencedReviewer:
+    """按调用顺序返回预设裁决，并记录每一级用的是谁。"""
+
+    def __init__(self, verdicts: list[str]) -> None:
+        self.verdicts = verdicts
+        self.calls: list[list[str]] = []
+
+    async def review(self, task, *, round_no, reviewer_keys=None, layer="llm"):
+        keys = list(reviewer_keys or [])
+        self.calls.append(keys)
+        verdict = self.verdicts[len(self.calls) - 1]
+        return ReviewRecord(
+            task_id=task.id, round=round_no, layer=layer, verdict=verdict,
+            score=0.8 if verdict == "approve" else 0.2,
+            issues=[] if verdict == "approve" else ["上级不认可"],
+            reviewer="+".join(keys) or "none", created_at=datetime.now(),
+        )
+
+
+def _chained(env, reviewer, chain: list[str]) -> SupervisorReviewer:
+    return SupervisorReviewer(reviewer, env["catalog"], env["ledger"],
+                              escalation=chain)
+
+
+async def test_chain_reviews_each_level_and_returns_topmost(env):
+    fake = _SequencedReviewer(["approve", "approve", "approve"])
+    record = await _chained(
+        env, fake, ["product_manager", "qa_engineer"]).review(
+        env["task"], round_no=1)
+    assert [call for call in fake.calls] == [
+        ["project_manager"], ["product_manager"], ["qa_engineer"]]
+    assert record is not None and record.verdict == "approve"
+    assert record.reviewer == "qa_engineer"        # 最上层的那条记录
+    levels = list(env["ledger"].events("supervisor_level"))
+    assert [event.data["level"] for event in levels] == [1, 2, 3]
+    assert all(event.data["levels"] == 3 for event in levels)
+
+
+async def test_chain_short_circuits_on_first_rejection(env):
+    fake = _SequencedReviewer(["approve", "reject", "approve"])
+    record = await _chained(env, fake, ["product_manager", "qa_engineer"]).review(
+        env["task"], round_no=1)
+    assert record is not None and record.verdict == "reject"
+    assert len(fake.calls) == 2                    # 第三级不再被调用
+    assert record.issues == ["上级不认可"]
+    levels = list(env["ledger"].events("supervisor_level"))
+    assert [event.data["verdict"] for event in levels] == ["approve", "reject"]
+
+
+async def test_chain_skips_duplicate_and_self_levels(env):
+    fake = _SequencedReviewer(["approve"])
+    # 链里放了「与直接主管同角色」和「执行者自己」——两级都该跳过
+    record = await _chained(
+        env, fake, ["project_manager", "backend_dev"]).review(
+        env["task"], round_no=1)
+    assert len(fake.calls) == 1
+    assert record is not None and record.reviewer == "project_manager"
+    reasons = [event.data["reason"]
+               for event in env["ledger"].events("supervisor_review_skipped")]
+    assert "duplicate_level" in reasons and "self_delegated" in reasons
+
+
+async def test_chain_skips_unknown_role_but_keeps_lower_levels(env):
+    fake = _SequencedReviewer(["approve"])
+    record = await _chained(env, fake, ["ghost_role"]).review(
+        env["task"], round_no=1)
+    assert record is not None and record.verdict == "approve"
+    reasons = [event.data["reason"]
+               for event in env["ledger"].events("supervisor_review_skipped")]
+    assert "unknown_supervisor" in reasons
+
+
+async def test_empty_chain_keeps_single_layer(env):
+    """默认（不配链）与 R7/R9 逐字一致：只发一次调用。"""
+    fake = _SequencedReviewer(["approve"])
+    record = await _supervisor(env, fake).review(env["task"], round_no=1)
+    assert len(fake.calls) == 1
+    assert record is not None and record.reviewer == "project_manager"
+    levels = list(env["ledger"].events("supervisor_level"))
+    assert len(levels) == 1 and levels[0].data["levels"] == 1
+
+
+def test_supervisor_chain_config_channels(monkeypatch):
+    monkeypatch.setenv("AGENTCREW_SUPERVISOR_CHAIN",
+                       " product_manager , qa_engineer ")
+    assert Settings.load().supervisor_chain == ["product_manager", "qa_engineer"]
+
+
+def test_api_validates_supervisor_chain_type():
+    from agentcrew.api.server import _validate_run_options
+
+    assert _validate_run_options(
+        {"supervisor_chain": ["product_manager"]}) is None
+    assert "必须是角色 key 数组" in _validate_run_options(
+        {"supervisor_chain": "product_manager"})
+    assert "每一项都必须是非空字符串" in _validate_run_options(
+        {"supervisor_chain": [""]})

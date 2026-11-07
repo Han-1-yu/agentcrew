@@ -111,6 +111,7 @@ _YAML_SCALAR_KEYS = (
     "delegation_mode", "max_delegation_depth", "max_dynamic_tasks",
     "peer_consult_capture_enabled", "supervisor_review_enabled",
     "max_subtask_corrections", "supervisor_scope", "supervisor_role",
+    "supervisor_chain",
     "max_supervisor_reassignments",
     "webhook_url", "webhook_secret", "webhook_events", "webhook_timeout_seconds",
     "webhook_max_retries", "webhooks",
@@ -399,6 +400,12 @@ def _env_values() -> dict[str, object]:
     if raw_webhook_events:
         values["webhook_events"] = [
             item.strip() for item in raw_webhook_events.split(",") if item.strip()
+        ]
+    # R33：主管复核链同样是列表，环境变量里只能逗号分隔。
+    raw_supervisor_chain = os.environ.get("AGENTCREW_SUPERVISOR_CHAIN", "").strip()
+    if raw_supervisor_chain:
+        values["supervisor_chain"] = [
+            item.strip() for item in raw_supervisor_chain.split(",") if item.strip()
         ]
     role_bindings: dict[str, str] = {}
     for env_name, raw in os.environ.items():
@@ -848,6 +855,14 @@ class Settings(BaseModel):
 
     必须真实存在于角色目录；不存在时该任务跳过并记
     ``supervisor_review_skipped(unknown_supervisor)``，不静默改用别人。
+    """
+    supervisor_chain: list[str] = Field(default_factory=list)
+    """R33：直接主管之上的**逐级复核链**（角色 key 列表，空 = 单层，默认）。
+
+    非空时按「直接主管 → chain[0] → chain[1] …」顺序逐级复核：任一级驳回立即
+    短路（返工理由取该级意见），全部放行才算通过。与直接主管同角色、不在角色
+    目录、已在 G2 评审人里的层级会被跳过并留痕（``supervisor_review_skipped``）。
+    环境变量 ``AGENTCREW_SUPERVISOR_CHAIN``（逗号分隔）。
     """
     role_fallback: dict[str, list[str]] = Field(default_factory=dict)
     """R10：主管驳回后可以换给谁做（role → 备选角色列表，按声明顺序取第一个可用的）。

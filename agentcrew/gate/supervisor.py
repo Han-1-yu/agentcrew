@@ -22,6 +22,7 @@ R9 补上这一半：``supervisor_scope="all"`` 时，没有 ``delegated_by`` �
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Literal
 
 from agentcrew.gate.reviewer import Reviewer
@@ -44,6 +45,7 @@ class SupervisorReviewer:
         *,
         scope: SupervisorScope = "delegated",
         fallback_role: str = "project_manager",
+        escalation: Sequence[str] = (),
     ) -> None:
         """复用同一个 :class:`Reviewer` 跑调用与聚合，只是换了评审人来源。
 
@@ -56,18 +58,20 @@ class SupervisorReviewer:
         self._ledger = ledger
         self._scope = scope
         self._fallback_role = fallback_role.strip()
+        #: R33：直接主管之上的逐级复核链（空 = 单层，行为与 R33 之前一致）。
+        self._escalation = [item.strip() for item in escalation if item.strip()]
 
-    async def review(self, task: Task, *, round_no: int) -> ReviewRecord | None:
-        """审一次；不该审 / 审不了时返回 ``None``（调用方据此跳过）。
+    def _candidate_chain(self, task: Task) -> list[str]:
+        """直接主管 + 逐级上级；无法确定主管时返回空列表（并留痕）。
 
-        返回 ``None`` 的各种情况都记一条 ``supervisor_review_skipped``——「为什么
-        这个任务没有被主管验收」必须能从审计里回答，否则开关打开后看到的「全部
-        通过」会让人误以为主管真的看过了。
+        主管来源与 R7/R9 完全一致（``delegated_by`` 优先，``scope="all"`` 时回落
+        配置角色），只是末尾追加 ``escalation``。去重留到 :meth:`review` 里做——
+        那里还要判断「与执行者同角色」「已在 G2」等情况，统一在一处跳过更清楚。
         """
         supervisor = (task.delegated_by or "").strip()
         if not supervisor:
             if self._scope != "all":
-                return None
+                return []
             supervisor = self._fallback_role
             if not supervisor:
                 self._ledger.emit(
@@ -76,35 +80,83 @@ class SupervisorReviewer:
                     supervisor="",
                     reason="no_supervisor_configured",
                 )
-                return None
-        if supervisor == task.role:
-            self._ledger.emit(
-                "supervisor_review_skipped",
-                task_id=task.id,
-                supervisor=supervisor,
-                reason="self_delegated",
-            )
+                return []
+        return [supervisor, *self._escalation]
+
+    async def review(self, task: Task, *, round_no: int) -> ReviewRecord | None:
+        """按链逐级复核；任一级驳回立即短路（返回那条驳回记录）。
+
+        返回 ``None`` 的各种情况都记一条 ``supervisor_review_skipped``——「为什么
+        这个任务没有被主管验收」必须能从审计里回答，否则开关打开后看到的「全部
+        通过」会让人误以为主管真的看过了。
+
+        R33：链上每一级都留一条 ``supervisor_level``（层级、角色、裁决），
+        这样「谁在第几层放了行」在 ledger 里是显式的；全部放行时返回**最后一层**
+        的记录（越靠上越有决定权，人看记录时的直觉也是这个）。
+        """
+        chain = self._candidate_chain(task)
+        if not chain:
             return None
-        if not self._catalog.has(supervisor):
-            self._ledger.emit(
-                "supervisor_review_skipped",
-                task_id=task.id,
-                supervisor=supervisor,
-                reason="unknown_supervisor",
+        seen: set[str] = set()
+        approved: ReviewRecord | None = None
+        for level, role in enumerate(chain, start=1):
+            role = role.strip()
+            if not role:
+                continue
+            if role in seen:
+                self._ledger.emit(
+                    "supervisor_review_skipped",
+                    task_id=task.id,
+                    supervisor=role,
+                    reason="duplicate_level",
+                    level=level,
+                )
+                continue
+            seen.add(role)
+            if role == task.role:
+                self._ledger.emit(
+                    "supervisor_review_skipped",
+                    task_id=task.id,
+                    supervisor=role,
+                    reason="self_delegated",
+                    level=level,
+                )
+                continue
+            if not self._catalog.has(role):
+                self._ledger.emit(
+                    "supervisor_review_skipped",
+                    task_id=task.id,
+                    supervisor=role,
+                    reason="unknown_supervisor",
+                    level=level,
+                )
+                continue
+            # 主管已经在 G2 评审人里：同一个角色以两种身份审两遍只是重复烧钱。
+            if role in self._catalog.reviewer_for(task.role):
+                self._ledger.emit(
+                    "supervisor_review_skipped",
+                    task_id=task.id,
+                    supervisor=role,
+                    reason="already_in_g2",
+                    level=level,
+                )
+                continue
+            record = await self._reviewer.review(
+                task,
+                round_no=round_no,
+                reviewer_keys=[role],
+                layer="supervisor",
             )
-            return None
-        # 主管已经在 G2 评审人里：同一个角色以两种身份审两遍只是重复烧钱。
-        if supervisor in self._catalog.reviewer_for(task.role):
             self._ledger.emit(
-                "supervisor_review_skipped",
+                "supervisor_level",
                 task_id=task.id,
-                supervisor=supervisor,
-                reason="already_in_g2",
+                level=level,
+                levels=len(chain),
+                supervisor=role,
+                verdict=record.verdict,
             )
-            return None
-        return await self._reviewer.review(
-            task,
-            round_no=round_no,
-            reviewer_keys=[supervisor],
-            layer="supervisor",
-        )
+            if record.verdict != "approve":
+                # 逐级短路：上级没点头就不再往上递，返工理由取这一级的意见。
+                return record
+            approved = record
+        return approved

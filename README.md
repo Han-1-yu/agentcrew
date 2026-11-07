@@ -2894,3 +2894,24 @@ R32 把它整理成一套可维护的界面，**功能与接口一个没动**（
 - **可访问性**：所有可交互元素有 `:focus-visible` 描边，主题切换用 `color-scheme`
   让原生控件（滚动条、下拉）跟着变。
 
+
+## R33 多级主管链
+
+R7/R9 的层级监督只有一层（派活的人 / 配置的主管）。真实组织里「主管的主管」也会
+看，R33 把它做成一条可配的链：
+
+```bash
+# 直接主管（派活的人）→ 产品经理 → QA 负责人，逐级复核
+AGENTCREW_SUPERVISOR_CHAIN=product_manager,qa_engineer \
+  python main.py run --goal "…" --supervisor-review
+```
+
+- 顺序是「直接主管 → chain[0] → chain[1] …」，**任一级驳回立即短路**，
+  返工理由取该级意见；全部放行才算通过，返回值是**最上层**的记录；
+- 每一级都留 `supervisor_level` 事件（层级 / 总层数 / 角色 / 裁决），
+  「谁在第几层放了行」在 ledger 里是显式的；
+- 会被跳过并留痕的层级：与直接主管同角色（`duplicate_level`）、执行者自己
+  （`self_delegated`）、角色不存在（`unknown_supervisor`）、已在 G2 评审人里
+  （`already_in_g2`）——跳过是为了不重复烧钱，不是静默吞掉；
+- **默认空链 = 单层**，与 R7/R9 逐字一致。
+

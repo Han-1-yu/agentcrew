@@ -75,7 +75,7 @@ def _validate_run_options(options: Mapping[str, Any]) -> str | None:
         "max_delegation_depth", "max_dynamic_tasks",
         # R7：主管审核；R8：委派拒绝原因回灌次数；R9：覆盖范围与主管角色。
         "supervisor_review_enabled", "max_subtask_corrections",
-        "supervisor_scope", "supervisor_role",
+        "supervisor_scope", "supervisor_role", "supervisor_chain",
         # R10：主管驳回后换人做。
         "role_fallback", "max_supervisor_reassignments",
         # R12：出站 Webhook（密钥不经 HTTP 接口传，只认配置文件/环境变量）。
@@ -114,6 +114,12 @@ def _validate_run_options(options: Mapping[str, Any]) -> str | None:
         elif key == "supervisor_role":
             if not isinstance(value, str) or not value.strip():
                 return "options.supervisor_role 必须是非空字符串"
+        elif key == "supervisor_chain":
+            if isinstance(value, str) or not isinstance(value, list):
+                return "options.supervisor_chain 必须是角色 key 数组"
+            for item in value:
+                if not isinstance(item, str) or not item.strip():
+                    return "options.supervisor_chain 的每一项都必须是非空字符串"
         elif key == "role_fallback":
             if not isinstance(value, dict):
                 return "options.role_fallback 必须是对象（角色 → 备选角色数组）"

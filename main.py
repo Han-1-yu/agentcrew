@@ -476,22 +476,30 @@ def _print_bare_invocation(parser: argparse.ArgumentParser) -> None:
 # ── run / resume ──────────────────────────────────────────────────────────
 
 
-def _expire_overdue_approvals(settings: Settings) -> int:
-    """R30：扫描所有挂起 run 的审批单，把超窗口的标记为 ``expired``。
+def _expire_overdue_approvals(settings: Settings, *,
+                              run_id: str | None = None) -> int:
+    """R30：扫描审批单，把超窗口的标记为 ``expired``。
 
     只警告不改变 run 结局（仍是 interrupted）；每张过期单会在对应 run 的 ledger
     里留一条 ``approval_expired``——有接 Webhook 的部署据此告警。返回本次过期数量。
     扫描失败一律不阻断调用方（status / serve 启动是只读入口，不该被清理拖死）。
+
+    ``run_id`` 给定时**只结算这一个 run**：``status`` 是查看单个 run 的命令，
+    顺手清扫整目录会让它变成一个对别的 run 有副作用的「只读」命令（也曾让批量
+    测试互相干扰）。全局清扫只在 ``serve`` 启动做一次。
     """
     from agentcrew.runtime.approvals import ApprovalStore
     from agentcrew.runtime.checkpoint import CheckpointStore
     from agentcrew.runtime.ledger import Ledger
 
     expired_total = 0
-    try:
-        run_ids = CheckpointStore.list_runs(settings.output_dir)
-    except (OSError, ValueError):
-        return 0
+    if run_id is not None:
+        run_ids = [run_id]
+    else:
+        try:
+            run_ids = CheckpointStore.list_runs(settings.output_dir)
+        except (OSError, ValueError):
+            return 0
     for run_id in run_ids:
         run_dir = settings.output_dir / run_id
         try:
@@ -786,7 +794,8 @@ def _cmd_status(args: argparse.Namespace) -> int:
     """
     try:
         settings = _settings_from(args)
-        _expire_overdue_approvals(settings)   # R30：先结算超时审批单
+        # R30：只结算本次查看的 run——status 不该顺手改别的 run。
+        _expire_overdue_approvals(settings, run_id=args.run_id)
         run_dir = _run_dir(settings, args.run_id)
         checkpoint = CheckpointStore(run_dir)
         record = checkpoint.load_record()

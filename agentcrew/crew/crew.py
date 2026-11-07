@@ -1256,6 +1256,8 @@ class Crew:
                     # R9：scope=all 时规划期任务也由 supervisor_role 验收。
                     scope=self._settings.supervisor_scope,
                     fallback_role=self._settings.supervisor_role,
+                    # R33：直接主管之上的逐级复核链（默认空 = 单层）。
+                    escalation=self._settings.supervisor_chain,
                 )
                 # R10：只有配了备选映射才接线——空映射时 pick 恒为 None，
                 # 不构造也就少一个对象。
