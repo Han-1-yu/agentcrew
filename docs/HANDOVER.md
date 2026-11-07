@@ -18,9 +18,9 @@
 | 离线样例 | `todo` 9/9 · `linear` 5/5 · `hierarchy` 7/7，全部 `completed` |
 | 一句话定位 | 8 角色多 Agent 编排器：规划 → 执行 → 三层门禁 → 交付；可完全离线（mock）跑通 |
 
-**接手第一件事**：跑一次三套样例确认环境（§5.1），然后从 §7.3 剩余两项
-（单步/断点调试、主管 `suggestions` 通道）或 §7.4 里挑一项推进。
-两个小项（限流窗口通道、ruff/mypy 清理）已由 R18 闭环；CI 只剩
+**接手第一件事**：跑一次三套样例确认环境（§5.1），然后从 §7.3 剩余一项
+（单步/断点调试）或 §7.4 里挑一项推进。
+限流窗口通道、ruff/mypy 清理、主管 `suggestions` 通道均已闭环（R18 / R19）；CI 只剩
 GitHub Actions 上 3.10–3.13 的四版本矩阵未实跑。
 
 ---
@@ -306,7 +306,7 @@ PROJECT-STATE §3.19–§3.23 与本文 §0 的状态口径已对齐，工作区
 | 单步/断点调试 | 5 人日 | R4 已实现“卡点挂起 → 跨进程恢复”，缺任意任务处暂停与变量查看 |
 | ~~过期 run 自动 reconcile~~ | — | ✅ **R17 已闭环**（见 PROJECT-STATE §3.22）：30s 心跳 + CLI `run`/`serve` 启动时把孤儿 `running` 标为 `interrupted`，记 `run_reconciled` |
 | ~~resume 锁文件~~ | — | ✅ **R17 已闭环**：`O_EXCL` 原子锁 + owner token + 陈旧接管；CLI 给可读提示、API 回 409 |
-| 主管 `suggestions` 通道 | 1 人日 | 主管现在只能 approve/reject，建议无处可去 |
+| ~~主管 `suggestions` 通道~~ | — | ✅ **R19 已闭环**：`Reviewer._finish()` 落主管层裁决时非空建议额外发 `supervisor_suggestions` 事件（不阻塞、不进返工提示），`status` 命令汇总最近 5 条（见 PROJECT-STATE §3.24） |
 | ~~`api_rate_limit_window` 配置通道~~ | — | ✅ **R18 已闭环**：env / YAML / `config export` / `config import` 四通道 + `ge=1` 校验（见 PROJECT-STATE §3.23）；OPERATIONS §2.2 已同步 |
 
 ### 7.4 第三档（整块工程，需要先定范围）
@@ -347,6 +347,7 @@ PROJECT-STATE §3.19–§3.23 与本文 §0 的状态口径已对齐，工作区
 | R16 | 官方 Python SDK + 示例（`sdk/`） | 已提交（2026-11-07） |
 | R17 | run 生命周期加固：心跳 / 僵尸收敛 / resume 锁 | 已提交（2026-11-07） |
 | R18 | CI 就绪（ruff/mypy 清零）+ 限流窗口配置通道 | 已提交（2026-11-07） |
+| R19 | 主管 `suggestions` 通道（`supervisor_suggestions` 事件 + `status` 汇总） | 已提交（2026-11-07） |
 
 R3–R8 之所以合并成一个提交：`config.py` / `crew.py` / `main.py` / `api/server.py` 四个文件
 被多轮同时改，`git add` 是文件粒度，按轮切分会把不同轮的改动硬塞进一个提交。

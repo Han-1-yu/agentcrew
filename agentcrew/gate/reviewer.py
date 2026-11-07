@@ -467,6 +467,8 @@ class Reviewer:
         ``suggestions`` 只进 ledger：评审员在标准之外的意见需要一个不阻塞的出口，
         但它们**不参与裁决、不写进 ``ReviewRecord.issues``** —— 一旦写进去，
         Task 27 的 Gatekeeper 就会把它们当成返工理由，等价于恢复到「开放式评审」。
+        R19 起主管层（``layer="supervisor"``）有非空建议时额外发一条
+        ``supervisor_suggestions``，方便订阅与汇总；仍然只是审计事件。
 
         ``layer``（R7）：默认 ``"llm"``（常规 G2）。主管审核传 ``"supervisor"``，
         让审计与按层统计能把「机器评审驳回」和「派活的人驳回」分开。
@@ -482,6 +484,19 @@ class Reviewer:
             suggestions=list(suggestions or ()),
             reviewer=reviewer,
         )
+        # R19：主管建议需要一条独立、可订阅的出口。它虽然也混在 gate_result
+        # 的 suggestions 里，但那四层裁决事件混在一起，消费方无法只订阅
+        # 「派活的人说了什么」。这里不发 fix_hints、不改 verdict、不碰额度——
+        # 建议仍然只进 ledger，绝不参与裁决。
+        if layer == "supervisor" and suggestions:
+            self._ledger.emit(
+                "supervisor_suggestions",
+                task_id=task.id,
+                supervisor=reviewer,
+                round=round_no,
+                verdict=verdict,
+                suggestions=list(suggestions),
+            )
         return ReviewRecord(
             task_id=task.id,
             round=round_no,

@@ -175,7 +175,7 @@
   | `verdict` | string | 是 | `"approve"` / `"reject"`。 |
   | `score` | number \| null | 是 | 0..1；static 层恒为 null。 |
   | `issues` | string[] | 是 | 驳回理由。 |
-  | `suggestions` | string[] | 否 | 仅 layer=llm：不阻塞的额外意见。 |
+  | `suggestions` | string[] | 否 | `layer=llm` / `supervisor`：不阻塞的额外意见。R19 起主管层的非空建议另发一条 `supervisor_suggestions`；两层都**不参与裁决**、不进 `ReviewRecord`。 |
   | `reviewer` | string | 是 | `"static:contract"` / 角色 key / `"<role>:score-bypass"` / `"human:delivery"`。 |
 
 ### `supervisor_review_skipped`（R7 / R9）
@@ -188,7 +188,21 @@
   | `supervisor` | string | 否 | 主管角色 key（`mock_channel` 与 `no_supervisor_configured` 时可能为空）。 |
   | `run_id` | string | 否 | 仅 `mock_channel`（run 装配期决定不启用）。 |
 
-> 主管审核**成功**时不会有额外事件：它就是一条 `gate_result(layer="supervisor")`，与 G2 同构，便于按层统一统计。
+> 主管审核**成功且没有建议**时不会有额外事件：它就是一条 `gate_result(layer="supervisor")`，与 G2 同构，便于按层统一统计。R19 起有建议时多一条 `supervisor_suggestions`，便于单独订阅（不改变裁决与返工语义）。
+
+### `supervisor_suggestions`（R19）
+- **触发时机**：`Reviewer._finish()` 落主管层裁决时，`suggestions` 非空（approve / reject 都发）。空建议不发，零开销。
+- **data**：
+  | 字段 | 类型 | 必填 | 含义 |
+  |---|---|---|---|
+  | `task_id` | string | 是 | 被验收的任务 id。 |
+  | `supervisor` | string | 是 | 主管角色 key（与 `gate_result.reviewer` 同源）。 |
+  | `round` | integer | 是 | 评审轮次。 |
+  | `verdict` | string | 是 | 该次主管裁决 `approve` / `reject`；建议存在不改变它。 |
+  | `suggestions` | string[] | 是 | 标准之外的改进意见，已去重保序。 |
+- **刻意不做的三件事**：不改 `verdict`、不进 `GateDecision.fix_hints`、不写进
+  `ReviewRecord.issues` —— 「还能更好」不是驳回理由，也不该变成返工指令。
+  `python main.py status <run_id>` 会汇总最近 5 条，便于查看。
 
 ### `supervisor_reassigned`（R10）
 - **触发时机**：主管驳回、且 ``role_fallback`` 给出可用替代角色、且 ``reassign_count < max_supervisor_reassignments``。换人后**照常走 REWORK**（状态不变，只改 `role`）。

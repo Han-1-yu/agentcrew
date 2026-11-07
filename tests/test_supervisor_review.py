@@ -15,6 +15,9 @@ mock 通道明确跳过。
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,6 +34,7 @@ from agentcrew.gate.supervisor import SupervisorReviewer
 from agentcrew.models.factory import ModelFactory
 from agentcrew.roles.builtin import BUILTIN_ROLES
 from agentcrew.roles.catalog import RoleCatalog
+from agentcrew.runtime.checkpoint import CheckpointStore
 from agentcrew.runtime.ledger import Ledger
 from agentcrew.task.task import ReviewRecord, Task
 from agentcrew.task.task import TaskStatus as S
@@ -416,3 +420,143 @@ async def test_delegated_task_still_wins_over_fallback(env):
 
     assert record is not None
     assert fake.calls[0][1] == ["project_manager"]
+
+
+# ── R19：主管 suggestions 通道 ───────────────────────────────────────────
+
+SUGGESTING = {
+    "judgements": [{"criterion_index": 0, "satisfied": True,
+                    "evidence": "a.py 已定义 def f"}],
+    "suggestions": ["命名可以再统一", "建议补类型注解"],
+    "score": 0.9,
+}
+
+
+def _real_gatekeeper_with_supervisor(env, tmp_path, response):
+    """真 Reviewer 路径（G2 + 主管共用同一份 mock 响应）。"""
+    _commit(env)
+    fixtures = tmp_path / "fx-r19"
+    fixtures.mkdir(exist_ok=True)
+    (fixtures / "reviews.json").write_text(
+        json.dumps({"T-DYN-001": response}), encoding="utf-8")
+    models = ModelFactory(env["settings"], ledger=env["ledger"],
+                          fixtures_dir=fixtures)
+    reviewer = Reviewer(models, env["catalog"], env["store"], env["ledger"])
+    supervisor = SupervisorReviewer(
+        reviewer, env["catalog"], env["ledger"])
+    gatekeeper = Gatekeeper(
+        reviewer, env["store"], env["board"], gate="none",
+        ledger=env["ledger"], prompter=NullPrompter(), supervisor=supervisor)
+    return gatekeeper, reviewer
+
+
+async def test_supervisor_suggestions_have_a_dedicated_event(env, tmp_path):
+    """建议有独立事件可订阅，但绝不改裁决、不进返工提示。"""
+    gatekeeper, _ = _real_gatekeeper_with_supervisor(
+        env, tmp_path, SUGGESTING)
+
+    decision = await gatekeeper.evaluate(env["task"], round_no=1)
+
+    assert decision.next_status is S.SUCCEEDED  # 建议不阻塞
+    events = list(env["ledger"].events("supervisor_suggestions"))
+    assert len(events) == 1
+    data = events[0].data
+    assert data["task_id"] == "T-DYN-001"
+    assert data["supervisor"] == "project_manager"
+    assert data["round"] == 1
+    assert data["verdict"] == "approve"
+    assert data["suggestions"] == SUGGESTING["suggestions"]
+    # gate_result 仍按原契约携带 suggestions
+    supervisor_gates = [
+        event for event in env["ledger"].events("gate_result")
+        if event.data["layer"] == "supervisor"
+    ]
+    assert supervisor_gates[0].data["suggestions"] == SUGGESTING["suggestions"]
+    # ReviewRecord 不收建议（不参与裁决、不变成返工理由）
+    record = env["board"].get("T-DYN-001").reviews[-1]
+    joined = "".join(record.issues + record.fix_hints)
+    assert all(text not in joined for text in SUGGESTING["suggestions"])
+    assert record.verdict == "approve"
+
+
+async def test_no_supervisor_suggestions_event_when_empty(env, tmp_path):
+    gatekeeper, _ = _real_gatekeeper_with_supervisor(env, tmp_path, GOOD)
+
+    await gatekeeper.evaluate(env["task"], round_no=1)
+
+    assert list(env["ledger"].events("supervisor_suggestions")) == []
+
+
+async def test_g2_suggestions_do_not_emit_supervisor_event(env, tmp_path):
+    """G2 自己的建议不该被误标成「主管建议」。"""
+    _commit(env)
+    gatekeeper = _gatekeeper(env, {"T-DYN-001": SUGGESTING}, tmp_path)
+
+    await gatekeeper.evaluate(env["task"], round_no=1)
+
+    assert list(env["ledger"].events("supervisor_suggestions")) == []
+    g2_gates = [
+        event for event in env["ledger"].events("gate_result")
+        if event.data["layer"] == "llm"
+    ]
+    assert g2_gates[0].data["suggestions"] == SUGGESTING["suggestions"]
+
+
+def test_supervisor_reject_suggestions_stay_out_of_fix_hints(env, tmp_path):
+    """主管驳回时建议照发事件，但一条都不许混进 issues / fix_hints。"""
+    fixtures = tmp_path / "fx-r19-record"
+    fixtures.mkdir(exist_ok=True)
+    (fixtures / "reviews.json").write_text("{}", encoding="utf-8")
+    models = ModelFactory(env["settings"], ledger=env["ledger"],
+                          fixtures_dir=fixtures)
+    reviewer = Reviewer(models, env["catalog"], env["store"], env["ledger"])
+
+    record = reviewer._finish(
+        env["task"], 1, verdict="reject", score=0.2,
+        issues=["缺业务规则"], fix_hints=["补业务规则"],
+        reviewer="project_manager", suggestions=SUGGESTING["suggestions"],
+        layer="supervisor",
+    )
+
+    assert record.verdict == "reject"
+    assert all(text not in record.issues + record.fix_hints
+               for text in SUGGESTING["suggestions"])
+    events = list(env["ledger"].events("supervisor_suggestions"))
+    assert len(events) == 1 and events[0].data["verdict"] == "reject"
+
+
+def test_status_shows_supervisor_suggestions(tmp_path):
+    """建议必须「有处可去」：status 是查看 run 的第一入口。"""
+    root = Path(__file__).resolve().parents[1]
+    output = tmp_path / "output"
+    output.mkdir()
+    store = CheckpointStore.create(
+        output, project_goal="R19 状态视图", config_snapshot={},
+        run_id="R-status")
+    store.save_tasks(TaskBoard([]))
+    Ledger(store.run_dir / "ledger.jsonl", run_id="R-status").emit(
+        "supervisor_suggestions", task_id="T-1",
+        supervisor="project_manager", round=1, verdict="approve",
+        suggestions=["命名可以再统一", "建议补类型注解"])
+    env = {
+        key: value for key, value in os.environ.items()
+        if not key.upper().startswith("PYTHON") and "PROXY" not in key.upper()
+    }
+    env.update({
+        "AGENTCREW_OUTPUT_DIR": str(output),
+        "PYTHONDONTWRITEBYTECODE": "1",
+        # 强制子进程以 UTF-8 写管道：Windows 控制台默认 GBK，pytest 读管道用
+        # 本机 locale（UTF-8）解码会错位，导致中文断言偶发失败。真实用户在
+        # GBK 控制台看到的是正常输出，这里只是让测试读管道确定可复现。
+        "PYTHONUTF8": "1",
+    })
+    result = subprocess.run(
+        [sys.executable, "main.py", "status", "R-status"],
+        cwd=root, env=env, capture_output=True, text=True,
+        timeout=60, errors="replace",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "主管建议  2 条" in result.stdout
+    assert "命名可以再统一" in result.stdout
+    assert "建议补类型注解" in result.stdout

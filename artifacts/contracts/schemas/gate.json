@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "./gate.json",
   "title": "门禁裁决（Gate Result）",
-  "description": "对应两类持久化形态：(1) tasks.json 中 task.reviews[] 的 ReviewRecord；(2) ledger.jsonl 中 event=\"gate_result\" 的 data 字段。二者字段基本一致，但 ledger 版本额外携带 layer=\"llm\" 的 suggestions 字段（不写回 ReviewRecord，因为 suggestions 不参与裁决）。代码中不存在独立的 GateStatus 枚举；门禁结果用 ReviewRecord.verdict (approve/reject) + Task.status (review/rework/succeeded/failed) 联合表达。",
+  "description": "对应两类持久化形态：(1) tasks.json 中 task.reviews[] 的 ReviewRecord；(2) ledger.jsonl 中 event=\"gate_result\" 的 data 字段。二者字段基本一致，但 ledger 版本额外携带 suggestions 字段（layer=llm / supervisor 都可能有；不写回 ReviewRecord，因为 suggestions 不参与裁决）。R19 起主管层非空建议另发 supervisor_suggestions 事件（见 event-types.md），本 schema 只描述 gate_result。代码中不存在独立的 GateStatus 枚举；门禁结果用 ReviewRecord.verdict (approve/reject) + Task.status (review/rework/succeeded/failed) 联合表达。",
   "type": "object",
   "additionalProperties": false,
   "required": ["task_id", "round", "layer", "verdict", "issues", "reviewer"],
@@ -37,7 +37,7 @@
     "suggestions": {
       "type": "array",
       "items": {"type": "string"},
-      "description": "仅 ledger gate_result（layer=llm）事件携带：评审员在标准之外的意见，不阻塞、不进 ReviewRecord.issues。"
+      "description": "仅 ledger gate_result 事件携带（layer=llm / supervisor）：评审员或主管在标准之外的意见，不阻塞、不进 ReviewRecord.issues / fix_hints。"
     },
     "reviewer": {
       "type": "string",

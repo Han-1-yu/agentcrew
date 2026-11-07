@@ -2556,3 +2556,26 @@ env / YAML / `config export` / `config import`，窗口默认 60s、下限 1s
 （非法值在配置加载期即报错）。配置与部署示例见
 [`docs/OPERATIONS.md`](docs/OPERATIONS.md) §2.2。
 
+
+## R19 主管 `suggestions` 通道：让「还能更好」有处可去
+
+R7/R9 给主管加了「谁派的活谁验收」，但主管除了 approve/reject 之外留下的
+改进意见（「命名可以再统一」「建议补类型注解」）一直**没有出口**——它们混在
+`gate_result.suggestions` 里，而那条事件 G2、人工、主管三层都往里写，订阅方
+没法只捞出「派活的人说了什么」。更糟的是契约刻意不让 suggestions 进
+`ReviewRecord`，所以它既不参与裁决、也不出现在任何汇总里，等于白写。
+
+R19 给主管层开了**一条独立、可订阅、不阻塞**的事件 `supervisor_suggestions`
+（`Reviewer._finish()` 在 `layer="supervisor"` 且建议非空时额外 emit）。它恪守
+三件刻意不做的事：
+
+- **不改 `verdict`**——建议不是驳回理由；
+- **不进 `GateDecision.fix_hints` / `ReviewRecord.issues`**——不会变成返工指令；
+- **不碰返工额度**——与 G2 同构，approve / reject 都照发。
+
+`python main.py status <run_id>` 会汇总最近 5 条建议，作为查看 run 的第一入口；
+完整记录始终在 ledger 的 `supervisor_suggestions` 事件里，方便下游订阅与审计。
+空建议不发，零开销。契约与 schema 同步见
+[`artifacts/contracts/event-types.md`](artifacts/contracts/event-types.md)
+（`supervisor_suggestions` 条目）与 [`gate.json`](artifacts/contracts/schemas/gate.json)。
+

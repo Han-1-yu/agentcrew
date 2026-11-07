@@ -8,17 +8,17 @@
 
 ## 0. 一句话现状
 
-**引擎与管线健康，无 P0/P1 阻断项。** 全量测试 **2444 passed / 1 skipped / 0 failed**（2445 用例收集，2026-11-07 R18 后分 5 批实测），三个预设样例 100% 通过，真实模型通道可用（`doctor` 6/6 通过）；Studio 架构检查 / e2e 28/28 / selftest 16/16 全绿。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道。
+**引擎与管线健康，无 P0/P1 阻断项。** 全量测试 **2449 passed / 1 skipped / 0 failed**（2450 用例收集，2026-11-07 R19 后分 5 批实测），三个预设样例 100% 通过，真实模型通道可用（`doctor` 6/6 通过）；Studio 架构检查 / e2e 28/28 / selftest 16/16 全绿。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道；R19 给主管审核开了独立、不阻塞的 `suggestions` 建议通道。
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | 2445 collected / 2444 passed / 1 skipped / 0 failed（3.12.10 + pytest 9.1.1，`--assert=plain`；R4 +38、R5 +16、R6 +21、R7 +14、R8 +9、R9 +6、R10 +13、R11 +17、R12 +21、R13 +12、R14 +12、R15 +18、R16 +34、R17 +24、R18 +10，本机断言重写 segfault 后按 §6 分 5 批累计） |
+| 全量测试 | 2450 collected / 2449 passed / 1 skipped / 0 failed（3.12.10 + pytest 9.1.1，`--assert=plain`；R4 +38、R5 +16、R6 +21、R7 +14、R8 +9、R9 +6、R10 +13、R11 +17、R12 +21、R13 +12、R14 +12、R15 +18、R16 +34、R17 +24、R18 +10、R19 +5，本机断言重写 segfault 后按 §6 分 5 批累计） |
 | 静态检查 | `ruff check .` **全绿**（全仓，14 项历史告警清零）；`mypy agentcrew/` **114 文件零错误**（2.4.1）。CI 等价检查链在本机 3.12 首次跑通 |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
 | Studio | `npm run check` **63** 模块 / 37 分片通过、selftest 16/16、e2e 28/28、probe 24/24 |
-| Git | `master` 领先 `origin/master` 174 个提交（均为本地提交、未推送）；**工作区干净，无未提交改动** |
+| Git | `master` 领先 `origin/master` 175 个提交（均为本地提交、未推送）；**工作区干净，无未提交改动** |
 | 角色 | 8 个内置岗位角色 + 执行体（Agent Profile）可多绑 |
 
 ```bash
@@ -726,6 +726,29 @@ duck-type 对象，字段/getter/setter 放宽为 `Any | None`）· `registry` �
 **刻意未做（下一轮再定）**：把 `/providers` 等端点补进 `openapi.yaml` 后再封装 ·
 异步客户端 · 发布到 PyPI。
 
+### 3.24 R19：主管 `suggestions` 通道（2026-11-07）
+
+R7/R9 给主管加了「谁派的活谁验收」，但主管除了 approve/reject 之外的改进意见
+（「命名可以再统一」「建议补类型注解」）一直**没有出口**：它们混在
+`gate_result.suggestions` 里，而该事件 G2 / 人工 / 主管三层都写，订阅方捞不出
+「派活的人说了什么」；且契约刻意不让 suggestions 进 `ReviewRecord`，等于白写。
+
+R19 在 `Reviewer._finish()` 落主管层裁决时，若 `suggestions` 非空（approve /
+reject 都发），额外 emit 一条独立事件 `supervisor_suggestions`。恪守三件刻意不做的
+事：**不改 `verdict`**（建议不是驳回理由）、**不进 `GateDecision.fix_hints` /
+`ReviewRecord.issues`**（不会变成返工指令）、**不碰返工额度**。空建议不发，零开销。
+
+`python main.py status <run_id>` 作为查看 run 的第一入口，汇总最近 5 条建议；
+完整记录始终在 ledger 的 `supervisor_suggestions` 事件里，便于下游订阅与审计。
+契约同步：`event-types.md` 新增 `supervisor_suggestions` 条目（含触发时机、
+data 字段、三件刻意不做的事）、`gate.json` 的 `suggestions` 描述放宽到
+`layer=llm / supervisor`。
+
+**验证**：`tests/test_supervisor_review.py` 新增 4 例（建议独立事件、空建议不发、
+G2 建议不误标、驳回时建议照发但不混进 issues/fix_hints）+ `test_status_shows_
+supervisor_suggestions`（端到端验 `status` 汇总）。相关门禁 / 评审 / 契约守卫用例
+一并复跑通过；`ruff` 与 `mypy agentcrew/` 维持全绿。全量回归见 §6 表末。
+
 ---
 
 ## 4. 历史报告汇总（已并入本文，原文归档）
@@ -737,7 +760,7 @@ duck-type 对象，字段/getter/setter 放宽为 `Any | None`）· `registry` �
 | **HANDOFF**（初版交接） | 2026-10-06 | SDD 会话完成 34 个任务实现/评审，并用真实 DeepSeek 跑 6 次端到端验收，每次暴露一个 mock 无法暴露的缺陷并修掉 | 已被 11-01 交接取代，结论并入本文 |
 | **V7-HANDOFF** | 2026-10-10 | V7 增强落地：P0 数据脱敏（`redact.py`）、配额、循环检测等，21 项脱敏用例全绿 | 能力已并入 §2，P2.5 脱敏已实施 |
 | **HANDOFF-2026-11-01** | 2026-11-01 | 自包含交接：架构、模块地图、命令、退出码、环境坑、13 项待办；声明"护城河是测试" | 本文继承其结论；待办见 §7 |
-| **HANDOVER-BASELINE** | 2026-11-01 | 实测 1946 passed / 1 skipped；两个风险：Git 提交清单不完整（真实 168 文件而非文档所说 65）、真实模型 Key 失效；查明 segfault 实为 `PYTHONPATH` 污染而非解释器不稳 | Key 已恢复（`doctor` 6/6 通过）；提交随 R1–R18 推进（现领先远端 174） |
+| **HANDOVER-BASELINE** | 2026-11-01 | 实测 1946 passed / 1 skipped；两个风险：Git 提交清单不完整（真实 168 文件而非文档所说 65）、真实模型 Key 失效；查明 segfault 实为 `PYTHONPATH` 污染而非解释器不稳 | Key 已恢复（`doctor` 6/6 通过）；提交随 R1–R19 推进（现领先远端 175） |
 | **V4 质量审查报告** | 2026-10-10 | 引擎侧修 6 项：密钥环境变量名硬编码、模型发现错误结果被缓存 60s 无法重试等 | 全部闭环 |
 | **V4 深度审查报告** | 2026-10-10 | 追加 15 项（D-01…D-15）：`api_key_env` 形状校验、空 model id 收录、重名 provider、CSP、弹窗状态清理等，逐项独立 commit | 全部闭环 |
 | **V4-FE 只读问题清单** | 2026-10-10 | 前端边界问题（深色模式 DAG 文字不可见、内联边框硬编码、主题缓存闪烁等），只读审查不改码 | 已由后续 F4–F7 提交修复 |
@@ -778,7 +801,8 @@ duck-type 对象，字段/getter/setter 放宽为 `Any | None`）· `registry` �
 | R15 | Webhook 持久化重放队列：入队前落盘、启动补投（见 §3.20） | 2376 |
 | R16 | 官方 Python SDK + 示例：零依赖 HTTP/SSE 客户端（见 §3.21） | 2410 |
 | R17 | run 生命周期加固：心跳 / 僵尸收敛 / resume 锁（见 §3.22） | 2434 |
-| R18 | CI 就绪 + 限流窗口配置通道（见 §3.23） | **2444（当前）** |
+| R18 | CI 就绪 + 限流窗口配置通道（见 §3.23） | 2444 |
+| R19 | 主管 `suggestions` 通道（见 §3.24） | **2449（当前）** |
 
 ---
 
@@ -830,7 +854,7 @@ duck-type 对象，字段/getter/setter 放宽为 `Any | None`）· `registry` �
 
 1. ✅ **R3 已闭环**：工具参数 JSON Schema 强校验（见 §3.8）
 2. MCP SSE/HTTP transport 资源关闭（消除 unclosed warning；`mcp_servers` 接入生产 run 已由 R13 闭环）
-3. CI 首次实跑：本机 3.12 已跑通等价检查链（ruff / mypy / pytest 全绿）；**仍缺 GitHub Actions 上 3.10–3.13 四版本矩阵**（remote 已配，本地领先 174 提交）
+3. CI 首次实跑：本机 3.12 已跑通等价检查链（ruff / mypy / pytest 全绿）；**仍缺 GitHub Actions 上 3.10–3.13 四版本矩阵**（remote 已配，本地领先 175 提交）
 4. 功能测试报告汇总（2444 用例按模块/场景出覆盖矩阵）
 5. ~~CI 前清理 `ruff check .` 的 14 项既存告警~~：✅ **R18 已闭环**（见 §3.23）；装 CI 同版本 mypy 后一并清掉 9 项类型错误，现在 `ruff check .` 全绿、`mypy agentcrew/` 114 文件零错误
 6. ~~`api_rate_limit_window` 配置通道~~：✅ **R18 已闭环**（env / YAML / `config export` / `config import` 四通道 + `ge=1` 校验，见 §3.23） |

@@ -680,6 +680,33 @@ def _cmd_status(args: argparse.Namespace) -> int:
             f"审批单  {len(approvals)} 条    待裁决 {pending} 条"
             + (f"    （python main.py approvals {record.run_id}）" if pending else ""),
         )
+    # R19：主管建议不参与裁决，但必须「有处可去」——否则它们只埋在 gate_result
+    # 里没人看。status 是查看 run 的第一入口，在这里汇总最近几条。
+    suggestion_events = list(ledger.events("supervisor_suggestions"))
+    if suggestion_events:
+        total = sum(
+            len(event.data.get("suggestions") or [])
+            for event in suggestion_events
+        )
+        task_count = len({
+            event.data.get("task_id") for event in suggestion_events})
+        _out(console, f"主管建议  {total} 条（{task_count} 个任务，不阻塞）")
+        shown = 0
+        for event in reversed(suggestion_events):
+            data = event.data
+            for text in (data.get("suggestions") or []):
+                if shown >= 5:
+                    _out(console, "  … 其余建议见 ledger 的 supervisor_suggestions 事件")
+                    break
+                _out(
+                    console,
+                    f"  · {data.get('task_id', '?')} "
+                    f"[{data.get('supervisor', '?')} · 第{data.get('round', '?')}轮 · "
+                    f"{data.get('verdict', '?')}] {text}",
+                )
+                shown += 1
+            if shown >= 5:
+                break
     return EXIT_CODES["ok"]
 
 
