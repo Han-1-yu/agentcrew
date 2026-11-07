@@ -158,6 +158,7 @@ class Scheduler:
         calibrator: ComplexityCalibrator | None = None,
         catalog: RoleCatalog | None = None,
         settings: Settings | None = None,
+        step_gate: Callable[[list[Task]], None] | None = None,
     ) -> None:
         if max_concurrency < 1:
             raise ValueError(f"max_concurrency 必须 >= 1：{max_concurrency}")
@@ -174,6 +175,10 @@ class Scheduler:
         # 2026-11 会话隔离改造：run 级校准器由 Crew 显式注入；未注入时
         # _record_calibration 回退读全局（直连 Scheduler 的旧测试行为不变）。
         self._calibrator = calibrator
+        #: R20：单步断点门（``Crew`` 在 ``debug_step`` 开启时注入
+        #: :class:`~agentcrew.gate.stepper.StepGate`）。``None``（默认）时
+        #: 主循环不做任何断点检查，执行路径与 R20 之前逐字一致。
+        self._step_gate = step_gate
         self._on_event = on_event
         #: 每次 checkpoint 落盘后的回调（Task 29 的 Crew 用它同步 ``run.json``
         #: 的统计，见 :meth:`_save_checkpoint`）；未接线时零开销。
@@ -271,6 +276,15 @@ class Scheduler:
                     self._notify("scheduler_cancelled")
                     break
                 free = self._max_concurrency - len(self._workers)
+                # R20：单步断点——必须在 take_ready **之前**（那一步扣 attempts
+                # 并跃迁 RUNNING，断点上下文要的是「还没派发」的任务）。只在
+                # 无在跑 worker 时停留：带病挂起会留下 RUNNING 孤儿；候选为空
+                # （只剩 REVIEW 补门禁）也不停留，断点管执行不管重评审。
+                if (self._step_gate is not None and not self._workers
+                        and not self._cancel_event.is_set()):
+                    candidates = self._board.peek_ready(limit=self._max_concurrency)
+                    if candidates:
+                        self._step_gate(candidates)
                 for task in self._board.take_ready(limit=free):
                     self._spawn(task, discarded=self._discard_before_rework(task))
                 # 限额**重算**：上一行可能刚把槽位派满，复用同一个 free 会让两个

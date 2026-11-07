@@ -22,7 +22,7 @@
 
 **RunStatus 没有显式跃迁表**——终局仍由 `_final_status()` 在收尾时一次性判定。R4 之后多了一条**非终局**路径：`running → awaiting_approval → running`，由 `_suspend()` 与 `resume()` 驱动；`awaiting_approval` 在删除/清理守卫里与 `running` 同等保护（不会被 `clean(protect_running=True)` 或 `delete_run` 抹掉）。R17 再加一条**收敛**路径：`running → interrupted`，只在进程入口（CLI `run` / `serve`）启动时由 `reconcile_stale_runs` 判定，依据是该 run 的心跳已过期（或升级前的无心跳老 run 满足 `updated_at` + 24h）。`awaiting_approval` **不参与**收敛——它有审批单、进程本就该退出，不是僵尸。
 
-**RunPhase 不存在**：代码里没有独立的"阶段"枚举。规划/执行/交付三阶段是 `Crew._start()` 内的代码路径（`_plan_phase` / `_execute` / `human_delivery_gate`），不枚举。但 R4 把「挂起在哪个卡点」持久化成了 `approvals.jsonl` 里审批单的 `checkpoint ∈ {plan, delivery}`，`Crew.resume_from` 据此决定重入哪个卡点 —— 这是可恢复的路标，不是阶段枚举。
+**RunPhase 不存在**：代码里没有独立的"阶段"枚举。规划/执行/交付三阶段是 `Crew._start()` 内的代码路径（`_plan_phase` / `_execute` / `human_delivery_gate`），不枚举。但 R4 把「挂起在哪个卡点」持久化成了 `approvals.jsonl` 里审批单的 `checkpoint ∈ {plan, delivery, step}`（R20 起新增 `step`：单步断点，每个任务派发前挂起），`Crew.resume_from` 据此决定重入哪个卡点 —— 这是可恢复的路标，不是阶段枚举。
 
 **resume 语义分叉**：`interrupted` / `running` 按 §13.3 直接重入执行（跳过规划与计划卡点）；`awaiting_approval` 必须回到原卡点，让 `DeferredPrompter` 消费已裁决的审批单。审批单缺失时 `resume_from` 直接报错，绝不悄悄绕过人工审批。
 

@@ -199,8 +199,9 @@ def build_parser() -> argparse.ArgumentParser:
     approve.add_argument("request_id", help="审批单 id（见 approvals 输出）")
     approve.add_argument(
         "--decision", required=True,
-        choices=("approve", "cancel", "save_exit", "accept", "abort", "rework"),
-        help="裁决动作；plan/delivery 卡点各只接受自己的子集")
+        choices=("approve", "cancel", "save_exit", "accept", "abort", "rework",
+                 "step", "run"),
+        help="裁决动作；plan/delivery/step 卡点各只接受自己的子集")
     approve.add_argument("--task-ids", nargs="*", default=[], metavar="ID",
                          help="rework 时要打回的任务 id")
     approve.add_argument("--by", default="cli", metavar="NAME",
@@ -316,6 +317,9 @@ def _add_run_flags(parser: argparse.ArgumentParser) -> None:
                         help="强制 mock provider（覆盖所有角色绑定，无需 API Key）")
     parser.add_argument("--auto", action="store_true",
                         help="等价于 --gate none（全自动，跳过人工闸门）")
+    parser.add_argument("--debug-step", action="store_true",
+                        help="R20：单步断点——每个任务派发前挂起为 step 审批单，"
+                             "用 approve --decision step|run|abort 逐个放行")
     parser.add_argument("--gate", choices=("both", "plan", "delivery", "none"),
                         help="人工闸门模式；含人工卡点但无 TTY 时降级为 none")
     parser.add_argument("--max-concurrency", type=int, metavar="N",
@@ -1476,6 +1480,9 @@ def _cmd_config_export(args: argparse.Namespace) -> int:
         export_doc["api_rate_limit_window"] = int(snap["api_rate_limit_window"])
     if snap.get("approval_mode") and snap["approval_mode"] != "interactive":
         export_doc["approval_mode"] = snap["approval_mode"]
+    # R20：单步断点只在开启时导出（默认导出文档保持不变）。
+    if snap.get("debug_step"):
+        export_doc["debug_step"] = True
     # 去掉空段
     export_doc["models"] = {
         k: v for k, v in export_doc["models"].items() if v
@@ -1595,6 +1602,7 @@ def _cmd_config_import(args: argparse.Namespace) -> int:
         "webhooks",                                   # R14 多接收端
         "api_rate_limit_enabled", "api_rate_limit_max",  # R18 限流配置通道
         "api_rate_limit_window",
+        "debug_step",                                 # R20 单步断点
     ):
         if key in data:
             existing[key] = data[key]
@@ -1668,6 +1676,8 @@ def _settings_from(args: argparse.Namespace) -> Settings:
     overrides: dict[str, Any] = {}
     if getattr(args, "mock", False):
         overrides["mock"] = True
+    if getattr(args, "debug_step", False):
+        overrides["debug_step"] = True   # R20：store_true 的 False 缺省不进 overrides
     gate = _effective_gate(
         getattr(args, "gate", None), auto=getattr(args, "auto", False))
     if gate is not None:

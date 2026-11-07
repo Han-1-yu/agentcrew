@@ -13,15 +13,15 @@
 |---|---|
 | 已提交 | R3–R18；R18 是最新提交（具体 hash 以 `git log -1` 为准） |
 | **未提交** | **无，工作区干净**（R18 已于 2026-11-07 提交） |
-| 测试 | R18 后全量 **2444 passed / 1 skipped / 0 failed**（2445 collected；分 5 批实测 448 + 547 + 300 + 744 + 405） |
+| 测试 | R20 后全量 **2466 passed / 1 skipped / 0 failed**（2467 collected；分 5 批实测） |
 | 静态检查 | `ruff check .` 全绿 · `mypy agentcrew/` 114 文件零错误（本机 3.12 首次跑通 CI 等价检查链） |
 | 离线样例 | `todo` 9/9 · `linear` 5/5 · `hierarchy` 7/7，全部 `completed` |
 | 一句话定位 | 8 角色多 Agent 编排器：规划 → 执行 → 三层门禁 → 交付；可完全离线（mock）跑通 |
 
-**接手第一件事**：跑一次三套样例确认环境（§5.1），然后从 §7.3 剩余一项
-（单步/断点调试）或 §7.4 里挑一项推进。
-限流窗口通道、ruff/mypy 清理、主管 `suggestions` 通道均已闭环（R18 / R19）；CI 只剩
-GitHub Actions 上 3.10–3.13 的四版本矩阵未实跑。
+**接手第一件事**：跑一次三套样例确认环境（§5.1）。**第一档、第二档功能项均已
+闭环**（R17–R20：心跳收敛 / resume 锁、CI 检查链、限流窗口通道、主管建议通道、
+单步断点调试）；下一轮从 §7.4 里挑一项，或做 CI 的 GitHub Actions 3.10–3.13
+四版本矩阵实跑（remote 已配、本地领先 176 提交）。
 
 ---
 
@@ -303,7 +303,7 @@ PROJECT-STATE §3.19–§3.23 与本文 §0 的状态口径已对齐，工作区
 
 | 项 | 预估 | 说明 |
 |---|---|---|
-| 单步/断点调试 | 5 人日 | R4 已实现“卡点挂起 → 跨进程恢复”，缺任意任务处暂停与变量查看 |
+| ~~单步/断点调试~~ | — | ✅ **R20 已闭环**（见 PROJECT-STATE §3.25）：`debug_step` 每任务派发前挂起，`approve --decision step/run/abort` + `resume` 逐个放行 / 解除断点 / 取消 |
 | ~~过期 run 自动 reconcile~~ | — | ✅ **R17 已闭环**（见 PROJECT-STATE §3.22）：30s 心跳 + CLI `run`/`serve` 启动时把孤儿 `running` 标为 `interrupted`，记 `run_reconciled` |
 | ~~resume 锁文件~~ | — | ✅ **R17 已闭环**：`O_EXCL` 原子锁 + owner token + 陈旧接管；CLI 给可读提示、API 回 409 |
 | ~~主管 `suggestions` 通道~~ | — | ✅ **R19 已闭环**：`Reviewer._finish()` 落主管层裁决时非空建议额外发 `supervisor_suggestions` 事件（不阻塞、不进返工提示），`status` 命令汇总最近 5 条（见 PROJECT-STATE §3.24） |
@@ -348,6 +348,7 @@ PROJECT-STATE §3.19–§3.23 与本文 §0 的状态口径已对齐，工作区
 | R17 | run 生命周期加固：心跳 / 僵尸收敛 / resume 锁 | 已提交（2026-11-07） |
 | R18 | CI 就绪（ruff/mypy 清零）+ 限流窗口配置通道 | 已提交（2026-11-07） |
 | R19 | 主管 `suggestions` 通道（`supervisor_suggestions` 事件 + `status` 汇总） | 已提交（2026-11-07） |
+| R20 | 单步/断点调试（`debug_step` + `step` 审批卡点） | 已提交（2026-11-07） |
 
 R3–R8 之所以合并成一个提交：`config.py` / `crew.py` / `main.py` / `api/server.py` 四个文件
 被多轮同时改，`git add` 是文件粒度，按轮切分会把不同轮的改动硬塞进一个提交。

@@ -69,6 +69,7 @@ _ENV_TO_FIELD: dict[str, str] = {
     "AGENTCREW_ENTITY_MEMORY_ENABLED": "entity_memory_enabled",
     "AGENTCREW_APPROVAL_MODE": "approval_mode",
     "AGENTCREW_PEER_DIALOGUE_ENABLED": "peer_dialogue_enabled",
+    "AGENTCREW_DEBUG_STEP": "debug_step",
     "AGENTCREW_MAX_PEER_MESSAGES": "max_peer_messages",
     "AGENTCREW_DELEGATION_MODE": "delegation_mode",
     "AGENTCREW_MAX_DELEGATION_DEPTH": "max_delegation_depth",
@@ -105,6 +106,8 @@ _YAML_SCALAR_KEYS = (
     "webhook_max_retries", "webhooks",
     # E-3：限流三参数此前只有 env 通道，YAML 里写会被静默忽略（R18 补齐）。
     "api_rate_limit_enabled", "api_rate_limit_max", "api_rate_limit_window",
+    # R20：单步断点开关（默认 False；只在 run 级快照里持久化）。
+    "debug_step",
 )
 
 #: 分层合并时按 key 覆盖（映射型）/ 按序合并去重（列表型）而非整体替换的字段。
@@ -714,6 +717,16 @@ class Settings(BaseModel):
       卡点把审批请求写进 ``<run_dir>/approvals.jsonl`` 后让 run 以
       ``awaiting_approval`` 挂起退出；人通过 CLI / HTTP API / Studio 在**另一个
       进程**里批准或驳回，再 ``resume`` 从原卡点继续。非 TTY 不再需要降级。
+    """
+    debug_step: bool = False
+    """R20：单步断点调试（默认**关闭**，关闭时执行路径与 R20 之前逐字一致）。
+
+    开启后，每个任务派发前 run 都会以 ``step`` 审批单挂起（``awaiting_approval``）：
+    ``approve --decision step`` 只放行断点上的那个任务；``--decision run`` 解除
+    断点一路跑到终局；``--decision abort`` 取消整场 run。开关随 ``config_snapshot``
+    落盘，resume 时自动恢复——断点属于 run，不属于进程。
+    环境变量 ``AGENTCREW_DEBUG_STEP=true``，或 YAML 顶层 ``debug_step: true``，
+    或 ``run --debug-step``。
     """
     entity_memory_enabled: bool = False
     """R3：跨 run 实体记忆（默认**关闭**）。

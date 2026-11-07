@@ -2579,3 +2579,43 @@ R19 给主管层开了**一条独立、可订阅、不阻塞**的事件 `supervi
 [`artifacts/contracts/event-types.md`](artifacts/contracts/event-types.md)
 （`supervisor_suggestions` 条目）与 [`gate.json`](artifacts/contracts/schemas/gate.json)。
 
+
+## R20 单步/断点调试：每个任务派发前停下来
+
+R4 的「卡点挂起 → 跨进程恢复」只覆盖 plan / delivery 两个**阶段边界**——想看
+「某个任务为什么做成这样」，只能跑完再翻 ledger。R20 把同一套审批纪律搬到
+**任务粒度**：
+
+```bash
+python main.py run --goal "..." --debug-step      # 或 AGENTCREW_DEBUG_STEP=true / YAML debug_step: true
+# → run 在第一个任务派发前挂起（awaiting_approval），审批单写明任务/角色/优先级
+python main.py approvals <run_id>                  # 看断点上下文
+python main.py approve <run_id> <request_id> --decision step   # 只放行这个任务
+python main.py resume <run_id>                     # 跑完它 → 在下一个任务前再停
+python main.py approve <run_id> <request_id> --decision run    # 解除断点，一路跑到终局
+python main.py approve <run_id> <request_id> --decision abort  # 取消整场 run
+```
+
+实现恪守四条边界：
+
+- **断点在派发之前**：挂起时任务还是 `READY`、一次尝试都没扣——
+  ``take_ready`` 会扣 ``attempts`` 并跃迁 ``RUNNING``，断点必须落在它前面
+  （新增 ``TaskBoard.peek_ready`` 只读窥视，与 ``take_ready`` 共享同一条候选
+  计算，顺序永不漂移）。
+- **默认关闭零参与**：``debug_step`` 未开启时调度器拿到的 ``step_gate=None``，
+  执行路径与 R20 之前逐字一致；``StepGate``（`agentcrew/gate/stepper.py`）
+  镜像 ``DeferredPrompter`` 的「建单 → 跨进程裁决 → resume 消费」三步纪律，
+  pending 单复用、不重复建单。
+- **并发语义是攒批**：断点只在无在跑 worker 时停留（带病挂起会留 RUNNING
+  孤儿）；``max_concurrency > 1`` 时已放行的任务凑批一起派发，每个新任务
+  派发前仍各停一次——断点的单位是「任务的派发权」，不是「时间片」。
+- **断点属于 run，不属于进程**：开关随 ``config_snapshot`` 落盘，resume 不重供
+  ``--debug-step`` 也继续逐任务停；想提前放行用 ``--decision run``。
+
+HTTP API 的 `POST /runs/{id}/approve` 同样接受 `step` / `run` / `abort`
+（存储层按卡点校验，plan 的 `approve` 写不进 step 单）。契约同步见
+[`event-types.md`](artifacts/contracts/event-types.md)（`run_paused` /
+`approval_requested` 的 `checkpoint` 枚举）与
+[`state-enums.md`](artifacts/contracts/state-enums.md)。
+
+

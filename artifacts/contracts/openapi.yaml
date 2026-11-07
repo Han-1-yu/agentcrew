@@ -243,7 +243,8 @@ paths:
       description: >
         裁决写入同一份 JSONL；引擎侧 `resume` 回到原卡点消费这张单后继续。
         plan 卡点接受 approve / cancel / save_exit；delivery 卡点接受
-        accept / abort / rework（rework 需非空 task_ids）。
+        accept / abort / rework（rework 需非空 task_ids）；step 卡点（R20
+        单步断点）接受 step / run / abort。
       parameters:
         - $ref: '#/components/parameters/RunId'
       requestBody:

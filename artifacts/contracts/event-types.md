@@ -47,7 +47,7 @@
   | `goal` | string | 是 | 项目目标原文。 |
   | `run_id` | string | 是 | run 目录名。 |
   | `approval_id` | string | 是 | 本次挂起对应的审批单 id。 |
-  | `checkpoint` | string | 是 | `plan` / `delivery`。 |
+  | `checkpoint` | string | 是 | `plan` / `delivery` / `step`（R20 单步断点）。 |
   | `status` | string | 是 | 恒为 `awaiting_approval`。 |
   | `exit_code` | integer | 是 | 挂起是正常中间态，复用 `ok=0`。 |
 
@@ -57,7 +57,7 @@
   | 字段 | 类型 | 必填 | 含义 |
   |---|---|---|---|
   | `approval_id` | string | 是 | 审批单 id。 |
-  | `checkpoint` | string | 是 | `plan` / `delivery`。 |
+  | `checkpoint` | string | 是 | `plan` / `delivery` / `step`（R20 单步断点）。 |
   | `context` | object | 是 | 给审批人看的上下文（任务 id、目标摘要、统计等），不含密钥。 |
 
 ### `peer_dialogue_enabled`（R5）

@@ -535,6 +535,13 @@ python main.py diff <run_a> <run_b> --json
 
 `delete` / `clean` 是真删，先 `--dry-run`。任何批量删除前按 §4.2 备份。
 
+**单步调试（R20）**：`run --debug-step` 让每个任务派发前都挂起为 `step` 审批单
+（任务 / 角色 / 优先级写在审批单上下文里）——`approve --decision step` 只放行
+当前断点上的任务，`--decision run` 解除断点一路跑到终局，`--decision abort`
+取消 run。断点开关随 run 快照落盘，resume 不重供 `--debug-step` 也继续逐任务停；
+`status` / `approvals` / ledger 负责看「任务为什么做成这样」。开关默认关闭，
+关闭时执行路径与开启前逐字一致。
+
 ### 7.5 已知环境问题（Windows + Git Bash）
 
 | 现象 | 处理 |

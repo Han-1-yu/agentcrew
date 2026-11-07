@@ -371,20 +371,12 @@ class TaskBoard:
           reason ``rework-dispatched``。
 
         两个额度各自有界：每轮返工至多 ``max_attempts`` 次执行、全局至多
-        ``max_reworks`` 轮，不存在无限循环。被 ``limit`` 截断的任务保持原状态、
+        ``max_reworks`` 轮，不存在无限循环。        被 ``limit`` 截断的任务保持原状态、
         不扣额度。返回按派发顺序排列的 RUNNING 任务。
         """
         self.refresh()
-        candidates = sorted(
-            (
-                task
-                for task in self._tasks.values()
-                if task.status in (TaskStatus.READY, TaskStatus.REWORK)
-            ),
-            key=lambda task: (task.priority, task.id),
-        )
         taken: list[Task] = []
-        for task in candidates[: max(0, limit)]:
+        for task in self._dispatch_candidates()[: max(0, limit)]:
             if task.status == TaskStatus.READY:
                 self.bump_attempt(task.id)
                 taken.append(
@@ -397,6 +389,32 @@ class TaskBoard:
                     )
                 )
         return taken
+
+    def peek_ready(self, limit: int) -> list[Task]:
+        """只读版 :meth:`take_ready`：同样的候选与顺序，不改状态、不扣额度。
+
+        R20 单步断点用——断点必须落在 ``take_ready`` **之前**（那一步会扣
+        ``attempts`` 并跃迁 ``RUNNING``），调度器需要先「看一眼下一个要派发的
+        是谁」才能把正确的任务写进断点上下文。与 ``take_ready`` 共享同一条
+        候选计算，两边顺序永不漂移。
+        """
+        self.refresh()
+        return self._dispatch_candidates()[: max(0, limit)]
+
+    def _dispatch_candidates(self) -> list[Task]:
+        """派发候选：``READY`` / ``REWORK``，按 ``(priority, id)`` 升序。
+
+        ``take_ready`` / ``peek_ready`` 的唯一候选来源（spec §7.3：REWORK 只在
+        派发时离开该状态，所以它必须出现在候选里，否则返工任务死锁）。
+        """
+        return sorted(
+            (
+                task
+                for task in self._tasks.values()
+                if task.status in (TaskStatus.READY, TaskStatus.REWORK)
+            ),
+            key=lambda task: (task.priority, task.id),
+        )
 
     # ---- 汇总 ----
 

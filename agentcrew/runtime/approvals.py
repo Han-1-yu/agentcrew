@@ -39,11 +39,14 @@ _logger = logging.getLogger(__name__)
 #: 审批单文件名（相对 ``<run_dir>``）。
 APPROVAL_FILE = "approvals.jsonl"
 
-#: 两个卡点各自允许的人工裁决。收紧在存储层，外部通道乱传不会污染引擎。
+#: 各卡点允许的人工裁决。收紧在存储层，外部通道乱传不会污染引擎。
 PLAN_ACTIONS = frozenset(("approve", "cancel", "save_exit"))
 DELIVERY_ACTIONS = frozenset(("accept", "abort", "rework"))
+#: R20 单步断点：``step`` 放行断点上的那个任务；``run`` 解除断点一路跑到终局；
+#: ``abort`` 取消整场 run（语义与 plan 卡点的 ``cancel`` 相同）。
+STEP_ACTIONS = frozenset(("step", "run", "abort"))
 
-ApprovalCheckpoint = Literal["plan", "delivery"]
+ApprovalCheckpoint = Literal["plan", "delivery", "step"]
 ApprovalStatus = Literal["pending", "decided", "consumed"]
 
 
@@ -89,7 +92,12 @@ def _validate_decision(checkpoint: str, decision: Any) -> dict[str, Any]:
     if not isinstance(decision, dict):
         raise ApprovalError("decision 必须是 JSON 对象")
     action = decision.get("action")
-    allowed = PLAN_ACTIONS if checkpoint == "plan" else DELIVERY_ACTIONS
+    if checkpoint == "plan":
+        allowed = PLAN_ACTIONS
+    elif checkpoint == "delivery":
+        allowed = DELIVERY_ACTIONS
+    else:
+        allowed = STEP_ACTIONS
     if action not in allowed:
         raise ApprovalError(
             f"{checkpoint} 卡点的 action 必须是 {'、'.join(sorted(allowed))} 之一"
@@ -264,3 +272,25 @@ class ApprovalStore:
             item for item in self.all() if item.status != "consumed"
         ]
         return candidates[-1].checkpoint if candidates else None
+
+    def consumed_steps(self) -> tuple[frozenset[str], str | None]:
+        """R20：汇总已消费的 step 断点裁决。
+
+        返回 ``(已放行的 task_id 集合, 终局指令)``。``task_id`` 取自各审批单的
+        ``context``（``decide`` 只存 action，任务 id 在建单时写进 context）；
+        终局指令是已消费裁决里出现过的 ``"run"`` / ``"abort"``（两者都是
+        「不再逐个断点」语义），一个都没有时为 ``None``。``status != "consumed"``
+        的单不算——裁决必须先被引擎消费才生效，与 plan/delivery 同一条纪律。
+        """
+        task_ids: set[str] = set()
+        final: str | None = None
+        for item in self.all():
+            if item.checkpoint != "step" or item.status != "consumed":
+                continue
+            task_id = item.context.get("task_id")
+            if isinstance(task_id, str) and task_id:
+                task_ids.add(task_id)
+            action = item.decision.get("action")
+            if action in ("run", "abort"):
+                final = str(action)
+        return frozenset(task_ids), final

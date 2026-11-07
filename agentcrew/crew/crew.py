@@ -54,6 +54,7 @@ from agentcrew.crew import report
 from agentcrew.crew.scheduler import Scheduler
 from agentcrew.gate.gatekeeper import Gatekeeper, Prompter, Reviewer
 from agentcrew.gate.reassign import ReassignPolicy
+from agentcrew.gate.stepper import StepGate
 from agentcrew.gate.supervisor import SupervisorReviewer
 from agentcrew.knowledge.entity import (
     EntityMemoryStore,
@@ -543,6 +544,11 @@ class Crew:
         record = checkpoint.load_record()  # schema_version 不匹配在这里就报错
         board = checkpoint.load_board()
         repair_statuses(board)
+        # R20：断点开关属于 run 而不属于进程——首跑带着 debug_step 挂起的 run，
+        # resume 时不重供 --debug-step 也必须继续逐任务断点，否则断点会被静默
+        # 丢掉、审批单永远 pending。用户想提前放行用 `approve --decision run`。
+        if (record.config_snapshot or {}).get("debug_step"):
+            settings = settings.model_copy(update={"debug_step": True})
         crew = cls(settings, checkpoint=checkpoint, **kw)
         crew._resume_board = board
         if record.status is RunStatus.AWAITING_APPROVAL:
@@ -759,6 +765,10 @@ class Crew:
                 board = self._build_board(run, resume_board.all())
                 self._board = board
                 checkpoint.save_tasks(board)   # 修复后的状态立即落盘
+                if self._resume_checkpoint == "step":
+                    # R20：先消费已裁决的 step 审批单（abort 在这里转 CANCELLED），
+                    # 再重入执行；未裁决时断点门会复用同一张单再次挂起。
+                    self._apply_step_decision(run)
                 if self._resume_checkpoint == "plan":
                     # R4：审批挂在计划卡点 → 拿已落盘的面板重入同一个卡点，
                     # 不再拆解、不再烧规划 token。交付卡点无需特殊分支：
@@ -980,6 +990,8 @@ class Crew:
                 # R6：委派治理——角色是否存在、谁能派、能套多深、能裂变多少。
                 catalog=self._catalog,
                 settings=self._settings,
+                # R20：单步断点（debug_step 开启时非 None，默认 None 零参与）。
+                step_gate=self._make_step_gate(run),
             )
             # P1-5：持有当前调度器供外部 ``cancel()`` 转发；若取消请求已在路上
             # （规划阶段到达），新装配的调度器立刻停止派发。
@@ -1648,6 +1660,47 @@ class Crew:
             entities=len(records),
             distinct=len({record.name.casefold() for record in records}),
         )
+
+    # ── R20：单步断点 ─────────────────────────────────────────────────────
+
+    def _make_step_gate(
+        self, run: _Run
+    ) -> Callable[[list[Task]], None] | None:
+        """``debug_step`` 开启时返回断点门，否则 ``None``（调度器零参与）。
+
+        「``run`` 裁决已消费」的 run 不再武装断点——用户已经说了「一路跑到
+        终局」，resume 不能又停下来。``abort`` 在 resume 路径
+        （:meth:`_apply_step_decision`）转成 ``CANCELLED``，走不到这里。
+        """
+        if not self._settings.debug_step:
+            return None
+        store = ApprovalStore(run.checkpoint.run_dir)
+        consumed, final = store.consumed_steps()
+        if final == "run":
+            return None
+        return StepGate(store, consumed)
+
+    def _apply_step_decision(self, run: _Run) -> None:
+        """resume 重入 step 断点前消费已裁决的审批单（DeferredPrompter 纪律 2）。
+
+        - ``abort`` → 与计划卡点 ``cancel`` 同一条收尾路径：``CANCELLED`` 封版 +
+          ``RunCancelled``（``main.py`` 捕获后以退出码 130 结束）。
+        - ``step`` / ``run`` → 只消费；放行集合与终局指令由
+          :meth:`_make_step_gate` 经 ``consumed_steps()`` 快照读取。
+        - 仍 ``pending`` → 什么都不做：断点门会复用同一张单再次挂起。
+        """
+        store = ApprovalStore(run.checkpoint.run_dir)
+        opened = store.open_for("step")
+        if opened is None or opened.status != "decided":
+            return
+        store.consume(opened.id)
+        if opened.decision.get("action") == "abort":
+            # ``self._board`` 已由 resume 分支设为修复后的面板（与 plan 卡点
+            # cancel 路径同一纪律：封版前把面板交给 _suspend/_finalize 落盘）。
+            self._finalize(run, RunStatus.CANCELLED)
+            raise RunCancelled(
+                f"调试断点 abort：run {run.record.run_id} 结束为 cancelled"
+            )
 
     def _suspend(self, run: _Run, request: ApprovalRequest) -> RunRecord:
         """R4：人工审批挂起 —— 写 ``awaiting_approval`` 后**正常退出，不封版**。
