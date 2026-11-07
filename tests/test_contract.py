@@ -6,6 +6,7 @@ brief 给定的用例外，这里还钉死两类行为 —— 能解析的 kind 
 以及 ``has_placeholder`` 的三条规则标定（HTML 桩 37 字符 vs 真实内容 47 字符）。
 """
 
+import sys
 import warnings
 from typing import get_args
 
@@ -181,7 +182,11 @@ def test_parser_crash_is_reported_not_raised(monkeypatch):
 
 def test_huge_integer_literal_reports_instead_of_raising():
     assert parse_check("json", "1" * 5000) is not None
-    assert parse_check("toml", "a = " + "1" * 5000) is not None
+    if sys.version_info >= (3, 11):
+        # 3.10 无 tomllib，toml 校验按 contract.py 顶部注释文档化地「跳过检查」
+        # 返回 None；超长整数的 int 转换上限（>4300 位抛 ValueError）也是
+        # 3.11+ 才有的 CPython 行为。yaml 两条路径都依赖 PyYAML，无版本差异。
+        assert parse_check("toml", "a = " + "1" * 5000) is not None
     assert parse_check("yaml", "a: " + "1" * 5000) is not None
 
 

@@ -9,6 +9,7 @@ DeferredPrompter 的挂起/消费语义、结果标签解析与条件边判定�
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -303,7 +304,19 @@ def flow_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 def _run_dir(env) -> Path:
-    return next(env["settings"].output_dir.iterdir())
+    """输出目录下唯一的 run 目录（名字形如 ``20261107-093012-xxxx``）。
+
+    不能用 ``next(iterdir())``：经验库 / 实体记忆会在 output 下建
+    ``knowledge/`` 子目录（R3），Linux 上目录枚举顺序不定，拿到它就会
+    FileNotFoundError（CI 3.10 首跑的真实失败）。按 run-id 模式过滤 + 排序，
+    跨平台跨版本确定性。
+    """
+    candidates = sorted(
+        path for path in env["settings"].output_dir.iterdir()
+        if path.is_dir() and re.match(r"^\d{8}-\d{6}-", path.name)
+    )
+    assert candidates, "输出目录下没有 run 目录（run 未落盘？）"
+    return candidates[0]
 
 
 async def test_plan_gate_suspends_and_resumes_from_same_checkpoint(flow_env):
