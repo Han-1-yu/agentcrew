@@ -129,6 +129,9 @@ python main.py run --demo
 > ——真实端口与认证、systemd / 反代示例、配置三通道与生产必配、日志与备份、
 > 扩容边界、监控告警、升级步骤和上线前检查清单。
 >
+> **测试覆盖情况**：见 [docs/TEST-REPORT.md](docs/TEST-REPORT.md)
+> ——2501 用例按子系统与业务场景的覆盖矩阵、质量门与已知边界。
+>
 > **在别的 Python 程序里调用 AgentCrew**：见 [sdk/README.md](sdk/README.md)
 > ——官方零依赖 SDK（HTTP + SSE，含可直接运行的示例）。
 
@@ -2658,6 +2661,23 @@ API `/runs/{id}/resume` 转 4xx。
 stdin/stdout/stderr 三条管道的 asyncio 传输句柄留给 GC，每次 run 收尾都报
 `unclosed transport` 警告；现在进程退出后立即关闭（stdout/stderr 是
 `StreamReader`，asyncio 子进程包装没有公开关闭口，需经其底层 transport）。
+
+
+## R23 功能测试报告：2501 用例的覆盖矩阵
+
+验收报告遗留的最后一项。`docs/TEST-REPORT.md` 用两个矩阵回答「测了什么」：
+
+- **模块矩阵**：120 个测试文件按 17 个子系统聚合（模型层 521 / 产物契约 426 /
+  任务调度 391 / 运行时设施 222 / Agent 134 / HTTP API 154 / 门禁 108 …），
+  每行附主要覆盖点；
+- **场景矩阵**：17 类业务动作（全链路编排、三层门禁、审批挂起恢复、断点调试、
+  生命周期、委派协作、契约校验、API/SDK/CLI、Webhook、MCP、成本与配额、
+  安全脱敏、确定性 mock、架构守卫…）到用例来源与关键断言的映射。
+
+报告同时如实声明边界：**没有行覆盖率数字**（项目不依赖 coverage，矩阵是
+用例-模块-场景口径，不是行覆盖百分比）、mock 与真实模型的行为差、容量未压测、
+CI 覆盖 Linux 四版本而 Windows 只在 3.12 本机验证。
+
 
 
 
