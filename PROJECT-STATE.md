@@ -8,16 +8,17 @@
 
 ## 0. 一句话现状
 
-**引擎与管线健康，无 P0/P1 阻断项。** 全量测试 **2434 passed / 1 skipped / 0 failed**（2435 用例收集，2026-11-07 R17 后分 5 批实测），三个预设样例 100% 通过，真实模型通道可用（`doctor` 6/6 通过）；Studio 架构检查 / e2e 28/28 / selftest 16/16 全绿。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁。
+**引擎与管线健康，无 P0/P1 阻断项。** 全量测试 **2444 passed / 1 skipped / 0 failed**（2445 用例收集，2026-11-07 R18 后分 5 批实测），三个预设样例 100% 通过，真实模型通道可用（`doctor` 6/6 通过）；Studio 架构检查 / e2e 28/28 / selftest 16/16 全绿。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道。
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | 2435 collected / 2434 passed / 1 skipped / 0 failed（3.12.10 + pytest 9.1.1，`--assert=plain`；R4 +38、R5 +16、R6 +21、R7 +14、R8 +9、R9 +6、R10 +13、R11 +17、R12 +21、R13 +12、R14 +12、R15 +18、R16 +34、R17 +24，本机断言重写 segfault 后按 §6 分 5 批累计） |
+| 全量测试 | 2445 collected / 2444 passed / 1 skipped / 0 failed（3.12.10 + pytest 9.1.1，`--assert=plain`；R4 +38、R5 +16、R6 +21、R7 +14、R8 +9、R9 +6、R10 +13、R11 +17、R12 +21、R13 +12、R14 +12、R15 +18、R16 +34、R17 +24、R18 +10，本机断言重写 segfault 后按 §6 分 5 批累计） |
+| 静态检查 | `ruff check .` **全绿**（全仓，14 项历史告警清零）；`mypy agentcrew/` **114 文件零错误**（2.4.1）。CI 等价检查链在本机 3.12 首次跑通 |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
 | Studio | `npm run check` **63** 模块 / 37 分片通过、selftest 16/16、e2e 28/28、probe 24/24 |
-| Git | `master` 领先 `origin/master` 173 个提交（均为本地提交、未推送）；**工作区干净，无未提交改动** |
+| Git | `master` 领先 `origin/master` 174 个提交（均为本地提交、未推送）；**工作区干净，无未提交改动** |
 | 角色 | 8 个内置岗位角色 + 执行体（Agent Profile）可多绑 |
 
 ```bash
@@ -629,7 +630,7 @@ ledger 里留一条 `shutdown_timeout`。
 查询串 / 头 / body / 错误映射 / SSE 帧 / 翻页 / 等待终态 / 示例 `--help`），外加
 **一次真 `main.py serve` + 真 mock run 的端到端**（health → create → wait → ledger
 → stats → approvals）。全量 **2410 passed / 1 skipped / 0 failed**；`ruff check`
-对新增文件全绿（根仓库另有 14 项**既存**告警，见 §7，本轮未扩大改动面）。
+对新增文件全绿（根仓库另有 14 项**既存**告警，见 §7，本轮未扩大改动面；R18 已全部闭环）。
 
 **端到端踩坑（值得记住）**：从 pytest 进程继承 `os.environ` 起子进程，宿主机注入的
 `PYTHONPATH` shim 会让子进程 `import ssl` 直接崩（`_TLSMessageType` 只读），
@@ -681,6 +682,47 @@ run 写坏 checkpoint。
 （跨平台代价与风险不值）· 收敛时自动 `resume`（状态修正与重跑是两件事，不该替用户
 决定）· 心跳写进 `run.json`（会与状态落盘竞争）。
 
+### 3.23 R18：CI 就绪与限流配置通道（2026-11-07）
+
+R16 发现全仓 `ruff check .` 有 14 项历史告警，但「CI 首次实跑」一直没做。本轮装上
+CI 同版本 `mypy==2.4.1` 后又暴露 9 项错误（其中 1 项是 R17 新增 `lifecycle.py` 的
+`__exit__` 注解）。两项一起收口，才谈得上 CI 可用。
+
+| 类 | 数量 | 处理 |
+|---|---|---|
+| ruff I001 / F401 / UP037 | 12 | `ruff check . --fix` 自动修（import 排序、未用导入、去引号注解）；逐个复核 diff，无循环导入风险（相关文件都有 `from __future__ import annotations`） |
+| ruff UP028 | 1 | `_safe_lines` 改 `yield from handle`；文件句柄不接收 send/throw，`try/except OSError` 语义不变 |
+| ruff B905 | 2 | `zip(deps, statuses, strict=True)`；`statuses` 由 `deps` 推导长度必等，加 strict 只是把不变量写出来 |
+| mypy 类型错误 | 9 | 见下：全部是类型标注 / 结构 / narrowing 调整，**不改运行时逻辑** |
+
+mypy 的 9 项分别落在：`lifecycle.__exit__`（`bool` → `None`，不吞异常）·
+`task_board` 列表推导的 Optional narrowing（展开成显式循环）· `crew` 的 `prompter`
+None guard 与 `message_router` 类型（实际接受 `PeerRouter` 这类**非 Callable** 的
+duck-type 对象，字段/getter/setter 放宽为 `Any | None`）· `registry` 的
+`subtask_creator.setter` 移到 getter 相邻（mypy 才识别成可写 property，顺带消掉
+`scheduler` 的「property 只读」连带错误）· `reviewer.layer` 改用
+`Literal["static","llm","human","supervisor"]` · `builtins._crosses_link` 的 `rel`
+改收 `PurePath`（`safe_relpath` 返回 `PurePosixPath`）。
+
+**限流配置通道**：`api_rate_limit_window` 此前既无 `AGENTCREW_*` 映射、也不在
+`agentcrew.yaml` 标量白名单，运维写进 YAML 会被静默忽略。本轮按 R3 的「4 通道」
+口径补齐：env 映射、YAML 标量白名单（同组 `enabled` / `max` 一并补）、
+`config export`（仅偏离默认时导出）、`config import` 顶层合并键；字段加
+`Field(default=60, ge=1)`，非法窗口在加载期就报错，`serve` 启动期的兜底校验保留。
+`tests/test_rate_limit_config.py` 10 例覆盖 env / YAML / env 覆盖 YAML / 非法值 /
+默认值不变 / export / 默认导出无新增键 / export→import 往返。
+
+`scripts/ci-check.ps1` 也钉成 `ruff==0.17.3` + `mypy==2.4.1`，与 `ci.yml` 一致，
+避免「本地绿、CI 红」。
+
+**验证**：`ruff check .` 全仓全绿；`mypy agentcrew/` 114 文件零错误；全量
+**2444 passed / 1 skipped / 0 failed**；三样例 9/9、5/5、7/7。相关既有用例
+（config / api_auth / 契约文档守卫）一并复跑通过。
+
+**刻意未做**：3.10 / 3.11 / 3.13 的矩阵**仍需 GitHub Actions 实跑**（本机只有
+3.12.10）；`zip(strict=)` 要求 3.10+，与 `pyproject.toml` 的下界一致。CI 的
+`pytest -q` 是单进程全量，本机 Windows 仍按 §6 分 5 批规避断言重写段错误。
+
 **刻意未做（下一轮再定）**：把 `/providers` 等端点补进 `openapi.yaml` 后再封装 ·
 异步客户端 · 发布到 PyPI。
 
@@ -695,7 +737,7 @@ run 写坏 checkpoint。
 | **HANDOFF**（初版交接） | 2026-10-06 | SDD 会话完成 34 个任务实现/评审，并用真实 DeepSeek 跑 6 次端到端验收，每次暴露一个 mock 无法暴露的缺陷并修掉 | 已被 11-01 交接取代，结论并入本文 |
 | **V7-HANDOFF** | 2026-10-10 | V7 增强落地：P0 数据脱敏（`redact.py`）、配额、循环检测等，21 项脱敏用例全绿 | 能力已并入 §2，P2.5 脱敏已实施 |
 | **HANDOFF-2026-11-01** | 2026-11-01 | 自包含交接：架构、模块地图、命令、退出码、环境坑、13 项待办；声明"护城河是测试" | 本文继承其结论；待办见 §7 |
-| **HANDOVER-BASELINE** | 2026-11-01 | 实测 1946 passed / 1 skipped；两个风险：Git 提交清单不完整（真实 168 文件而非文档所说 65）、真实模型 Key 失效；查明 segfault 实为 `PYTHONPATH` 污染而非解释器不稳 | Key 已恢复（`doctor` 6/6 通过）；提交随 R1–R17 推进（现领先远端 173） |
+| **HANDOVER-BASELINE** | 2026-11-01 | 实测 1946 passed / 1 skipped；两个风险：Git 提交清单不完整（真实 168 文件而非文档所说 65）、真实模型 Key 失效；查明 segfault 实为 `PYTHONPATH` 污染而非解释器不稳 | Key 已恢复（`doctor` 6/6 通过）；提交随 R1–R18 推进（现领先远端 174） |
 | **V4 质量审查报告** | 2026-10-10 | 引擎侧修 6 项：密钥环境变量名硬编码、模型发现错误结果被缓存 60s 无法重试等 | 全部闭环 |
 | **V4 深度审查报告** | 2026-10-10 | 追加 15 项（D-01…D-15）：`api_key_env` 形状校验、空 model id 收录、重名 provider、CSP、弹窗状态清理等，逐项独立 commit | 全部闭环 |
 | **V4-FE 只读问题清单** | 2026-10-10 | 前端边界问题（深色模式 DAG 文字不可见、内联边框硬编码、主题缓存闪烁等），只读审查不改码 | 已由后续 F4–F7 提交修复 |
@@ -735,7 +777,8 @@ run 写坏 checkpoint。
 | R14 | Webhook 多接收端 + 只推失败（见 §3.19） | 2358 |
 | R15 | Webhook 持久化重放队列：入队前落盘、启动补投（见 §3.20） | 2376 |
 | R16 | 官方 Python SDK + 示例：零依赖 HTTP/SSE 客户端（见 §3.21） | 2410 |
-| R17 | run 生命周期加固：心跳 / 僵尸收敛 / resume 锁（见 §3.22） | **2434（当前）** |
+| R17 | run 生命周期加固：心跳 / 僵尸收敛 / resume 锁（见 §3.22） | 2434 |
+| R18 | CI 就绪 + 限流窗口配置通道（见 §3.23） | **2444（当前）** |
 
 ---
 
@@ -787,9 +830,10 @@ run 写坏 checkpoint。
 
 1. ✅ **R3 已闭环**：工具参数 JSON Schema 强校验（见 §3.8）
 2. MCP SSE/HTTP transport 资源关闭（消除 unclosed warning；`mcp_servers` 接入生产 run 已由 R13 闭环）
-3. CI 首次实跑（remote 已配，本地领先 173 提交；需验证 3.10–3.13 矩阵）
-4. 功能测试报告汇总（2434 用例按模块/场景出覆盖矩阵）
-5. CI 前清理 `ruff check .` 的 **14 项既存告警**（I001×9 / F401 / UP037 / UP028 / B905×2，分布在 `agentcrew/agents/team.py`、`crew/crew.py`、`runtime/approvals.py`、`runtime/ledger.py`、`task/planner.py`、`task/task_board.py` 与 6 个旧测试文件）。本轮新增的 `sdk/` / `tests/test_sdk.py` / `tests/conftest.py` 单独跑 ruff 全绿；没顺手全仓修是因为 B905 的 `zip(strict=)` 与 UP028 会改变行为，不该混进 SDK 提交 |
+3. CI 首次实跑：本机 3.12 已跑通等价检查链（ruff / mypy / pytest 全绿）；**仍缺 GitHub Actions 上 3.10–3.13 四版本矩阵**（remote 已配，本地领先 174 提交）
+4. 功能测试报告汇总（2444 用例按模块/场景出覆盖矩阵）
+5. ~~CI 前清理 `ruff check .` 的 14 项既存告警~~：✅ **R18 已闭环**（见 §3.23）；装 CI 同版本 mypy 后一并清掉 9 项类型错误，现在 `ruff check .` 全绿、`mypy agentcrew/` 114 文件零错误
+6. ~~`api_rate_limit_window` 配置通道~~：✅ **R18 已闭环**（env / YAML / `config export` / `config import` 四通道 + `ge=1` 校验，见 §3.23） |
 
 **大项（建议单独立项）**
 

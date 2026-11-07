@@ -289,6 +289,7 @@ class ResumeLock:
         self.acquire()
         return self
 
-    def __exit__(self, *exc_info: object) -> bool:
+    def __exit__(self, *exc_info: object) -> None:
+        # 返回 None（不吞异常）；显式返回 False 会被 mypy 2.x 的 exit-return
+        # 规则判为「可能吞异常」的 bool 返回类型。
         self.release()
-        return False

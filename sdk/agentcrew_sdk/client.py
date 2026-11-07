@@ -129,9 +129,8 @@ class AgentCrewClient:
     def __enter__(self) -> AgentCrewClient:
         return self
 
-    def __exit__(self, *exc_info: object) -> bool:
+    def __exit__(self, *exc_info: object) -> None:
         self.close()
-        return False
 
     def close(self) -> None:
         """标记不再使用。urllib 没有连接池，这里没有需要释放的句柄。"""

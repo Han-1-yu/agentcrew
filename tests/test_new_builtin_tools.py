@@ -16,13 +16,12 @@ from agentcrew.tools.builtins import WriteFileTool
 from agentcrew.tools.network import (
     MAX_MAX_CHARS,
     WebFetchTool,
-    _NoRedirect,
     _is_forbidden_ip,
+    _NoRedirect,
     validate_fetch_url,
 )
 from agentcrew.tools.schema import validate_tool_args
 from agentcrew.utils.files import read_text
-
 
 # ── WriteFileTool ──────────────────────────────────────────────────────
 

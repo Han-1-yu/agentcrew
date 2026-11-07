@@ -18,8 +18,8 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from agentcrew.artifacts.spec import ArtifactSpec
-from agentcrew.task.conditions import normalize_outcome
 from agentcrew.roles.catalog import RoleCatalog
+from agentcrew.task.conditions import normalize_outcome
 from agentcrew.task.graph import TaskGraph
 from agentcrew.task.task import Task
 

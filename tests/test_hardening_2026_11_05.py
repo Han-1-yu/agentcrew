@@ -264,8 +264,9 @@ async def test_cache_hit_never_calls_quota_check(monkeypatch):
 @pytest.mark.asyncio
 async def test_structured_path_now_checks_quota():
     """PM 拆解 / G2 评审走的结构化路径也受配额约束（此前完全失效）。"""
-    from agentcrew.models.quota import QuotaExhaustedError
     from pydantic import BaseModel
+
+    from agentcrew.models.quota import QuotaExhaustedError
 
     class _Out(BaseModel):
         ok: bool

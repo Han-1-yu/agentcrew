@@ -280,7 +280,7 @@ class TaskBoard:
             if not deps:
                 continue
             statuses = [self._status_of(dep) for dep in deps]
-            pairs = list(zip(deps, statuses))
+            pairs = list(zip(deps, statuses, strict=True))
             # 非条件性 SKIPPED（上游失败 / 取消）保持原语义，优先级最高。
             if any(
                 status == TaskStatus.SKIPPED and dep not in conditional_skips
@@ -293,12 +293,14 @@ class TaskBoard:
             if not all(status in SETTLED_STATUSES for status in statuses):
                 continue
             if task.when_outcomes:
-                upstream_outcomes = [
-                    (self._tasks[dep].result.outcome
-                     if dep in self._tasks and self._tasks[dep].result is not None
-                     else None)
-                    for dep in deps
-                ]
+                # 展开成显式循环：列表推导里重复索引 self._tasks[dep] 时，
+                # mypy 无法把 result is not None 的 narrowing 带进 .outcome。
+                upstream_outcomes: list[str | None] = []
+                for dep in deps:
+                    upstream = self._tasks.get(dep)
+                    result = upstream.result if upstream is not None else None
+                    upstream_outcomes.append(
+                        result.outcome if result is not None else None)
                 if not condition_matches(task, upstream_outcomes):
                     self.transition(
                         task_id, TaskStatus.SKIPPED, reason=CONDITION_SKIP_REASON
@@ -336,7 +338,7 @@ class TaskBoard:
             if not all(
                 status == TaskStatus.SUCCEEDED
                 or (status == TaskStatus.SKIPPED and dep in conditional_skips)
-                for dep, status in zip(deps, statuses)
+                for dep, status in zip(deps, statuses, strict=True)
             ):
                 continue
             if any(status == TaskStatus.SUCCEEDED for status in statuses):

@@ -58,6 +58,7 @@ _ENV_TO_FIELD: dict[str, str] = {
     "AGENTCREW_API_KEYS": "api_keys",
     "AGENTCREW_API_RATE_LIMIT_ENABLED": "api_rate_limit_enabled",
     "AGENTCREW_API_RATE_LIMIT_MAX": "api_rate_limit_max",
+    "AGENTCREW_API_RATE_LIMIT_WINDOW": "api_rate_limit_window",
     "AGENTCREW_REDACT_ENABLED": "redact_enabled",
     "AGENTCREW_REDACT_API_KEYS": "redact_api_keys",
     "AGENTCREW_REDACT_PII": "redact_pii",
@@ -102,6 +103,8 @@ _YAML_SCALAR_KEYS = (
     "max_supervisor_reassignments",
     "webhook_url", "webhook_secret", "webhook_events", "webhook_timeout_seconds",
     "webhook_max_retries", "webhooks",
+    # E-3：限流三参数此前只有 env 通道，YAML 里写会被静默忽略（R18 补齐）。
+    "api_rate_limit_enabled", "api_rate_limit_max", "api_rate_limit_window",
 )
 
 #: 分层合并时按 key 覆盖（映射型）/ 按序合并去重（列表型）而非整体替换的字段。
@@ -654,12 +657,21 @@ class Settings(BaseModel):
     ``False``（默认）时不挂限流中间件。``True`` 时 serve 子命令按
     :attr:`api_rate_limit_max` / :attr:`api_rate_limit_window` 构造
     :class:`~agentcrew.api.auth.RateLimiter`，超限回 429 + ``Retry-After``。
-    环境变量 ``AGENTCREW_API_RATE_LIMIT_ENABLED``。
+    环境变量 ``AGENTCREW_API_RATE_LIMIT_ENABLED``；YAML 同名顶层标量（R18）。
     """
     api_rate_limit_max: int = 100
-    """滑动窗口内每 IP 允许的最大请求数（E-3）；``<= 0`` 视为不限流。"""
-    api_rate_limit_window: int = 60
-    """速率限制窗口时长（秒，E-3）；与 :attr:`api_rate_limit_max` 共同决定策略。"""
+    """滑动窗口内每 IP 允许的最大请求数（E-3）；``<= 0`` 视为不限流。
+
+    环境变量 ``AGENTCREW_API_RATE_LIMIT_MAX``；YAML 同名顶层标量（R18）。
+    """
+    api_rate_limit_window: int = Field(default=60, ge=1)
+    """速率限制窗口时长（秒，E-3）；与 :attr:`api_rate_limit_max` 共同决定策略。
+
+    R18 补齐配置通道：环境变量 ``AGENTCREW_API_RATE_LIMIT_WINDOW``、YAML 同名
+    顶层标量，且可经 ``config export/import`` 往返。``ge=1`` 让非法窗口在配置
+    加载期就报错——窗口为 0 会让限流静默失效；``serve`` 启动期仍保留同一条
+    校验，兜住 ``model_copy`` 绕过 pydantic 的路径。
+    """
     gate_config: dict[str, Any] = Field(default_factory=dict)
     """门禁规则配置化（P2-5）：G1/G2/G3 开关与评审参数。
 

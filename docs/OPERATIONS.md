@@ -112,6 +112,7 @@ AGENTCREW_API_AUTH_ENABLED=true \
 AGENTCREW_API_KEYS="替换成随机长串A,替换成随机长串B" \
 AGENTCREW_API_RATE_LIMIT_ENABLED=true \
 AGENTCREW_API_RATE_LIMIT_MAX=100 \
+AGENTCREW_API_RATE_LIMIT_WINDOW=60 \
 AGENTCREW_LOG_JSON=1 \
 python main.py serve --host 127.0.0.1 --port 8765
 ```
@@ -120,11 +121,11 @@ python main.py serve --host 127.0.0.1 --port 8765
 请求带 `Authorization: Bearer <key>` 或 `X-API-Key: <key>`。
 
 **认证是 fail-closed 的**：`api_auth_enabled=true`（或传了 `--api-key`）却没有任何有效 key，
-`serve` 会拒绝启动并打印提示，不会退化成匿名服务。**限流窗口固定 60 秒**：
-`api_rate_limit_window` 既没有 `AGENTCREW_*` 环境变量、也不在 `agentcrew.yaml` 的标量
-白名单里，运维只能调 `_MAX`（每 IP 请求数）；`window < 1` 的启动校验只在程序内注入
-该字段时才会触发。若业务需要可调窗口，得先补配置通道——别在 YAML 里写一个会被静默
-忽略的键。
+`serve` 会拒绝启动并打印提示，不会退化成匿名服务。限流三参数**都能配**（R18 补齐）：
+`AGENTCREW_API_RATE_LIMIT_ENABLED` / `_MAX` / `_WINDOW` 环境变量、`agentcrew.yaml`
+同名顶层标量，以及 `config export/import` 往返。`api_rate_limit_window` 默认 60 秒、
+下限 1 秒——非法值在配置加载期就报错；`serve` 启动期仍保留同一条兜底校验，防止
+`model_copy` 绕过 pydantic 的路径。
 
 认证中间件挂在**所有**路由之前，`GET /health` 也不例外——启用认证后探活必须带 key：
 
@@ -259,7 +260,7 @@ python main.py config import /etc/agentcrew/new.yaml
 | `AGENTCREW_OUTPUT_DIR` | `./output` | 独立数据盘绝对路径 | 所有 run 与跨 run 数据都在这里 |
 | `AGENTCREW_API_AUTH_ENABLED` | `false` | **`true`** | 不开就是匿名可访问 |
 | `AGENTCREW_API_KEYS` | 空 | 随机长串，逗号分隔 | 轮换时新旧 key 可并存一段时间 |
-| `AGENTCREW_API_RATE_LIMIT_ENABLED` / `_MAX` | 关 / 100 次每 60s | 按调用方调 | 按客户端 IP 滑动窗口，超限 429；窗口固定 60s，无 env / YAML 通道 |
+| `AGENTCREW_API_RATE_LIMIT_ENABLED` / `_MAX` / `_WINDOW` | 关 / 100 次 / 60s | 按调用方调 | 按客户端 IP 滑动窗口，超限 429；三者都支持 env / YAML / `config export`（R18） |
 | `AGENTCREW_LOG_LEVEL` / `AGENTCREW_LOG_JSON` | `INFO` / 关 | 生产开 JSON | 结构化日志进采集系统，已脱敏 |
 | `AGENTCREW_WEBHOOK_URL` 或 `webhooks` | 空 | 按需 | 关键节点外推；R15 起失败会落盘补投 |
 | `AGENTCREW_MAX_CONCURRENCY` | 4 | 按 Provider 配额调 | 峰值并发受 DAG 宽度约束 |
@@ -410,7 +411,7 @@ with AgentCrewClient("http://127.0.0.1:8765", api_key="<key>") as client:
 | `webhook_failed`（`shutdown_timeout` / 重试耗尽） | P2 | 检查接收端；R15 起记录留盘会补投，但要盯 spool 是否堆积 |
 | `webhook_failed(replay_discarded: …)` / `replay_target_missing` | P2 | 通知被淘汰或地址变了，核对 `webhooks` 配置 |
 | `api_auth_failed` 突增 | P2 | 疑似凭据泄露或扫描；轮换 `AGENTCREW_API_KEYS` |
-| 429 变多 | P3 | 调 `AGENTCREW_API_RATE_LIMIT_MAX`，或排查调用方（窗口固定 60s） |
+| 429 变多 | P3 | 调 `AGENTCREW_API_RATE_LIMIT_MAX` / `_WINDOW`，或排查调用方 |
 | `output_dir` 剩余空间 < 20% | P2 | 按 §4.3 清理，避免 ledger 写失败 |
 | 退出码 3 / 4 的 CLI run | P2 | 配置/参数错误或停滞，见 §7.3 |
 
@@ -451,9 +452,18 @@ python main.py status <最近一次 run_id>
 - **落盘结构**：`schema_version=1` 与 10 态状态机是兼容红线，升级不应要求手工改
   `run.json` / `tasks.json`。
 - **密钥**：`config export` 的输出是脱敏的，升级后要把密钥从密钥管理重新注入。
-- **CI 参考**：`.github/workflows/ci.yml` 在 3.10–3.13 四版本跑 ruff / mypy / pytest，
-  `scripts/ci-check.ps1` 是本地复现脚本（自动建 `.venv-ci`）。本机 Windows 全量回归
-  需分 5 批，见 HANDOVER §5.1。
+- **CI 等价检查**（R18 起本地可完整跑通，三步全部零错误）：
+
+  ```bash
+  pip install "ruff==0.17.3" "mypy==2.4.1"   # 与 ci.yml 钉同一版本
+  ruff check .
+  mypy agentcrew/
+  pytest -q                                  # CI 单进程；本机 Windows 需分 5 批
+  ```
+
+  `.github/workflows/ci.yml` 在 3.10–3.13 四版本跑同一套检查；Windows 下用
+  `scripts/ci-check.ps1`（自动建 `.venv-ci`、装同版本工具）一键复现。本机
+  Windows 全量回归需分 5 批，见 HANDOVER §5.1。
 
 ---
 
@@ -484,7 +494,7 @@ python main.py status <最近一次 run_id>
 | `serve 启动失败（…: 地址已在使用）` | 端口被占 | 换 `--port` 或停掉占用进程 |
 | `--port 必须是 1–65535` | 参数越界 | 改成合法端口（0 不允许，虽能绑随机端口但打印地址不可用） |
 | `已启用 API 认证但未配置任何密钥` | fail-closed 生效 | 配 `AGENTCREW_API_KEYS` / `--api-key`，或明确关掉 `api_auth_enabled` |
-| `api_rate_limit_window 必须 >= 1` | 程序内注入了非法窗口值 | 窗口固定 60s、运维配不了；查是不是二次集成传了 `cli_overrides` |
+| `api_rate_limit_window 必须 >= 1` | 配置里给了 0 / 负数，或程序内 `model_copy` 注入了非法窗口 | 配置加载期通常已先报错；出现这条说明绕过了 pydantic，检查二次集成的 `cli_overrides` |
 | `配置错误：…` | YAML / 环境变量值非法 | 用 `config export` 看合并视图，逐项核对 |
 | `doctor` 的 `output_dir` 失败 | 目录不存在 / 不可写 / 磁盘满 | 建目录、修权限、清空间；`AGENTCREW_OUTPUT_DIR` 用绝对路径 |
 | 401 | 未带 / 带错 key | `Authorization: Bearer <key>` 或 `X-API-Key`；密钥不回显在错误信息里 |

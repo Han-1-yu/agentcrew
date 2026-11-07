@@ -15,7 +15,6 @@ import pytest
 
 from agentcrew.knowledge.retrieval import BM25Index, tokenize
 
-
 # ── 分词 ──────────────────────────────────────────────────────────────────
 
 
@@ -111,8 +110,9 @@ def test_query_tokens_are_deduplicated():
 
 
 def _store(tmp_path):
-    from agentcrew.knowledge.experience import Experience, ExperienceStore
     from datetime import datetime
+
+    from agentcrew.knowledge.experience import Experience, ExperienceStore
 
     store = ExperienceStore(tmp_path)
     for index, (description, role) in enumerate([

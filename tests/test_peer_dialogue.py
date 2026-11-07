@@ -37,7 +37,6 @@ from agentcrew.runtime.ledger import Ledger
 from agentcrew.task.task import Task
 from agentcrew.task.task_board import TaskBoard
 
-
 GOOD = "```python file=a.py\ndef f():\n    return 1\n```\n"
 MSG_ARCH = '<message to="architect">\n数据模型字段叫什么？\n</message>\n'
 ARCH_REPLY = "字段叫 TodoItem。"

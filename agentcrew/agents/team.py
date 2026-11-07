@@ -23,7 +23,6 @@ from datetime import datetime
 from agentcrew.agents.base_agent import AgentExecutionError, BaseAgent
 from agentcrew.agents.plan import ResolvedAgent, pick_primary
 from agentcrew.artifacts.spec import ArtifactRecord
-from agentcrew.utils.files import path_in_scope
 from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.config import Settings
 from agentcrew.contracts import EventSink
@@ -32,6 +31,7 @@ from agentcrew.models.providers.base import Message
 from agentcrew.roles.binding import BindingError, Duty, RoleAgents
 from agentcrew.roles.spec import RoleSpec
 from agentcrew.task.task import Task, TaskResult
+from agentcrew.utils.files import path_in_scope
 from agentcrew.utils.tokens import estimate_tokens
 
 #: 复核/裁判看多少产物内容：够判断"有没有按标准做"，不追求全文。

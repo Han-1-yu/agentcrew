@@ -57,8 +57,9 @@ def _safe_lines(handle: Any, path: Any) -> Iterator[str]:
     历史读不出来。JSON 坏行仍由调用方按原规则跳过并逐条记 warning。
     """
     try:
-        for line in handle:
-            yield line
+        # yield from 与逐行迭代文件句柄等价：handle 是普通文件对象，不接收
+        # send/throw；try 仍会捕获迭代中途的 OSError，保留已读到的部分。
+        yield from handle
     except OSError as exc:
         _logger.warning("ledger 读取中断，保留已读部分 %s: %s", path, exc)
 

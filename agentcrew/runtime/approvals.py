@@ -58,7 +58,7 @@ class ApprovalPending(RuntimeError):
     ``_suspend``，绝不能落到「兜底封版为 FAILED」的异常分支。
     """
 
-    def __init__(self, request: "ApprovalRequest") -> None:
+    def __init__(self, request: ApprovalRequest) -> None:
         super().__init__(
             f"审批请求 {request.id}（{request.checkpoint}）等待人工裁决"
         )

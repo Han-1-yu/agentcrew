@@ -11,15 +11,17 @@
 
 | 项 | 值 |
 |---|---|
-| 已提交 | R3–R17；R17 是最新提交（具体 hash 以 `git log -1` 为准） |
-| **未提交** | **无，工作区干净**（R17 已于 2026-11-07 提交） |
-| 测试 | R17 后全量 **2434 passed / 1 skipped / 0 failed**（2435 collected；分 5 批实测 448 + 547 + 300 + 734 + 405） |
+| 已提交 | R3–R18；R18 是最新提交（具体 hash 以 `git log -1` 为准） |
+| **未提交** | **无，工作区干净**（R18 已于 2026-11-07 提交） |
+| 测试 | R18 后全量 **2444 passed / 1 skipped / 0 failed**（2445 collected；分 5 批实测 448 + 547 + 300 + 744 + 405） |
+| 静态检查 | `ruff check .` 全绿 · `mypy agentcrew/` 114 文件零错误（本机 3.12 首次跑通 CI 等价检查链） |
 | 离线样例 | `todo` 9/9 · `linear` 5/5 · `hierarchy` 7/7，全部 `completed` |
 | 一句话定位 | 8 角色多 Agent 编排器：规划 → 执行 → 三层门禁 → 交付；可完全离线（mock）跑通 |
 
 **接手第一件事**：跑一次三套样例确认环境（§5.1），然后从 §7.3 剩余两项
 （单步/断点调试、主管 `suggestions` 通道）或 §7.4 里挑一项推进。
-第一档三项与第二档的稳定性两项均已闭环，不需要再补跑或补文档。
+两个小项（限流窗口通道、ruff/mypy 清理）已由 R18 闭环；CI 只剩
+GitHub Actions 上 3.10–3.13 的四版本矩阵未实跑。
 
 ---
 
@@ -165,9 +167,14 @@ PY="C:/Users/33793/AppData/Local/Microsoft/WindowsApps/python.exe"
 PYTHONPATH= "$PY" -m pytest tests/test_[a-b]*.py -q --assert=plain   # 448 passed, 1 skipped
 PYTHONPATH= "$PY" -m pytest tests/test_[c-e]*.py -q --assert=plain   # 547
 PYTHONPATH= "$PY" -m pytest tests/test_[f-l]*.py -q --assert=plain   # 300
-PYTHONPATH= "$PY" -m pytest tests/test_[m-r]*.py -q --assert=plain   # 734
+PYTHONPATH= "$PY" -m pytest tests/test_[m-r]*.py -q --assert=plain   # 744
 PYTHONPATH= "$PY" -m pytest tests/test_[s-z]*.py -q --assert=plain   # 405
-# 累计 2434 passed / 1 skipped / 0 failed（2435 collected）
+# 累计 2444 passed / 1 skipped / 0 failed（2445 collected）
+
+# R18 起 CI 等价静态检查（钉版本，与 .github/workflows/ci.yml 一致）
+pip install "ruff==0.17.3" "mypy==2.4.1"
+ruff check .
+mypy agentcrew/
 
 python main.py run --sample todo --no-live --auto       # 三套离线样例，各 1–3 秒
 python main.py doctor               # 配置 / 依赖 / Provider 连通性
@@ -276,7 +283,9 @@ R14 的第 3–5 批回归已补跑（5 批累计 2358 passed / 1 skipped / 0 fa
 2410 passed / 1 skipped / 0 failed，含一次真 `serve` + 真 mock run 的端到端。
 随后完成 R17（run 生命周期加固）：新增 24 例、全量
 2434 passed / 1 skipped / 0 failed，含一次真 CLI 启动的 reconcile 端到端。
-PROJECT-STATE §3.19–§3.22 与本文 §0 的状态口径已对齐，工作区干净。
+随后完成 R18（CI 就绪 + 限流窗口配置通道）：全仓 ruff / mypy 首次双绿、
+新增 10 例、全量 2444 passed / 1 skipped / 0 failed。
+PROJECT-STATE §3.19–§3.23 与本文 §0 的状态口径已对齐，工作区干净。
 
 ### 7.2 第一档（投入小、直接影响可用性）
 
@@ -286,8 +295,9 @@ PROJECT-STATE §3.19–§3.22 与本文 §0 的状态口径已对齐，工作区
 | ~~官方 SDK + 示例~~ | — | ✅ **R16 已闭环**：`sdk/README.md` + `sdk/agentcrew_sdk/` + 两个示例（见 PROJECT-STATE §3.21） |
 | ~~Webhook 持久化重放队列~~ | — | ✅ **R15 已闭环**（见 PROJECT-STATE §3.20）：入队前落盘、启动补投、24h / 5 次淘汰；仍不保证「恰好一次」 |
 
-**第一档已全部闭环（2026-11-07）**：三项均已完成并提交。下一轮从 §7.3 第二档
-开始；另有一个 0.1 人日的小缺口见 §7.3 表末。
+**第一档已全部闭环（2026-11-07）**：三项均已完成并提交。第二档的稳定性两项
+（过期 run 收敛、resume 锁）由 R17 闭环，两个小项（限流窗口通道、CI 静态检查
+清理）由 R18 闭环。下一轮从 §7.3 剩下的功能项开始。
 
 ### 7.3 第二档（价值明确、改动面中等）
 
@@ -297,7 +307,7 @@ PROJECT-STATE §3.19–§3.22 与本文 §0 的状态口径已对齐，工作区
 | ~~过期 run 自动 reconcile~~ | — | ✅ **R17 已闭环**（见 PROJECT-STATE §3.22）：30s 心跳 + CLI `run`/`serve` 启动时把孤儿 `running` 标为 `interrupted`，记 `run_reconciled` |
 | ~~resume 锁文件~~ | — | ✅ **R17 已闭环**：`O_EXCL` 原子锁 + owner token + 陈旧接管；CLI 给可读提示、API 回 409 |
 | 主管 `suggestions` 通道 | 1 人日 | 主管现在只能 approve/reject，建议无处可去 |
-| `api_rate_limit_window` 配置通道 | 0.1 人日 | 字段存在（默认 60s）但既无 `AGENTCREW_*` 映射、也不在 YAML 标量白名单，运维只能调 `_MAX`；OPERATIONS §2.2 已如实注明。补通道要守住「配置合并顺序」红线 |
+| ~~`api_rate_limit_window` 配置通道~~ | — | ✅ **R18 已闭环**：env / YAML / `config export` / `config import` 四通道 + `ge=1` 校验（见 PROJECT-STATE §3.23）；OPERATIONS §2.2 已同步 |
 
 ### 7.4 第三档（整块工程，需要先定范围）
 
@@ -336,6 +346,7 @@ PROJECT-STATE §3.19–§3.22 与本文 §0 的状态口径已对齐，工作区
 | 文档 | 运维部署/排障手册 `docs/OPERATIONS.md`；勘误 serve 端口（8000 → 8765）与 `clean` 保护默认值注释 | 已提交（2026-11-07） |
 | R16 | 官方 Python SDK + 示例（`sdk/`） | 已提交（2026-11-07） |
 | R17 | run 生命周期加固：心跳 / 僵尸收敛 / resume 锁 | 已提交（2026-11-07） |
+| R18 | CI 就绪（ruff/mypy 清零）+ 限流窗口配置通道 | 已提交（2026-11-07） |
 
 R3–R8 之所以合并成一个提交：`config.py` / `crew.py` / `main.py` / `api/server.py` 四个文件
 被多轮同时改，`git add` 是文件粒度，按轮切分会把不同轮的改动硬塞进一个提交。

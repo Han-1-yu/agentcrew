@@ -61,6 +61,8 @@ from agentcrew.knowledge.entity import (
     entities_from_experience,
 )
 from agentcrew.knowledge.experience import Experience, ExperienceStore
+from agentcrew.mcp.adapter import adapt_tools
+from agentcrew.mcp.client import MCPClient
 from agentcrew.models import factory as model_factory
 from agentcrew.models.cache import LLMCache
 from agentcrew.models.complexity import ComplexityCalibrator
@@ -68,16 +70,16 @@ from agentcrew.models.factory import BudgetExhaustedError, ModelFactory, ModelFa
 from agentcrew.roles.builtin import BUILTIN_ROLES
 from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.roles.spec import RoleSpec
+from agentcrew.runtime.approvals import (
+    ApprovalPending,
+    ApprovalRequest,
+    ApprovalStore,
+)
 from agentcrew.runtime.checkpoint import (
     CheckpointStore,
     RunRecord,
     RunStatus,
     repair_statuses,
-)
-from agentcrew.runtime.approvals import (
-    ApprovalPending,
-    ApprovalRequest,
-    ApprovalStore,
 )
 from agentcrew.runtime.ledger import Ledger
 from agentcrew.runtime.lifecycle import ResumeLock, RunHeartbeat
@@ -112,8 +114,6 @@ from agentcrew.tools import (
     WebFetchTool,
     WriteFileTool,
 )
-from agentcrew.mcp.adapter import adapt_tools
-from agentcrew.mcp.client import MCPClient
 from agentcrew.tools.registry import ToolRegistry
 from agentcrew.utils.files import atomic_write_text
 
@@ -701,8 +701,9 @@ class Crew:
         # R4：DeferredPrompter 需要 run 目录才能读写审批单；run_id 直到
         # CheckpointStore.create 时才生成，只能在装配阶段注入。其它 Prompter
         # 没有这个钩子，零开销（duck typing，不扩 Prompter Protocol）。
-        if hasattr(self._prompter, "bind_approvals"):
-            self._prompter.bind_approvals(checkpoint.run_dir)
+        prompter = self._prompter
+        if prompter is not None and hasattr(prompter, "bind_approvals"):
+            prompter.bind_approvals(checkpoint.run_dir)
         # 多 agent：启动期解析编排计划并落事件，配置错误在此 fail fast（退出码 3）。
         # 运行中切换的落盘结果：resume 时先恢复，再解析计划（顺序不能反）
         run.agents.import_bindings(_load_binding_overrides(

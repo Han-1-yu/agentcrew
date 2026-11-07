@@ -113,9 +113,10 @@ class AgentFactory:
         #: R3：run 级工具注册表。``None``（默认）时所有 Agent 走「单次调用」
         #: 的原有路径；Crew 在 ``tools_enabled`` 开启时注入一份。
         self._tool_registry = tool_registry
-        #: R5：跨角色咨询路由。``None``（默认）时不检测 ``<message>`` 围栏，
-        #: 与改造前逐字一致；Crew 在 ``peer_dialogue_enabled`` 开启时注入。
-        self._message_router: Callable[[str, str], Any] | None = None
+        #: R5：跨角色咨询路由。``None``（默认）时不检测 ``<message>`` 围栏。
+        #: 实际类型要么是二参回调，要么是提供 ``bind()`` 的 PeerRouter（本身
+        #: 不可调用），所以按 duck typing 存 ``Any``，由 _bind_router 统一解析。
+        self._message_router: Any | None = None
         #: 运行中切换：role → 覆盖后的绑定（进程内生效，可整体导出持久化）。
         self._binding_overrides: dict[str, RoleAgents] = {}
         #: 任务级覆盖：task_id → {"role", "profile"}。只影响这一次任务的派发，
@@ -127,13 +128,25 @@ class AgentFactory:
         """当前子任务回调（``None`` = 不启用动态子任务）。"""
         return self._subtask_creator
 
+    @subtask_creator.setter
+    def subtask_creator(self, creator: Callable[[dict], str | None] | None) -> None:
+        """更换子任务回调，并把它推给所有已缓存的 Agent 实例。
+
+        Agent 按 role key 缓存、跨调度器循环复用；调度器换板（交付打回重建
+        面板）后，旧闭包会把新任务加到已废弃的面板上——必须连缓存实例一起刷新。
+        setter 与 getter 相邻定义，mypy 才能把它识别成可写 property。
+        """
+        self._subtask_creator = creator
+        for agent in self._agents.values():
+            agent.set_subtask_creator(creator)
+
     @property
-    def message_router(self) -> Callable[[str, str], Any] | None:
+    def message_router(self) -> Any | None:
         """当前跨角色咨询路由（``None`` = 不启用 ``<message>`` 对话）。"""
         return self._message_router
 
     @message_router.setter
-    def message_router(self, router: Callable[[str, str], Any] | None) -> None:
+    def message_router(self, router: Any | None) -> None:
         """更换路由，并推给所有已缓存的 Agent 实例（R5）。
 
         与 :attr:`subtask_creator` 同理：Agent 按 role key 缓存、跨调度器循环
@@ -187,17 +200,6 @@ class AgentFactory:
         if consult_fn is None:  # 理论上不会发生；不静默炸掉提问方
             return "（该角色暂不支持咨询：请按最合理的默认值继续。）"
         return await consult_fn(question, from_role=from_role, context=context)
-
-    @subtask_creator.setter
-    def subtask_creator(self, creator: Callable[[dict], str | None] | None) -> None:
-        """更换子任务回调，并把它推给所有已缓存的 Agent 实例。
-
-        Agent 按 role key 缓存、跨调度器循环复用；调度器换板（交付打回重建
-        面板）后，旧闭包会把新任务加到已废弃的面板上——必须连缓存实例一起刷新。
-        """
-        self._subtask_creator = creator
-        for agent in self._agents.values():
-            agent.set_subtask_creator(creator)
 
     def switch_agent(
         self, role_key: str, profile: str, *, duty: Duty = Duty.PRIMARY,

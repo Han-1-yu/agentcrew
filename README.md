@@ -2531,3 +2531,28 @@ CLI `resume` 遇到锁冲突给可读提示（退出码 3），HTTP `POST /runs/
 判定细节与设计取舍见 PROJECT-STATE §3.22，排障见
 [`docs/OPERATIONS.md`](docs/OPERATIONS.md) §7.3。
 
+---
+
+## R18 CI 就绪与限流配置通道
+
+`.github/workflows/ci.yml` 定义但从未实跑过。这轮把本地等价检查链第一次跑成全绿：
+
+```bash
+pip install "ruff==0.17.3" "mypy==2.4.1"   # 与 ci.yml 钉同一版本
+ruff check .                                # 全仓 14 项历史告警清零
+mypy agentcrew/                             # 114 个源文件零错误
+pytest -q                                   # Windows 本机需按 HANDOVER §5.1 分 5 批
+```
+
+Windows 下可直接跑 `scripts/ci-check.ps1`（自动建 `.venv-ci`、装同版本工具）。
+修复全部是 import 排序、类型标注、Optional narrowing 与 property 结构调整，
+**不改运行时逻辑**；详见 PROJECT-STATE §3.23。仍需 GitHub Actions 实跑
+3.10–3.13 四版本矩阵。
+
+顺带补齐 `api_rate_limit_window` 的配置通道：此前它既无 `AGENTCREW_*` 映射、
+也不在 `agentcrew.yaml` 标量白名单，运维写进 YAML 会被静默忽略。现在
+`AGENTCREW_API_RATE_LIMIT_ENABLED` / `_MAX` / `_WINDOW` 三参数都支持
+env / YAML / `config export` / `config import`，窗口默认 60s、下限 1s
+（非法值在配置加载期即报错）。配置与部署示例见
+[`docs/OPERATIONS.md`](docs/OPERATIONS.md) §2.2。
+

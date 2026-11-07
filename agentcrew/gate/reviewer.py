@@ -179,7 +179,7 @@ class Reviewer:
         *,
         round_no: int,
         reviewer_keys: Sequence[str] | None = None,
-        layer: str = "llm",
+        layer: Literal["static", "llm", "human", "supervisor"] = "llm",
     ) -> ReviewRecord:
         """评审一个任务，返回本轮的 ``ReviewRecord``（默认 ``layer="llm"``）。
 
@@ -460,7 +460,7 @@ class Reviewer:
         fix_hints: list[str],
         reviewer: str,
         suggestions: list[str] | None = None,
-        layer: str = "llm",
+        layer: Literal["static", "llm", "human", "supervisor"] = "llm",
     ) -> ReviewRecord:
         """落一条 ``gate_result`` 并组装 ``ReviewRecord``——本模块的唯一出口。
 

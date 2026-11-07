@@ -1440,6 +1440,13 @@ def _cmd_config_export(args: argparse.Namespace) -> int:
                 snap["webhook_timeout_seconds"])
         if snap.get("webhook_max_retries") not in (None, 2):
             export_doc["webhook_max_retries"] = int(snap["webhook_max_retries"])
+    # R18：限流三参数补齐配置通道，只在偏离默认时导出（默认导出文档保持不变）。
+    if snap.get("api_rate_limit_enabled"):
+        export_doc["api_rate_limit_enabled"] = True
+    if snap.get("api_rate_limit_max") not in (None, 100):
+        export_doc["api_rate_limit_max"] = int(snap["api_rate_limit_max"])
+    if snap.get("api_rate_limit_window") not in (None, 60):
+        export_doc["api_rate_limit_window"] = int(snap["api_rate_limit_window"])
     if snap.get("approval_mode") and snap["approval_mode"] != "interactive":
         export_doc["approval_mode"] = snap["approval_mode"]
     # 去掉空段
@@ -1559,6 +1566,8 @@ def _cmd_config_import(args: argparse.Namespace) -> int:
         "webhook_url", "webhook_secret", "webhook_events",  # R12 出站 Webhook
         "webhook_timeout_seconds", "webhook_max_retries",
         "webhooks",                                   # R14 多接收端
+        "api_rate_limit_enabled", "api_rate_limit_max",  # R18 限流配置通道
+        "api_rate_limit_window",
     ):
         if key in data:
             existing[key] = data[key]

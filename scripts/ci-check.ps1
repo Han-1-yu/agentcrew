@@ -18,7 +18,8 @@ if (-not (Test-Path $venvPython)) {
 # 2. 安装依赖（幂等：已装则跳过）
 Write-Host "==> 安装依赖 ..." -ForegroundColor Cyan
 & $venvPython -m pip install -r requirements.txt --quiet
-& $venvPython -m pip install ruff mypy --quiet
+# 与 .github/workflows/ci.yml 钉同一版本：不钉的话"本地绿、CI 红"最难查。
+& $venvPython -m pip install "ruff==0.17.3" "mypy==2.4.1" --quiet
 
 $failed = @()
 

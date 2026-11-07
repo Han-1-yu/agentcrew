@@ -16,7 +16,7 @@ import math
 import os
 import re
 import sys
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any
 
 from pydantic import Field
@@ -31,7 +31,7 @@ from agentcrew.utils.files import (
 )
 
 
-def _crosses_link(workdir: Path, rel: Path) -> bool:
+def _crosses_link(workdir: Path, rel: PurePath) -> bool:
     """从 ``workdir`` 到 ``workdir / rel`` 的每一段是否经过符号链接 / 重解析点。
 
     :func:`safe_relpath` 只做词法规范化：``link/file.txt`` 完全合法，但如果
