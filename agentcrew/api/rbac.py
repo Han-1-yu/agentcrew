@@ -368,6 +368,12 @@ _ROUTE_SCOPES: tuple[tuple[str, str, str], ...] = (
     ("POST", r"^/providers/[^/]+/test$", SCOPE_CONFIG_READ),
     ("GET", r"^/tools$", SCOPE_TOOLS_READ),
     ("POST", r"^/tools/[^/]+/test$", SCOPE_TOOLS_TEST),
+    # R26：流程编排——流程是 run 的定义，复用 runs 作用域（读/写/删）
+    ("GET", r"^/flows$", SCOPE_RUNS_READ),
+    ("POST", r"^/flows$", SCOPE_RUNS_WRITE),
+    ("GET", r"^/flows/[^/]+$", SCOPE_RUNS_READ),
+    ("POST", r"^/flows/validate$", SCOPE_RUNS_READ),
+    ("DELETE", r"^/flows/[^/]+$", SCOPE_RUNS_ADMIN),
     ("GET", r"^/keys$", SCOPE_KEYS_READ),
     ("POST", r"^/keys$", SCOPE_KEYS_WRITE),
     ("DELETE", r"^/keys/[^/]+$", SCOPE_KEYS_WRITE),

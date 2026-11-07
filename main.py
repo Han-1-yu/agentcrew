@@ -252,6 +252,17 @@ def build_parser() -> argparse.ArgumentParser:
     for _keys_parser in (p_keys_add, p_keys_list, p_keys_revoke):
         _keys_parser.add_argument(
             "--output-dir", metavar="DIR", help="output 目录（定位 _auth/keys.json）")
+    p_flow = sub.add_parser(
+        "flow", help="R26：可视化编排——校验 / 列表 / 导出示例流程 YAML")
+    flow_sub = p_flow.add_subparsers(dest="flow_action", required=True)
+    p_flow_v = flow_sub.add_parser("validate", help="校验一个流程 YAML 文件")
+    p_flow_v.add_argument("file", help="流程文件路径（- 表示 stdin）")
+    p_flow_l = flow_sub.add_parser("list", help="列出已保存流程")
+    p_flow_l.add_argument("--json", action="store_true", help="输出 JSON")
+    flow_sub.add_parser("sample", help="打印示例流程 YAML（可重定向成文件）")
+    for _flow_parser in (p_flow_v, p_flow_l):
+        _flow_parser.add_argument(
+            "--output-dir", metavar="DIR", help="output 目录（定位 _flows/）")
     p_agents = sub.add_parser("agents", help="列出执行体档案与角色绑定（--json 供 Studio 读取）")
     p_agents.add_argument("--json", action="store_true", help="输出机器可读 JSON")
     p_switch = sub.add_parser("switch", help="给一个 run 写入执行体切换（下次 resume 生效）")
@@ -969,6 +980,72 @@ def _cmd_keys(args: argparse.Namespace) -> int:
     except ValueError as exc:
         return _fail(f"keys revoke 失败：{exc}")
     _out(console, f"已吊销 [{record.name}]（{record.id}）")
+    return EXIT_CODES["ok"]
+
+
+def _cmd_flow(args: argparse.Namespace) -> int:
+    """R26：流程 YAML 的校验 / 列表 / 示例输出。
+
+    退出码：``ok``=0；流程不合法=2（``plan``——能改的东西，不是配置错误）；
+    文件读不了=3。
+    """
+    from agentcrew.flow.spec import (
+        FlowError,
+        dump_flow_yaml,
+        list_flows,
+        parse_flow_yaml,
+        sample_flow,
+        validate_flow,
+    )
+
+    action = args.flow_action
+    console = Console()
+    if action == "sample":
+        _out(console, dump_flow_yaml(sample_flow()))
+        return EXIT_CODES["ok"]
+
+    try:
+        settings = (
+            Settings.load(output_dir=Path(args.output_dir))
+            if getattr(args, "output_dir", None) else Settings.load()
+        )
+    except (OSError, ValueError) as exc:
+        return _fail(f"配置错误：{exc}")
+
+    if action == "list":
+        items = list_flows(settings.output_dir)
+        if getattr(args, "json", False):
+            print(json.dumps({"flows": items}, ensure_ascii=False, indent=2))
+            return EXIT_CODES["ok"]
+        if not items:
+            _out(console, f"没有已保存的流程：{settings.output_dir / '_flows'}")
+            _out(console, "示例：python main.py flow sample > my-flow.yaml")
+            return EXIT_CODES["ok"]
+        for item in items:
+            state = "合法" if item["errors"] == 0 else f"{item['errors']} 处错误"
+            _out(console, f"[{item['name']}] {item['tasks']} 个任务 · {state}")
+            if item.get("error"):
+                _out(console, f"  {item['error']}")
+        return EXIT_CODES["ok"]
+
+    # validate
+    try:
+        text = sys.stdin.read() if args.file == "-" else Path(args.file).read_text(
+            encoding="utf-8")
+    except OSError as exc:
+        return _fail(f"读不到流程文件：{exc}")
+    try:
+        spec = parse_flow_yaml(text)
+    except FlowError as exc:
+        print(str(exc), file=sys.stderr)
+        return EXIT_CODES["plan"]
+    errors = validate_flow(spec)
+    if errors:
+        _out(console, f"流程不合法（{len(errors)} 处）：{spec.name}")
+        for error in errors:
+            _out(console, f"  - {error}")
+        return EXIT_CODES["plan"]
+    _out(console, f"流程合法：{spec.name} · {len(spec.tasks)} 个任务")
     return EXIT_CODES["ok"]
 
 
@@ -1821,6 +1898,7 @@ _HANDLERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "tools": _cmd_tools,
     "tool": _cmd_tool,
     "keys": _cmd_keys,
+    "flow": _cmd_flow,
     "agents": _cmd_agents,
     "switch": _cmd_switch,
     "samples": _cmd_samples,

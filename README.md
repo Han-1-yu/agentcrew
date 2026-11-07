@@ -2741,8 +2741,29 @@ python main.py keys revoke alice  # 吊销：下一次请求立即 401（无需�
 看板「密钥」标签页可直接建/吊销密钥（admin），明文创建后只显示一次。
 
 
+## R26 拖拽式可视化编排
 
+画布在浏览器控制台的「编排」标签页（零依赖 SVG，不需要启动 Electron Studio）。
 
+**能做什么**：拖节点、点右端口再点左端口连线、点连线删除、自动分层布局；
+右侧属性面板改 id / 标题 / 角色 / 优先级 / 依赖 / 条件标签 / 产物 / 验收标准；
+顶部可校验、保存、从流程库载入、载入示例、展开 YAML 面板导入导出。
 
+**YAML 双向**：画布与引擎共用同一份 schema（`tasks` 直接是规划草案模型
+`TaskDraft`，priority 1..9、deliverables 契约字段都在），导入导出都走
+`POST /flows/validate` 的规范化 YAML——前端不引 YAML 库，也就不会与后端
+序列化不一致。
 
+**命令行同样可用**：
+
+```bash
+python main.py flow sample > my-flow.yaml   # 打印示例流程
+python main.py flow validate my-flow.yaml   # 图校验（退出码 2 = 不合法）
+python main.py flow list                    # 已保存流程
+```
+
+**校验报可读理由**：重复 id、悬空依赖、自依赖、成环（Kahn，报出环上路径）、
+没有入口任务；坏流程不会写进 `<output>/_flows/`（避免污染列表）。
+条件边（`when_outcomes`）在画布上以橙色连线 + 标签呈现，与引擎的
+「上游 `<outcome>` 命中才执行」语义一致。
 

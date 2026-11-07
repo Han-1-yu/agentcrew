@@ -1028,6 +1028,170 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /flows:
+    get:
+      tags: [flows]
+      summary: R26 已保存流程清单
+      description: 列出 `<output>/_flows/*.yaml`：名字、任务数、错误数、修改时间。
+        流程是 run 的定义，作用域复用 `runs:read`。
+      responses:
+        '200':
+          description: 流程清单
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [flows]
+                properties:
+                  flows:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, tasks, errors]
+                      properties:
+                        name: { type: string }
+                        tasks: { type: integer }
+                        errors: { type: integer }
+                        flow_name: { type: string }
+                        error: { type: string }
+                        updated_at: { type: number }
+        '503':
+          description: output_dir 未配置
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      tags: [flows]
+      summary: R26 保存流程（校验通过才落盘）
+      description: |
+        body 接受 `{"yaml": "<YAML 文本>"}` 或 `{"flow": {version,name,tasks}}`。
+        图校验失败回 400 并给出可读理由（重复 id / 悬空依赖 / 自依赖 / 成环 /
+        无入口），**坏流程不写入目录**。需要 `runs:write`。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                yaml: { type: string }
+                flow: { type: object }
+      responses:
+        '201':
+          description: 已保存
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [saved, view]
+                properties:
+                  saved: { type: string }
+                  view: { type: object }
+        '400':
+          description: body 非法 / 图校验失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 缺少 runs:write 作用域
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /flows/validate:
+    post:
+      tags: [flows]
+      summary: R26 校验流程（不落盘，回显规范化 YAML）
+      description: |
+        画布每次编辑后调用：返回 `ok`、错误列表、图视图（节点/边/拓扑序）与
+        **规范化 YAML**（导入导出的唯一通道——前端因此不需要引 YAML 库，
+        也就不会与后端序列化不一致）。需要 `runs:read`。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                yaml: { type: string }
+                flow: { type: object }
+      responses:
+        '200':
+          description: 校验结果（结构错误也是 200，`ok=false`）
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, errors, view, yaml]
+                properties:
+                  ok: { type: boolean }
+                  errors:
+                    type: array
+                    items: { type: string }
+                  view: { type: object, nullable: true }
+                  yaml: { type: string }
+        '400':
+          description: body 缺少 yaml / flow 字段
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /flows/{name}:
+    get:
+      tags: [flows]
+      summary: R26 读取单个流程（原始 YAML + 图视图）
+      parameters:
+        - in: path
+          name: name
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 流程内容
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [yaml, view]
+                properties:
+                  yaml: { type: string }
+                  view: { type: object }
+        '404':
+          description: 流程不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      tags: [flows]
+      summary: R26 删除流程
+      description: 需要 `runs:admin`（删除是破坏性操作）。
+      parameters:
+        - in: path
+          name: name
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 已删除
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deleted]
+                properties:
+                  deleted: { type: string }
+        '404':
+          description: 流程不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   ##########################################################################
   # 兜底：未匹配路径 → 404；未实现方法 → 405
   ##########################################################################

@@ -96,6 +96,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <button class="tab-btn" onclick="switchTab('stats', this)">统计</button>
   <button class="tab-btn" onclick="switchTab('tools', this)">工具</button>
   <button class="tab-btn" onclick="switchTab('keys', this)">密钥</button>
+  <button class="tab-btn" onclick="switchTab('flow', this)">编排</button>
 </div>
 <div class="tab-pane active" id="pane-board">
   <div class="board" id="board"></div>
@@ -151,6 +152,35 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <pre id="key-created" class="log" style="display:none;height:120px;white-space:pre-wrap;margin-top:8px"></pre>
   </div>
 </div>
+<div class="tab-pane" id="pane-flow">
+  <div class="controls">
+    <input id="flow-name" placeholder="流程名" style="width:130px">
+    <button class="small" onclick="flowAddNode()">新建节点</button>
+    <button class="small btn-danger" onclick="flowDeleteSelected()">删除选中</button>
+    <button class="small" onclick="flowAutoLayout()">自动布局</button>
+    <button class="small" onclick="flowValidate()">校验</button>
+    <button class="small" onclick="flowSave()">保存</button>
+    <button class="small" onclick="flowSample()">示例</button>
+    <button class="small" onclick="flowToggleYaml()">YAML</button>
+    <select id="flow-select" onchange="flowLoadSelected()" style="background:#161b22;border:1px solid #30363d;color:#e1e4e8;padding:6px;border-radius:6px">
+      <option value="">载入…</option>
+    </select>
+    <span id="flow-status" style="color:#8b949e;font-size:12px"></span>
+  </div>
+  <div style="display:flex;gap:10px">
+    <div style="flex:1;min-width:420px;background:#0d1117;border:1px solid #30363d;border-radius:8px;overflow:auto">
+      <svg id="flow-canvas" width="100%" height="520" style="display:block"></svg>
+    </div>
+    <div id="flow-props" style="width:250px;color:#8b949e;font-size:12px"></div>
+  </div>
+  <div id="flow-yaml-box" style="display:none;margin-top:8px">
+    <textarea id="flow-yaml" spellcheck="false" style="width:100%;height:180px;background:#161b22;border:1px solid #30363d;color:#e1e4e8;border-radius:6px;padding:8px;font-family:ui-monospace,Consolas,monospace;font-size:12px"></textarea>
+    <div class="controls" style="margin-top:6px">
+      <button class="small" onclick="flowApplyYaml()">应用 YAML</button>
+      <span style="color:#6e7681;font-size:12px">导入 / 导出都走 /flows/validate 的规范化 YAML，与引擎同一份 schema</span>
+    </div>
+  </div>
+</div>
 
 <script>
 const STATUSES = ["pending", "ready", "running", "review", "rework", "succeeded", "failed", "blocked", "cancelled", "skipped"];
@@ -167,6 +197,7 @@ function switchTab(name, btn) {
   if (name === "stats" && currentRun) loadStats();
   if (name === "tools") loadTools();
   if (name === "keys") loadKeys();
+  if (name === "flow") { flowEnsureState(); flowRender(); flowRefreshList(); }
 }
 
 // ── Run 列表（P2-10）───────────────────────────────────────────────────
@@ -703,6 +734,456 @@ async function revokeKey(id, name) {
     loadKeys();
   } catch (e) { alert(`请求失败：${e}`); }
 }
+
+// ── R26：可视化编排画布（节点 / 连线 / 属性面板 / YAML 双向）──────────
+const FLOW_NODE_W = 156, FLOW_NODE_H = 58;
+let flowState = null;   // {name, description, tasks:[], pos:{id:{x,y}}}
+let flowSelected = null;
+let flowConnectFrom = null;
+let flowDrag = null;
+
+function flowNewTask(id) {
+  return {
+    id: id, title: "新任务", description: "", role: "backend_dev",
+    acceptance_criteria: [], deliverables: [], dependencies: [],
+    priority: 5, brief: "", timeout_seconds: 300, when_outcomes: []
+  };
+}
+
+function flowNextId() {
+  let n = 1;
+  const ids = new Set(flowState.tasks.map(t => t.id));
+  while (ids.has("T-" + String(n).padStart(3, "0"))) n++;
+  return "T-" + String(n).padStart(3, "0");
+}
+
+function flowEnsureState() {
+  if (!flowState) {
+    flowState = { name: "untitled", description: "", tasks: [], pos: {} };
+  }
+  return flowState;
+}
+
+function flowAddNode() {
+  flowEnsureState();
+  const id = flowNextId();
+  flowState.tasks.push(flowNewTask(id));
+  const index = flowState.tasks.length - 1;
+  flowState.pos[id] = { x: 40 + (index % 4) * 200, y: 30 + Math.floor(index / 4) * 100 };
+  flowSelected = id;
+  flowRender();
+}
+
+function flowDeleteSelected() {
+  if (!flowSelected || !flowState) return;
+  const id = flowSelected;
+  flowState.tasks = flowState.tasks.filter(t => t.id !== id);
+  for (const task of flowState.tasks) {
+    task.dependencies = task.dependencies.filter(d => d !== id);
+  }
+  delete flowState.pos[id];
+  flowSelected = null;
+  flowConnectFrom = null;
+  flowRender();
+}
+
+function flowRenameTask(oldId, newId) {
+  if (!newId || newId === oldId) return;
+  if (flowState.tasks.some(t => t.id === newId)) { alert("id 已存在"); return; }
+  const task = flowState.tasks.find(t => t.id === oldId);
+  if (!task) return;
+  task.id = newId;
+  for (const other of flowState.tasks) {
+    other.dependencies = other.dependencies.map(d => d === oldId ? newId : d);
+  }
+  flowState.pos[newId] = flowState.pos[oldId] || { x: 40, y: 30 };
+  delete flowState.pos[oldId];
+  flowSelected = newId;
+  flowRender();
+}
+
+function flowConnect(toId) {
+  if (!flowConnectFrom || flowConnectFrom === toId) {
+    flowConnectFrom = null;
+    flowRender();
+    return;
+  }
+  const target = flowState.tasks.find(t => t.id === toId);
+  if (!target) return;
+  if (!target.dependencies.includes(flowConnectFrom)) {
+    target.dependencies.push(flowConnectFrom);
+  }
+  flowConnectFrom = null;
+  flowRender();
+}
+
+function flowRender() {
+  const svg = document.getElementById("flow-canvas");
+  if (!svg) return;
+  flowEnsureState();
+  const ns = "http://www.w3.org/2000/svg";
+  svg.innerHTML = "";
+  const defs = document.createElementNS(ns, "defs");
+  defs.innerHTML = '<marker id="flow-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#58a6ff"/></marker>';
+  svg.appendChild(defs);
+
+  for (const task of flowState.tasks) {
+    const from = flowState.pos[task.id] || { x: 40, y: 30 };
+    for (const dep of task.dependencies) {
+      const source = flowState.pos[dep];
+      if (!source) continue;
+      const x1 = source.x + FLOW_NODE_W, y1 = source.y + FLOW_NODE_H / 2;
+      const x2 = from.x, y2 = from.y + FLOW_NODE_H / 2;
+      const mid = Math.max(40, Math.abs(x2 - x1) / 2);
+      const path = document.createElementNS(ns, "path");
+      path.setAttribute("d", `M ${x1} ${y1} C ${x1 + mid} ${y1}, ${x2 - mid} ${y2}, ${x2} ${y2}`);
+      path.setAttribute("stroke", (task.when_outcomes || []).length ? "#d29922" : "#58a6ff");
+      path.setAttribute("stroke-width", "1.6");
+      path.setAttribute("fill", "none");
+      path.setAttribute("marker-end", "url(#flow-arrow)");
+      path.style.cursor = "pointer";
+      path.addEventListener("click", () => {
+        if (confirm(`删除连线 ${dep} → ${task.id}？`)) {
+          task.dependencies = task.dependencies.filter(d => d !== dep);
+          flowRender();
+        }
+      });
+      svg.appendChild(path);
+      if ((task.when_outcomes || []).length) {
+        const label = document.createElementNS(ns, "text");
+        label.setAttribute("x", (x1 + x2) / 2);
+        label.setAttribute("y", (y1 + y2) / 2 - 4);
+        label.setAttribute("fill", "#d29922");
+        label.setAttribute("font-size", "10");
+        label.setAttribute("text-anchor", "middle");
+        label.textContent = task.when_outcomes.join(",");
+        svg.appendChild(label);
+      }
+    }
+  }
+
+  for (const task of flowState.tasks) {
+    const pos = flowState.pos[task.id] || { x: 40, y: 30 };
+    const g = document.createElementNS(ns, "g");
+    g.setAttribute("transform", `translate(${pos.x},${pos.y})`);
+    g.style.cursor = "move";
+    const rect = document.createElementNS(ns, "rect");
+    rect.setAttribute("width", FLOW_NODE_W);
+    rect.setAttribute("height", FLOW_NODE_H);
+    rect.setAttribute("rx", "8");
+    rect.setAttribute("fill", "#161b22");
+    rect.setAttribute("stroke", flowSelected === task.id ? "#58a6ff" : "#30363d");
+    rect.setAttribute("stroke-width", flowSelected === task.id ? "2" : "1");
+    g.appendChild(rect);
+    const idText = document.createElementNS(ns, "text");
+    idText.setAttribute("x", "10"); idText.setAttribute("y", "18");
+    idText.setAttribute("fill", "#e1e4e8"); idText.setAttribute("font-size", "12");
+    idText.setAttribute("font-weight", "600");
+    idText.textContent = task.id;
+    g.appendChild(idText);
+    const title = document.createElementNS(ns, "text");
+    title.setAttribute("x", "10"); title.setAttribute("y", "34");
+    title.setAttribute("fill", "#8b949e"); title.setAttribute("font-size", "11");
+    title.textContent = (task.title || "").slice(0, 18);
+    g.appendChild(title);
+    const role = document.createElementNS(ns, "text");
+    role.setAttribute("x", "10"); role.setAttribute("y", "48");
+    role.setAttribute("fill", "#6e7681"); role.setAttribute("font-size", "10");
+    role.textContent = `${task.role} · p${task.priority}`;
+    g.appendChild(role);
+    const portIn = document.createElementNS(ns, "circle");
+    portIn.setAttribute("cx", "0"); portIn.setAttribute("cy", String(FLOW_NODE_H / 2));
+    portIn.setAttribute("r", "5"); portIn.setAttribute("fill", "#30363d");
+    portIn.setAttribute("stroke", "#58a6ff");
+    portIn.style.cursor = "crosshair";
+    portIn.addEventListener("click", (event) => { event.stopPropagation(); flowConnect(task.id); });
+    g.appendChild(portIn);
+    const portOut = document.createElementNS(ns, "circle");
+    portOut.setAttribute("cx", String(FLOW_NODE_W));
+    portOut.setAttribute("cy", String(FLOW_NODE_H / 2));
+    portOut.setAttribute("r", "5");
+    portOut.setAttribute("fill", flowConnectFrom === task.id ? "#d29922" : "#30363d");
+    portOut.setAttribute("stroke", "#58a6ff");
+    portOut.style.cursor = "crosshair";
+    portOut.addEventListener("click", (event) => {
+      event.stopPropagation();
+      flowConnectFrom = flowConnectFrom === task.id ? null : task.id;
+      flowRender();
+    });
+    g.appendChild(portOut);
+    g.addEventListener("mousedown", (event) => {
+      if (event.target === portIn || event.target === portOut) return;
+      flowSelected = task.id;
+      const current = flowState.pos[task.id] || { x: 40, y: 30 };
+      flowDrag = { id: task.id, dx: event.clientX - current.x, dy: event.clientY - current.y };
+      flowRender();
+    });
+    svg.appendChild(g);
+  }
+  flowRenderProps();
+}
+
+function flowRenderProps() {
+  const box = document.getElementById("flow-props");
+  if (!box) return;
+  if (!flowState) flowEnsureState();
+  const task = flowState.tasks.find(t => t.id === flowSelected);
+  if (!task) {
+    box.innerHTML = `<div style="margin-bottom:8px;color:#e1e4e8">${flowState.tasks.length} 个节点</div><div>拖节点移动；点右端口再点左端口连线；点连线删除。</div>`;
+    return;
+  }
+  box.innerHTML = `
+    <div style="margin-bottom:6px;color:#e1e4e8;font-weight:600">属性 · ${task.id}</div>
+    <label>id</label><input id="fp-id" value="${task.id}" style="width:100%;margin:2px 0 6px">
+    <label>标题</label><input id="fp-title" value="${(task.title || "").replace(/"/g, "&quot;")}" style="width:100%;margin:2px 0 6px">
+    <label>角色</label><input id="fp-role" value="${task.role}" style="width:100%;margin:2px 0 6px">
+    <label>优先级 1-9</label><input id="fp-priority" type="number" min="1" max="9" value="${task.priority}" style="width:100%;margin:2px 0 6px">
+    <label>描述</label><textarea id="fp-desc" style="width:100%;height:52px;margin:2px 0 6px">${task.description || ""}</textarea>
+    <label>依赖（逗号）</label><input id="fp-deps" value="${task.dependencies.join(",")}" style="width:100%;margin:2px 0 6px">
+    <label>条件标签（逗号，可空）</label><input id="fp-when" value="${(task.when_outcomes || []).join(",")}" style="width:100%;margin:2px 0 6px">
+    <label>产物（每行 path|kind|说明）</label><textarea id="fp-deliv" style="width:100%;height:52px;margin:2px 0 6px">${(task.deliverables || []).map(d => `${d.path}|${d.kind}|${d.description || ""}`).join("\n")}</textarea>
+    <label>验收标准（每行一条）</label><textarea id="fp-accept" style="width:100%;height:44px;margin:2px 0 6px">${(task.acceptance_criteria || []).join("\n")}</textarea>
+    <button class="small" onclick="flowApplyProps()">应用</button>
+  `;
+}
+
+function flowApplyProps() {
+  if (!flowState) return;
+  const task = flowState.tasks.find(t => t.id === flowSelected);
+  if (!task) return;
+  const value = id => (document.getElementById(id) || {}).value || "";
+  const newId = value("fp-id").trim();
+  if (newId && newId !== task.id) flowRenameTask(task.id, newId);
+  const current = flowState.tasks.find(t => t.id === (newId || flowSelected));
+  if (!current) return;
+  current.title = value("fp-title").trim() || current.id;
+  current.role = value("fp-role").trim() || "backend_dev";
+  current.priority = Math.min(9, Math.max(1, parseInt(value("fp-priority"), 10) || 5));
+  current.description = value("fp-desc");
+  current.dependencies = value("fp-deps").split(",").map(s => s.trim()).filter(Boolean);
+  current.when_outcomes = value("fp-when").split(",").map(s => s.trim()).filter(Boolean);
+  current.deliverables = value("fp-deliv").split("\n").map(line => line.trim()).filter(Boolean).map(line => {
+    const parts = line.split("|");
+    return { path: (parts[0] || "").trim(), kind: (parts[1] || "markdown").trim(),
+             description: (parts[2] || "").trim() };
+  }).filter(d => d.path);
+  current.acceptance_criteria = value("fp-accept").split("\n").map(s => s.trim()).filter(Boolean);
+  flowRender();
+}
+
+function flowAutoLayout() {
+  if (!flowState) flowEnsureState();
+  const depth = {};
+  const byId = Object.fromEntries(flowState.tasks.map(t => [t.id, t]));
+  function depthOf(id, seen) {
+    if (depth[id] !== undefined) return depth[id];
+    if (seen.has(id)) return 0;
+    seen.add(id);
+    const task = byId[id];
+    const deps = (task ? task.dependencies : []).filter(d => byId[d]);
+    const value = deps.length ? 1 + Math.max(...deps.map(d => depthOf(d, seen))) : 0;
+    depth[id] = value;
+    return value;
+  }
+  flowState.tasks.forEach(t => depthOf(t.id, new Set()));
+  const columns = {};
+  for (const task of flowState.tasks) {
+    const column = depth[task.id] || 0;
+    columns[column] = (columns[column] || 0) + 1;
+    flowState.pos[task.id] = { x: 40 + column * 210, y: 20 + (columns[column] - 1) * 92 };
+  }
+  flowRender();
+}
+
+function flowJson() {
+  flowEnsureState();
+  return {
+    version: 1, name: flowState.name || "untitled",
+    description: flowState.description || "",
+    tasks: flowState.tasks.map(t => ({
+      id: t.id, title: t.title, description: t.description, role: t.role,
+      acceptance_criteria: t.acceptance_criteria || [],
+      deliverables: t.deliverables || [],
+      dependencies: t.dependencies || [],
+      priority: t.priority || 5,
+      brief: t.brief || "",
+      timeout_seconds: t.timeout_seconds || 300,
+      when_outcomes: t.when_outcomes || [],
+    })),
+  };
+}
+
+async function flowValidate() {
+  const status = document.getElementById("flow-status");
+  status.textContent = "校验中…";
+  try {
+    const resp = await fetch("/flows/validate", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ flow: flowJson() })
+    });
+    const data = await resp.json();
+    if (!resp.ok) { status.textContent = `失败（${resp.status}）：${data.error || ""}`; return null; }
+    flowState.yaml = data.yaml;
+    status.textContent = data.ok
+      ? `合法 · ${data.view.nodes.length} 节点 / ${data.view.edges.length} 边`
+      : `不合法：${data.errors.join("；")}`;
+    status.style.color = data.ok ? "#3fb950" : "#f85149";
+    return data;
+  } catch (e) { status.textContent = `请求失败：${e}`; return null; }
+}
+
+async function flowSave() {
+  const status = document.getElementById("flow-status");
+  const name = (document.getElementById("flow-name").value || flowState.name || "").trim();
+  if (!name) { alert("先填流程名（字母数字开头）"); return; }
+  flowState.name = name;
+  try {
+    const resp = await fetch("/flows", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ flow: flowJson() })
+    });
+    const data = await resp.json();
+    if (!resp.ok) { status.textContent = `保存失败（${resp.status}）：${data.error || ""}`; return; }
+    status.textContent = `已保存 ${data.saved}`;
+    status.style.color = "#3fb950";
+    flowRefreshList();
+  } catch (e) { status.textContent = `请求失败：${e}`; }
+}
+
+async function flowRefreshList() {
+  const select = document.getElementById("flow-select");
+  if (!select) return;
+  try {
+    const resp = await fetch("/flows");
+    const data = await resp.json();
+    const current = select.value;
+    select.innerHTML = '<option value="">载入…</option>';
+    for (const item of data.flows || []) {
+      const option = document.createElement("option");
+      option.value = item.name;
+      option.textContent = `${item.name}（${item.tasks} 任务${item.errors ? " · " + item.errors + " 错" : ""}）`;
+      select.appendChild(option);
+    }
+    select.value = current;
+  } catch (e) { /* 列表失败不打断画布 */ }
+}
+
+async function flowLoadSelected() {
+  const name = document.getElementById("flow-select").value;
+  if (!name) return;
+  try {
+    const resp = await fetch(`/flows/${encodeURIComponent(name)}`);
+    const data = await resp.json();
+    if (!resp.ok) { alert(`载入失败：${data.error || resp.status}`); return; }
+    flowHydrate(data.view);
+    document.getElementById("flow-name").value = data.view.name;
+    document.getElementById("flow-status").textContent = `已载入 ${name}`;
+  } catch (e) { alert(`请求失败：${e}`); }
+}
+
+function flowHydrate(view) {
+  flowState = {
+    name: view.name || "untitled",
+    description: view.description || "",
+    tasks: (view.nodes || []).map(node => ({
+      id: node.id, title: node.title, description: node.description,
+      role: node.role, acceptance_criteria: node.acceptance_criteria || [],
+      deliverables: node.deliverables || [],
+      dependencies: node.dependencies || [],
+      priority: node.priority || 5, brief: node.brief || "",
+      timeout_seconds: node.timeout_seconds || 300,
+      when_outcomes: node.when_outcomes || [],
+    })),
+    pos: {},
+  };
+  flowSelected = null;
+  flowConnectFrom = null;
+  flowAutoLayout();
+}
+
+const SAMPLE_FLOW_YAML = `version: 1
+name: sample
+description: 示例：需求 → 实现 → 交付
+tasks:
+- id: T-001
+  title: 需求文档
+  role: project_manager
+  description: 输出 PRD
+  acceptance_criteria: [含范围内外]
+  deliverables:
+  - {path: docs/PRD.md, kind: markdown, description: PRD}
+  priority: 9
+- id: T-002
+  title: 后端实现
+  role: backend_dev
+  description: 按 PRD 实现接口
+  acceptance_criteria: [接口可调用]
+  deliverables:
+  - {path: backend/app/main.py, kind: python, description: 服务入口}
+  dependencies: [T-001]
+  priority: 6
+`;
+
+async function flowSample() {
+  try {
+    const resp = await fetch("/flows/validate", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ yaml: SAMPLE_FLOW_YAML })
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data.view) {
+      alert(`示例失败：${(data.errors || [data.error || resp.status]).join("；")}`);
+      return;
+    }
+    flowHydrate(data.view);
+    document.getElementById("flow-name").value = data.view.name;
+  } catch (e) { alert(`请求失败：${e}`); }
+}
+
+function flowToggleYaml() {
+  const box = document.getElementById("flow-yaml-box");
+  box.style.display = box.style.display === "none" ? "block" : "none";
+  if (box.style.display === "block" && flowState && flowState.yaml) {
+    document.getElementById("flow-yaml").value = flowState.yaml;
+  }
+}
+
+async function flowApplyYaml() {
+  const text = document.getElementById("flow-yaml").value;
+  const status = document.getElementById("flow-status");
+  try {
+    const resp = await fetch("/flows/validate", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ yaml: text })
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data.view) {
+      status.textContent = `YAML 不合法：${(data.errors || [data.error || resp.status]).join("；")}`;
+      status.style.color = "#f85149";
+      return;
+    }
+    flowHydrate(data.view);
+    document.getElementById("flow-name").value = data.view.name;
+    document.getElementById("flow-yaml").value = data.yaml;
+    status.textContent = data.ok
+      ? `YAML 已应用 · ${data.view.nodes.length} 节点`
+      : `YAML 已应用（图有错误：${data.errors.join("；")}）`;
+    status.style.color = data.ok ? "#3fb950" : "#d29922";
+  } catch (e) { status.textContent = `请求失败：${e}`; }
+}
+
+document.addEventListener("mousemove", (event) => {
+  if (!flowDrag || !flowState) return;
+  const svg = document.getElementById("flow-canvas");
+  if (!svg) return;
+  const bounds = svg.getBoundingClientRect();
+  flowState.pos[flowDrag.id] = {
+    x: Math.max(0, event.clientX - bounds.left - flowDrag.dx),
+    y: Math.max(0, event.clientY - bounds.top - flowDrag.dy),
+  };
+  flowRender();
+});
+document.addEventListener("mouseup", () => { flowDrag = null; });
 
 initBoard();
 loadRuns();

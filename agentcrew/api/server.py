@@ -257,6 +257,11 @@ API_ROUTES: tuple[tuple[str, str], ...] = (
     ("GET", "/keys"),
     ("POST", "/keys"),
     ("DELETE", "/keys/{key_id}"),
+    ("GET", "/flows"),
+    ("POST", "/flows"),
+    ("GET", "/flows/{name}"),
+    ("DELETE", "/flows/{name}"),
+    ("POST", "/flows/validate"),
 )
 
 
@@ -580,6 +585,12 @@ class ApiServer:
         if p == "/keys":
             await self._list_keys(writer)
             return
+        if p == "/flows":
+            await self._list_flows(writer)
+            return
+        if p.startswith("/flows/"):
+            await self._get_flow(unquote(p[len("/flows/"):]), writer)
+            return
         segments = [unquote(s) for s in p.split("/") if s]
         # A5：/providers 目录与 /providers/{name}/models
         if segments and segments[0] == "providers":
@@ -764,6 +775,13 @@ class ApiServer:
         # R25：POST /keys —— 新建密钥（明文只回这一次）
         if p == "/keys":
             await self._create_key(body, writer)
+            return
+        # R26：POST /flows（保存）与 /flows/validate（只校验不落盘）
+        if p == "/flows":
+            await self._save_flow(body, writer)
+            return
+        if p == "/flows/validate":
+            await self._validate_flow(body, writer)
             return
         # 任务级覆盖：POST /runs/{id}/tasks/{task_id}/agent
         if (len(segments) == 5 and segments[0] == "runs"
@@ -1197,6 +1215,127 @@ class ApiServer:
         await self._send_json(
             writer, 202, {"run_id": resumed_id, "status": "running"})
 
+    # ── R26：可视化编排（流程 YAML 双向 / 图校验 / 落盘）─────────────────
+
+    async def _list_flows(self, writer: asyncio.StreamWriter) -> None:
+        """``GET /flows``：已保存流程清单（名字 / 任务数 / 错误数）。"""
+        if self._output_dir is None:
+            await self._send_json(writer, 503, {"error": "output_dir 未配置"})
+            return
+        from agentcrew.flow.spec import list_flows
+
+        await self._send_json(writer, 200, {"flows": list_flows(self._output_dir)})
+
+    async def _get_flow(self, name: str, writer: asyncio.StreamWriter) -> None:
+        """``GET /flows/{name}``：返回原始 YAML + 图视图（节点/边/拓扑序/错误）。"""
+        if self._output_dir is None:
+            await self._send_json(writer, 503, {"error": "output_dir 未配置"})
+            return
+        from agentcrew.flow.spec import (
+            FlowError,
+            dump_flow_yaml,
+            graph_view,
+            load_flow,
+        )
+
+        try:
+            spec = load_flow(self._output_dir, name)
+        except FlowError as exc:
+            await self._send_json(writer, 404, {"error": str(exc)})
+            return
+        await self._send_json(writer, 200, {
+            "yaml": dump_flow_yaml(spec), "view": graph_view(spec)})
+
+    @staticmethod
+    def _flow_yaml_from_body(body: bytes) -> tuple[str | None, str | None]:
+        """从 ``{"yaml": "..."}`` 或 ``{"flow": {...}}`` 取 YAML 文本。"""
+        try:
+            data = json.loads(body.decode("utf-8")) if body else {}
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return None, "invalid JSON"
+        if not isinstance(data, dict):
+            return None, "body 必须是 JSON 对象"
+        raw = data.get("yaml")
+        if isinstance(raw, str) and raw.strip():
+            return raw, None
+        flow = data.get("flow")
+        if isinstance(flow, dict):
+            from agentcrew.flow.spec import FlowError, FlowSpec, dump_flow_yaml
+
+            try:
+                return dump_flow_yaml(FlowSpec(**flow)), None
+            except (FlowError, ValueError, TypeError) as exc:
+                return None, f"flow 结构不合法：{exc}"
+        return None, "缺少 yaml 字段（字符串）或 flow 字段（对象）"
+
+    async def _validate_flow(
+        self, body: bytes, writer: asyncio.StreamWriter
+    ) -> None:
+        """``POST /flows/validate``：只校验不落盘（画布每次编辑后调）。"""
+        from agentcrew.flow.spec import FlowError, graph_view, parse_flow_yaml
+
+        text, error = self._flow_yaml_from_body(body)
+        if text is None:
+            await self._send_json(writer, 400, {"error": error})
+            return
+        try:
+            spec = parse_flow_yaml(text)
+        except FlowError as exc:
+            await self._send_json(writer, 200, {
+                "ok": False, "errors": [str(exc)], "view": None, "yaml": ""})
+            return
+        from agentcrew.flow.spec import dump_flow_yaml
+
+        view = graph_view(spec)
+        await self._send_json(writer, 200, {
+            "ok": not view["errors"], "errors": view["errors"], "view": view,
+            # 回显规范化 YAML：画布「导出 / 导入」都走这条通道，
+            # 前端不需要再引一个 YAML 库（也就不会与后端序列化不一致）。
+            "yaml": dump_flow_yaml(spec)})
+
+    async def _save_flow(
+        self, body: bytes, writer: asyncio.StreamWriter
+    ) -> None:
+        """``POST /flows``：校验通过后落盘 ``<output>/_flows/<name>.yaml``。"""
+        if self._output_dir is None:
+            await self._send_json(writer, 503, {"error": "output_dir 未配置"})
+            return
+        from agentcrew.flow.spec import (
+            FlowError,
+            graph_view,
+            parse_flow_yaml,
+            save_flow,
+        )
+
+        text, error = self._flow_yaml_from_body(body)
+        if text is None:
+            await self._send_json(writer, 400, {"error": error})
+            return
+        try:
+            spec = parse_flow_yaml(text)
+            path = save_flow(self._output_dir, spec)
+        except FlowError as exc:
+            await self._send_json(writer, 400, {"error": str(exc)})
+            return
+        await self._send_json(writer, 201, {
+            "saved": path.name, "view": graph_view(spec)})
+
+    async def _delete_flow(
+        self, name: str, writer: asyncio.StreamWriter
+    ) -> None:
+        """``DELETE /flows/{name}``：删除已保存流程。"""
+        if self._output_dir is None:
+            await self._send_json(writer, 503, {"error": "output_dir 未配置"})
+            return
+        from agentcrew.flow.spec import FlowError, delete_flow
+
+        try:
+            delete_flow(self._output_dir, name)
+        except FlowError as exc:
+            await self._send_json(writer, 404, {"error": str(exc)})
+            return
+        await self._send_json(writer, 200, {"deleted": name})
+
     # ── R25：密钥管理（RBAC）──────────────────────────────────────────────
 
     def _key_store(self) -> Any:
@@ -1549,6 +1688,9 @@ class ApiServer:
         segments = [unquote(s) for s in parsed.path.split("/") if s]
         if len(segments) == 2 and segments[0] == "keys":
             await self._revoke_key(segments[1], writer)
+            return
+        if len(segments) == 2 and segments[0] == "flows":
+            await self._delete_flow(segments[1], writer)
             return
         if len(segments) != 2 or segments[0] != "runs":
             await self._send_json(writer, 404, {"error": "Not Found"})

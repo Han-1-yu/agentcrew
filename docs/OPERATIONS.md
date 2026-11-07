@@ -576,6 +576,11 @@ python main.py diff <run_a> <run_b> --json
 `status` / `approvals` / ledger 负责看「任务为什么做成这样」。开关默认关闭，
 关闭时执行路径与开启前逐字一致。
 
+**可视化编排（R26）**：看板「编排」标签页拖节点连线，或
+`python main.py flow validate <file>` 在 CI / 提交前校验流程 YAML（不合法退出码 2）。
+流程存 `<output>/_flows/`，与 run 目录互不影响；`flow list` 列出已保存流程。
+画布产出的是流程定义，尚未接入「一键起跑」（见 PROJECT-STATE §3.31 的边界说明）。
+
 **单工具试跑（R24）**：`python main.py tools` 列工具，`python main.py tool
 <name> --args '{"path":"a.txt"}'` 在 `<output>/_tool_trial/` 沙箱里试跑一个工具；
 HTTP 等价物是 `GET /tools` 与 `POST /tools/{name}/test`，看板首页「工具」标签页
