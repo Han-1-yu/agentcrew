@@ -1353,6 +1353,32 @@ P3-9 的 `HTTPTransport` 是「POST 一次拿一个 JSON」。对照官方 strea
 且提示反代、`Content-Length` 不等关闭、无限 SSE 撞事件上限、超大 body 拒绝。回归
 `mcp_transports / mcp_client / mcp_wiring` 共 **51 例**全过。
 
+### 3.50 R37：真实 provider 端到端验证 + 计划校验误伤修复（2026-11-08）
+
+此前全部验证都跑在 mock 夹具上。本轮第一次用**真实 DeepSeek**（`.env` 已配、`doctor`
+healthy）做三档实跑，暴露并修掉一个会拒绝合法计划的误伤。
+
+**发现的 bug**：计划校验第 8 条（「要求文档的验收标准必须有文档类交付物」）用裸子串
+匹配关键词，把动词「说明」当成名词「文档」——PM 写「add 函数带有**说明参数与返回值**
+的 docstring」，被判定为「要求一份 markdown」，而该任务只有 `.py` 交付物 → 合法计划
+被判退出码 2；重拆几次措辞仍类似，最终整条 run 死掉。根因与历史两次修正同源：这条
+检查是针对真实死锁类（「提供启动命令与依赖说明」却只有代码交付物 → G1/G2 双向堵死）
+的定向 lint，但关键词是启发式。
+
+**修复**（`agentcrew/task/planner.py`）：新增 `_demands_document()`——`说明` 后接宾语
+（参数/返回值/用法/字段…）时判为动词、跳过；标准里出现 `docstring`/`注释` 时跳过
+（代码内说明由代码本身满足）。名词用法（「启动说明」「使用说明」，说明在句尾）照旧命中，
+原死锁防护不丢。回归 `tests/test_planner.py` +3（docstring 标准不误伤、说明动词不误伤、
+名词用法仍拦）。
+
+**三档实跑**（`--max-cost`/`--max-llm-calls` 兜底，产物在仓库外、已清理）：
+
+| 档 | 结果 |
+|---|---|
+| 基线（无工具） | 3 任务 / 10 调用 / $0.01 / 36s；产物 `slugify.py` 自带 pytest **18 例全过**，交互边界（空串/纯中文/多余空白）正确 |
+| 工具链（fence） | 5 任务 / 16 调用 / $0.03；ledger 7 次 `tool_call(mode=fence)` 全成功 |
+| **原生 function calling** | 5 任务 / 30 调用 / $0.04；ledger **60 次 `mode=native`、带真实 `call_id`**——`assistant(tool_calls)` + `role="tool"(tool_call_id)` 回传被 DeepSeek 接受（此前只有单测覆盖，从未对真端点验证） |
+
 ---
 ## 4. 历史报告汇总（已并入本文，原文归档）
 

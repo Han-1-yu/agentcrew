@@ -425,6 +425,35 @@ def test_docs_path_inside_criterion_is_not_a_document_demand(catalog):
     validate_plan([t], catalog)
 
 
+def test_docstring_criterion_is_not_a_document_demand(catalog):
+    """「docstring 说明参数与返回值」是要代码内的注释，不是要一份 markdown。
+
+    真实 run 复现：PM 写了这条标准，任务只有 ``a.py`` 交付物，整份计划被判「不可
+    能通过」，重拆几次措辞仍类似，最终 run 以退出码 2 直接死掉——而计划本身是
+    合理的。裸子串匹配把动词「说明」当成了名词「文档」。
+    """
+    t = _task(
+        "T1",
+        ["add 函数带有说明参数与返回值的 docstring，且该 docstring 内容在 a.py 中可直接读到"],
+        [_py("a.py")],
+    )
+    validate_plan([t], catalog)
+
+
+def test_explain_as_verb_is_not_a_document_demand(catalog):
+    """``说明`` 后接宾语时是动词：说明用法 / 说明字段 都不该被判成「要求文档」。"""
+    for criterion in ("在 docstring 里说明用法", "在注释中说明字段含义"):
+        t = _task("T1", [criterion], [_py("a.py")])
+        validate_plan([t], catalog)
+
+
+def test_noun_usage_still_demands_document(catalog):
+    """收窄不能把原意弄丢：「提供使用说明」仍是要求文档（名词用法，说明在句尾）。"""
+    t = _task("T1", ["提供使用说明"], [_py("a.py")])
+    with pytest.raises(PlanValidationError):
+        validate_plan([t], catalog)
+
+
 def test_english_docs_keyword_is_gone(catalog):
     """``docs`` 已从关键词表移除；``documentation`` 仍在。"""
     from agentcrew.task.planner import _DOC_DEMANDING_KEYWORDS

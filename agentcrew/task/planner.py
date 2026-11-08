@@ -278,6 +278,20 @@ _DOC_DEMANDING_KEYWORDS = (
     "说明", "文档", "手册", "指南", "readme", "documentation", "manual", "guide",
 )
 
+#: ``说明`` 后接这些词时，它是**动词**（「说明参数与返回值」），不是在要一份文档。
+#: 依据：真实 run 里 PM 写过一条「add 函数带有说明参数与返回值的 docstring」，
+#: 裸子串匹配把它当成「要求文档」，而该任务只有 ``.py`` 交付物 —— 合法计划被拒、
+#: 重拆几次措辞仍类似，最后整条 run 以退出码 2 死掉。名词用法不受影响：
+#: 「启动说明」「使用说明」「接口说明」后面跟的是标点或结尾，照旧命中。
+_EXPLAIN_VERB_OBJECTS = (
+    "参数", "返回值", "用法", "作用", "原因", "理由", "设计", "步骤", "思路",
+    "字段", "行为", "格式", "示例", "算法", "依赖关系",
+)
+
+#: 标准要求的是**代码内**的说明（docstring / 注释），不是独立文档文件。
+#: 这类要求由代码本身就能满足，不该逼着任务额外交一份 markdown。
+_IN_CODE_DOC_HINTS = ("docstring", "注释", "代码内", "行内")
+
 #: 能充当「文档」的产物类型。
 _DOC_ARTIFACT_KINDS = frozenset({"markdown", "text", "html"})
 
@@ -289,6 +303,33 @@ _NOT_A_DOCUMENT = (
     "pyproject.toml", "pipfile", "pipfile.lock", "poetry.lock", "cargo.toml",
     "go.mod", "pom.xml", "build.gradle",
 )
+
+
+def _demands_document(criterion: str) -> str | None:
+    """这条验收标准是否在**要求一份文档**？返回命中的关键词，否则 ``None``。
+
+    比裸子串匹配多做两件事，都是被真实运行逼出来的：
+
+    1. ``说明`` 作动词时跳过（后接 ``参数`` / ``返回值`` / ``用法`` …）——
+       「docstring 说明参数与返回值」是要代码内的注释，不是要一份 markdown；
+    2. 标准里出现 ``docstring`` / ``注释`` 时跳过——这类要求代码本身即可满足。
+
+    其余关键词（``文档`` / ``手册`` / ``指南`` / ``readme`` …）没有这种动宾歧义，
+    仍是直接命中。
+    """
+    lowered = criterion.lower()
+    if any(hint in lowered for hint in _IN_CODE_DOC_HINTS):
+        return None
+    for word in _DOC_DEMANDING_KEYWORDS:
+        start = lowered.find(word)
+        while start != -1:
+            if word != "说明":
+                return word
+            tail = lowered[start + len(word): start + len(word) + 4]
+            if not any(tail.startswith(obj) for obj in _EXPLAIN_VERB_OBJECTS):
+                return word
+            start = lowered.find(word, start + 1)
+    return None
 
 
 def _counts_as_document(path: str, kind: str) -> bool:
@@ -323,8 +364,7 @@ def _check_criteria_have_deliverables(tasks: Sequence[Task]) -> list[str]:
         if any(_counts_as_document(spec.path, spec.kind) for spec in task.deliverables):
             continue
         for criterion in task.acceptance_criteria:
-            lowered = criterion.lower()
-            hit = next((word for word in _DOC_DEMANDING_KEYWORDS if word in lowered), None)
+            hit = _demands_document(criterion)
             if hit is None:
                 continue
             errors.append(
