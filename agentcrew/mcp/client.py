@@ -20,7 +20,9 @@ from typing import Any
 
 from agentcrew.mcp.tool import MCPTool, MCPToolResult
 from agentcrew.mcp.transports import (
+    PROTOCOL_VERSION_DEFAULT,
     HTTPTransport,
+    MCPSessionExpired,
     MCPTransport,
     MCPTransportError,
     SSETransport,
@@ -29,8 +31,8 @@ from agentcrew.mcp.transports import (
 
 _logger = logging.getLogger(__name__)
 
-#: MCP 协议版本
-_PROTOCOL_VERSION = "2025-03-26"
+#: MCP 协议版本（与传输层同一默认值；服务端可在 initialize 结果里协商成别的值）
+_PROTOCOL_VERSION = PROTOCOL_VERSION_DEFAULT
 #: JSON-RPC 响应超时（秒）
 _RPC_TIMEOUT = 30
 
@@ -66,6 +68,8 @@ class MCPClient:
                 raise MCPError("MCPClient 需要 command 或 transport")
             self._transport = StdioTransport(command, env=env)
         self._request_id = 0
+        #: 握手期内已经用过一次「重建会话」的额度（防 404 ↔ 重连死循环）
+        self._handshake_retry_used = False
         self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
         self._reader_task: asyncio.Task[None] | None = None
         self._initialized = False
@@ -158,12 +162,35 @@ class MCPClient:
         })
         if "error" in response:
             raise MCPError(f"initialize 失败：{response['error']}")
-        # 发送 initialized 通知（不需要响应）
-        await self._notify("notifications/initialized", {})
+        # 发送 initialized 通知（不需要响应）。
+        #
+        # 通知也可能撞上「会话刚建好就被服务端丢掉」（重启、网关换后端）。这种
+        # 情况重握手一次就能恢复，**但只给一次额度**：否则服务端持续 404 时会变成
+        # 「重连 ↔ 404」的死循环，表现为整个 run 卡在这里不报错。
+        try:
+            await self._notify("notifications/initialized", {})
+        except MCPSessionExpired as exc:
+            if self._handshake_retry_used:
+                self._initialized = False
+                raise MCPError(
+                    f"{exc}；握手后会话仍未建立，请检查 MCP 服务端") from exc
+            self._handshake_retry_used = True
+            _logger.warning("MCP 握手后会话失效，重建一次：%s", exc)
+            await self._initialize()
+            return
         self._initialized = True
+        self._handshake_retry_used = False
 
-    async def _request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
-        """发送 JSON-RPC 请求并等待响应。"""
+    async def _request(
+        self, method: str, params: dict[str, Any], *, allow_reinit: bool = True,
+    ) -> dict[str, Any]:
+        """发送 JSON-RPC 请求并等待响应。
+
+        ``allow_reinit``：streamable HTTP 的服务端可以随时丢掉会话（重启、过期），
+        此时 POST 回 404。这种情况**重握手一次就能恢复**，比让整次 run 失败好得多；
+        所以这里捕获 :class:`MCPSessionExpired` → 重新 ``initialize`` → 重发一次，
+        且**只重试一次**（``allow_reinit=False``），避免 404 ↔ 重连的死循环。
+        """
         self._request_id += 1
         req_id = self._request_id
         future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
@@ -176,6 +203,16 @@ class MCPClient:
         }
         try:
             await self._transport.send(message)
+        except MCPSessionExpired as exc:
+            self._pending.pop(req_id, None)
+            if method == "initialize" or not allow_reinit:
+                # 握手本身都建不起来：再试也是同一个结果，如实报错。
+                self._initialized = False
+                raise MCPError(f"{exc}；请重新 start() 以重建会话") from exc
+            _logger.warning("MCP 会话失效，重新握手后重试 %s：%s", method, exc)
+            self._initialized = False
+            await self._initialize()
+            return await self._request(method, params, allow_reinit=False)
         except MCPTransportError as exc:
             self._pending.pop(req_id, None)
             raise MCPError(str(exc)) from exc
@@ -194,6 +231,9 @@ class MCPClient:
         }
         try:
             await self._transport.send(message)
+        except MCPSessionExpired:
+            # 原样上抛：调用方要能区分「会话没了，重建即可」与「真的发不出去」。
+            raise
         except MCPTransportError as exc:
             raise MCPError(str(exc)) from exc
 

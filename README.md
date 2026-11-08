@@ -129,6 +129,10 @@ python main.py run --demo
 > ——真实端口与认证、systemd / 反代示例、配置三通道与生产必配、日志与备份、
 > 扩容边界、监控告警、升级步骤和上线前检查清单。
 >
+> **安全评审 / 上线签字**：见 [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)
+> ——信任边界、资产、46 条威胁与当前控制、**15 条已知缺口及补偿措施**、
+> 控制到测试的证据映射。想知道「这个系统能防什么、不能防什么」，看它。
+>
 > **测试覆盖情况**：见 [docs/TEST-REPORT.md](docs/TEST-REPORT.md)
 > ——2501 用例按子系统与业务场景的覆盖矩阵、质量门与已知边界。
 >
@@ -195,7 +199,17 @@ python main.py samples                          # 列出样例（--json 可脚�
 python main.py run --sample linear --no-live     # 简单串行
 python main.py run --sample hierarchy --no-live  # 层级管理
 python main.py run --sample todo --no-live       # 混合并发（等价于 --demo）
+
+# P2-5：把样例当评测集跑——断言产物内容，得出可复现的结论
+python main.py eval examples/evals/smoke.jsonl            # pass@1
+python main.py eval examples/evals/smoke.jsonl --repeat 3 # pass^3（稳定性）
 ```
+
+评测集是 **JSONL**（一行一条 case，`#` 开头是注释），`checks` 只做确定性断言
+（产物存在 / 含某段文本 / 正则 / 行数 / 事件次数 / 任务终态），**不用 LLM 判**。
+`pass^k` = 同一 case 连跑 k 次**全过**才算过——只报 `pass@1` 会给出虚高的结论。
+新增 case 就是在文件里加一行，`artifact_count` 记得把平台生成的 `MANIFEST.json`
+与 `DELIVERY.md` 算进去（= 交付物数 + 2）。
 
 每个样例是一套独立夹具，互不干扰：
 
@@ -232,6 +246,7 @@ examples/samples/<name>/
 | `python main.py serve` | 启动 HTTP API + Web UI 面板（V2） | `--host HOST`（默认 127.0.0.1）；`--port PORT`（默认 8765） |
 | `python main.py doctor` | 诊断配置 / 环境 / 依赖 / Provider 连通性，输出健康报告 | `--config PATH`（指定 agentcrew.yaml）；`--output-dir DIR`；`--json`（机器可读） |
 | `python main.py diff <a> <b>` | 对比两个 run 的配置 / 任务 / 产物 / 事件统计差异 | `--output-dir DIR`；`--json`（机器可读） |
+| `python main.py eval <dataset>` | P2-5：跑离线评测集，用产物断言给出 `pass@1` / `pass^k` | `--repeat K`（每 case 跑 K 次）；`--json`；`--output-dir DIR`（留账） |
 
 行为说明：
 
@@ -314,6 +329,13 @@ models:
 ```
 
 然后用 `cli:my-model` 作为模型别名即可。
+
+**模板按 argv 执行、不经 shell**（2026-11 加固）：`command` 先按 shell 词法切成
+参数列表，再逐项替换 `{model}` / `{prompt}` / `{max_tokens}` / `{temperature}`。
+所以模板里的 `|` `&&` `$(...)` **不会被解释**，替换进来的值也永远只是「一个参数」
+——配置文件被改写不再等于本机任意命令执行。含空格的可执行文件路径要加双引号：
+`"C:/Program Files/foo/bar.exe" --flag`。prompt 默认走 stdin，`{prompt}` 也可用
+（作为单个 argv 元素传递）。
 
 ### 4. 树状任务拆解
 
@@ -497,7 +519,19 @@ DELETE /runs/{run_id}?confirm=1
   盘符）；`run_python` 用独立子进程（`-I` 隔离、cwd 受限、默认 10s 超时、裁剪
   环境变量），生成代码不在宿主进程执行。
 - **诚实留痕**：每次工具调用都记 ledger `tool_call` 事件（工具名、入参摘要、
-  success、耗时）。
+  success、耗时、**mode**）。
+- **原生 function calling（P2-1，默认关闭）**：把 provider 的
+  `capabilities.supports_tool_calls` 打开后，平台改发 OpenAI 原生 `tools` +
+  `tool_choice: auto`，读 `message.tool_calls`，回灌用 `assistant(tool_calls)` +
+  逐条 `role="tool"`（带 `tool_call_id`），**提示词也随之切成「直接调函数」**。
+  两条协议的差别只到「调用从哪来」为止：解析后的执行、schema 校验、权限闸门、
+  ledger 留痕、错误回灌完全同一条路径，所以同一任务两种模式产出同一份产物。
+  模型仍写出 `<tool_call>` 文本时照样会被识别（原生化不是非黑即白）。
+  默认关：兼容网关里不认 `tools` 的不少，默认打开会让本来能跑的部署直接 400。
+- **工具 guardrails（P2-4，默认无规则）**：`agentcrew.yaml` 的 `tool_guards:` 用
+  正则/长度在**执行前**拦危险调用（`phase: input`）或在**结果回灌前**遮掉凭据泄漏
+  （`phase: output`），三态 `block` / `warn` / `allow`。`block` 的工具一次都不执行，
+  命中记 `tool_guard_triggered`。规则在加载期校验，写错正则直接退 3。
 - **配置**：`agentcrew.yaml` 可声明 `mcp_servers`（服务器名 → `command`/`args`），
   配置快照落盘前对含 key/token/secret 的字段脱敏为 `***`。
 
@@ -849,9 +883,17 @@ AGENTCREW_LLM_CACHE_ENABLED=true
 边生成边收集，并实时留痕。
 
 - **接口分层**：`BaseProvider.stream_complete()` 逐块 yield `StreamChunk(delta,
-  finish_reason)`；默认实现退化为一次性 `complete()` 后吐一个完整块，未覆写的
-  Provider 仍可工作（只是没有实时性）。`MockProvider` 覆写为按固定长度分块，
-  拼接所有块必然等于 `complete()` 的文本。
+  finish_reason, tool_call_deltas)`；默认实现退化为一次性 `complete()` 后吐一个
+  完整块，未覆写的 Provider 仍可工作（只是没有实时性）。`MockProvider` 覆写为按
+  固定长度分块，拼接所有块必然等于 `complete()` 的文本。
+- **真 SSE（P2-5）**：`OpenAICompatProvider` 覆写为 `stream=True` 的真流式，
+  逐帧解析 `choices[0].delta`（文本 + `tool_calls`）。建流这一步在重试引擎内
+  （连接失败 / 429 / 5xx 可重试），**开始消费后不重试**——已吐出的块无法回滚，
+  由工厂层决定是否在首块之前切换备用别名。
+- **流式工具调用（P2-5）**：`delta.tool_calls` 是**分片**的（`arguments` 是 JSON
+  文本的片段，可能把字符串字面量切成两半），所以只做「按 `index` 收集」，流结束
+  后由 `assemble_tool_calls()` 一次性拼接 + 解析。流式与非流式在工具调用上共用同
+  一条消费路径：ReAct 循环照常执行，ledger 的 `tool_call.mode` 仍是 `native`。
 - **工厂入口**：`ModelFactory.stream_call()` 与 `call()` 同形，只是走流式路径；
   信号量同样只包住流消费。**流式不做故障转移**（已吐出的块无法回滚），Provider
   不可用直接上抛。流完整消费后把全部 `delta` 拼成全文，按同口径估算 token 并
@@ -979,6 +1021,24 @@ IO / 协议帧错误统一抛 `MCPTransportError`。
 未配置任何角色权限时所有角色可用全部工具（向后兼容）。配置经
 `Settings.tool_permissions: {角色: [工具名...]}`（YAML `tool_permissions:` 段）
 加载；`mcp_servers` 各项可带 `transport` 字段。
+
+### P3-10. MCP streamable HTTP（会话 / 协议版本 / SSE 响应 / 会话重建）
+
+P3-9 的 `HTTPTransport` 是「POST 一次拿一个 JSON」，与官方 streamable HTTP 差四件事，
+每一件在真实服务端上都会直接失败。`agentcrew/mcp/transports.py` 补齐：
+
+| 语义 | 行为 |
+|---|---|
+| **会话** | `initialize` 响应头里的 `Mcp-Session-Id` 被记下，之后每个请求回带；`404` 表示会话没了 |
+| **协议版本** | 握手**之后**的请求带 `MCP-Protocol-Version`，值取服务端在 `initialize` 结果里协商的 `protocolVersion`（默认 `2025-06-18`，**不硬编码**） |
+| **SSE 响应** | 服务端可用 `text/event-stream` 回一批消息（先通知、后响应）：按 `Transfer-Encoding` 解块、跨块缓冲成行、只取 `data:`、跳过注释（保活行），拿到本次请求的响应即停 |
+| **会话失效** | 抛 `MCPSessionExpired`（`MCPTransportError` 子类），`MCPClient` 重握手**一次**后重试——握手期同样适用，全局只给一次额度，避免 404 ↔ 重连死循环 |
+
+两条「不设就会挂死」的止损线：单次响应 `MAX_RESPONSE_BYTES`（8 MiB）与
+`MAX_SSE_EVENTS`（1000）。响应是靠 id 匹配结束的，服务端只要一直推别人的通知就
+永远不会结束——没有上限时表现为整个 run 卡住且不报错，比报错难查得多。
+
+仍只支持 `http://`：TLS 由反向代理终止（与主服务同一部署约定）。
 
 ### P3-4. 多轮 Agent 对话
 
@@ -2218,6 +2278,9 @@ models:
 | `AGENTCREW_API_RATE_LIMIT_ENABLED` | `false` | REST API 的 IP 速率限制总开关（E-3） |
 | `AGENTCREW_API_RATE_LIMIT_MAX` | `100` | 滑动窗口内每 IP 最大请求数 |
 | `AGENTCREW_TOOLS_ENABLED` | `false` | R3：把 6 个内置工具接进真实 run 的 ReAct 循环（见「R3 能力完善」） |
+| `AGENTCREW_CODE_EXEC_ENABLED` | `false` | P1：是否把 `run_python` 注册进 run（无网络/系统沙箱，见 `docs/OPERATIONS.md` §3.3） |
+| `AGENTCREW_OTEL_ENABLED` | `false` | P2-3：每次 run 导出一条 OTel trace（`gen_ai.*` 语义 + OTLP/HTTP JSON，零依赖） |
+| `AGENTCREW_OTEL_CAPTURE_CONTENT` | `false` | P2-3：是否采集 prompt/completion 内容（默认不采，含源码与用户数据） |
 | `AGENTCREW_ENTITY_MEMORY_ENABLED` | `false` | R3：跨 run 实体记忆的沉淀与规划注入 |
 | `AGENTCREW_APPROVAL_MODE` | `interactive` | R4：人工卡点实现方式 `interactive`（TTY 问答）/ `deferred`（审批单挂起，跨进程恢复） |
 | `AGENTCREW_PEER_DIALOGUE_ENABLED` | `false` | R5：Agent 间真实咨询（`<message to="…">` 走真模型调用） |

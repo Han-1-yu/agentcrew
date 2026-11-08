@@ -81,7 +81,11 @@ from agentcrew.models.agent_budget import (
     release_failover,
 )
 from agentcrew.models.factory import ModelFactory
-from agentcrew.models.providers.base import CompletionResult, Message
+from agentcrew.models.providers.base import (
+    CompletionResult,
+    Message,
+    assemble_tool_calls,
+)
 from agentcrew.models.providers.mock import MockProvider, set_purpose
 from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.roles.spec import RoleSpec
@@ -89,7 +93,7 @@ from agentcrew.runtime.ledger import Ledger
 from agentcrew.task.conditions import parse_outcome
 from agentcrew.task.task import Task, TaskResult
 from agentcrew.tools import Tool, ToolRegistry
-from agentcrew.tools.schema import schema_hint, validate_tool_args
+from agentcrew.tools.schema import function_spec, schema_hint, validate_tool_args
 from agentcrew.utils.files import UnsafePathError
 from agentcrew.utils.trace import TraceContext, reset_trace, set_trace
 
@@ -230,13 +234,39 @@ def _consult_system_prompt(spec: RoleSpec) -> str:
 
 
 class ParsedToolCall:
-    """从模型回复里解析出的一次工具调用（轻量值对象，不进 pydantic 体系）。"""
+    """从模型回复里解析出的一次工具调用（轻量值对象，不进 pydantic 体系）。
 
-    __slots__ = ("name", "args")
+    P2-1 起多两个字段，让「原生调用」与「围栏解析」共用同一条执行路径：
 
-    def __init__(self, name: str, args: dict[str, Any]) -> None:
+    - ``id``：Provider 给的调用 id（原生路径用它回传 ``role="tool"`` 消息）；
+      围栏路径为空串——那时没有 id，也不需要。
+    - ``error``：这次解析本身失败的原因（原生 arguments 坏 JSON / 围栏块坏
+      JSON）。非空时执行层**不调用工具**，直接把原因回灌，让模型自己改。
+    """
+
+    __slots__ = ("args", "error", "id", "name")
+
+    def __init__(
+        self, name: str, args: dict[str, Any], *,
+        call_id: str = "", error: str | None = None,
+    ) -> None:
         self.name = name
         self.args = args
+        self.id = call_id
+        self.error = error
+
+
+def _native_tool_calls(completion: CompletionResult) -> list[ParsedToolCall]:
+    """把 Provider 解析好的原生 ``tool_calls`` 转成执行层的统一形状（P2-1）。"""
+    calls: list[ParsedToolCall] = []
+    for item in completion.tool_calls:
+        calls.append(ParsedToolCall(
+            item.name, dict(item.arguments),
+            call_id=item.id,
+            error=(f"工具 {item.name!r} 的 arguments 不可用：{item.arguments_error}"
+                   if item.arguments_error else None),
+        ))
+    return calls
 
 
 def _extract_tool_calls(raw: str) -> list[ParsedToolCall]:
@@ -250,11 +280,15 @@ def _extract_tool_calls(raw: str) -> list[ParsedToolCall]:
         body = match.group(1).strip()
         try:
             data = json.loads(body)
-        except json.JSONDecodeError:
-            calls.append(ParsedToolCall("<malformed>", {"_raw": body[:200]}))
+        except json.JSONDecodeError as exc:
+            calls.append(ParsedToolCall(
+                "<malformed>", {"_raw": body[:200]},
+                error=f"<tool_call> 块内不是合法 JSON：{exc}"))
             continue
         if not isinstance(data, dict):
-            calls.append(ParsedToolCall("<malformed>", {"_raw": body[:200]}))
+            calls.append(ParsedToolCall(
+                "<malformed>", {"_raw": body[:200]},
+                error="<tool_call> 块内必须是 JSON 对象（形如 {\"name\": ..., \"args\": {...}}）"))
             continue
         name = str(data.get("name", "")).strip()
         args = data.get("args")
@@ -262,6 +296,57 @@ def _extract_tool_calls(raw: str) -> list[ParsedToolCall]:
             args = {}
         calls.append(ParsedToolCall(name, args))
     return calls
+
+
+def _native_call_id(call: ParsedToolCall, index: int) -> str:
+    """原生续传用的调用 id：Provider 给了就用它的，没给就造一个稳定的。"""
+    return call.id or f"call_{index}"
+
+
+def _native_tool_call_payload(calls: list[ParsedToolCall]) -> list[dict[str, Any]]:
+    """把执行过的调用还原成 assistant 消息里的 ``tool_calls``（OpenAI 形状）。
+
+    必须原样回传给端点：``role="tool"`` 的结果靠 ``tool_call_id`` 与这里的
+    ``id`` 对齐，少一个字段请求就会被拒。``arguments`` 用 JSON 字符串
+    （OpenAI 协议如此），坏 JSON 的情况回传 ``{}``——那时结果里已经写明原因，
+    续传本身不该再失败一次。
+    """
+    payload: list[dict[str, Any]] = []
+    for index, call in enumerate(calls):
+        payload.append({
+            "id": _native_call_id(call, index),
+            "type": "function",
+            "function": {
+                "name": call.name,
+                "arguments": json.dumps(call.args, ensure_ascii=False),
+            },
+        })
+    return payload
+
+
+def _native_tool_messages(
+    calls: list[ParsedToolCall], results: list[str],
+) -> list[Message]:
+    """原生路径的逐条工具结果消息（``role="tool"`` + ``tool_call_id``）。"""
+    messages: list[Message] = []
+    for index, (call, text) in enumerate(zip(calls, results, strict=False)):
+        messages.append({
+            "role": "tool",
+            "content": text,
+            "tool_call_id": _native_call_id(call, index),
+        })
+    return messages
+
+
+def _fence_tool_results(
+    calls: list[ParsedToolCall], results: list[str],
+) -> str:
+    """围栏路径的合并结果块（与改造前逐字节一致：``<tool_result name=…>``）。"""
+    blocks = [
+        f'<tool_result name="{call.name}">\n{text}\n</tool_result>'
+        for call, text in zip(calls, results, strict=False)
+    ]
+    return "\n\n".join(blocks)
 
 
 def _args_summary(args: dict[str, Any]) -> dict[str, str]:
@@ -381,6 +466,7 @@ class BaseAgent(ABC):
         message_router: Callable[[str, str], str] | None = None,
         max_message_rounds: int = 5,
         max_subtask_corrections: int = 1,
+        tool_guard: Any | None = None,
     ) -> None:
         """``catalog`` 是本 run 的角色目录（含自定义角色），可为 ``None``。
 
@@ -447,6 +533,12 @@ class BaseAgent(ABC):
         #: R8：子任务被拒时，把原因回灌并重问 LLM 的次数上限（``0`` = 不回灌，
         #: 行为与 R8 之前逐字一致）。只有回调提供了 ``last_rejection`` 才可能触发。
         self._max_subtask_corrections = max(0, int(max_subtask_corrections))
+        #: P2-4：工具级 guardrails（``None`` = 没配规则，整段逻辑是一次判断）。
+        self._tool_guard = tool_guard
+
+    def set_tool_guard(self, guard: Any | None) -> None:
+        """运行时更换 guard（AgentFactory 在配置变更后刷新缓存实例用，P2-4）。"""
+        self._tool_guard = guard
 
     def set_subtask_creator(
         self, creator: Callable[[dict], str | None] | None
@@ -507,8 +599,12 @@ class BaseAgent(ABC):
             attempt=task.attempts,
         )
 
-        messages = self.build_messages(task, pack, fix_hints)
+        # P2-1：先定别名再构提示词——工具段要按「这个别名能不能原生调函数」
+        # 选一套指令，两套同时给会让模型在协议之间摇摆。
         alias = self._resolve_alias(task)
+        messages = self.build_messages(
+            task, pack, fix_hints,
+            native_tools=self._native_tools_enabled(alias))
         final_text = await self._obtain_final_text(task, messages, alias)
 
         # P2-1：检测 <subtask> 围栏并创建动态子任务（仅当注入了 creator）。
@@ -560,8 +656,15 @@ class BaseAgent(ABC):
         task: Task,
         pack: ContextPack,
         fix_hints: Sequence[str],
+        *,
+        native_tools: bool = False,
     ) -> list[Message]:
-        """默认提示词：system 走角色规格，user 走渲染后的上下文包。"""
+        """默认提示词：system 走角色规格，user 走渲染后的上下文包。
+
+        ``native_tools``（P2-1）：本次调用是否走原生 function calling。是则工具段
+        改成「直接调函数」，不再教模型写 ``<tool_call>`` 文本——两套指令同时给会
+        让模型在两套协议之间摇摆。默认 ``False``，提示词与改造前逐字一致。
+        """
         system_parts: list[str] = [
             self.spec.system_prompt,
             f"## 输出规范\n{self.spec.output_contract}",
@@ -572,7 +675,7 @@ class BaseAgent(ABC):
             f"{self.spec.max_output_tokens} token。宁可写紧凑、写到要点为止，"
             f"也不要写满被截断——一旦截断，本次输出整体作废。",
         ]
-        tools_section = self._tools_section()
+        tools_section = self._tools_section(native=native_tools)
         if tools_section:
             system_parts.append(tools_section)
         # P2-1：仅在注入了子任务回调时告知模型可以请求动态子任务。
@@ -701,8 +804,24 @@ class BaseAgent(ABC):
             return []
         return self._tool_registry.filter_by_allowed(self.spec.allowed_tools)
 
-    def _tools_section(self) -> str:
-        """渲染进系统提示词的工具说明段；无可用工具时返回空串。"""
+    def _native_tools_enabled(self, alias: str) -> bool:
+        """本次执行是否走原生 function calling（P2-1 / P2-5）。
+
+        两条同时满足：有可用工具、该别名能力位支持。**流式不再降级**——P2-5 起
+        ``stream_call`` 会解析 ``delta.tool_calls`` 并在 :meth:`_invoke_model` 里
+        用 ``assemble_tool_calls`` 拼装，与非流式共用同一条消费路径。
+        """
+        return (
+            bool(self._available_tools())
+            and self._models.supports_native_tools(alias)
+        )
+
+    def _tools_section(self, *, native: bool = False) -> str:
+        """渲染进系统提示词的工具说明段；无可用工具时返回空串。
+
+        ``native=True``（P2-1）时给的是「直接调用请求里的函数」这一套指令；否则
+        是既有的 ``<tool_call>`` 围栏写法（默认，逐字不变）。
+        """
         tools = self._available_tools()
         if not tools:
             return ""
@@ -718,6 +837,16 @@ class BaseAgent(ABC):
                 f"{name}{'（必填）' if name in required else ''}" for name in props
             ) or "无参数"
             lines.append(f"- `{tool.name}`：{tool.description} 入参：{args_desc}")
+        if native:
+            lines += [
+                "调用方式：本次请求已经通过 **函数调用（tools）** 提供上面这些函数，"
+                "直接发起函数调用即可（可并行调用多个）。",
+                "函数结果会作为工具消息返回给你。收集到足够信息后，"
+                "再产出带 `file=` 的最终产物围栏；**最终产物的那条回复里不要再发起函数调用**。",
+                "如果函数调用不可用，可以退回到文本围栏写法：在回复里插入一个 "
+                "`<tool_call>` 块，内含 `{\"name\": \"<工具名>\", \"args\": {…}}`。",
+            ]
+            return "\n".join(lines)
         lines += [
             "调用方式：在回复中插入一个 `<tool_call>` 块，内含一个 JSON 对象 "
             "`{\"name\": \"<工具名>\", \"args\": {…}}`，例如：",
@@ -731,7 +860,8 @@ class BaseAgent(ABC):
         return "\n".join(lines)
 
     async def _invoke_model(
-        self, task: Task, messages: list[Message], alias: str
+        self, task: Task, messages: list[Message], alias: str,
+        *, tools: list[dict[str, Any]] | None = None,
     ) -> CompletionResult:
         """调一次 LLM：非流式走 ``models.call``，流式走 ``models.stream_call``（P3-3）。
 
@@ -750,9 +880,16 @@ class BaseAgent(ABC):
                 max_tokens=self.spec.max_output_tokens,
                 purpose="execute",
                 role=self.spec.key,
+                # P2-1：只有能力位支持时才带 tools；不支持时传 None，Provider
+                # 侧与改造前逐字节一致（不会凭空多出 tools 字段）。
+                tools=tools,
+                tool_choice="auto" if tools else None,
             )
         parts: list[str] = []
         finish_reason: str | None = None
+        # P2-5：流式下的原生工具调用——把分片增量攒起来，流结束后一次性拼装。
+        # 每片都解析是错的：一个 JSON 字符串字面量可能被切成两片。
+        tool_deltas: list[Any] = []
         async for chunk in self._models.stream_call(
             alias,
             messages,
@@ -760,8 +897,12 @@ class BaseAgent(ABC):
             max_tokens=self.spec.max_output_tokens,
             purpose="execute",
             role=self.spec.key,
+            tools=tools,
+            tool_choice="auto" if tools else None,
         ):
             parts.append(chunk.delta)
+            if chunk.tool_call_deltas:
+                tool_deltas.extend(chunk.tool_call_deltas)
             if chunk.finish_reason is not None:
                 finish_reason = chunk.finish_reason
             self._ledger.emit(
@@ -779,6 +920,7 @@ class BaseAgent(ABC):
             completion_tokens=0,
             latency_ms=0,
             finish_reason=finish_reason,
+            tool_calls=assemble_tool_calls(tool_deltas),
         )
 
     async def consult(
@@ -926,25 +1068,52 @@ class BaseAgent(ABC):
     ) -> str:
         """ReAct 循环：LLM → 解析 tool_call → 执行工具 → 回灌 → 再问 LLM。
 
-        最多 ``self._max_tool_calls`` 轮。模型某次回复不再含 ``<tool_call>`` 即
-        为最终产物。触顶仍在发 tool_call 时**降级**：记一条 ``tool_loop_exhausted``
-        警告，把最后一次回复当最终产物（不判失败——重试同上限只会再循环一次）。
+        最多 ``self._max_tool_calls`` 轮。模型某次回复不再发工具调用即为最终产物。
+        触顶仍在发 tool_call 时**降级**：记一条 ``tool_loop_exhausted`` 警告，把
+        最后一次回复当最终产物（不判失败——重试同上限只会再循环一次）。
+
+        **两条来源、同一个消费端**（P2-1）：能力位支持原生 function calling 时
+        优先用 ``completion.tool_calls``；为空再回退到 ``<tool_call>`` 围栏。
+        回灌协议也随之切换（原生：assistant(tool_calls) + 逐条 role="tool"；
+        围栏：assistant 文本 + user(tool_result) 文本块），但**解析之后的执行、
+        校验、留痕、错误回灌完全同一条路径**——这正是「原生与回退同任务同结果」
+        的实现方式。ledger 的 ``tool_call`` 事件带 ``mode`` 字段，运维能看出这次
+        实际走的是哪条。
         """
+        native = self._native_tools_enabled(alias)
+        specs = (
+            [function_spec(tool) for tool in self._available_tools()]
+            if native else None)
         completion = None
         exhausted = False
         for round_index in range(self._max_tool_calls):
             self._configure_replay(alias, task)
-            completion = await self._invoke_model(task, messages, alias)
+            completion = await self._invoke_model(
+                task, messages, alias, tools=specs)
             self._guard_truncation(completion, task)
-            calls = _extract_tool_calls(completion.text)
+            native_calls = _native_tool_calls(completion)
+            mode = "native" if native_calls else "fence"
+            calls = native_calls or _extract_tool_calls(completion.text)
             if not calls:
                 break
             if round_index >= self._max_tool_calls - 1:
                 exhausted = True
                 break
-            results_block = await self._execute_tool_calls(calls, task)
-            messages.append({"role": "assistant", "content": completion.text})
-            messages.append({"role": "user", "content": results_block})
+            results = await self._execute_tool_calls(calls, task, mode=mode)
+            if mode == "native":
+                messages.append({
+                    "role": "assistant",
+                    "content": completion.text,
+                    "tool_calls": _native_tool_call_payload(calls),
+                })
+                messages.extend(
+                    _native_tool_messages(calls, results))
+            else:
+                messages.append({"role": "assistant", "content": completion.text})
+                messages.append({
+                    "role": "user",
+                    "content": _fence_tool_results(calls, results),
+                })
         if exhausted:
             self._ledger.emit(
                 "tool_loop_exhausted",
@@ -955,21 +1124,143 @@ class BaseAgent(ABC):
         assert completion is not None  # 循环至少跑一轮
         return completion.text
 
-    async def _execute_tool_calls(
-        self, calls: list[ParsedToolCall], task: Task
-    ) -> str:
-        """执行一批 tool_call，把每条结果包成 ``<tool_result>`` 块拼接返回。
+    def _guard_input(
+        self, task: Task, call: ParsedToolCall,
+    ) -> tuple[bool, str]:
+        """P2-4：执行前的入参检查，返回 ``(是否拦下, 回灌文本)``。
 
-        工具不存在 / 未授权 / 执行抛异常，都收敛成错误文本回灌（不中断循环），
-        每条都记 ``tool_call`` ledger 事件（含入参摘要、success、耗时）——工具
-        调用必须诚实留痕。
+        未配置规则时是一次 ``None`` 判断（零开销）。命中 ``warn`` 只留痕、照常
+        执行；命中 ``block`` 则**不执行**，把原因与规则名一起回灌给模型——它下一轮
+        能自己换写法，而不是让整个任务失败。
+        """
+        guard = self._tool_guard
+        if guard is None:
+            return False, ""
+        try:
+            hits = guard.check_input(call.name, call.args)
+        except Exception as exc:  # noqa: BLE001 —— 规则执行失败按「放行」处理
+            self._ledger.emit(
+                "tool_guard_error", task_id=task.id, role=self.spec.key,
+                tool_name=call.name, error=str(exc)[:200])
+            return False, ""
+        if not hits:
+            return False, ""
+        self._emit_guard_hits(task, call, hits)
+        blocked = [hit for hit in hits if hit.action == "block"]
+        if not blocked:
+            return False, ""
+        reasons = "；".join(
+            f"{hit.rule}：{hit.reason}" for hit in blocked)
+        return True, (
+            f"错误：工具 {call.name!r} 的调用被安全规则拦截（{reasons}）。"
+            "请换一种不触发该规则的写法后重新发起调用。")
+
+    def _guard_output(
+        self, task: Task, call: ParsedToolCall, text: str,
+    ) -> str | None:
+        """P2-4：回灌前的输出检查；被拦时返回替换文本（``None`` = 放行原样）。
+
+        输出相位拦的是**泄漏**（把密钥/凭据读进上下文再发给模型）。拦截后原文
+        一律不回灌——留一段说明，让模型知道结果是「被遮掉」而不是「空」。
+        """
+        guard = self._tool_guard
+        if guard is None:
+            return None
+        try:
+            hits = guard.check_output(call.name, text)
+        except Exception as exc:  # noqa: BLE001
+            self._ledger.emit(
+                "tool_guard_error", task_id=task.id, role=self.spec.key,
+                tool_name=call.name, error=str(exc)[:200])
+            return None
+        if not hits:
+            return None
+        self._emit_guard_hits(task, call, hits)
+        blocked = [hit for hit in hits if hit.action == "block"]
+        if not blocked:
+            return None
+        reasons = "；".join(f"{hit.rule}：{hit.reason}" for hit in blocked)
+        return f"（工具 {call.name!r} 的输出被安全规则拦截：{reasons}；内容未回灌）"
+
+    def _emit_guard_hits(
+        self, task: Task, call: ParsedToolCall, hits: list[Any],
+    ) -> None:
+        """每条命中都留一条 ``tool_guard_triggered``（含相位与动作）。"""
+        for hit in hits:
+            self._ledger.emit(
+                "tool_guard_triggered",
+                task_id=task.id,
+                role=self.spec.key,
+                tool_name=call.name,
+                rule=hit.rule,
+                phase=hit.phase,
+                action=hit.action,
+                field=hit.field,
+                reason=hit.reason,
+            )
+
+    def _record_tool_span(
+        self, *, task: Task, call: ParsedToolCall, success: bool,
+        duration_ms: int, error: str | None,
+    ) -> None:
+        """P2-3：把一次工具调用记成 ``gen_ai.tool.*`` span（未启用时零开销）。
+
+        tracer 由工厂持有（``models.tracer``），本方法只做一次 ``getattr``：
+        未启用 OTel 时这里是纯判断，不影响工具执行路径。
+        """
+        tracer = getattr(self._models, "tracer", None)
+        if tracer is None:
+            return
+        try:
+            tracer.record_tool(
+                tool_name=call.name,
+                task_id=task.id,
+                role=self.spec.key,
+                success=success,
+                duration_ms=duration_ms,
+                call_id=call.id,
+                error=error,
+            )
+        except Exception:  # noqa: BLE001 —— 可观测性不许打断工具执行
+            pass
+
+    async def _execute_tool_calls(
+        self, calls: list[ParsedToolCall], task: Task, *, mode: str = "fence",
+    ) -> list[str]:
+        """执行一批 tool_call，返回**逐条**结果文本（顺序与 ``calls`` 一致）。
+
+        工具不存在 / 未授权 / 入参不合法 / 执行抛异常，都收敛成错误文本回灌
+        （不中断循环），每条都记 ``tool_call`` ledger 事件（含入参摘要、success、
+        耗时、``mode``）——工具调用必须诚实留痕。
+
+        返回列表而不是拼好的字符串：原生路径要按 ``tool_call_id`` 逐条回传
+        ``role="tool"`` 消息，围栏路径要拼成 ``<tool_result>`` 文本块。两条路径
+        在**执行**这一层完全共用（P2-1 的「同任务同结果」就靠这一点）。
         """
         available = {tool.name: tool for tool in self._available_tools()}
         blocks: list[str] = []
-        for call in calls:
+        for fence_index, call in enumerate(calls):
             started = datetime.now()
+            # P2-2：执行**前**先记 started。崩溃发生在工具执行中途时，ledger 里
+            # 就会留下「有 started、没有配对的 tool_call」，resume 据此把这次
+            # 调用标成「被中断」——否则重跑一次 write_file / run_python 时没人
+            # 知道上一次已经动过手。
+            self._ledger.emit(
+                "tool_call_started",
+                task_id=task.id,
+                role=self.spec.key,
+                tool_name=call.name,
+                call_id=call.id,
+                fence_index=fence_index,
+                mode=mode,
+            )
             tool = available.get(call.name)
-            if tool is None:
+            if call.error is not None:
+                # 解析阶段就失败（原生 arguments 坏 JSON / 围栏块坏 JSON）：
+                # 不执行任何工具，把原因原样回灌，模型下一轮自己改。
+                result_text = f"错误：{call.error}。请修正后重新发起调用。"
+                success = False
+            elif tool is None:
                 result_text = (
                     f"错误：工具 {call.name!r} 不存在或未授权。"
                     f"本角色可用工具：{'、'.join(sorted(available)) or '（无）'}"
@@ -1006,12 +1297,24 @@ class BaseAgent(ABC):
                     errors=schema_errors,
                 )
             else:
-                try:
-                    result_text = await tool.run(**call.args)
-                    success = True
-                except Exception as exc:  # 工具内部异常统一兜底回灌
-                    result_text = f"错误：工具 {call.name!r} 执行失败：{exc}"
+                blocked, reason = self._guard_input(task, call)
+                if blocked:
+                    # P2-4：**副作用发生前**拦下。这是 guardrails 唯一真正有意义的
+                    # 时点——write_file / run_python 跑完之后再拦只是事后报警。
+                    result_text = reason
                     success = False
+                else:
+                    try:
+                        result_text = await tool.run(**call.args)
+                        success = True
+                        # P2-4：输出相位（回灌前）——拦泄漏，不改执行结果本身。
+                        leaked = self._guard_output(task, call, result_text)
+                        if leaked is not None:
+                            result_text = leaked
+                            success = False
+                    except Exception as exc:  # 工具内部异常统一兜底回灌
+                        result_text = f"错误：工具 {call.name!r} 执行失败：{exc}"
+                        success = False
             duration_ms = int((datetime.now() - started).total_seconds() * 1000)
             self._ledger.emit(
                 "tool_call",
@@ -1021,11 +1324,17 @@ class BaseAgent(ABC):
                 args=_args_summary(call.args),
                 success=success,
                 duration_ms=duration_ms,
+                mode=mode,
+                # 与上面的 tool_call_started 配对（P2-2 的 pending 推导靠这三个键）
+                call_id=call.id,
+                fence_index=fence_index,
             )
-            blocks.append(
-                f'<tool_result name="{call.name}">\n{result_text}\n</tool_result>'
-            )
-        return "\n\n".join(blocks)
+            self._record_tool_span(
+                task=task, call=call, success=success,
+                duration_ms=duration_ms,
+                error=None if success else result_text)
+            blocks.append(result_text)
+        return blocks
 
     async def _maybe_create_subtasks(self, task: Task, raw: str) -> list[str]:
         """P2-1：检测 ``<subtask>`` 围栏，经回调创建动态子任务并记 ledger。

@@ -154,9 +154,8 @@ def test_registry_assembly_when_enabled(tmp_path: Path, monkeypatch):
     )
     assert isinstance(registry, ToolRegistry)
     names = [tool.name for tool in registry.list_tools()]
-    assert names == [
-        "read_file", "list_files", "grep", "run_python", "write_file", "web_fetch",
-    ]
+    # P1：run_python 默认不注册（无网络/系统沙箱，见 docs/OPERATIONS.md）
+    assert names == ["read_file", "list_files", "grep", "write_file", "web_fetch"]
     run_dir = tmp_path / "run"
     workspace = run_dir / "workspace"
     assert workspace.is_dir(), "工作区目录必须随装配创建"

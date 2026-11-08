@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import ipaddress
 import json
 import math
 import os
@@ -142,7 +143,19 @@ class _EncodingSafeStream:
 
 
 def _install_encoding_safe_stdio() -> None:
-    """把编不出探测串的 stdout/stderr 换成 :class:`_EncodingSafeStream`（幂等）。"""
+    """把编不出探测串的 stdout/stderr 换成 UTF-8 或 :class:`_EncodingSafeStream`。
+
+    两级处理，顺序不能反：
+
+    1. **非 TTY（重定向到文件 / 管道 / CI）先尝试 ``reconfigure(encoding="utf-8")``**。
+       重定向时目标编码默认取系统代码页（中文 Windows = GBK），而文件/管道本身
+       并不限制编码——强制 UTF-8 能**完整保留**看板符号与中文。这一步不改变
+       终端上的显示（TTY 分支不动）。
+    2. 回退到 :class:`_EncodingSafeStream`（逐字符替换），保证不因编码异常崩进程。
+
+    ``reconfigure`` 在 Python 3.7+ 的 ``TextIOWrapper`` 上有，但包装过的流（pytest
+    的 capture、rich 的 console file）未必有——所以只做「有就用」，失败即跳过。
+    """
     for name in ("stdout", "stderr"):
         stream = getattr(sys, name, None)
         if stream is None or isinstance(stream, _EncodingSafeStream):
@@ -152,8 +165,18 @@ def _install_encoding_safe_stdio() -> None:
             continue
         try:
             _ENCODING_PROBE.encode(encoding)
+            continue   # 目标编码够用，不动它
         except (UnicodeEncodeError, LookupError):
-            setattr(sys, name, _EncodingSafeStream(stream))
+            pass
+        if not getattr(stream, "isatty", lambda: False)():
+            reconfigure = getattr(stream, "reconfigure", None)
+            if callable(reconfigure):
+                try:
+                    reconfigure(encoding="utf-8", errors="replace")
+                    continue
+                except (OSError, ValueError):
+                    pass   # 流不支持重配置（已被包装）→ 落到字符替换
+        setattr(sys, name, _EncodingSafeStream(stream))
 
 
 # ── 参数解析 ──────────────────────────────────────────────────────────────
@@ -289,6 +312,18 @@ def build_parser() -> argparse.ArgumentParser:
     samples.add_argument("--json", action="store_true",
                          help="以 JSON 输出（便于脚本解析）")
 
+    p_eval = sub.add_parser(
+        "eval", help="P2-5：跑离线评测集（产物断言 + pass^k）")
+    p_eval.add_argument("dataset", help="JSONL 数据集路径（一行一条 case）")
+    p_eval.add_argument(
+        "--repeat", type=int, default=1, metavar="K",
+        help="每个 case 跑 K 次，用 pass^K 衡量稳定性（默认 1）")
+    p_eval.add_argument("--json", action="store_true",
+                        help="以 JSON 输出（便于 CI 解析）")
+    p_eval.add_argument(
+        "--output-dir", default=None, metavar="DIR",
+        help="把每次 run 的目录留在这里便于排查（默认用临时目录并清理）")
+
     clean_cmd = sub.add_parser(
         "clean", help="保留最近 N 个 run，删除更旧的（默认 N=5）")
     clean_cmd.add_argument("--keep", type=int, default=5, metavar="N",
@@ -314,11 +349,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     serve = sub.add_parser(
         "serve", help="启动 HTTP API + Web UI 面板（V2）")
-    serve.add_argument("--host", default="127.0.0.1", metavar="HOST")
+    serve.add_argument(
+        "--host", default="127.0.0.1", metavar="HOST",
+        help="监听地址（默认只绑回环）。绑非回环地址时必须配置 API Key，"
+             "否则拒绝启动")
     serve.add_argument("--port", type=int, default=8765, metavar="PORT")
     serve.add_argument(
         "--api-key", metavar="KEY",
-        help="E-3：快速设置单个 API Key（给出即临时开启认证；与 AGENTCREW_API_KEYS 合并）")
+        help="E-3：快速设置单个 API Key（等价 admin 角色；与 AGENTCREW_API_KEYS 合并）")
 
     doctor = sub.add_parser(
         "doctor", help="诊断配置 / 环境 / 依赖 / Provider 连通性，输出健康报告")
@@ -957,7 +995,8 @@ def _cmd_tools(args: argparse.Namespace) -> int:
     """R24：列出内置工具（名称 / 类别 / 必填入参）。管理页与 API 共用同一份元数据。"""
     from agentcrew.tools.lab import describe_tools
 
-    tools = describe_tools()
+    # P1：run_python 只在 code_exec_enabled 打开时进清单（与 run 内注册表同口径）。
+    tools = describe_tools(code_exec=Settings.load().code_exec_enabled)
     if args.json:
         print(json.dumps({"tools": tools}, ensure_ascii=False, indent=2))
         return EXIT_CODES["ok"]
@@ -1004,7 +1043,8 @@ def _cmd_tool(args: argparse.Namespace) -> int:
         return _fail("--args 必须是 JSON 对象")
     try:
         result = asyncio.run(
-            run_trial(args.name, payload, output_dir=settings.output_dir))
+            run_trial(args.name, payload, output_dir=settings.output_dir,
+                      code_exec=settings.code_exec_enabled))
     except ToolLabError as exc:
         return _fail(str(exc))
     if args.json:
@@ -1353,6 +1393,55 @@ def _cmd_agents(args: argparse.Namespace) -> int:
     return EXIT_CODES["ok"]
 
 
+def _cmd_eval(args: argparse.Namespace) -> int:
+    """``eval``：跑离线评测集，用产物断言 + ``pass^k`` 给出可复现的结论。
+
+    退出码：全部 case 的 K 次运行都通过 → 0；有任一 case 没过 → 1（与「测试失败」
+    同一口径）；数据集本身不合法 / 运行环境错误 → 3（配置类）。
+
+    刻意**不**做「部分通过也算过」：评测的价值就在于是非题。想只看趋势就加
+    ``--json`` 自己算，别让工具替人下结论。
+    """
+    from agentcrew.evals import DatasetError, load_dataset, run_dataset
+
+    try:
+        cases = load_dataset(args.dataset)
+    except DatasetError as exc:
+        return _fail(f"数据集不合法：{exc}")
+    repeat = max(1, int(getattr(args, "repeat", 1) or 1))
+    output_dir = getattr(args, "output_dir", None)
+    try:
+        report = asyncio.run(run_dataset(
+            cases, repeat=repeat,
+            output_dir=Path(output_dir) if output_dir else None))
+    except Exception as exc:  # noqa: BLE001 —— 评测跑不起来是环境/配置问题
+        return _fail(f"评测执行失败：{type(exc).__name__}: {exc}")
+
+    if args.json:
+        print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2))
+    else:
+        console = Console()
+        _out(console, f"评测集 {args.dataset} · {len(cases)} 条 case · "
+                      f"每条跑 {repeat} 次")
+        grouped = report.by_case()
+        for case_id, runs in grouped.items():
+            bad = [run for run in runs if not run.ok]
+            # ``_out`` 走 ``Text``（rich 的标记会被当字面量），所以这里用纯文本
+            # 而不是 [green] 标记——宁可朴素，也不要控制台里出现 "[/]"。
+            mark = "PASS" if not bad else "FAIL"
+            _out(console, f"  {mark} {case_id}  "
+                          f"{len(runs) - len(bad)}/{len(runs)} 次通过")
+            for run in bad[:1]:
+                for failure in run.failures:
+                    _out(console, f"       - {failure.kind}: {failure.detail}")
+                if run.error:
+                    _out(console, f"       - 运行错误：{run.error}")
+        _out(console, "")
+        _out(console, f"pass@1 = {report.pass_at_1:.2%} · "
+                      f"pass^{repeat} = {report.pass_pow_k:.2%}")
+    return EXIT_CODES["ok"] if report.pass_pow_k >= 1.0 else EXIT_CODES["failed"]
+
+
 def _cmd_samples(args: argparse.Namespace) -> int:
     """``samples [name]``：列出预设 Crew 样例。
 
@@ -1500,6 +1589,26 @@ def _cmd_delete(args: argparse.Namespace) -> int:
     return EXIT_CODES["ok"]
 
 
+def _is_loopback_host(host: str) -> bool:
+    """``--host`` 是否只绑回环地址（决定「无密钥能否启动」）。
+
+    空串 / 通配地址（``0.0.0.0`` / ``::``）**不算**回环：asyncio 会把它们解释成
+    「监听所有网卡」，那正是最需要认证的形态。主机名按字面判断（``localhost``），
+    不做 DNS 解析——解析结果会随环境变化，安全判定不能依赖它。
+    """
+    name = (host or "").strip().lower()
+    if name.startswith("[") and name.endswith("]"):
+        name = name[1:-1]
+    if not name:
+        return False
+    if name in {"localhost", "localhost.localdomain"}:
+        return True
+    try:
+        return ipaddress.ip_address(name).is_loopback
+    except ValueError:
+        return False
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     """启动 HTTP API + SSE 事件流服务器（V2 第 5 项；E-3 可选认证/限流）。"""
     import asyncio
@@ -1521,12 +1630,20 @@ def _cmd_serve(args: argparse.Namespace) -> int:
             return _fail(f"serve：配置错误：{exc}")
         _reconcile_on_startup(settings)
         _expire_overdue_approvals(settings)   # R30：启动时结算超时审批单
-        # E-3：按配置装配认证 / 限流；两者默认关闭，缺省时与改造前行为一致。
+        # P0：认证默认开启（``api_auth_enabled`` 默认 True），且 fail-closed。
+        #
+        # 判定只看两件事：「有没有密钥」与「要不要认证」，不去猜「是不是显式设置的」：
+        #   1) 有 legacy/api_keys 或 RBAC 密钥库里有活跃密钥 → 认证必开；
+        #   2) 没有密钥，且配置要求认证（默认状态）→ **退 3**，回环地址也一样：
+        #      否则「我明明开了认证」和「忘了配密钥」在日志里长得一样，还顺手
+        #      起了一个匿名服务（一条 `AGENTCREW_API_AUTH_ENABLED=1` 的用例会
+        #      把进程挂死在启动后的等待上，就是这么暴露出来的）；
+        #   3) 没有密钥，且显式关掉认证（``api_auth_enabled=false``）→ 只允许绑
+        #      回环地址并打警告；绑非回环仍然退 3（关认证不能顺手对外）。
         api_keys = list(settings.api_keys)
         cli_key = getattr(args, "api_key", None)
         if cli_key:
             api_keys.append(cli_key)
-        wants_auth = settings.api_auth_enabled or bool(cli_key)
         # R25：密钥库里有活跃密钥就启用多密钥认证（fail-closed）；legacy
         # ``api_keys`` 仍等价于 admin——单密钥部署不需要改任何配置。
         from agentcrew.api.rbac import MultiKeyAuth, default_key_store
@@ -1534,17 +1651,32 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         store = default_key_store(settings.output_dir)
         has_rbac_keys = any(
             record.revoked_at is None for record in store.load())
-        if wants_auth or has_rbac_keys:
-            # 显式开启认证却既没有 legacy 密钥也没有 RBAC 密钥时 fail-closed，
-            # 避免「以为开了认证」的错觉（原逻辑会让 auth=None 匿名可访问）。
-            if not api_keys and not has_rbac_keys:
-                return _fail(
-                    "serve：已启用 API 认证但未配置任何密钥，服务不会以匿名方式启动；"
-                    "请配置 agentcrew.yaml 的 api_keys / --api-key，"
-                    "或用 python main.py keys add 建一个 RBAC 密钥。")
+        loopback = _is_loopback_host(args.host)
+        if api_keys or has_rbac_keys:
             auth = MultiKeyAuth(store, legacy_keys=api_keys, required=True)
+        elif settings.api_auth_enabled:
+            return _fail(
+                "serve：已启用 API 认证但没有配置任何密钥，拒绝以匿名方式启动。\n"
+                "  任选其一：\n"
+                "    1) python main.py keys add --name admin --role admin"
+                "（推荐，明文只打印一次）；\n"
+                "    2) 配置 agentcrew.yaml 的 api_keys 或环境变量 AGENTCREW_API_KEYS；\n"
+                "    3) serve --api-key <KEY> 临时加一个 admin 密钥。\n"
+                "  仅本机开发且明确不要认证时，显式设 api_auth_enabled=false"
+                "（或 AGENTCREW_API_AUTH_ENABLED=false）。")
+        elif not loopback:
+            return _fail(
+                f"serve：已显式关闭 API 认证，却要绑非回环地址 {args.host}；"
+                "拒绝以匿名方式对外提供服务。\n"
+                "  只在本机开发时用 --host 127.0.0.1；对外必须先配密钥"
+                "（keys add / AGENTCREW_API_KEYS）。")
         else:
             auth = None
+            print(
+                "  ! 警告：已显式关闭认证且未配置任何 API Key，服务以**匿名**方式运行；"
+                f"仅因绑定回环地址（{args.host}）才放行。",
+                file=sys.stderr,
+            )
         if auth is not None:
             source = (f"RBAC 密钥库 {store.path}" if has_rbac_keys
                       else "legacy api_keys")
@@ -1869,6 +2001,9 @@ def _cmd_config_export(args: argparse.Namespace) -> int:
         "mcp_servers": snap.get("mcp_servers") or {},
         "gate_config": snap.get("gate_config") or {},
         "tool_permissions": snap.get("tool_permissions") or {},
+        # P2-4：guardrails 属于安全配置，导出/导入必须带上——否则
+        # `config export` 会静默丢掉整套拦截规则，是最不该出现的「丢配置」。
+        "tool_guards": snap.get("tool_guards") or [],
         # R10：换人映射只在非空时导出（默认空映射不写回 yaml）。
         "role_fallback": snap.get("role_fallback") or {},
     }
@@ -1927,7 +2062,7 @@ def _cmd_config_export(args: argparse.Namespace) -> int:
         k: v for k, v in export_doc["models"].items() if v
     }
     for key in ("mcp_servers", "gate_config", "tool_permissions",
-                "role_fallback"):
+                "tool_guards", "role_fallback"):
         if not export_doc[key]:
             del export_doc[key]
     text = yaml.safe_dump(export_doc, allow_unicode=True, sort_keys=False)
@@ -2026,7 +2161,7 @@ def _cmd_config_import(args: argparse.Namespace) -> int:
     existing["models"] = existing_models
     # 合并顶层段
     for key in (
-        "mcp_servers", "gate_config", "tool_permissions",
+        "mcp_servers", "gate_config", "tool_permissions", "tool_guards",
         "tools_enabled", "entity_memory_enabled",  # R3 顶层能力开关
         "approval_mode",                          # R4 人工审批模式
         "peer_dialogue_enabled", "max_peer_messages",  # R5 跨角色咨询
@@ -2070,6 +2205,7 @@ _HANDLERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "agents": _cmd_agents,
     "switch": _cmd_switch,
     "samples": _cmd_samples,
+    "eval": _cmd_eval,
     "clean": _cmd_clean,
     "cancel": _cmd_cancel,
     "delete": _cmd_delete,

@@ -172,7 +172,7 @@ async def test_unexpected_handler_error_returns_500(monkeypatch):
     """顶层兜底：任何未预料异常都要给客户端一个 HTTP 响应。"""
     from agentcrew.api.server import ApiServer
 
-    async def boom(self, path, writer):
+    async def boom(self, path, query, writer):
         raise RuntimeError("kaboom")
 
     monkeypatch.setattr(ApiServer, "_handle_get", boom)

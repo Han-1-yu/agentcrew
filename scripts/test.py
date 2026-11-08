@@ -295,6 +295,9 @@ def main(argv: list[str] | None = None) -> int:
                              "「未证实为环境」，--strict 下仍判失败")
     parser.add_argument("--strict", action="store_true",
                         help="失败后重试通过也算失败（不让疑似回归被洗成绿色）")
+    parser.add_argument("--fail-on-recovered-crash", action="store_true",
+                        help="崩溃后重试通过也判失败。CI/发版前用：崩溃本身是环境"
+                             "问题，但「这一轮确实没一次跑通」不该被当成绿灯")
     parser.add_argument("--timeout", type=int, default=600,
                         help="单个子进程超时秒数（默认 600）")
     parser.add_argument("-k", "--filter", dest="pattern", default=None,
@@ -373,7 +376,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"用例：{total_passed} passed · {total_failed} failed · "
           f"{total_skipped} skipped · {total_errors} error")
     if recovered:
-        print(f"崩溃重试后恢复：{len(recovered)} 个（进程被杀，非回归）")
+        suffix = "；--fail-on-recovered-crash 已开启，判失败" \
+            if args.fail_on_recovered_crash else "（进程被杀，非回归）"
+        print(f"崩溃重试后恢复：{len(recovered)} 个{suffix}")
     if suspicious:
         print("首次失败、重试通过（**未证实**为环境，请人工核对）：")
         for item in suspicious:
@@ -396,7 +401,8 @@ def main(argv: list[str] | None = None) -> int:
         for item in unstable:
             print(f"  - {item.path}")
     passed = (not broken and not unstable and not no_tests
-              and not (args.strict and suspicious))
+              and not (args.strict and suspicious)
+              and not (args.fail_on_recovered_crash and recovered))
     print("结果：" + ("通过" if passed else "未通过"))
     print("=" * 70)
     return 0 if passed else 1

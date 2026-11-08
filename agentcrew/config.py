@@ -66,6 +66,11 @@ _ENV_TO_FIELD: dict[str, str] = {
     "AGENTCREW_ROUTING_STRATEGY": "routing_strategy",
     "AGENTCREW_AFFINITY_MODE": "affinity_mode",
     "AGENTCREW_TOOLS_ENABLED": "tools_enabled",
+    "AGENTCREW_CODE_EXEC_ENABLED": "code_exec_enabled",
+    "AGENTCREW_OTEL_ENABLED": "otel_enabled",
+    "AGENTCREW_OTEL_ENDPOINT": "otel_endpoint",
+    "AGENTCREW_OTEL_SERVICE_NAME": "otel_service_name",
+    "AGENTCREW_OTEL_CAPTURE_CONTENT": "otel_capture_content",
     "AGENTCREW_ENTITY_MEMORY_ENABLED": "entity_memory_enabled",
     "AGENTCREW_EMBEDDING_ENABLED": "embedding_enabled",
     "AGENTCREW_EMBEDDING_MODEL": "embedding_model",
@@ -99,7 +104,11 @@ _ROLE_MODEL_ENV_PREFIX = "AGENTCREW_MODEL_"
 _YAML_SCALAR_KEYS = (
     "max_concurrency", "context_budget_tokens", "gate", "roles_dir",
     # R3：两个能力开关都是顶层标量，走与 max_concurrency 同一条读取/合并路径。
-    "tools_enabled", "entity_memory_enabled", "approval_mode",
+    "tools_enabled", "code_exec_enabled", "entity_memory_enabled",
+    "approval_mode",
+    # P2-3：OTel GenAI 导出（默认关；开关与端点都是运维显式决定）。
+    "otel_enabled", "otel_endpoint", "otel_service_name",
+    "otel_capture_content",
     # R30：审批单等待窗口（秒，0 = 永不超时）。
     "approval_timeout_seconds",
     # R27：向量检索通道与混合权重。
@@ -347,6 +356,15 @@ def _yaml_values() -> dict[str, object]:
         if not isinstance(tool_permissions, dict):
             raise ValueError(f"配置文件 tool_permissions 段必须是映射：{path}")
         values["tool_permissions"] = dict(tool_permissions)
+    # P2-4：工具级 guardrails。形状与正则都在这里先粗校验一遍、再由
+    # ``Settings._validate_tool_guards`` 精校验——两层是有意的：这一层能报出
+    # 「配置文件哪一段写错了」，Pydantic 那层保证任何构造路径（含 model_copy）
+    # 都过同样的检查。
+    tool_guards = data.get("tool_guards")
+    if tool_guards is not None:
+        if not isinstance(tool_guards, list):
+            raise ValueError(f"配置文件 tool_guards 段必须是列表：{path}")
+        values["tool_guards"] = list(tool_guards)
     webhooks = data.get("webhooks")
     if webhooks is not None:
         if not isinstance(webhooks, list):
@@ -654,13 +672,18 @@ class Settings(BaseModel):
     完全一致 —— 默认关闭是为了避免意外改变既有输出/计费口径。
     环境变量 ``AGENTCREW_LLM_CACHE_ENABLED``。
     """
-    api_auth_enabled: bool = False
-    """REST API 的 API Key 认证总开关（E-3）。
+    api_auth_enabled: bool = True
+    """REST API 的 API Key 认证总开关（E-3；P0 起**默认开启**）。
 
-    ``False``（默认）时 :class:`~agentcrew.api.server.ApiServer` 不挂认证中间件，
-    所有端点匿名可访问，行为与改造前逐字节一致。``True`` 时 serve 子命令用
-    :attr:`api_keys` 构造 :class:`~agentcrew.api.auth.APIKeyAuth`，请求须带
+    ``True``（默认）时 ``serve`` 用 :attr:`api_keys` / RBAC 密钥库构造
+    :class:`~agentcrew.api.rbac.MultiKeyAuth`，请求须带
     ``Authorization: Bearer <key>`` 或 ``X-API-Key: <key>``，否则回 401。
+
+    为什么改默认：此前默认 ``False`` = 匿名可访问，「忘了开认证就上线」是最常见
+    的事故形态。现在换成**忘记配置**就启动失败（非回环地址 + 无密钥 →
+    ``serve`` 直接退 3），本地开发（回环地址）才允许无密钥启动并给出显式警告。
+    真要在一个可信内网裸跑，显式写 ``api_auth_enabled: false`` 也不会被拦——
+    但那是一次有意识的决定，而不是默认值。
     环境变量 ``AGENTCREW_API_AUTH_ENABLED``。
     """
     api_keys: list[str] = Field(default_factory=list)
@@ -724,6 +747,47 @@ class Settings(BaseModel):
     为本次 run 装配一份注册表：4 个本地沙箱工具 + ``write_file`` / ``web_fetch``，
     Agent 进入 ReAct 循环；``tool_permissions`` 与 ``mcp_servers`` 中前者同步生效。
     环境变量 ``AGENTCREW_TOOLS_ENABLED=true``，或 YAML 顶层 ``tools_enabled: true``。
+    """
+    otel_enabled: bool = False
+    """P2-3：把每次 run 导成一条 OTel trace（默认**关闭**）。
+
+    开着的时候 Crew 建一个 :class:`~agentcrew.runtime.otel.OTLPTracer`：run 是根
+    span，任务是子 span，每次 LLM 调用带 ``gen_ai.*`` 属性，每次工具调用带
+    ``gen_ai.tool.*``。run 收尾时**一次性** POST 到 ``{otel_endpoint}/v1/traces``
+    （OTLP/HTTP JSON，零依赖），失败只落一条 ``otel_export_failed`` 事件、不影响
+    run 结局。
+
+    默认关：没有 collector 时每次 run 都会多一次注定失败的外发请求（本机 3s 超时
+    的代价不值得）。
+    """
+
+    otel_endpoint: str = "http://127.0.0.1:4318"
+    """OTLP/HTTP 端点（collector 默认 4318）。末尾不带 ``/v1/traces``。"""
+
+    otel_service_name: str = "agentcrew"
+    """``service.name`` 资源属性；多实例部署时用它区分（如 ``agentcrew-prod``）。"""
+
+    otel_capture_content: bool = False
+    """是否采集 prompt / completion 文本（默认**关**）。
+
+    关掉是刻意的：内容里有源码、用户数据，也可能有没被脱敏词表覆盖的凭据。
+    打开后每条内容截断到 4000 字符（``otel._MAX_CONTENT_CHARS``），且仍走
+    ``secret_values()`` 的脱敏后再进 span。
+    """
+
+    code_exec_enabled: bool = False
+    """是否把 ``run_python`` 注册进真实 run 的工具表（默认**关闭**，P1）。
+
+    ``run_python`` 已经做了该做的进程级隔离（``-I`` 隔离模式、裁剪环境变量、
+    ``cwd`` 限制、超时杀进程），但它**没有网络与系统调用沙箱**：一段代码可以
+    出网、可以吃满 CPU/内存。把它当默认能力等于把「配置错误」升级成「远程执行
+    面」。所以分两步走：
+
+    - 默认不注册（本字段为 ``False``）：模型看不见、也调不到；
+    - 显式打开（``AGENTCREW_CODE_EXEC_ENABLED=true`` 或 YAML 同名键）时注册，
+      并且**只有此时**才有该能力，边界写在 ``docs/OPERATIONS.md``。
+
+    真正的容器级沙箱（Docker / gVisor）是 P3 的事，不在这一步假装做到。
     """
     approval_timeout_seconds: int = 0
     """R30：审批单等待窗口（秒）；``0`` = 永不超时（默认，与 R30 之前一致）。
@@ -968,6 +1032,39 @@ class Settings(BaseModel):
         if value < 0:
             raise ValueError("webhook_max_retries 必须 >= 0")
         return value
+
+    # ── P1-12：非法配置在**加载期**报错，不留运行时兜底 ──────────────────
+    #
+    # 此前 ``max_concurrency: 0`` 能一路加载成功，直到 Crew 建信号量时才炸，
+    # 表现为「run 直接 FAILED」——配置写错和引擎写错在日志里长得一样。对齐
+    # Pydantic AI 的做法（``Field(ge=...)``），把值域约束挪到 schema：加载即失败，
+    # 退出码 3（配置错误），错误里带字段名。
+
+    @field_validator("max_concurrency", "context_budget_tokens",
+                     "plan_max_attempts")
+    @classmethod
+    def _validate_positive_int(cls, value: int, info: Any) -> int:
+        if value < 1:
+            raise ValueError(f"{info.field_name} 必须 >= 1（实际 {value}）")
+        return value
+
+    @field_validator("mock_latency_ms")
+    @classmethod
+    def _validate_non_negative_int(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError(f"mock_latency_ms 必须 >= 0（实际 {value}）")
+        return value
+
+    @field_validator("review_score_threshold")
+    @classmethod
+    def _validate_review_threshold(cls, value: float | None) -> float | None:
+        """``None`` = 不启用；启用时必须落在 (0, 1]——放开区间等于默认全放行。"""
+        if value is None:
+            return None
+        if not 0 < value <= 1:
+            raise ValueError(
+                f"review_score_threshold 必须落在 (0, 1]（实际 {value}）")
+        return value
     max_subtask_corrections: int = 1
     """R8：子任务被拒时把原因回灌给模型、要一次修正后回复的次数上限（默认 1）。
 
@@ -988,6 +1085,76 @@ class Settings(BaseModel):
     的工具记 ``tool_permission_denied`` ledger 事件、绝不执行。经 YAML
     ``tool_permissions:`` 段加载。
     """
+
+    tool_guards: list[dict[str, Any]] = Field(default_factory=list)
+    """工具级 guardrails（P2-4）：在**副作用发生前**按规则拦截工具调用。
+
+    形状（``agentcrew.yaml`` 的 ``tool_guards:`` 段，规则按顺序全部求值）：
+
+    ```yaml
+    tool_guards:
+      - name: block-recursive-delete
+        tools: [run_python]          # 省略 = 全部工具
+        phase: input                 # input（执行前）| output（回灌前）
+        field: code                  # 可选：只查这个入参字段
+        pattern: "rm\\s+-rf"         # pattern / max_length 至少给一个
+        action: block                # block | warn | allow
+        message: "禁止递归删除"
+    ```
+
+    ``block`` 的工具**绝不执行**（原因作为错误文本回灌，模型自己改），``warn``
+    只留痕。默认空列表 = 零行为变化。校验在加载期做：正则写错、action 拼错、
+    缺 pattern/max_length 都会在启动时报错，而不是跑到一半才发现规则不生效。
+    """
+
+    @field_validator("tool_guards")
+    @classmethod
+    def _validate_tool_guards(
+        cls, value: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """逐条校验规则；错误信息只点字段名与位置，不回显敏感内容。"""
+        for index, rule in enumerate(value or []):
+            where = f"tool_guards[{index}]"
+            if not isinstance(rule, dict):
+                raise ValueError(f"{where} 必须是映射")
+            name = str(rule.get("name") or "").strip()
+            if not name:
+                raise ValueError(f"{where} 缺少 name")
+            phase = str(rule.get("phase") or "input")
+            if phase not in ("input", "output"):
+                raise ValueError(
+                    f"{where}.phase 必须是 input 或 output（实际 {phase!r}）")
+            action = str(rule.get("action") or "block")
+            if action not in ("block", "warn", "allow"):
+                raise ValueError(
+                    f"{where}.action 必须是 block / warn / allow（实际 {action!r}）")
+            tools = rule.get("tools")
+            if tools is not None:
+                if isinstance(tools, str) or not isinstance(tools, (list, tuple)):
+                    raise ValueError(f"{where}.tools 必须是工具名数组")
+                for item in tools:
+                    if not isinstance(item, str) or not item.strip():
+                        raise ValueError(f"{where}.tools 的每一项都必须是非空字符串")
+            pattern = rule.get("pattern")
+            max_length = rule.get("max_length")
+            if pattern is None and max_length is None:
+                raise ValueError(
+                    f"{where} 必须给出 pattern 或 max_length（否则这条规则永不命中）")
+            if pattern is not None:
+                try:
+                    re.compile(str(pattern))
+                except re.error as exc:
+                    raise ValueError(
+                        f"{where}.pattern 不是合法正则：{exc}") from None
+            if max_length is not None and (
+                isinstance(max_length, bool) or not isinstance(max_length, int)
+                or max_length < 1
+            ):
+                raise ValueError(f"{where}.max_length 必须是 >= 1 的整数")
+            field_name = rule.get("field")
+            if field_name is not None and not isinstance(field_name, str):
+                raise ValueError(f"{where}.field 必须是字符串")
+        return value
 
     @field_validator("output_dir")
     @classmethod

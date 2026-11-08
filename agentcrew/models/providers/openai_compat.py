@@ -15,10 +15,11 @@
   留痕（该对象正是传给 ``on_retry`` 的那一个），ledger 可见，绝不静默。
 """
 
+import json
 import math
 import re
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from typing import Any
 
 from agentcrew.models.config import ModelBinding
@@ -27,6 +28,9 @@ from agentcrew.models.providers.base import (
     CompletionResult,
     Message,
     ResponseFormat,
+    StreamChunk,
+    ToolCallDelta,
+    ToolCallRequest,
 )
 from agentcrew.utils.retry import (
     PermanentError,
@@ -200,8 +204,15 @@ class OpenAICompatProvider(BaseProvider):
         temperature: float,
         max_tokens: int,
         response_format: ResponseFormat | None = None,
+        tools: Sequence[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> CompletionResult:
-        """调用 Chat Completions；``latency_ms`` 为含重试等待的总耗时。"""
+        """调用 Chat Completions；``latency_ms`` 为含重试等待的总耗时。
+
+        P2-1：``tools`` 非空时按 OpenAI 原生 function calling 发请求，并把响应里的
+        ``message.tool_calls`` 解析成 :class:`ToolCallRequest`。``text`` 仍然照常
+        返回（模型可能同时给文本），两条来源都由调用方决定先后。
+        """
         kwargs: dict[str, Any] = {
             "model": self.binding.model,
             "messages": self._prepare_messages(messages),
@@ -210,6 +221,10 @@ class OpenAICompatProvider(BaseProvider):
         }
         if response_format is not None:
             kwargs["response_format"] = response_format
+        if tools:
+            kwargs["tools"] = [dict(item) for item in tools]
+            if tool_choice is not None:
+                kwargs["tool_choice"] = tool_choice
         started = time.perf_counter()
         response = await retry_async(
             lambda: self._create(kwargs),
@@ -222,15 +237,78 @@ class OpenAICompatProvider(BaseProvider):
         )
         latency_ms = round((time.perf_counter() - started) * 1000)
         usage = getattr(response, "usage", None)
+        message = response.choices[0].message
         return CompletionResult(
-            text=response.choices[0].message.content or "",
+            text=getattr(message, "content", None) or "",
             provider=self.binding.provider,
             model=self.binding.model,
             prompt_tokens=int(getattr(usage, "prompt_tokens", 0) or 0),
             completion_tokens=int(getattr(usage, "completion_tokens", 0) or 0),
             latency_ms=latency_ms,
             finish_reason=getattr(response.choices[0], "finish_reason", None),
+            tool_calls=parse_tool_calls(getattr(message, "tool_calls", None)),
         )
+
+    async def stream_complete(
+        self,
+        messages: Sequence[Message],
+        *,
+        temperature: float,
+        max_tokens: int,
+        response_format: ResponseFormat | None = None,
+        tools: Sequence[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+    ) -> AsyncIterator[StreamChunk]:
+        """真 SSE 流式调用（P2-5）：逐块 yield 文本增量与工具调用增量。
+
+        与 :meth:`complete` 的两点差异都是流式本身决定的：
+
+        - **建流可重试、消费不可重试**：``create(stream=True)`` 返回流对象那一步
+          仍在 ``retry_async`` 里（连接失败 / 429 / 5xx 重试），但一旦开始
+          ``async for``，已吐出的块无法回滚，中途异常直接上抛——由工厂层决定
+          是否在**首块之前**切换备用别名。
+        - **不返回 tool_calls 成品**，只 yield :class:`ToolCallDelta`：工具调用的
+          ``arguments`` 是分片到达的 JSON 文本，拼接与解析统一在
+          :func:`assemble_tool_calls` 里做，避免两处各写一遍解析逻辑。
+        """
+        kwargs: dict[str, Any] = {
+            "model": self.binding.model,
+            "messages": self._prepare_messages(messages),
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": True,
+        }
+        if response_format is not None:
+            kwargs["response_format"] = response_format
+        if tools:
+            kwargs["tools"] = [dict(item) for item in tools]
+            if tool_choice is not None:
+                kwargs["tool_choice"] = tool_choice
+        stream = await retry_async(
+            lambda: self._create(kwargs),
+            attempts=_ATTEMPTS,
+            base_delay=_BASE_DELAY,
+            retry_on=(TransientError,),
+            on_retry=self._on_retry,
+            retry_after=retry_after_seconds,
+            retry_filter=_should_retry,
+        )
+        async for event in stream:
+            choices = getattr(event, "choices", None) or []
+            if not choices:
+                continue      # 用量尾帧 / keepalive：没有 delta 就没有可吐的东西
+            choice = choices[0]
+            delta = getattr(choice, "delta", None)
+            text = getattr(delta, "content", None) or ""
+            deltas = parse_tool_call_deltas(getattr(delta, "tool_calls", None))
+            finish_reason = getattr(choice, "finish_reason", None)
+            if not text and not deltas and finish_reason is None:
+                continue
+            yield StreamChunk(
+                delta=text,
+                finish_reason=finish_reason,
+                tool_call_deltas=deltas,
+            )
 
     async def _create(self, kwargs: dict[str, Any]) -> Any:
         """单次 SDK 调用；异常在重试引擎看到之前翻译成类型化错误。
@@ -253,14 +331,30 @@ class OpenAICompatProvider(BaseProvider):
                 new_exc.status_code = int(match.group(1))  # type: ignore[attr-defined]
             raise new_exc from exc
 
-    def _prepare_messages(self, messages: Sequence[Message]) -> list[dict[str, str]]:
-        """``supports_system_role=False`` 时把 system 内容并入首条 user 消息。"""
-        prepared: list[dict[str, str]] = [
-            {"role": m["role"], "content": m["content"]} for m in messages
-        ]
+    def _prepare_messages(
+        self, messages: Sequence[Message]
+    ) -> list[dict[str, Any]]:
+        """把内部消息转成 SDK 形状；``tool_calls`` / ``tool_call_id`` 原样透传。
+
+        P2-1：原生续传必须是「assistant 带 ``tool_calls`` → tool 带 ``tool_call_id``」
+        的成对消息，少一半兼容端点会直接 400。这里按字段存在与否复制，文本围栏
+        路径的消息没有这两个键，产出与改造前逐字节一致。
+        """
+        prepared: list[dict[str, Any]] = []
+        for message in messages:
+            item: dict[str, Any] = {
+                "role": message["role"], "content": message["content"]}
+            tool_calls = message.get("tool_calls")
+            if tool_calls:
+                item["tool_calls"] = list(tool_calls)
+            tool_call_id = message.get("tool_call_id")
+            if tool_call_id:
+                item["tool_call_id"] = tool_call_id
+            prepared.append(item)
         if self.capabilities.supports_system_role:
             return prepared
-        system_parts = [m["content"] for m in prepared if m["role"] == "system"]
+        system_parts = [
+            str(m.get("content") or "") for m in prepared if m["role"] == "system"]
         if not system_parts:
             return prepared
         system_text = "\n\n".join(system_parts)
@@ -271,3 +365,89 @@ class OpenAICompatProvider(BaseProvider):
                 return rest
         # 没有 user 消息（异常调用方）也不能丢 system 内容：作为首条 user 发出。
         return [{"role": "user", "content": system_text}, *rest]
+
+
+def parse_tool_call_deltas(raw: Any) -> list[ToolCallDelta]:
+    """SDK 的 ``delta.tool_calls`` → :class:`ToolCallDelta` 列表（P2-5）。
+
+    流式下每一片只有部分字段：第一片带 ``id`` / ``function.name``，后续片通常
+    只有 ``function.arguments`` 的一段。**这里不做任何拼接与 JSON 解析**——那是
+    :func:`~agentcrew.models.providers.base.assemble_tool_calls` 的事，一次做完
+    才不会出现「两处解析、两种容错」。
+    """
+    if not raw or not isinstance(raw, list):
+        return []
+    deltas: list[ToolCallDelta] = []
+    for position, item in enumerate(raw):
+        function = getattr(item, "function", None)
+        if function is None and isinstance(item, dict):
+            function = item.get("function")
+        raw_args = getattr(function, "arguments", None)
+        if raw_args is None and isinstance(function, dict):
+            raw_args = function.get("arguments")
+        index = getattr(item, "index", None)
+        if index is None and isinstance(item, dict):
+            index = item.get("index")
+        call_id = getattr(item, "id", None)
+        if call_id is None and isinstance(item, dict):
+            call_id = item.get("id")
+        name = getattr(function, "name", None)
+        if name is None and isinstance(function, dict):
+            name = function.get("name")
+        deltas.append(ToolCallDelta(
+            index=int(index) if isinstance(index, int) else position,
+            id=str(call_id or ""),
+            name=str(name or ""),
+            arguments=raw_args if isinstance(raw_args, str) else "",
+        ))
+    return deltas
+
+
+def parse_tool_calls(raw: Any) -> list[ToolCallRequest]:
+    """SDK 的 ``message.tool_calls`` → :class:`ToolCallRequest` 列表（P2-1）。
+
+    容错策略：坏数据**不抛异常**，而是尽量保留信息——
+
+    - ``arguments`` 不是合法 JSON 对象：留空 dict + ``arguments_error`` 说明原因，
+      上层把这条错误回灌给模型（它下一轮能自己改）；
+    - 缺 ``function.name`` 的条目直接跳过（没有名字无法执行，回灌也无意义）；
+    - 传进来不是列表 / 是 ``None``：返回空列表（很多兼容网关会返回 ``None``）。
+    """
+    if not raw:
+        return []
+    if not isinstance(raw, list):
+        return []
+    calls: list[ToolCallRequest] = []
+    for item in raw:
+        function = getattr(item, "function", None)
+        if function is None and isinstance(item, dict):
+            function = item.get("function")
+        name = str(getattr(function, "name", "") or "")
+        if not name:
+            continue
+        raw_args = getattr(function, "arguments", None)
+        if raw_args is None and isinstance(function, dict):
+            raw_args = function.get("arguments")
+        arguments: dict[str, Any] = {}
+        error: str | None = None
+        if isinstance(raw_args, dict):
+            arguments = dict(raw_args)
+        elif isinstance(raw_args, str) and raw_args.strip():
+            try:
+                parsed = json.loads(raw_args)
+            except ValueError as exc:
+                error = f"arguments 不是合法 JSON：{exc}"
+            else:
+                if isinstance(parsed, dict):
+                    arguments = parsed
+                else:
+                    error = f"arguments 必须是 JSON 对象，实际是 {type(parsed).__name__}"
+        elif raw_args not in (None, ""):
+            error = f"arguments 类型不可解析：{type(raw_args).__name__}"
+        calls.append(ToolCallRequest(
+            id=str(getattr(item, "id", "") or ""),
+            name=name,
+            arguments=arguments,
+            arguments_error=error,
+        ))
+    return calls

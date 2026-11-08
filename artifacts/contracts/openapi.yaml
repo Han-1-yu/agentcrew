@@ -788,9 +788,10 @@ paths:
       tags: [tools]
       summary: R24 内置工具清单（管理页 / CLI 共用元数据）
       description: >
-        返回 6 个内置工具的名称、说明、类别（sandbox / network）与入参 JSON Schema，
-        以及 `tools_enabled` 开关。元数据读取不建目录、不执行工具；开关为 false
-        时仍可查看清单，但试跑端点会回 409。
+        返回内置工具的名称、说明、类别（sandbox / network）与入参 JSON Schema，
+        以及 `tools_enabled` / `code_exec_enabled` 两个开关。元数据读取不建目录、
+        不执行工具；`tools_enabled` 为 false 时仍可查看清单，但试跑端点会回 409。
+        `run_python` 只在 `code_exec_enabled=true` 时出现在清单里（默认关）。
       responses:
         '200':
           description: 工具清单与执行开关
@@ -801,6 +802,9 @@ paths:
                 required: [tools_enabled, tools]
                 properties:
                   tools_enabled: { type: boolean }
+                  code_exec_enabled:
+                    type: boolean
+                    description: run_python 是否可用（默认 false，见 docs/OPERATIONS.md §3.3）
                   trial_dir: { type: string, description: 试跑沙箱目录名（相对 output） }
                   tools:
                     type: array

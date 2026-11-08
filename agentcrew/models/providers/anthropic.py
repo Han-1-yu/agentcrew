@@ -72,10 +72,15 @@ class AnthropicProvider(BaseProvider):
         temperature: float,
         max_tokens: int,
         response_format: ResponseFormat | None = None,
+        tools: Sequence[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> CompletionResult:
-        """调用 Messages API；``response_format`` 静默忽略。
+        """调用 Messages API；``response_format`` / ``tools`` 静默忽略。
 
         ``latency_ms`` 为含重试等待的总耗时。
+
+        P2-1 只在 OpenAI 兼容实现上落地原生工具调用；Anthropic 的 tool_use
+        形状不同，单独适配是另一件事，这里保持同名参数以维持接口同形。
         """
         system, chat_messages = self._split_system(messages)
         kwargs: dict[str, Any] = {

@@ -3,7 +3,9 @@
 from agentcrew.mcp.client import MCPClient, MCPError
 from agentcrew.mcp.tool import MCPTool, MCPToolResult
 from agentcrew.mcp.transports import (
+    PROTOCOL_VERSION_DEFAULT,
     HTTPTransport,
+    MCPSessionExpired,
     MCPTransport,
     MCPTransportError,
     SSETransport,
@@ -17,6 +19,8 @@ __all__ = [
     "MCPToolResult",
     "MCPTransport",
     "MCPTransportError",
+    "MCPSessionExpired",
+    "PROTOCOL_VERSION_DEFAULT",
     "StdioTransport",
     "SSETransport",
     "HTTPTransport",

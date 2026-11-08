@@ -70,6 +70,7 @@ from agentcrew.models.factory import BudgetExhaustedError
 from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.runtime.checkpoint import CheckpointStore
 from agentcrew.runtime.ledger import Ledger
+from agentcrew.runtime.superstep import SuperStepJournal
 from agentcrew.task.task import Task, TaskResult, TaskStatus
 from agentcrew.task.task_board import TaskBoard
 
@@ -159,6 +160,8 @@ class Scheduler:
         catalog: RoleCatalog | None = None,
         settings: Settings | None = None,
         step_gate: Callable[[list[Task]], None] | None = None,
+        journal: SuperStepJournal | None = None,
+        tracer: Any | None = None,
     ) -> None:
         if max_concurrency < 1:
             raise ValueError(f"max_concurrency 必须 >= 1：{max_concurrency}")
@@ -179,6 +182,11 @@ class Scheduler:
         #: :class:`~agentcrew.gate.stepper.StepGate`）。``None``（默认）时
         #: 主循环不做任何断点检查，执行路径与 R20 之前逐字一致。
         self._step_gate = step_gate
+        #: P2-2：super-step 标记（崩溃后能看出「停在第几轮、在跑哪些任务」）。
+        #: ``None``（直连 Scheduler 的库层用法与旧测试）时全程零 I/O。
+        self._journal = journal
+        #: P2-3：OTel tracer（``None`` = 不采集）。任务 span 挂到 run 根 span 下。
+        self._tracer = tracer
         self._on_event = on_event
         #: 每次 checkpoint 落盘后的回调（Task 29 的 Crew 用它同步 ``run.json``
         #: 的统计，见 :meth:`_save_checkpoint`）；未接线时零开销。
@@ -285,7 +293,14 @@ class Scheduler:
                     candidates = self._board.peek_ready(limit=self._max_concurrency)
                     if candidates:
                         self._step_gate(candidates)
-                for task in self._board.take_ready(limit=free):
+                ready = self._board.take_ready(limit=free)
+                if ready and self._journal is not None:
+                    # P2-2：派发前先落「这一轮在跑谁」。崩溃发生在本轮内时，
+                    # resume 读到 phase=dispatch + 这些 task id，就知道上次停在
+                    # 半步上（而不是「什么都没发生」）。
+                    self._journal.begin(running=[
+                        *self._workers, *(task.id for task in ready)])
+                for task in ready:
                     self._spawn(task, discarded=self._discard_before_rework(task))
                 # 限额**重算**：上一行可能刚把槽位派满，复用同一个 free 会让两个
                 # 循环各派一轮，注册表峰值到 2 × max_concurrency（peak_concurrency
@@ -311,6 +326,10 @@ class Scheduler:
                 self._notify("deadlock", report=self._deadlock_report)
                 break
             await self._drain_workers()
+            if self._journal is not None:
+                # 正常收尾才标 idle：异常/取消路径不写，留下的 dispatch 标记
+                # 正好是「这次没跑完」的证据。
+                self._journal.end()
             # P0-3：worker 收尾完毕后重抛预算耗尽异常，由 Crew 捕获并优雅收尾。
             if self._budget_exhausted is not None:
                 raise self._budget_exhausted
@@ -326,6 +345,19 @@ class Scheduler:
         边界 1）。``asyncio.CancelledError`` 显式捕获、把取消结局送回队列后
         **原样重抛** —— 吞掉它会让取消静默失效。
         """
+        span = None
+        if self._tracer is not None:
+            try:
+                span = self._tracer.start_span(
+                    f"agentcrew.task {task.id}",
+                    attributes={
+                        "agentcrew.task_id": task.id,
+                        "agentcrew.task_title": task.title,
+                        "agentcrew.role": task.role,
+                        "agentcrew.attempt": task.attempts,
+                    })
+            except Exception:  # noqa: BLE001 —— 采集失败不影响调度
+                span = None
         try:
             async with self._task_slot:
                 outcome = await self._execute_one(task)
@@ -349,6 +381,22 @@ class Scheduler:
             # 非预期异常（provider 网络/鉴权、门禁崩溃…）也收敛成结局回流：
             # 让主循环按板上状态决定重试/失败，绝不让 run() 等在空队列上。
             outcome = _error_outcome(task.id, exc)
+        if span is not None:
+            try:
+                self._tracer.end_span(
+                    span,
+                    status="error" if outcome.error is not None else "ok",
+                    attributes={
+                        # 落板上的最终状态（REVIEW / FAILED / …）比 outcome 的
+                        # 内部字段更稳：WorkerOutcome 的字段集合会随门禁演化。
+                        "agentcrew.task_status": (
+                            getattr(self._board.get(task.id), "status", None)
+                            and self._board.get(task.id).status.value),
+                        "agentcrew.task_error": (
+                            str(outcome.error)[:300] if outcome.error else None),
+                    })
+            except Exception:  # noqa: BLE001
+                pass
         self._completion_queue.put_nowait(outcome)
 
     async def _regate_worker(self, task_id: str) -> None:

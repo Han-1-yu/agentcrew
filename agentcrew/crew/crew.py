@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -89,6 +90,7 @@ from agentcrew.runtime.lifecycle import (
     RunHeartbeat,
     read_heartbeat,
 )
+from agentcrew.runtime.superstep import SuperStepJournal
 from agentcrew.runtime.webhook import (
     SPOOL_DIR_NAME,
     WebhookConfig,
@@ -120,8 +122,11 @@ from agentcrew.tools import (
     WebFetchTool,
     WriteFileTool,
 )
+from agentcrew.tools.guard import build_tool_guard
 from agentcrew.tools.registry import ToolRegistry
 from agentcrew.utils.files import atomic_write_text
+
+_logger = logging.getLogger(__name__)
 
 #: run 级退出码（spec §7.4）；Task 32 的 CLI 直接消费本表。
 EXIT_CODES: dict[str, int] = {
@@ -242,6 +247,11 @@ class _Run:
     models: ModelFactory
     agents: AgentFactory
     base_stats: RunStats
+    journal: SuperStepJournal
+    """P2-2：super-step 标记 + pending tool writes 的读写器（绑定本 run 目录）。"""
+
+    tracer: Any | None = None
+    """P2-3：OTel tracer（``None`` = 未启用）。run 根 span 由 Crew 持有并收尾。"""
 
 
 class Crew:
@@ -617,6 +627,8 @@ class Crew:
             # R12：兜底排空 Webhook（``_finalize`` 已排空时这里是幂等空操作）。
             # 异常路径不走 ``_finalize``，没有这一步则最后一批通知直接丢。
             self._close_webhook()
+            # P2-3：trace 导出放在这里——异步上下文里走 ``to_thread``，不卡事件循环。
+            await self._flush_telemetry()
             self._active = False
 
     async def resume(self) -> RunRecord:
@@ -644,6 +656,8 @@ class Crew:
             # R12：兜底排空 Webhook（``_finalize`` 已排空时这里是幂等空操作）。
             # 异常路径不走 ``_finalize``，没有这一步则最后一批通知直接丢。
             self._close_webhook()
+            # P2-3：trace 导出放在这里——异步上下文里走 ``to_thread``，不卡事件循环。
+            await self._flush_telemetry()
             self._active = False
 
     # ── 流程外壳 ──────────────────────────────────────────────────────────
@@ -695,10 +709,14 @@ class Crew:
         await self._attach_mcp_tools(tool_registry, ledger)
         # P3-2：按配置决定是否给工厂挂响应缓存（默认 None = 不缓存，向后兼容）。
         resp_cache = LLMCache() if self._settings.llm_cache_enabled else None
+        # P2-3：OTel —— 默认不建 tracer（整条链路零开销）。建了就在本次 run 里
+        # 只导出一条 trace：run 是根 span，任务/LLM/工具都是它的子 span。
+        tracer = self._build_tracer(record)
         models = ModelFactory(
             self._settings, ledger=ledger, fixtures_dir=_fixtures_dir(),
             cache=resp_cache,
             calibrator=self._calibrator,
+            tracer=tracer,
         )
         # 执行体级 run 累计成本：resume 后把上一段的花费灌回来，
         # 否则额度在重启瞬间清零，"整场上限"就名存实亡。
@@ -715,10 +733,15 @@ class Crew:
             agents=AgentFactory(
                 models, store, ledger, goal, self._catalog,
                 settings=self._settings, run_id=record.run_id,
-                tool_registry=tool_registry),
+                tool_registry=tool_registry,
+                # P2-4：工具级 guardrails（未配置规则时为 None，零开销）。
+                tool_guard=build_tool_guard(self._settings.tool_guards)),
             base_stats=record.stats.model_copy(deep=True),
+            journal=SuperStepJournal(checkpoint.run_dir, ledger),
+            tracer=tracer,
         )
         self._run = run
+        self._open_run_span(run)
         # R5：跨角色咨询路由。默认关闭时不注入——Agent 的系统提示词里连
         # <message> 这一段都不会出现，行为与改造前逐字一致。开启后每个 Agent
         # 都能真的去问队友，答复由目标角色的一次轻量模型调用产生。
@@ -771,6 +794,8 @@ class Crew:
                 "goal": run.goal,
             })
         ledger.emit("run_started", goal=run.goal)
+        # P2-2：把上一次运行停在哪个半步如实报出来（首次运行什么都没有 → 不发事件）。
+        self._recover_superstep(run)
         try:
             self._validate_config(run)
             if resume_board is not None and record.status is RunStatus.CANCELLED:
@@ -1027,6 +1052,114 @@ class Crew:
             raise PlanFailedError(exc.errors) from exc
         return tasks
 
+    # ── P2-3：OTel trace（一次 run 一棵）────────────────────────────────
+
+    def _build_tracer(self, record: RunRecord) -> Any | None:
+        """按配置建 tracer；未启用返回 ``None``（调用侧全是零开销判断）。"""
+        if not self._settings.otel_enabled:
+            return None
+        from agentcrew.runtime.otel import OTLPTracer
+
+        return OTLPTracer(
+            service_name=self._settings.otel_service_name,
+            endpoint=self._settings.otel_endpoint,
+            capture_content=self._settings.otel_capture_content,
+        )
+
+    def _open_run_span(self, run: _Run) -> None:
+        """开 run 根 span：goal / run_id / 模型 / 工具开关都进属性。"""
+        tracer = run.tracer
+        if tracer is None:
+            return
+        try:
+            span = tracer.start_span("agentcrew.run", attributes={
+                "agentcrew.run_id": run.record.run_id,
+                "agentcrew.goal": run.goal[:200],
+                "agentcrew.default_model": self._settings.default_model,
+                "agentcrew.tools_enabled": self._settings.tools_enabled,
+                "agentcrew.code_exec_enabled": self._settings.code_exec_enabled,
+                "agentcrew.max_concurrency": self._settings.max_concurrency,
+            })
+            self._otel_root_span = span
+        except Exception:  # noqa: BLE001 —— 采集失败不影响 run
+            self._otel_root_span = None
+
+    def _close_run_span(self, status: RunStatus) -> None:
+        """结束根 span（在 ``_finalize`` 里调，纯内存操作、不做网络 I/O）。"""
+        span = getattr(self, "_otel_root_span", None)
+        tracer = getattr(self, "_run", None)
+        tracer = getattr(tracer, "tracer", None)
+        if span is None or tracer is None:
+            return
+        try:
+            tracer.end_span(
+                span,
+                status="ok" if status is RunStatus.COMPLETED else "error",
+                attributes={"agentcrew.run_status": status.value})
+        except Exception:  # noqa: BLE001
+            pass
+
+    async def _flush_telemetry(self) -> None:
+        """把本次 run 的 trace 导出（**不阻塞事件循环**，失败只记日志）。
+
+        为什么放在 ``run()`` / ``resume()`` 的 ``finally`` 而不是 ``_finalize``：
+        ``_finalize`` 是同步函数，在里面发 HTTP 会卡住事件循环（``serve`` 场景下
+        等于卡住所有连接）；而 ledger 在 ``_finalize`` 末尾就 close 了，也来不及
+        再记一条导出结果事件。所以导出放在异步收尾处，结果只进日志——trace 是运维
+        侧数据，不该反过来影响 run 的账。
+        """
+        run = getattr(self, "_run", None)
+        tracer = getattr(run, "tracer", None) if run is not None else None
+        self._otel_root_span = None
+        if tracer is None:
+            return
+        try:
+            result = await asyncio.to_thread(tracer.flush)
+        except Exception as exc:  # noqa: BLE001 —— 导出永远不许把 run 弄失败
+            _logger.warning("otel 导出异常：%s", exc)
+            return
+        if not result.get("ok"):
+            _logger.warning(
+                "otel 导出失败（%s，%s 个 span）：%s",
+                result.get("endpoint"), result.get("spans"), result.get("error"))
+        else:
+            _logger.debug("otel 已导出 %s 个 span → %s",
+                          result.get("spans"), result.get("endpoint"))
+
+    # ── P2-2：super-step 恢复 ─────────────────────────────────────────────
+
+    def _recover_superstep(self, run: _Run) -> dict[str, Any] | None:
+        """续跑/重启时汇报「上次停在哪半步」，并留一条审计事件。
+
+        三种情况：
+
+        - 首次运行：没有 ``superstep.json``，也没有任何工具调用 → 返回 ``None``，
+          **不发事件**（新建 run 的 ledger 不该凭空多一条恢复记录）；
+        - 上次正常收尾：状态是 ``idle`` 且没有未配对的工具调用 → 返回摘要但不发
+          事件（没有需要恢复的东西）；
+        - 上次崩在半步上：``phase=dispatch`` 或存在 pending 工具调用 → 发
+          ``superstep_recovered``。任务本身由 :func:`repair_statuses`
+          （RUNNING → READY）重派，这里只负责让「上一次动过什么」可见——
+          尤其 ``write_file`` / ``run_python`` 这类不可回滚的副作用。
+        """
+        try:
+            summary = run.journal.recover()
+        except OSError:   # 盘只读 / 权限异常：恢复信息不该阻断续跑
+            return None
+        pending = summary["pending_tool_calls"]
+        interrupted = summary["last_phase"] == "dispatch"
+        if not pending and not interrupted:
+            return None
+        run.ledger.emit(
+            "superstep_recovered",
+            last_index=summary["last_index"],
+            last_phase=summary["last_phase"],
+            running_tasks=summary["running_tasks"],
+            pending_tool_calls=pending,
+            pending_count=len(pending),
+        )
+        return summary
+
     # ── 阶段 1：执行 ──────────────────────────────────────────────────────
 
     async def _execute(self, run: _Run, board: TaskBoard) -> RunRecord:
@@ -1067,6 +1200,10 @@ class Crew:
                 settings=self._settings,
                 # R20：单步断点（debug_step 开启时非 None，默认 None 零参与）。
                 step_gate=self._make_step_gate(run),
+                # P2-2：每轮调度落 super-step 标记（崩溃后能看出停在哪半步）。
+                journal=run.journal,
+                # P2-3：任务 span 挂到 run 根 span 下。
+                tracer=run.tracer,
             )
             # P1-5：持有当前调度器供外部 ``cancel()`` 转发；若取消请求已在路上
             # （规划阶段到达），新装配的调度器立刻停止派发。
@@ -1569,7 +1706,8 @@ class Crew:
         这是把「库能力」接进生产 run 的**唯一装配点**：此前 ``ToolRegistry`` 只
         在单测里被实例化，``tool_permissions`` / ``mcp_servers`` 因此是死配置，
         Agent 永远走单次调用。现在 ``settings.tools_enabled`` 开启时，为本次 run
-        登记 6 个内置工具并把 ``tool_permissions`` 下发成执行期白名单。
+        登记内置工具（默认 5 个；``code_exec_enabled`` 打开时含 ``run_python``，
+        见 P1 的默认关闭决定）并把 ``tool_permissions`` 下发成执行期白名单。
 
         边界：读工具以 ``run_dir`` 为根（能看上游 ``artifacts/`` 与 ``context/``），
         写工具只以 ``run_dir/workspace`` 为根（中间草稿与交付产物物理隔离，不进
@@ -1587,14 +1725,19 @@ class Crew:
         workspace = run_dir / "workspace"
         workspace.mkdir(parents=True, exist_ok=True)
         registry = ToolRegistry(ledger=ledger)
-        for tool in (
+        tools = [
             ReadFileTool(workdir=run_dir),
             ListFilesTool(workdir=run_dir),
             GrepTool(workdir=run_dir),
-            RunPythonTool(workdir=run_dir),
-            WriteFileTool(workdir=workspace),
-            WebFetchTool(),
-        ):
+        ]
+        # P1：``run_python`` 默认不进注册表。它有进程内隔离（``-I`` / 裁剪环境 /
+        # cwd 限制 / 超时杀进程），但没有网络与系统调用沙箱——默认打开等于把
+        # 「配置写错」升级成「远程执行面」。需要时用 AGENTCREW_CODE_EXEC_ENABLED
+        # 显式打开，边界写在 docs/OPERATIONS.md。
+        if self._settings.code_exec_enabled:
+            tools.append(RunPythonTool(workdir=run_dir))
+        tools.extend((WriteFileTool(workdir=workspace), WebFetchTool()))
+        for tool in tools:
             registry.register(tool)
         permissioned: list[str] = []
         for role, allowed in self._settings.tool_permissions.items():
@@ -1898,6 +2041,7 @@ class Crew:
             run.store.write_manifest()
         started = record.stats.started_at or record.created_at
         code = self._exit_code(status) if exit_code is None else exit_code
+        self._close_run_span(status)
         run.ledger.emit(
             "run_finished",
             goal=record.project_goal,

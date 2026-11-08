@@ -26,16 +26,16 @@ from __future__ import annotations
 
 import asyncio
 import json
-import math
 import os
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlsplit
+from urllib.parse import parse_qs
 
 from agentcrew.api import http as http_transport
 from agentcrew.api.auth import APIKeyAuth, RateLimiter
+from agentcrew.api.paths import PathRejected, canonical_target
 from agentcrew.api.rbac import (
     ALL_SCOPES,
     Principal,
@@ -45,145 +45,18 @@ from agentcrew.api.rbac import (
     set_current,
     write_owner,
 )
+from agentcrew.api.run_options import validate_run_options
 from agentcrew.models.config import PROVIDER_PRESETS as PROVIDER_PRESETS_NAMES
 
 
 def _validate_run_options(options: Mapping[str, Any]) -> str | None:
-    """``POST /runs`` 的 ``options`` 白名单 + 逐字段类型/范围校验，返回错误文案。
+    """兼容别名：校验逻辑已收敛到 :mod:`agentcrew.api.run_options`（P1-11）。
 
-    ``Settings.model_copy(update=...)`` 既不校验也不过滤：任意键都会被塞进
-    ``Settings.__dict__``，``{"mock": "false"}`` 里的字符串还会被当成 truthy
-    的开关（客户端想关 mock、实际却强制开了）。此前唯一的兜底是 ``except
-    Exception: settings = self._settings`` —— 失败被静默吞掉、请求照样回 202，
-    用户以为 options 生效了。这里在入口挡住，值仍由 Settings 的既有语义解释。
-
-    白名单按「可安全按 run 覆盖且不会绕过服务端边界」取最小集合；``gate``
-    恒被 ``_build_crew`` 覆写为 none，``output_dir`` / ``api_keys`` 等属于
-    服务端配置，均不开放。
+    保留这个名字是因为库层与既有测试按它导入；实现只有一份，不再有
+    「HTTP 端校验、其他入口放行」的第二套规则。
     """
-    allowed = {
-        "mock", "default_model", "max_concurrency", "context_budget_tokens",
-        "max_cost_usd", "max_llm_calls", "model_tiers", "gate_config",
-        # R3：两个默认关闭的能力开关，允许按 run 显式打开。
-        "tools_enabled", "entity_memory_enabled",
-        # R4：允许按 run 打开「审批单挂起」模式。
-        "approval_mode",
-        # R5：允许按 run 打开跨角色咨询并收紧配额。
-        "peer_dialogue_enabled", "max_peer_messages",
-        # R6：咨询沉淀与动态委派治理。
-        "peer_consult_capture_enabled", "delegation_mode",
-        "max_delegation_depth", "max_dynamic_tasks",
-        # R7：主管审核；R8：委派拒绝原因回灌次数；R9：覆盖范围与主管角色。
-        "supervisor_review_enabled", "max_subtask_corrections",
-        "supervisor_scope", "supervisor_role", "supervisor_chain",
-        # R10：主管驳回后换人做。
-        "role_fallback", "max_supervisor_reassignments",
-        # R12：出站 Webhook（密钥不经 HTTP 接口传，只认配置文件/环境变量）。
-        "webhook_url", "webhook_events", "webhook_timeout_seconds",
-        "webhook_max_retries",
-        # R28：流程直通——flow 是内联流程对象，flow_name 指向流程库里的名字。
-        "flow", "flow_name",
-    }
-    unknown = sorted(set(options) - allowed)
-    if unknown:
-        return ("options 含不支持的键：" + "、".join(unknown)
-                + "；可用：" + "、".join(sorted(allowed)))
-    if "flow" in options and "flow_name" in options:
-        return "options.flow 与 options.flow_name 只能给一个"
-    if "flow" in options and not isinstance(options["flow"], Mapping):
-        return "options.flow 必须是对象（{version, name, tasks}）"
-    if "flow_name" in options and not isinstance(options["flow_name"], str):
-        return "options.flow_name 必须是字符串"
-    for key, value in options.items():
-        if value is None:
-            if key not in {"default_model", "max_cost_usd", "max_llm_calls"}:
-                return f"options.{key} 不能为 null"
-            continue
-        # R3：两个能力开关与 mock 同为布尔开关，共用一条类型校验。
-        if key in ("mock", "tools_enabled", "entity_memory_enabled",
-                   "peer_dialogue_enabled", "peer_consult_capture_enabled",
-                   "supervisor_review_enabled"):
-            if not isinstance(value, bool):
-                return f"options.{key} 必须是布尔值"
-        elif key == "delegation_mode":
-            if value not in ("any", "manager_only"):
-                return "options.delegation_mode 必须是 any 或 manager_only"
-        elif key == "supervisor_scope":
-            if value not in ("delegated", "all"):
-                return "options.supervisor_scope 必须是 delegated 或 all"
-        elif key == "supervisor_role":
-            if not isinstance(value, str) or not value.strip():
-                return "options.supervisor_role 必须是非空字符串"
-        elif key == "supervisor_chain":
-            if isinstance(value, str) or not isinstance(value, list):
-                return "options.supervisor_chain 必须是角色 key 数组"
-            for item in value:
-                if not isinstance(item, str) or not item.strip():
-                    return "options.supervisor_chain 的每一项都必须是非空字符串"
-        elif key == "role_fallback":
-            if not isinstance(value, dict):
-                return "options.role_fallback 必须是对象（角色 → 备选角色数组）"
-            for role, candidates in value.items():
-                if isinstance(candidates, str) or not isinstance(candidates, list):
-                    return f"options.role_fallback.{role} 必须是角色 key 数组"
-        elif key in ("max_delegation_depth", "max_dynamic_tasks",
-                     "max_subtask_corrections",
-                     "max_supervisor_reassignments", "webhook_max_retries"):
-            if isinstance(value, bool) or not isinstance(value, int):
-                return f"options.{key} 必须是整数"
-            if value < 0:
-                return f"options.{key} 必须 >= 0"
-        elif key == "approval_mode":
-            if value not in ("interactive", "deferred"):
-                return "options.approval_mode 必须是 interactive 或 deferred"
-        elif key == "webhook_url":
-            if not isinstance(value, str) or not value.strip():
-                return "options.webhook_url 必须是非空字符串"
-            if not value.startswith(("http://", "https://")):
-                return "options.webhook_url 必须是 http/https 地址"
-            if "@" in value.split("//", 1)[-1].split("/", 1)[0]:
-                return "options.webhook_url 不能带用户名密码"
-        elif key == "webhook_events":
-            if isinstance(value, str) or not isinstance(value, list):
-                return "options.webhook_events 必须是事件名数组"
-            if not value:
-                return "options.webhook_events 不能为空数组（要全推请用 [\"*\"]）"
-            for item in value:
-                if not isinstance(item, str) or not item.strip():
-                    return "options.webhook_events 的每一项都必须是非空字符串"
-        elif key == "max_peer_messages":
-            if isinstance(value, bool) or not isinstance(value, int):
-                return "options.max_peer_messages 必须是整数"
-            if value < 0:
-                return "options.max_peer_messages 必须 >= 0"
-        elif key == "default_model":
-            if not isinstance(value, str) or not value.strip():
-                return "options.default_model 必须是非空字符串"
-        elif key in ("max_concurrency", "context_budget_tokens", "max_llm_calls"):
-            if isinstance(value, bool) or not isinstance(value, int):
-                return f"options.{key} 必须是整数"
-            lower = 0 if key == "max_llm_calls" else 1
-            if value < lower:
-                return f"options.{key} 必须 >= {lower}"
-        elif key == "webhook_timeout_seconds":
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                return "options.webhook_timeout_seconds 必须是数字"
-            if value <= 0:
-                return "options.webhook_timeout_seconds 必须 > 0"
-        elif key == "max_cost_usd":
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                return "options.max_cost_usd 必须是数值"
-            if not math.isfinite(value) or value < 0:
-                return "options.max_cost_usd 必须是 >= 0 的有限数"
-        elif key == "flow":
-            if not isinstance(value, dict):
-                return "options.flow 必须是对象（{version, name, tasks}）"
-        elif key == "flow_name":
-            if not isinstance(value, str) or not value.strip():
-                return "options.flow_name 必须是非空字符串"
-        elif not isinstance(value, dict):
-            return f"options.{key} 必须是对象"
-    return None
+    return validate_run_options(options)
+
 
 
 @dataclass
@@ -198,32 +71,47 @@ class RunState:
 
 
 class EventBus:
-    """发布/订阅事件总线：SSE 客户端订阅，Crew 的 on_event 发布。"""
+    """发布/订阅事件总线：SSE 客户端订阅，Crew 的 on_event 发布。
+
+    **按 run 分桶**（安全止血项）：一进程可以同时跑多个 run，而 ``/runs/{id}/
+    events`` 是「看这一个 run 的实时状态」的接口。改造前 ``publish`` 广播给所有
+    订阅者，A run 的 goal / 产物摘要 / 审批内容会推到 B run 的连接上——同进程
+    内跨 run 的信息泄露，且订阅者越多泄露面越大。
+
+    分桶规则：
+    - 订阅时声明 ``run_id``：只收「同一 run」的事件，以及**没有** ``run_id`` 的
+      事件（全局广播，如服务级通知）；
+    - 订阅时不声明（``run_id=None``）：收全部（库层/测试用的通配订阅）。
+    """
 
     def __init__(self) -> None:
-        self._subscribers: set[asyncio.Queue[str]] = set()
+        self._subscribers: dict[asyncio.Queue[str], str | None] = {}
 
     def publish(self, event: str, data: dict[str, Any]) -> None:
-        """发布事件到所有订阅者（非阻塞）。"""
+        """发布事件；只投给关心这个 run 的订阅者（非阻塞，慢客户端丢弃）。"""
         payload = http_transport.sse_frame(event, data)
-        for queue in list(self._subscribers):
+        run_id = str(data.get("run_id") or "")
+        for queue, want in list(self._subscribers.items()):
+            if want is not None and run_id and want != run_id:
+                continue   # 别的 run 的事件：不投递，连队列都不碰
             try:
                 queue.put_nowait(payload)
             except asyncio.QueueFull:
                 pass  # 慢客户端丢弃，不阻塞发布者
 
-    def subscribe(self) -> asyncio.Queue[str]:
-        """订阅事件流，返回一个队列；用完须调用 :meth:`unsubscribe`。"""
+    def subscribe(self, run_id: str | None = None) -> asyncio.Queue[str]:
+        """订阅事件流（``run_id`` 为空 = 通配）；用完须调用 :meth:`unsubscribe`。"""
         queue: asyncio.Queue[str] = asyncio.Queue(maxsize=1000)
-        self._subscribers.add(queue)
+        self._subscribers[queue] = run_id or None
         return queue
 
     def unsubscribe(self, queue: asyncio.Queue[str]) -> None:
-        self._subscribers.discard(queue)
+        self._subscribers.pop(queue, None)
 
     @property
     def subscriber_count(self) -> int:
         return len(self._subscribers)
+
 
 
 #: 请求体补读超时（秒）：绝大多数请求一次 ``read`` 就凑满，只有跨 TCP 段到达
@@ -408,13 +296,23 @@ class ApiServer:
             request = await http_transport.read_request(reader)
             if request is None:
                 return
+            # P0：**只在这里解码一次**。规范路径同时喂给授权中间件与路由分发，
+            # 两侧看到同一个字符串，`/%6beys` 这类「授权端匹配不上、分发端解成
+            # /keys」的编码绕过就没有生存空间（见 agentcrew/api/paths.py）。
+            try:
+                path, query = canonical_target(request.path)
+            except PathRejected as exc:
+                await self._send_json(
+                    writer, 400, {"error": f"非法请求路径：{exc}"})
+                return
             # E-3 中间件链（路由分发前）：先限流后认证。任一拦截直接回响应并
             # return，不再读 body / 不再分发——被拒请求不该再触发任何业务逻辑。
             if await self._apply_middleware(
-                    request.method, request.path, request.headers, writer):
+                    request.method, path, request.headers, writer):
                 return
+            query_params = parse_qs(query)
             if request.method == "GET":
-                await self._handle_get(request.path, writer)
+                await self._handle_get(path, query_params, writer)
             elif request.method in ("POST", "PUT"):
                 length = request.content_length
                 if length > http_transport.MAX_BODY_BYTES:
@@ -436,11 +334,11 @@ class ApiServer:
                         rest = getattr(exc, "partial", b"")
                     body += rest
                 if request.method == "POST":
-                    await self._handle_post(request.path, body, writer)
+                    await self._handle_post(path, query_params, body, writer)
                 else:
-                    await self._handle_put(request.path, body, writer)
+                    await self._handle_put(path, query_params, body, writer)
             elif request.method == "DELETE":
-                await self._handle_delete(request.path, writer)
+                await self._handle_delete(path, query_params, writer)
             else:
                 await self._send_json(writer, 405, {"error": "Method Not Allowed"})
         except (ConnectionError, asyncio.CancelledError):
@@ -519,7 +417,7 @@ class ApiServer:
                     extra_headers={"WWW-Authenticate": 'Bearer realm="agentcrew"'},
                 )
                 return True
-            scope = required_scope(method, urlsplit(path).path.rstrip("/") or "/")
+            scope = required_scope(method, path)
             if not principal.allows(scope):
                 self._record_security("api_forbidden", {
                     "client_ip": client_ip, "path": path,
@@ -578,15 +476,13 @@ class ApiServer:
         """追加一条服务端安全审计事件（内存；与 Ledger 事件同形：event + data）。"""
         self.security_events.append({"event": event, "data": dict(data)})
 
-    async def _handle_get(self, path: str, writer: asyncio.StreamWriter) -> None:
-        # 先按 urlsplit 拆开路径与查询串：带 ``?event=...`` 的请求不能再用
-        # ``path.endswith("/status")`` 这类裸匹配（P2-9 的 ledger/stats 端点
-        # 自带查询参数）。无查询串时 ``parsed.path`` 与历史行为逐字节一致。
-        parsed = urlsplit(path)
-        # 统一去掉路径尾斜杠：``/runs/`` 与 ``/runs`` 是同一个资源，此前只有
-        # POST /runs 用裸字符串比较，带尾斜杠或查询串会直接 404。
-        p = parsed.path.rstrip("/") or "/"
-        query = parse_qs(parsed.query)
+    async def _handle_get(
+        self, path: str, query: dict[str, list[str]], writer: asyncio.StreamWriter,
+    ) -> None:
+        # ``path`` 已由 _handle_connection 规范化（解码 + 去尾斜杠 + 折叠斜杠），
+        # 与授权中间件用的是同一个字符串；这里再 unquote 一次就等于制造第二种
+        # 解释，正是路径绕过的成因。查询串单独传入，不参与路径语义。
+        p = path
         if p == "/" or p == "/index.html":
             # 看板页面按需 import：dashboard 是纯字符串大常量，只有访问根路径时
             # 才需要它，别让每个 API 请求都背着它。
@@ -609,9 +505,9 @@ class ApiServer:
             await self._list_flows(writer)
             return
         if p.startswith("/flows/"):
-            await self._get_flow(unquote(p[len("/flows/"):]), writer)
+            await self._get_flow(p[len("/flows/"):], writer)
             return
-        segments = [unquote(s) for s in p.split("/") if s]
+        segments = [s for s in p.split("/") if s]
         # A5：/providers 目录与 /providers/{name}/models
         if segments and segments[0] == "providers":
             await self._handle_providers_get(segments, writer)
@@ -774,17 +670,17 @@ class ApiServer:
         await self._send_json(writer, 200, updated.model_dump(mode="json"))
 
     async def _handle_post(
-        self, path: str, body: bytes, writer: asyncio.StreamWriter,
+        self, path: str, query: dict[str, list[str]], body: bytes,
+        writer: asyncio.StreamWriter,
     ) -> None:
-        parsed = urlsplit(path)
-        p = parsed.path.rstrip("/") or "/"
+        # ``path`` 已是规范路径（见 _handle_get 的说明），不再二次 unquote。
+        p = path
         if p == "/runs":
             await self._create_run(body, writer)
             return
-        segments = [unquote(s) for s in p.split("/") if s]
+        segments = [s for s in p.split("/") if s]
         # A4：POST /providers/{name}/test（V5 P2：支持 ?mode=stream 流式测速）
         if len(segments) == 3 and segments[0] == "providers" and segments[2] == "test":
-            query = parse_qs(parsed.query)
             mode = query.get("mode", ["completion"])[0]
             await self._provider_test(segments[1], writer, mode=mode)
             return
@@ -1505,8 +1401,11 @@ class ApiServer:
 
         await self._send_json(writer, 200, {
             "tools_enabled": bool(self._settings.tools_enabled),
+            # P1：run_python 是否可用由 code_exec_enabled 单独控制（默认关），
+            # 管理页据此决定是否渲染它——清单与实际注册表必须同一口径。
+            "code_exec_enabled": bool(self._settings.code_exec_enabled),
             "trial_dir": TRIAL_DIR_NAME,
-            "tools": describe_tools(),
+            "tools": describe_tools(code_exec=bool(self._settings.code_exec_enabled)),
         })
 
     async def _tool_test(
@@ -1545,7 +1444,9 @@ class ApiServer:
         from agentcrew.tools.lab import ToolLabError, run_trial
 
         try:
-            result = await run_trial(name, args, output_dir=self._output_dir)
+            result = await run_trial(
+                name, args, output_dir=self._output_dir,
+                code_exec=bool(self._settings.code_exec_enabled))
         except ToolLabError as exc:
             status = 404 if str(exc).startswith("未知工具") else 400
             await self._send_json(writer, status, {"error": str(exc)})
@@ -1679,10 +1580,10 @@ class ApiServer:
     # ── P1-6：运行时切换模型 ────────────────────────────────────────────────
 
     async def _handle_put(
-        self, path: str, body: bytes, writer: asyncio.StreamWriter,
+        self, path: str, query: dict[str, list[str]], body: bytes,
+        writer: asyncio.StreamWriter,
     ) -> None:
-        parsed = urlsplit(path)
-        segments = [unquote(s) for s in parsed.path.split("/") if s]
+        segments = [s for s in path.split("/") if s]
         if len(segments) == 3 and segments[0] == "runs" and segments[2] == "model":
             await self._put_model(segments[1], body, writer)
             return
@@ -1741,14 +1642,15 @@ class ApiServer:
             return
         await self._send_json(writer, 200, bindings)
 
-    async def _handle_delete(self, path: str, writer: asyncio.StreamWriter) -> None:
+    async def _handle_delete(
+        self, path: str, query: dict[str, list[str]], writer: asyncio.StreamWriter,
+    ) -> None:
         """``DELETE /runs/{run_id}?confirm=1``：删除单个 run（P0-4）。
 
         必须带 ``?confirm=1`` 否则返回 400（防误删）。``running`` 状态由
         ``delete_run`` 内部拒绝（返回 409）。删除成功返回释放字节数。
         """
-        parsed = urlsplit(path)
-        segments = [unquote(s) for s in parsed.path.split("/") if s]
+        segments = [s for s in path.split("/") if s]
         if len(segments) == 2 and segments[0] == "keys":
             await self._revoke_key(segments[1], writer)
             return
@@ -1761,7 +1663,6 @@ class ApiServer:
         run_id = segments[1]
         if await self._deny_if_run_hidden(run_id, writer):
             return
-        query = parse_qs(parsed.query)
         if query.get("confirm", ["0"])[0] != "1":
             await self._send_json(writer, 400, {
                 "error": "删除需显式确认：追加 ?confirm=1",
@@ -2023,7 +1924,8 @@ class ApiServer:
         if await self._deny_if_run_hidden(run_id, writer):
             return
         await http_transport.sse_headers(writer)
-        queue = self.bus.subscribe()
+        # P0：只订阅这个 run 的事件桶，别的 run 的事件不进这条连接（见 EventBus）。
+        queue = self.bus.subscribe(run_id)
         try:
             # 发送初始连接事件
             await http_transport.write_sse(

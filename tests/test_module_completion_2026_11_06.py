@@ -202,7 +202,11 @@ async def test_delete_invalid_run_id_is_400_not_500(tmp_path):
         port = srv._server.sockets[0].getsockname()[1]
         status, payload = await _http(port, "DELETE", "/runs/..%2Fetc?confirm=1")
         assert status == 400, payload
-        assert "非法 run_id" in payload.get("error", "")
+        # P0 起这条路径在更前面就被拦下（`%2F` 是编码后的分隔符，解码会改变
+        # 段边界），所以错误文案是「非法请求路径」而不是「非法 run_id」——两者
+        # 都是 400，要害是「客户端错误不伪装成 500」。
+        assert ("非法 run_id" in payload.get("error", "")
+                or "非法请求路径" in payload.get("error", ""))
     finally:
         await srv.stop()
 

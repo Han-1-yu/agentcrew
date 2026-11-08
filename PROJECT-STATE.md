@@ -1062,8 +1062,298 @@ R9 遗留「多级主管链（当前只有一层）」。
 **验证**：新增 `tests/test_test_runner.py` 11 例（计数解析、环境净化、详情摘取、
 文件发现、空输入不乱猜）。
 
----
+### 3.40 R35：按开源对标方案做安全止血（2026-11-08）
 
+依据 `完善/AgentCrew开源对标调研与完善方案.md`（P0 安全止血 → P1 可信基线）。
+本轮只做 P0 与 P1 中「不引重型依赖、可确定性验证」的部分，架构与调度语义不变。
+
+| 项 | 改动 | 解决的问题 |
+|---|---|---|
+| **P0-1 路径规范化** | 新增 `api/paths.py`；`_handle_connection` 只解码一次，规范路径同时喂给授权中间件与路由分发；四个 handler 不再各自 `unquote` | 授权端用未解码 path 匹配 `_ROUTE_SCOPES`、分发端用解码 path 路由，`POST /%6beys` 被解成 `/keys` → **viewer 能建 admin 密钥**。现在 `%2f`/`%5c`/`%00`/`.`/`..`/多层编码一律 400，同一条路径只有一种解释 |
+| **P0-2 SSE 分桶** | `EventBus` 由 `set` 改 `dict[queue, run_id]`，`publish` 按 `data.run_id` 投递，`_handle_sse` 订阅时带上 run_id | 此前全量广播：A run 的 goal / 产物摘要 / 审批内容推到 B run 的连接上（同进程跨 run 泄露） |
+| **P0-3 认证默认开** | `api_auth_enabled` 默认 `True`；`serve` 按「有密钥 → 必开 / 无密钥且认证开（默认）→ 退 3（含回环）/ 无密钥且显式关认证 → 仅回环放行并警告，非回环仍退 3」 | 旧默认 `False` = 忘了配就匿名暴露在 0.0.0.0。第一版对回环「警告放行」，被既有用例打回：`AGENTCREW_API_AUTH_ENABLED=1` 无密钥时会把进程挂在启动等待上，而不是退错——改了语义就必须 fail-closed |
+| **P1 CLI 引擎** | `create_subprocess_shell` + `format` → `shlex.split` 先切 argv、再**逐 token** 替换占位符 + `create_subprocess_exec` | 去掉 shell 解释层：模板里的 `|`/`&&`/`$(...)` 不再生效，替换值永远只是「一个参数」。按方案把严重度从 P0 降为 P1（模板来自配置文件、prompt 走 stdin，模型注入不成立），但按 P1 一次修到位 |
+| **P1 run_python 默认关** | 新增 `code_exec_enabled`（默认 `False`，env `AGENTCREW_CODE_EXEC_ENABLED`）；`Crew._build_tool_registry`、工具实验台、CLI 工具清单三处**同口径** | 它有 `-I`/裁剪环境/cwd/超时隔离，但没有网络与系统调用沙箱（可出网）。默认不注册，打开时边界写进 `OPERATIONS.md §3.3` |
+| **P1-11 单点校验** | `_validate_run_options` 抽到 `api/run_options.py`（`ALLOWED_RUN_OPTIONS` + `validate_run_options` + `apply_run_options`），`api` 包导出；server 保留兼容别名 | 白名单/类型校验只有一份，库层调用方也能用同一套规则，不再「HTTP 拒、库放行」 |
+| **P1-12 配置期校验** | `max_concurrency`/`context_budget_tokens`/`plan_max_attempts ≥ 1`、`mock_latency_ms ≥ 0`、`review_score_threshold ∈ (0,1]` 走 `field_validator` | 此前 `max_concurrency: 0` 能加载成功，到建信号量时才炸 → 表现为「run 直接 FAILED」，与引擎 bug 长得一样。现在加载即退 3 |
+| **P1-2 看板 XSS** | `dashboard.py` 渲染全改 DOM/`textContent`（run 卡片、ledger、日志、统计、任务卡、流程属性面板、SVG marker）；新增 `el()`/`clearNode()`；HTML 响应加 CSP + nosniff + Referrer-Policy | `card.innerHTML = ...${r.goal}...` 让持 key 的调用方能在其他运营者看板里执行脚本。攻击面是「低权限用户 → 运营者」而非匿名反射，但仍是真 XSS |
+| **P1 编码** | 非 TTY 的 stdout/stderr 先尝试 `reconfigure(encoding="utf-8")`，失败才回退字符替换 | 重定向到文件时不再把 `✓`/`⟳` 降级成 `?`，日志里的中文与符号完整 |
+| **文档** | `OPERATIONS.md`（认证三分支表、`run_python` 边界、路径/SSE 边界、上线清单）、`README.md`（CLI 模板 argv 语义）、`openapi.yaml`（`code_exec_enabled`） | 方案里的「边界必须写清」不能只写在代码注释里 |
+
+**明确未做（按方案 §5.4 与本轮取舍）**：Checkpoint v2 / pending writes、HITL resume、OTel GenAI、
+evals、guardrails、原生 function calling、MCP 协议升级、`uv lock`、`THREAT_MODEL.md`——
+这些属 P2/P3，需各自立项；`uv`/`mypy` 不在本机环境，未强行引入。
+
+**验证**：新增 `tests/test_security_hardening_2026_11_08.py`（64 例，覆盖编码变体 403、
+非法路径 400、SSE 不串台、回环判定矩阵、serve 退 3、CLI argv 注入字面化、`run_python` 默认关、
+配置期校验、`options` 单点校验、看板无 `innerHTML` 拼接、CSP 头）；改写 4 个既有断言
+（工具数 6→5、`api_auth_enabled` 默认值、`_handle_get` 签名）。`ruff check` 全绿。
+
+### 3.41 P2-1：原生 function calling（2026-11-08）
+
+方案 P2 的第一项。目标不是「换一套协议」，而是**两条协议共用同一个消费端**，
+让「原生与回退同任务同结果」这条验收标准在结构上成立。
+
+| 层 | 改动 |
+|---|---|
+| 数据 | `CompletionResult.tool_calls: list[ToolCallRequest]`（默认空，向后兼容）；`Message` 增加可选 `tool_calls` / `tool_call_id` 与 `role="tool"`（用 `total=False` 基类继承，保持 `role`/`content` 仍必填） |
+| Provider | `OpenAICompatProvider.complete` 接受 `tools`/`tool_choice`，非空才写进请求体；解析 `message.tool_calls`（坏 JSON → `arguments_error`，不抛异常）；`_prepare_messages` 透传 tool 字段。Anthropic / CLI / Mock 签名同形、忽略这两个参数 |
+| 工厂 | `call(..., tools, tool_choice)` → `_attempt` → `provider.complete`；**带工具时禁用响应缓存**（缓存键不含工具声明，命中会把 ReAct 变成单次调用）；不带工具时**连关键字都不传**，既有实现一行不改 |
+| Agent | `_run_agent_loop`：能力位支持时优先 `completion.tool_calls`，为空回退围栏；原生回灌用 `assistant(tool_calls)` + 逐条 `role="tool"(tool_call_id)`，围栏回灌保持 `<tool_result>` 块；`_execute_tool_calls` 改为返回**逐条**结果，两条路径共用执行/校验/权限/留痕/错误回灌 |
+| 提示词 | 原生模式给「直接调函数」，围栏模式逐字保留原文；流式（`stream=True`）暂时强制围栏——`stream_call` 还不解析 `delta.tool_calls`，两套协议不能半接 |
+| 留痕 | `tool_call` 事件新增 `mode`（native / fence），运维能看出实际走了哪条 |
+
+**开关**：`capabilities.supports_tool_calls`，默认全 `False`（兼容网关不认 `tools`
+的不少，默认打开会让本来能跑的部署 400）。YAML 覆写即启用：
+
+```yaml
+models:
+  providers:
+    openai:
+      capabilities: {supports_tool_calls: true}
+```
+
+**工具链**：`scripts/test.py` 新增 `--fail-on-recovered-crash`（崩溃后重试通过也判
+失败）——本机环境噪音下「这一轮确实没一次跑通」不该被当成绿灯；CI/发版前用它。
+
+**验证**：新增 `tests/test_native_tool_calls_2026_11_08.py` 13 例——请求体带/不带
+tools 的差异、tool_call 解析（含坏 JSON、数组、缺 name、None）、tool 字段透传、
+能力位默认值、**原生 vs 围栏同任务同结果（产物逐字节相同、工具都真的执行、
+ledger 除 mode 外一致）**、坏 arguments 回灌不执行工具、提示词按协议切换。
+回归 `crew / end_to_end_mock / multi_turn / supervisor / delegation / streaming /
+agent_tools / openai_compat / models / factory` 共 273 例全过。
+
+### 3.42 P2-2：super-step 标记 + pending tool writes（2026-11-08）
+
+方案 §4.2 的判断：已有「原子 checkpoint + delta + 节流压缩」走在正确的轻量 durable
+路上，缺的只是**pending 状态**——「正在调工具时崩溃」无迹可寻。所以只借
+LangGraph super-step 的**语义**，不引 Temporal / 外部 durable 服务。
+
+**问题定位**：`run.json` / `tasks.json` 都是「事件落地后」写。进程被强杀时两种半步
+丢失：①「一批任务已派发、还没收尾」（R17 的 `run_reconciled` 兜住了状态，但看不出
+派发了谁）；②「工具已开始执行、结果还没回灌」——**完全不可见**，重跑
+`write_file` / `run_python` 时没人知道上一次已经动过手。
+
+**做法**（新增 `agentcrew/runtime/superstep.py`）：
+
+| 件 | 作用 |
+|---|---|
+| `superstep.json` | 每轮调度开始写「第 N 轮 + 在跑哪些任务」，本轮正常结束改 `idle`。原子写（临时文件 + `os.replace`）。看到 `phase=dispatch` 就是「上次停在半路」 |
+| `tool_call_started` 事件 | Agent 在工具执行**前**记一条；既有 `tool_call` 作为「完成」标记，两者新增 `call_id` / `fence_index` 关联键 |
+| `pending_tool_calls()` | 扫 ledger 推出「有 started 没配对的 finished」= 被中断的调用。原生按 `call_id`、围栏按 `fence_index`、升级前的老事件按工具名兜底 |
+| `_recover_superstep()` | 启动/续跑时若有 `dispatch` 或 pending，记 `superstep_recovered`（含 `last_phase` / `running_tasks` / `pending_tool_calls` / `pending_count`）；首次运行与正常收尾**不发事件** |
+
+**为什么不另存一份 pending 状态**：ledger 已经是「写入严（逐行 fsync）、读取宽
+（容忍崩断尾行）」的追加日志，再存一份就多了一个会漂移的事实源。**为什么不做结果
+重放**：`write_file` / `run_python` 的副作用不可回滚，重放要求工具幂等；宁可如实
+标注「这次被中断，任务将重跑」。任务本身仍由既有 `repair_statuses`（RUNNING →
+READY）重派 —— 本项补的是「可见」，不是另造一套恢复引擎。
+
+**验证**：新增 `tests/test_superstep_2026_11_08.py` 13 例——标记原子写/自增/坏文件
+不炸、`superstep_begin` 留痕、pending 三种配对键（call_id / fence_index / 工具名）、
+上限裁剪、首次运行不冒事件、崩在半步上发 `superstep_recovered` 且字段齐全、正常
+idle 不发事件、文档事件名同步。回归 `scheduler / scheduler_deadlock / crew /
+checkpoint / incremental_checkpoint / resume_whitelist / run_lifecycle(+hardening) /
+end_to_end_mock` **175 例**、`ledger(+api) / board_view / webhook / approval_timeout /
+agent_tools / native_tool_calls / superstep / security` **200 例**全过。
+真实 run 冒烟：5 轮调度落 `superstep.json`（index=5, phase=idle），全新 run 无
+`superstep_recovered`，与设计一致。
+
+### 3.43 P2-3：OTel GenAI 语义 + 零依赖 OTLP 导出（2026-11-08）
+
+方案 §4.3 的结论是「借 `gen_ai.*` 语义、先 OTLP 输出、不早期自建重型后端」。
+官方 `opentelemetry-sdk` 会拖进 api/sdk/exporter + protobuf 一串依赖，而本仓对
+依赖白名单极严（HTTP 服务、SDK、工具链全手写），所以只实现一条够用的通道：
+**OTLP/HTTP + JSON 编码**，`urllib` + `json` 就够。
+
+| 件 | 内容 |
+|---|---|
+| `agentcrew/runtime/otel.py`（新） | `OTLPTracer`：一次 run 一个 `traceId`，缓冲 span，`flush()` 一次性 POST `{endpoint}/v1/traces`；`encode_attribute` 按 OTLP 规则编码（`intValue` 必须是字符串） |
+| 语义 | `chat {model}` 带 `gen_ai.operation.name` / `system` / `request.model` / `response.model` / `usage.input_tokens` / `usage.output_tokens` / `request.temperature` / `request.max_tokens` / `response.finish_reasons`；`execute_tool {name}` 带 `gen_ai.tool.name` / `tool.call.id`。**不自造新的 `gen_ai.*` 键** |
+| 接线 | Crew 开根 span（run_id/goal/模型/开关）→ 调度器每任务一个 `agentcrew.task` span → 工厂在 **`_account`**（唯一记账口）记 LLM span → Agent 记工具 span |
+| 默认 | `otel_enabled=false`、`otel_capture_content=false`：不采集内容，也不在没有 collector 时白发请求 |
+| 失败 | 导出在 `asyncio.to_thread` 里做（3s 超时），失败只 `logger.warning`；run 的退出码/产物不受影响 |
+
+**踩到的坑（已修）**：第一版把 LLM span 记在 `call()` 里，冒烟一看 12 次调用只出
+5 个 span——plan / review 走 `complete_structured` 的阶梯，压根不经过 `call()`。
+改到 `_account`（docstring 明写「所有调用路径共用」）后 12/12 对齐，`temperature` /
+`max_tokens` 也从 `_attempt` / `_structured_attempt` 透传进去。
+
+**验证**：新增 `tests/test_otel_2026_11_08.py` 18 例——resource/span 结构、一 run 一
+trace 与 parent 链、属性编码、丢 span 计数、`gen_ai.*` 齐全、**默认不含内容 / 打开后
+含且截断**、工具 span 的 error 状态、异常进 span 标 error 并重抛、真起本地端点收
+POST（路径 `/v1/traces` + body 可解析 + 缓冲清空）、端点不可达返回 `ok=false` 不抛、
+配置默认关与 env 开关、`Crew._build_tracer` 开关。端到端：一次 mock run 导出
+**1 条 trace / 18 span（1 run + 5 task + 12 chat）**，与运行报告的 12 次 LLM 调用
+完全对齐。
+
+### 3.44 P2-4：工具级 guardrails —— 副作用前拦截（2026-11-08）
+
+本项是 P2 里唯一**直接减风险**（而不是加能力）的一条。做之前先把「哪些判断可信」
+想清楚：只有能确定性判断（正则 / 长度 / 字段位置）的规则才放进来——**不用 LLM 判**，
+用模型判断模型既不稳定又贵，失败模式恰好是「该拦的没拦」。
+
+| 件 | 内容 |
+|---|---|
+| `agentcrew/tools/guard.py`（新） | `ToolGuard` + `GuardHit`：`check_input(tool, args)` / `check_output(tool, text)`，规则按 `tools` / `field` / `phase` 过滤，命中返回 `block` 或 `warn` |
+| 三态 | `block`（拒绝执行 / 拒绝回灌）/ `warn`（照常执行但留痕，灰度用）/ `allow`（显式放行，把「我们知道这个模式」写进配置供评审） |
+| 两相位 | `input` = 工具执行**前**（拦副作用）；`output` = 结果回灌**前**（拦泄漏）。前者才是安全边界，后者防「把 .env 读进上下文再发给模型」 |
+| 执行链 | `BaseAgent._execute_tool_calls`：schema 校验之后、`tool.run()` 之前查 input；`tool.run()` 之后、回灌之前查 output。`block` 的工具**一次都不执行**，原因与规则名一起回灌让模型自己改 |
+| 配置 | `Settings.tool_guards`（YAML `tool_guards:` 段）+ 加载期校验：缺 name / phase 拼错 / action 拼错 / 正则不合法 / 无 `pattern` 且无 `max_length` 全部退 3 |
+| 留痕 | 每次命中记 `tool_guard_triggered`（rule / phase / action / field / reason）；规则自身抛异常记 `tool_guard_error` 并按**放行**处理（安全组件不许把正常调用变成失败） |
+
+**验证**：新增 `tests/test_tool_guard_2026_11_08.py` 20 例。最关键的一条是
+`test_block_prevents_tool_execution`：用带调用计数的工具断言 **`hits == 0`**——
+「文本说被拦了、其实已经写了文件」是这类功能最容易出现的假绿。其余覆盖 warn
+照常执行、allow 显式放行、phase 隔离、`field` 定位、`max_length`、输出相位拦泄漏
+（断言 `sk-live-SECRET` 不在回灌文本里）、无规则时零行为变化、7 种非法配置。
+回归 `agent_tools / native_tool_calls / tool_wiring / tool_permissions / tool_lab /
+config / crew` **141 例**全过。
+
+### 3.45 P2-5：evals —— 离线确定性回归 + pass^k（2026-11-08）
+
+前四项都在改**行为面**。「测试还是绿的」不够：单测钉的是函数，不是「一次 run 出来
+的东西还对不对」。evals 补的就是这一层——固定输入跑完整 run，断言**产物内容**，
+把「改了提示词 / 换了模型 / 调了上限，效果变好还是变坏」变成可复现的数字。
+
+| 件 | 内容 |
+|---|---|
+| `agentcrew/evals/case.py` | `EvalCase`（id / sample / goal / checks / options）、`CaseOutput`（产物全文 + 任务终态 + 事件计数）、JSONL 加载器（坏 JSON 带行号、id 去重、必须给 sample 或 goal） |
+| `agentcrew/evals/checks.py` | 11 种确定性断言：产物存在/含/不含/正则/行数区间/数量、任务终态、事件次数、run 终态、无失败任务。未知 kind **直接判失败并列出可用类型**（否则「全绿」是假的） |
+| `agentcrew/evals/runner.py` | 每条 case 一次独立 `Crew.run`（自己的临时 output 目录，避免产物互相污染）；`EvalReport` 给出 `pass@1` 与 `pass^k`（k 次全过才算过） |
+| CLI | `python main.py eval <dataset> --repeat K [--json] [--output-dir DIR]`，退出码与测试同口径（全过 0 / 有失败 1 / 数据集非法 3） |
+| 数据集 | `examples/evals/smoke.jsonl` 4 条 case，覆盖三个样例（产物齐全 / 无模板残留 / 并行汇合 / 事件数下限） |
+
+三条设计取舍：**离线确定性优先**（case 绑 mock 夹具，不碰网络与 token，CI 能天天跑）；
+**不用 LLM 判**（判不动的写成人看，不伪装成自动化）；**指标不自欺**（`pass^k` 与
+`pass@1` 并列报，波动 case 在 `pass^k` 上会被明确扣分）。
+
+**踩到的坑**：数据集第一版写成「带缩进的多行 JSON」，加载器直接报错——JSONL 定义
+就是一行一条。这一条也顺手写进了测试（`test_dataset_reports_line_number_for_broken_json`），
+因为手写数据集最常见的错误就是这个。
+
+**验证**：新增 `tests/test_evals_2026_11_08.py` 40 例——数据集加载（坏 JSON 行号、
+重复 id、空文件、id 含分隔符）、22 条断言矩阵、未知 kind 报错、运行失败时全部判失败
+（防「artifact_not_contains 恰好通过」的假绿）、`pass^k` 的波动扣分数学、端到端跑真
+run（正例 + **故意写错断言必须红** + 样例名不存在时不崩）、`--output-dir` 留账、
+报告可 JSON 序列化。CLI 实测：`smoke.jsonl` 4 条 case `pass@1 = 100%`，`--repeat 2`
+时 `pass^2 = 100%`。
+
+### 3.46 P2-6：真实流式 + 流式工具调用（2026-11-08）
+
+补的是 P2-1 留下的那半句：「流式暂时强制走围栏」。做完这条，流式与原生工具调用
+不再是互斥的两条路。
+
+| 件 | 内容 |
+|---|---|
+| `StreamChunk` | 新增 `tool_call_deltas: list[ToolCallDelta]`（`index` / `id` / `name` / 半截 `arguments`） |
+| `assemble_tool_calls()` | 按 `index` 合并分片、`arguments` 字符串相加后**一次性**解析；坏 JSON 留 `arguments_error` 不抛；乱序到达也正确（结果按 index 排序） |
+| `OpenAICompatProvider.stream_complete` | 真 SSE：`stream=True` + 逐帧解析 `delta.content` / `delta.tool_calls`；**建流在重试引擎内、消费不重试**（已吐块无法回滚）；无 delta 的用量/keepalive 帧不产出空块 |
+| 工厂 `stream_call` | 新增 `tools` / `tool_choice` 透传（不带工具时仍一个关键字都不传） |
+| Agent | `_invoke_model` 流式分支收集工具增量 → `assemble_tool_calls` → `CompletionResult.tool_calls`；`_native_tools_enabled` **去掉「流式降级」的闸门** |
+
+为什么「只在流结束后解析一次」：`arguments` 是 JSON 文本的片段，一次切分可能落在
+字符串字面量中间（`"写了一半的内容"` 就是被切开的那类）。逐片 `json.loads` 必然
+在片边界失败，而失败后重试会把「模型写对了」变成「解析不出来」。
+
+**验证**：新增 `tests/test_streaming_tool_calls_2026_11_08.py` 14 例——分片拼装
+（含「切开字符串字面量」的真实边界）、并行调用按 index 分流、乱序到达、坏 JSON /
+缺 name / 空输入、`parse_tool_call_deltas` 对 None 与 dict 形状的容错、Provider
+真的把 `stream=True`+`tools` 发出去、文本与工具增量按序产出、空帧被跳过、Agent
+流式路径的 `mode=native` 与工具真执行、无工具增量时仍是纯文本、无工具时不传
+`tools`。回归 `streaming / openai_compat / agent_tools / native_tool_calls /
+model_factory / models` **156 例**、`crew / e2e / superstep / evals` **116 例**全过。
+
+### 3.47 P2-7：HITL 审批的幂等与恢复语义（2026-11-08）
+
+方案 P2 的「HITL `request → pending → resume(checkpoint, response)` 幂等、部分审批、
+进程重启后仍可审批恢复」——机制本身 R4（持久化审批单）+ R30（等待窗口）已经给了，
+缺的是**把语义钉住**：此前只有一条 CLI 往返测试间接覆盖，重复裁决 / 过期裁决 /
+重启后仍在 pending 这三件事没有断言。
+
+三个必须成立的点（也是本轮的 8 条用例）：
+
+| 语义 | 断言 |
+|---|---|
+| 重复裁决被拒、**第一份裁决不被覆盖** | 第二次 `decide` 抛 `ApprovalError("已 decided，不能重复裁决")`，文件里 `decision`/`decided_by` 仍是第一个人写的 |
+| 已消费的单不能再裁决 | `consume()` 之后 `decide` 抛「已 consumed」——否则 resume 会把同一张单执行两次 |
+| 过期后裁决被拒且提示可操作 | 错误里带 `approval_timeout_seconds`，不是一句「已 expired」 |
+| 重启后未裁决的单仍是 pending | 新建 `ApprovalStore` 实例读到同一张单与同一份 `context` |
+| 追加日志被截断不丢历史 | 手工写入半行后，前面已落盘的审批单仍可读（ledger 同款「写入严、读取宽」） |
+
+**为什么这条重要**：审批是唯一「人说了算」的地方。两个人同时一个点批准、一个点
+驳回时，如果结果是「谁后写文件谁赢」，那这套审批等于没有——所以拒绝重复裁决比
+接受覆盖更重要，哪怕这会让人多操作一步。
+
+**验证**：新增 `tests/test_hitl_2026_11_08.py` 8 例；回归 `approval_interfaces /
+approval_timeout / resume_whitelist` 共 **38 例**全过。
+
+### 3.48 P3-1：`THREAT_MODEL.md` —— 把散落的安全结论收成可评审的威胁模型（2026-11-08）
+
+P0–P2 补了十几处安全边界（路径规范化、认证默认开、SSE 分桶、guardrails、
+`run_python` 默认关、看板 CSP…），但结论分散在三处：代码注释、`OPERATIONS` 的边界表、
+测试文件。三处都不回答评审会问的那个问题——**「所以你们到底防不住什么？」**
+
+新增 `docs/THREAT_MODEL.md`（310 行），结构按「能被质询」来设计：
+
+| 节 | 内容 | 为什么这么写 |
+|---|---|---|
+| §2 系统模型 | 组件数据流图 + **5 条信任边界**（B1 网络→进程 / B2 进程→LLM / B3 进程→工具 / **B4 模型输出→进程行为** / B5 配置→执行）+ 不可信输入清单 | B4 是本类系统特有边界；不单独列它，威胁模型就退化成普通 Web 服务的安全文档 |
+| §3 资产 | 按「丢了最疼」排序，含落盘目录与敏感度 | 判断影响面时先看丢了什么 |
+| §4 行为者 | A1 无凭证者 / A2 低权限 key / **A3 能影响模型输入的人** / A4 同机用户 / A5 供应链 / A6 运维误操作 | 每类标「是否覆盖」，A3 诚实标「部分覆盖」 |
+| §5 威胁 | **46 条**（T-01…T-46；T-46 由 P3-2 的 MCP 流式传输增补），八域：认证授权 / 请求解析 / 跨 run 隔离 / 提示词注入 / 工具执行 / 秘密泄露 / 供应链 / 可用性 | 每条四列：场景、当前控制、**残留风险**。有残留的一律标 ⚠️ 并指向缺口编号 |
+| §6 缺口 | **15 条**（G-1…G-15），含「影响 / 为什么接受 / 补偿或触发条件」 | 上线签字的正题：G-1 提示词注入无法根除、G-2 配置即 RCE、G-9 `run_python` 无隔离，都必须由部署方明确接受 |
+| §7 证据映射 | 12 个域 → 测试文件 → 关键断言 | 「控制」不是声明而是断言，指不到测试的视为无效 |
+| §8 上线清单 | 10 项，与 `OPERATIONS §8` 互为正反面 | 命令在运维手册，判断在这里 |
+| §9 维护规则 | 5 条「什么时候必须更新」 | 防文档腐化 |
+
+**顺带修掉的三处文档事实错误**（写的时候逐个回代码核对才发现）：知识库目录名不是
+`_kb/` 而是 `knowledge/`（`experiences.jsonl` + `entities.jsonl`）；成本上限不是配置项而是
+`AgentProfile` 的 ctor 参数（`cost_ceiling_usd` / `run_cost_ceiling_usd` /
+`max_calls_per_task` / `max_rpm`，默认 `None`）；`web_fetch` 的测试在
+`tests/test_new_builtin_tools.py` 而不是某个不存在的 `test_web_fetch.py`。
+
+**给文档本身加了测试**（`tests/test_threat_model_2026_11_08.py` 8 例），因为威胁模型最
+容易烂掉的方式不是写错，而是**慢慢与现实脱节**：引用的测试文件被删、缺口编号改了一半、
+上线清单悄悄少一条。断言四条：必需章节齐全、**正文点名的每个 `tests/test_*.py` 真实
+存在**、`T-xx` 连续无空洞且 `G-x` 引用都能落到缺口表、上线清单仍点名 G-1/G-2/G-9、
+文档写死的安全默认值与 `Settings.model_validate({})` 一致（用 model_validate 而非
+`load()`，否则断言变成环境测试）。
+
+**验证**：`tests/test_threat_model_2026_11_08.py` 8 例全过；`ruff check` 全绿。
+`README` 与 `OPERATIONS §0/§3.3` 已加入指向本文档的入口。
+
+### 3.49 P3-2：MCP streamable HTTP（会话 / 协议版本 / SSE 响应 / 会话重建）（2026-11-08）
+
+P3-9 的 `HTTPTransport` 是「POST 一次拿一个 JSON」。对照官方 streamable HTTP，缺四件事，
+**每一件在真实服务端上都会直接失败**——这也是威胁模型 G-15 原来记的那个缺口。
+
+| 语义 | 之前 | 现在 |
+|---|---|---|
+| 会话 | 不认 `Mcp-Session-Id` | 从 `initialize` 响应头记下，之后每个请求回带 |
+| 协议版本 | 不发送 | 握手**之后**的请求带 `MCP-Protocol-Version`，值取服务端协商的 `protocolVersion`（默认 `2025-06-18`，**不硬编码**） |
+| SSE 响应 | 只按 JSON 解析，遇到 `text/event-stream` 会挂到超时 | 按 `Transfer-Encoding` 解块 → 跨块缓冲成行 → 只取 `data:`、跳过注释 → 拿到匹配 `id` 即停；坏 JSON 跳过不中断流 |
+| 会话失效 | 只报 `HTTP 404` | 抛 `MCPSessionExpired`，`MCPClient` 重握手**一次**后重试；握手期的 `notifications/initialized` 同样适用，全局只给一次额度 |
+
+**给自己踩出来的一个坑**：第一版只在 `_request` 里处理会话失效，测试立刻打回——
+`notifications/initialized` 走的是 `_notify`，它把 `MCPSessionExpired` 包成了普通
+`MCPError`，于是「会话刚建好就被丢掉」变成整次 `start()` 失败。现在 `_notify` 原样
+上抛该异常，`_initialize` 用一次性额度重建。**另一个更隐蔽的问题**：响应是靠 id 匹配
+结束的，服务端只要一直推别人的通知就永远不会结束——原实现会永久阻塞在读流上，表现为
+「run 卡死且不报错」。补了 `MAX_RESPONSE_BYTES`（8 MiB）与 `MAX_SSE_EVENTS`（1000）
+双上限，撞线即抛错。
+
+**顺带修掉的一个真 bug**：重写 body 读取时先写成「读到连接关闭」，对 keep-alive 的
+服务端会挂住——`Content-Length` 分支被补回，并有一条用例专门盯它。
+
+**验证**：新增 `tests/test_mcp_streamable_http_2026_11_08.py` 15 例——会话捕获与回带、
+协商版本优先于本地默认（假服务端故意返回更旧的 `2025-03-26`）、自定义头透传、SSE 先
+通知后响应、chunk 边界切在 JSON 中间仍能重组、坏 JSON 跳过、404 只重建一次且重试用新
+会话、握手都握不上时报错不重试、重试又 404 时如实报错、通知 202 不阻塞、`https` 拒绝
+且提示反代、`Content-Length` 不等关闭、无限 SSE 撞事件上限、超大 body 拒绝。回归
+`mcp_transports / mcp_client / mcp_wiring` 共 **51 例**全过。
+
+---
 ## 4. 历史报告汇总（已并入本文，原文归档）
 
 | 报告 | 时间 | 核心结论 | 现状 |

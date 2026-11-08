@@ -92,6 +92,7 @@ class AgentFactory:
         settings: Settings | None = None,
         run_id: str = "",
         tool_registry: ToolRegistry | None = None,
+        tool_guard: Any | None = None,
     ) -> None:
         self._models = models
         self._store = store
@@ -113,6 +114,9 @@ class AgentFactory:
         #: R3：run 级工具注册表。``None``（默认）时所有 Agent 走「单次调用」
         #: 的原有路径；Crew 在 ``tools_enabled`` 开启时注入一份。
         self._tool_registry = tool_registry
+        #: P2-4：工具级 guardrails。``None``（默认 / 未配置规则）时 Agent 侧
+        #: 每次工具调用只多一次 ``None`` 判断。
+        self._tool_guard = tool_guard
         #: R5：跨角色咨询路由。``None``（默认）时不检测 ``<message>`` 围栏。
         #: 实际类型要么是二参回调，要么是提供 ``bind()`` 的 PeerRouter（本身
         #: 不可调用），所以按 duck typing 存 ``Any``，由 _bind_router 统一解析。
@@ -468,6 +472,8 @@ class AgentFactory:
                 if self._settings is not None else 1),
             # R3：工具链只在显式开启时下发；None 与改造前逐字一致。
             tool_registry=self._tool_registry,
+            # P2-4：guardrails 与工具链同生共死——没有工具就谈不上拦工具。
+            tool_guard=self._tool_guard,
             # R5：对话路由同理——None 时系统提示词里连这段能力都不会出现。
             message_router=self._bind_router(role_key),
         )

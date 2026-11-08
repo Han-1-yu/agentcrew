@@ -119,7 +119,20 @@ class ModelBinding(BaseModel):
 
 #: 内置能力预设，逐行对应 spec §12.1 的能力表（8 行）。
 #: ``api_key_env`` 取自 spec §17.2 的环境变量清单；ollama 无需密钥、mock 离线，
-#: 二者为空串。``supports_tool_calls`` 全为 False —— V1 不使用工具调用。
+#: 二者为空串。
+#:
+#: ``supports_tool_calls`` 一律为 ``False``：这是 P2-1 原生 function calling 的
+#: **开关位**，而兼容网关里有相当一部分不认 ``tools`` 字段（会直接 400）。默认
+#: 关 = 继续走 ``<tool_call>`` 文本围栏，行为与改造前逐字节一致；要启用就在
+#: ``agentcrew.yaml`` 里显式打开：
+#:
+#: ```yaml
+#: models:
+#:   providers:
+#:     openai:
+#:       capabilities:
+#:         supports_tool_calls: true
+#: ```
 PROVIDER_PRESETS: dict[str, ProviderPreset] = {
     "openai": ProviderPreset(
         implementation="openai_compat",

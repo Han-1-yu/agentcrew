@@ -112,7 +112,10 @@ async def test_fix_hints_reach_the_model(env, tmp_path):
     agent = make_agent(env, fx)
     captured = []
     orig = agent.build_messages
-    agent.build_messages = lambda t, p, h: (captured.append(list(h)), orig(t, p, h))[1]
+    # P2-1：build_messages 多了一个 keyword-only 的 native_tools，替身要跟着收
+    agent.build_messages = (
+        lambda t, p, h, **kw: (
+            captured.append(list(h)), orig(t, p, h, **kw))[1])
     await agent.execute(env["task"], env["bus"].build(env["task"]),
                         fix_hints=["补上输入校验"])
     assert captured[0] == ["补上输入校验"]

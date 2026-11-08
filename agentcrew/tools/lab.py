@@ -45,29 +45,39 @@ class ToolLabError(ValueError):
     """试跑请求本身不合法（未知工具 / 入参校验失败）。运行时失败走返回值。"""
 
 
-def build_tools(root: Path, *, create_workspace: bool = True) -> list[Any]:
-    """在一组根目录上装配 6 个内置工具（与 ``Crew._build_tool_registry`` 同源）。
+def build_tools(
+    root: Path, *, create_workspace: bool = True, code_exec: bool = False,
+) -> list[Any]:
+    """在一组根目录上装配内置工具（与 ``Crew._build_tool_registry`` 同源）。
 
     ``create_workspace=False`` 用于**只读元数据**场景（管理页列清单）：
     构造工具本身不建目录，避免为了一次列清单在 CWD 里留下 ``workspace/``。
+
+    ``code_exec``（P1）与生产装配保持同一口径：``run_python`` 只在
+    ``settings.code_exec_enabled`` 打开时才出现。否则「Agent 调不到、实验台却能
+    跑」——调试入口就成了绕过那道开关的后门，而它恰恰是最容易被暴露的一面。
     """
     workspace = root / "workspace"
     if create_workspace:
         workspace.mkdir(parents=True, exist_ok=True)
-    return [
+    tools: list[Any] = [
         ReadFileTool(workdir=root),
         ListFilesTool(workdir=root),
         GrepTool(workdir=root),
-        RunPythonTool(workdir=root),
-        WriteFileTool(workdir=workspace),
-        WebFetchTool(),
     ]
+    if code_exec:
+        tools.append(RunPythonTool(workdir=root))
+    tools.extend((WriteFileTool(workdir=workspace), WebFetchTool()))
+    return tools
 
 
-def build_trial_registry(root: Path, *, create_workspace: bool = True) -> ToolRegistry:
+def build_trial_registry(
+    root: Path, *, create_workspace: bool = True, code_exec: bool = False,
+) -> ToolRegistry:
     """试跑用注册表（无角色权限：实验台是管理员显式动作，不走 Agent 的授权链）。"""
     registry = ToolRegistry()
-    for tool in build_tools(root, create_workspace=create_workspace):
+    for tool in build_tools(
+            root, create_workspace=create_workspace, code_exec=code_exec):
         registry.register(tool)
     return registry
 
@@ -76,12 +86,14 @@ def _kind(tool: Any) -> str:
     return "network" if tool.name == "web_fetch" else "sandbox"
 
 
-def describe_tools() -> list[dict[str, Any]]:
+def describe_tools(code_exec: bool = False) -> list[dict[str, Any]]:
     """工具清单：名称 / 说明 / 入参 schema / 类别。管理页与 CLI 共用。
 
     构造工具只注入 ``workdir`` 字段，不建目录、不执行——纯元数据读取。
+    ``code_exec`` 为假时 ``run_python`` 不在清单里（它没被注册，列出来是误导）。
     """
-    registry = build_trial_registry(Path("."), create_workspace=False)
+    registry = build_trial_registry(
+        Path("."), create_workspace=False, code_exec=code_exec)
     return [
         {
             "name": tool.name,
@@ -108,6 +120,7 @@ async def run_trial(
     output_dir: Path,
     sandbox: Path | None = None,
     timeout: float = TRIAL_TIMEOUT_SECONDS,
+    code_exec: bool = False,
 ) -> dict[str, Any]:
     """跑一次单工具试跑，返回结果字典（**不抛运行时异常**）。
 
@@ -121,7 +134,7 @@ async def run_trial(
     由调用方映射成 400/404——那是请求错误，不是工具执行失败。
     """
     root = Path(sandbox) if sandbox is not None else new_sandbox(output_dir)
-    registry = build_trial_registry(root)
+    registry = build_trial_registry(root, code_exec=code_exec)
     tool = registry.get(tool_name)
     if tool is None:
         known = ", ".join(sorted(item.name for item in registry.list_tools()))

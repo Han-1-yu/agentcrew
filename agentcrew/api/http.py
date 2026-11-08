@@ -131,13 +131,38 @@ async def send_json(
     )
 
 
+#: 看板 HTML 的安全响应头（P1-2）。
+#:
+#: 看板是单文件内联脚本 + 内联事件属性，因此 ``script-src`` 必须放 ``'unsafe-inline'``
+#: —— 光靠 CSP 挡不住注入，真正的修法是渲染时一律 ``textContent``（见 dashboard）。
+#: 这里加的是**纵深防御**：即使某处漏了一处拼接，``connect-src 'self'`` 也把外发
+#: 通道堵死（XSS 拿不到把 key/内容送出站的通路），``frame-ancestors 'none'`` 阻
+#: 止被嵌套点击劫持，``nosniff`` 阻止内容嗅探。
+_HTML_SECURITY_HEADERS: dict[str, str] = {
+    "Content-Security-Policy": (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "connect-src 'self'; "
+        "object-src 'none'; "
+        "base-uri 'none'; "
+        "form-action 'self'; "
+        "frame-ancestors 'none'"
+    ),
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+}
+
+
 async def send_html(writer: asyncio.StreamWriter, html: str) -> None:
-    """写一条 200 HTML 响应（看板页面用）。"""
+    """写一条 200 HTML 响应（看板页面用），带 CSP / nosniff 等安全头。"""
     await _write_response(
         writer,
         200,
         b"Content-Type: text/html; charset=utf-8\r\n",
         html.encode("utf-8"),
+        extra_headers=_HTML_SECURITY_HEADERS,
     )
 
 

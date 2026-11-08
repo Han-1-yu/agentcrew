@@ -206,3 +206,27 @@ def schema_hint(schema: Any) -> str:
     if optional:
         parts.append("可选 " + "、".join(optional))
     return "；".join(parts)
+
+
+def function_spec(tool: Any) -> dict[str, Any]:
+    """把一个工具渲染成 OpenAI 原生 function calling 的声明形状（P2-1）。
+
+    只读 ``name`` / ``description`` / ``input_schema`` 三个属性（鸭子类型），
+    不 import :class:`~agentcrew.tools.tool.Tool`：本模块在 ``tools`` 层，任何
+    反向依赖都会让「零项目内依赖」这条边界破掉，也会给 MCP 适配器这类外来工具
+    增加耦合。
+
+    没有 ``input_schema``（或不是 dict）时给一个空对象 schema——OpenAI 兼容端点
+    要求 ``parameters`` 必须存在，缺了直接 400。
+    """
+    schema = getattr(tool, "input_schema", None)
+    if not isinstance(schema, dict) or not schema:
+        schema = {"type": "object", "properties": {}}
+    return {
+        "type": "function",
+        "function": {
+            "name": str(getattr(tool, "name", "")),
+            "description": str(getattr(tool, "description", "")),
+            "parameters": schema,
+        },
+    }

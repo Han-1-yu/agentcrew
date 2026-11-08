@@ -30,6 +30,7 @@ from collections.abc import AsyncIterator, Callable, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from agentcrew.models.config import ModelBinding
 from agentcrew.models.providers.base import (
@@ -119,6 +120,8 @@ class MockProvider(BaseProvider):
         temperature: float,
         max_tokens: int,
         response_format: ResponseFormat | None = None,
+        tools: Sequence[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> CompletionResult:
         """按当前 purpose/task_id/attempt 回放 fixture。
 
@@ -149,6 +152,8 @@ class MockProvider(BaseProvider):
         temperature: float,
         max_tokens: int,
         response_format: ResponseFormat | None = None,
+        tools: Sequence[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> AsyncIterator[StreamChunk]:
         """模拟流式：与 :meth:`complete` 解析同一段夹具文本，按固定长度分块 yield。
 

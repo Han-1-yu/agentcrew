@@ -18,20 +18,29 @@ from agentcrew.tools.lab import (
 )
 
 
-def test_describe_tools_lists_six_builtins():
-    """清单是纯元数据：6 个内置工具、按名字排序、字段齐全。"""
+def test_describe_tools_lists_builtins():
+    """清单是纯元数据：内置工具、按名字排序、字段齐全。
+
+    ``run_python`` 默认**不在**清单里（code_exec 默认关）；打开后才出现。
+    """
     tools = describe_tools()
     names = [item["name"] for item in tools]
     assert names == sorted(names)
     assert set(names) == {
-        "read_file", "list_files", "grep", "run_python", "write_file",
-        "web_fetch",
+        "read_file", "list_files", "grep", "write_file", "web_fetch",
     }
     for item in tools:
         assert item["description"]
         assert item["kind"] in ("sandbox", "network")
         assert item["input_schema"]["type"] == "object"
     assert next(t for t in tools if t["name"] == "web_fetch")["kind"] == "network"
+
+
+def test_describe_tools_includes_run_python_when_code_exec_enabled():
+    """打开 code_exec 后 run_python 才进清单——与 run 内注册表同一口径。"""
+    names = [item["name"] for item in describe_tools(code_exec=True)]
+    assert "run_python" in names
+    assert len(names) == 6
 
 
 async def test_write_then_read_roundtrip_in_sandbox(tmp_path):
@@ -78,9 +87,16 @@ async def test_read_file_escape_reports_instead_of_reading(tmp_path):
     assert "不该被读到" not in (result["result"] or "")
 
 
+async def test_run_python_requires_code_exec_flag(tmp_path):
+    """P1：默认不注册 run_python——试跑入口不得成为绕过该开关的后门。"""
+    with pytest.raises(ToolLabError, match="未知工具"):
+        await run_trial("run_python", {"code": "print(1)"}, output_dir=tmp_path)
+
+
 async def test_run_python_executes_in_sandbox(tmp_path):
     result = await run_trial(
-        "run_python", {"code": "print(6 * 7)"}, output_dir=tmp_path)
+        "run_python", {"code": "print(6 * 7)"}, output_dir=tmp_path,
+        code_exec=True)
     assert result["ok"] is True
     assert "42" in (result["result"] or "")
 
@@ -106,4 +122,5 @@ def test_trial_registry_has_no_role_permissions(tmp_path):
     """实验台是管理员显式动作，不走 Agent 的角色授权链。"""
     registry = build_trial_registry(tmp_path)
     assert registry.is_allowed("backend_dev", "read_file") is True
-    assert len(registry.list_tools()) == 6
+    assert len(registry.list_tools()) == 5            # 默认不含 run_python
+    assert len(build_trial_registry(tmp_path, code_exec=True).list_tools()) == 6

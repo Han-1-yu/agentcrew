@@ -251,9 +251,10 @@ class TestServerRateLimit:
 
 
 class TestConfigFields:
-    def test_defaults_off(self, monkeypatch):
+    def test_defaults(self, monkeypatch):
+        """P0：认证默认**开启**（此前默认关 = 忘了配就裸奔）。"""
         s = Settings.load()
-        assert s.api_auth_enabled is False
+        assert s.api_auth_enabled is True
         assert s.api_keys == []
         assert s.api_rate_limit_enabled is False
         assert s.api_rate_limit_max == 100

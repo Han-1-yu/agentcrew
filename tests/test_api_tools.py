@@ -73,7 +73,10 @@ async def test_list_tools_shows_inventory_and_switch(server_factory):
     assert data["tools_enabled"] is False
     assert data["trial_dir"] == "_tool_trial"
     names = {item["name"] for item in data["tools"]}
-    assert "write_file" in names and "run_python" in names
+    assert "write_file" in names
+    # P1：run_python 默认不注册（code_exec_enabled=false），清单与实际注册表同口径
+    assert "run_python" not in names
+    assert data["code_exec_enabled"] is False
     assert all(item["input_schema"]["type"] == "object" for item in data["tools"])
 
 

@@ -305,6 +305,22 @@ const STATUSES = ["pending", "ready", "running", "review", "rework", "succeeded"
 let eventSource = null;
 let currentRun = null;
 
+// ── 安全渲染原语（P1-2）───────────────────────────────────────────────
+// 此前用模板字符串拼 innerHTML：``run.goal`` 来自 POST /runs，一个持 key 的
+// 调用方写一段 <img onerror=...> 就能在其他运营者的看板里执行脚本（低权限用户
+// 跨到运营者，不是匿名反射，但仍是真 XSS）。现在所有来自服务端 / 请求体的
+// 字符串一律走 textContent 或 setAttribute，不再进入 HTML 解析器。
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined && text !== null) node.textContent = String(text);
+  return node;
+}
+
+function clearNode(node) {
+  while (node.firstChild) node.removeChild(node.firstChild);
+}
+
 // ── Tab 切换 ──────────────────────────────────────────────────────────
 function switchTab(name, btn) {
   document.querySelectorAll(".tab-pane").forEach(p => p.classList.remove("active"));
@@ -325,39 +341,41 @@ async function loadRuns() {
     const data = await resp.json();
     renderRunList(data.runs || []);
   } catch (e) {
-    document.getElementById("run-list").innerHTML =
-      '<div class="empty err-text">运行列表加载失败：' + e + "</div>";
+    const wrap = document.getElementById("run-list");
+    clearNode(wrap);
+    wrap.appendChild(el("div", "empty err-text", "运行列表加载失败：" + e));
   }
 }
 
 function renderRunList(runs) {
   const wrap = document.getElementById("run-list");
+  clearNode(wrap);
   if (!runs.length) {
-    wrap.innerHTML = '<div class="empty">暂无 run</div>';
+    wrap.appendChild(el("div", "empty", "暂无 run"));
     return;
   }
-  wrap.innerHTML = "";
   runs.forEach(r => {
-    const card = document.createElement("div");
-    card.className = "run-card";
     const status = r.status || "pending";
-    const cancelBtn = status === "running"
-      ? `<button class="small btn-cancel" onclick="cancelRun('${r.run_id}')">取消</button>`
-      : "";
-    const deleteBtn = status !== "running"
-      ? `<button class="small btn-danger" onclick="deleteRunById('${r.run_id}')">删除</button>`
-      : "";
-    card.innerHTML = `
-      <div class="card-head">
-        <span class="rid">${r.run_id}</span>
-        <span class="status-badge status-${status}">${status}</span>
-      </div>
-      <div class="goal" title="${r.goal || ""}">${r.goal || ""}</div>
-      <div class="actions">
-        <button class="small" onclick="connectById('${r.run_id}')">打开</button>
-        ${cancelBtn}
-        ${deleteBtn}
-      </div>`;
+    const card = el("div", "run-card");
+    const head = el("div", "card-head");
+    head.appendChild(el("span", "rid", r.run_id));
+    head.appendChild(el("span", `status-badge status-${status}`, status));
+    const goal = el("div", "goal", r.goal || "");
+    goal.title = r.goal || "";          // setAttribute 语义：属性值不解析 HTML
+    const actions = el("div", "actions");
+    const openBtn = el("button", "small", "打开");
+    openBtn.addEventListener("click", () => connectById(r.run_id));
+    actions.appendChild(openBtn);
+    if (status === "running") {
+      const cancelBtn = el("button", "small btn-cancel", "取消");
+      cancelBtn.addEventListener("click", () => cancelRun(r.run_id));
+      actions.appendChild(cancelBtn);
+    } else {
+      const deleteBtn = el("button", "small btn-danger", "删除");
+      deleteBtn.addEventListener("click", () => deleteRunById(r.run_id));
+      actions.appendChild(deleteBtn);
+    }
+    card.append(head, goal, actions);
     wrap.appendChild(card);
   });
 }
@@ -413,43 +431,57 @@ async function loadLedger() {
   if (!currentRun) return;
   const filter = document.getElementById("ledger-event-filter").value.trim();
   const list = document.getElementById("ledger-list");
+  const showError = (text) => {
+    clearNode(list);
+    list.appendChild(el("div", "err-text", text));
+  };
   try {
-    const url = `/runs/${currentRun}/ledger?limit=200` +
+    const url = `/runs/${encodeURIComponent(currentRun)}/ledger?limit=200` +
       (filter ? `&event=${encodeURIComponent(filter)}` : "");
     const resp = await fetch(url);
     const data = await resp.json();
     if (!resp.ok) {
-      list.innerHTML = `<div class="err-text">${data.error || resp.statusText}</div>`;
+      showError(data.error || resp.statusText);
       return;
     }
     document.getElementById("ledger-total").textContent = `共 ${data.total} 条`;
+    clearNode(list);
     if (!(data.events || []).length) {
-      list.innerHTML = '<div class="empty">（无事件）</div>';
+      list.appendChild(el("div", "empty", "（无事件）"));
       return;
     }
-    list.innerHTML = "";
     data.events.forEach(ev => {
-      const entry = document.createElement("div");
-      entry.className = "log-entry";
-      entry.innerHTML = `<span class="ts">${(ev.ts || "").replace("T", " ")}</span> ` +
-        `<span class="evt">${ev.event}</span> ${JSON.stringify(ev.data || {}).substring(0, 160)}`;
+      const entry = el("div", "log-entry");
+      entry.appendChild(el("span", "ts", (ev.ts || "").replace("T", " ")));
+      entry.appendChild(document.createTextNode(" "));
+      entry.appendChild(el("span", "evt", ev.event));
+      entry.appendChild(document.createTextNode(
+        " " + JSON.stringify(ev.data || {}).substring(0, 160)));
       list.appendChild(entry);
     });
     list.scrollTop = 0;
   } catch (e) {
-    list.innerHTML = `<div class="err-text">事件日志加载失败：${e}</div>`;
+    showError("事件日志加载失败：" + e);
   }
 }
 
 // ── 统计标签页 ─────────────────────────────────────────────────────────
+function statCard(value, label) {
+  const card = el("div", "stat-card");
+  card.appendChild(el("div", "num", value));
+  card.appendChild(el("div", "label", label));
+  return card;
+}
+
 async function loadStats() {
   if (!currentRun) return;
   const panel = document.getElementById("stats-panel");
+  const showError = (text) => { clearNode(panel); panel.appendChild(el("div", "err-text", text)); };
   try {
-    const resp = await fetch(`/runs/${currentRun}/stats`);
+    const resp = await fetch(`/runs/${encodeURIComponent(currentRun)}/stats`);
     const data = await resp.json();
     if (!resp.ok) {
-      panel.innerHTML = `<div class="err-text">${data.error || resp.statusText}</div>`;
+      showError(data.error || resp.statusText);
       return;
     }
     const llm = data.llm || {};
@@ -457,32 +489,48 @@ async function loadStats() {
     const tools = data.tools || {};
     const sr = tasks.started ? ((tasks.success_rate || 0) * 100).toFixed(1) + "%" : "n/a";
     const avg = tasks.avg_duration_ms != null ? tasks.avg_duration_ms + " ms" : "n/a";
-    panel.innerHTML = `
-      <div class="stats-grid">
-        <div class="stat-card"><div class="num">${llm.calls || 0}</div><div class="label">LLM 调用次数</div></div>
-        <div class="stat-card"><div class="num">${(llm.total_tokens || 0).toLocaleString()}</div><div class="label">总 tokens（入 ${llm.prompt_tokens || 0} / 出 ${llm.completion_tokens || 0}）</div></div>
-        <div class="stat-card"><div class="num">$${(llm.cost_usd || 0).toFixed(4)}</div><div class="label">估算成本 (USD)</div></div>
-        <div class="stat-card"><div class="num">${tasks.finished || 0}/${tasks.started || 0}</div><div class="label">任务完成（成功率 ${sr}）</div></div>
-        <div class="stat-card"><div class="num">${avg}</div><div class="label">平均任务时长</div></div>
-        <div class="stat-card"><div class="num">${tools.calls || 0}</div><div class="label">工具调用（成功 ${tools.success || 0} / 失败 ${tools.failed || 0}）</div></div>
-      </div>
-      <h3 class="hint" style="font-size:13px;margin:14px 0 8px">事件分布</h3>
-      <div>${Object.entries(data.event_counts || {}).map(([k, v]) =>
-        `<span class="status-badge" style="margin:2px">${k}: ${v}</span>`).join("")}</div>`;
+    const grid = el("div", "stats-grid");
+    grid.appendChild(statCard(llm.calls || 0, "LLM 调用次数"));
+    grid.appendChild(statCard(
+      `${(llm.total_tokens || 0).toLocaleString()}`,
+      `总 tokens（入 ${llm.prompt_tokens || 0} / 出 ${llm.completion_tokens || 0}）`));
+    grid.appendChild(statCard(`$${(llm.cost_usd || 0).toFixed(4)}`, "估算成本 (USD)"));
+    grid.appendChild(statCard(`${tasks.finished || 0}/${tasks.started || 0}`,
+                              `任务完成（成功率 ${sr}）`));
+    grid.appendChild(statCard(avg, "平均任务时长"));
+    grid.appendChild(statCard(tools.calls || 0,
+                              `工具调用（成功 ${tools.success || 0} / 失败 ${tools.failed || 0}）`));
+    const counts = el("div");
+    // 事件名可能来自 POST /runs/{id}/events 的自由输入（调试端点），
+    // 每个名字都单独建节点 + textContent，不参与 HTML 解析。
+    Object.entries(data.event_counts || {}).forEach(([name, count]) => {
+      const badge = el("span", "status-badge", `${name}: ${count}`);
+      badge.style.margin = "2px";
+      counts.appendChild(badge);
+    });
+    const heading = el("h3", "hint", "事件分布");
+    heading.style.fontSize = "13px";
+    heading.style.margin = "14px 0 8px";
+    clearNode(panel);
+    panel.append(grid, heading, counts);
   } catch (e) {
-    panel.innerHTML = `<div class="err-text">统计加载失败：${e}</div>`;
+    showError("统计加载失败：" + e);
   }
 }
 
 // ── 以下为原有看板 / SSE 逻辑 ──────────────────────────────────────────
 function initBoard() {
   const board = document.getElementById("board");
-  board.innerHTML = "";
+  clearNode(board);
   STATUSES.forEach(s => {
-    const col = document.createElement("div");
-    col.className = "column";
+    const col = el("div", "column");
     col.id = "col-" + s;
-    col.innerHTML = `<h3>${s} <span id="count-${s}">0</span></h3>`;
+    const head = el("h3", null, s);
+    head.appendChild(document.createTextNode(" "));
+    const counter = el("span", null, "0");
+    counter.id = "count-" + s;
+    head.appendChild(counter);
+    col.appendChild(head);
     board.appendChild(col);
   });
 }
@@ -499,32 +547,34 @@ function updateTask(tasks) {
     counts[st] = (counts[st] || 0) + 1;
     const col = document.getElementById("col-" + st);
     if (col) {
-      const card = document.createElement("div");
-      card.className = "task-card";
-      card.innerHTML = `<div>${id}</div><div class="role">${t.role || ""}</div>`;
+      const card = el("div", "task-card");
+      card.appendChild(el("div", null, id));
+      card.appendChild(el("div", "role", t.role || ""));
       col.appendChild(card);
     }
   });
   STATUSES.forEach(s => {
-    const el = document.getElementById("count-" + s);
-    if (el) el.textContent = counts[s] || 0;
+    const item = document.getElementById("count-" + s);
+    if (item) item.textContent = counts[s] || 0;
   });
 }
 
 function logEvent(event, data) {
   const log = document.getElementById("log");
-  const entry = document.createElement("div");
-  entry.className = "log-entry";
-  const ts = new Date().toLocaleTimeString();
-  entry.innerHTML = `<span class="ts">${ts}</span> <span class="evt">${event}</span> ${JSON.stringify(data).substring(0, 120)}`;
+  const entry = el("div", "log-entry");
+  entry.appendChild(el("span", "ts", new Date().toLocaleTimeString()));
+  entry.appendChild(document.createTextNode(" "));
+  entry.appendChild(el("span", "evt", event));
+  entry.appendChild(document.createTextNode(
+    " " + JSON.stringify(data).substring(0, 120)));
   log.appendChild(entry);
   log.scrollTop = log.scrollHeight;
 }
 
 function setStatus(status) {
-  const el = document.getElementById("run-status");
-  el.textContent = status;
-  el.className = "status-badge status-" + status;
+  const badge = document.getElementById("run-status");
+  badge.textContent = status;
+  badge.className = "status-badge status-" + status;
   const btn = document.getElementById("btn-delete");
   if (btn) btn.disabled = (status === "running" || !currentRun);
 }
@@ -553,9 +603,9 @@ async function deleteRun() {
 }
 
 function setConn(connected) {
-  const el = document.getElementById("conn-status");
-  el.textContent = connected ? "SSE 已连接" : "未连接";
-  el.className = "status-badge " + (connected ? "status-completed" : "status-pending");
+  const badge = document.getElementById("conn-status");
+  badge.textContent = connected ? "SSE 已连接" : "未连接";
+  badge.className = "status-badge " + (connected ? "status-completed" : "status-pending");
 }
 
 async function connect() {
@@ -961,7 +1011,21 @@ function flowRender() {
   };
   svg.innerHTML = "";
   const defs = document.createElementNS(ns, "defs");
-  defs.innerHTML = `<marker id="flow-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="${palette.accent}"/></marker>`;
+  // marker 也走 DOM + setAttribute：整个看板不再有任何一处「字符串拼 HTML」，
+  // 这样以后加字段时也不用逐个回忆「这个值可不可信」。
+  const marker = document.createElementNS(ns, "marker");
+  marker.setAttribute("id", "flow-arrow");
+  marker.setAttribute("viewBox", "0 0 10 10");
+  marker.setAttribute("refX", "9");
+  marker.setAttribute("refY", "5");
+  marker.setAttribute("markerWidth", "7");
+  marker.setAttribute("markerHeight", "7");
+  marker.setAttribute("orient", "auto-start-reverse");
+  const markerPath = document.createElementNS(ns, "path");
+  markerPath.setAttribute("d", "M 0 0 L 10 5 L 0 10 z");
+  markerPath.setAttribute("fill", palette.accent);
+  marker.appendChild(markerPath);
+  defs.appendChild(marker);
   svg.appendChild(defs);
 
   for (const task of flowState.tasks) {
@@ -1065,23 +1129,58 @@ function flowRenderProps() {
   if (!box) return;
   if (!flowState) flowEnsureState();
   const task = flowState.tasks.find(t => t.id === flowSelected);
+  clearNode(box);
   if (!task) {
-    box.innerHTML = `<div class="card-title" style="margin-bottom:8px">${flowState.tasks.length} 个节点</div><div class="hint">拖节点移动；点右端口再点左端口连线；点连线删除。</div>`;
+    const title = el("div", "card-title", `${flowState.tasks.length} 个节点`);
+    title.style.marginBottom = "8px";
+    box.append(title, el("div", "hint",
+      "拖节点移动；点右端口再点左端口连线；点连线删除。"));
     return;
   }
-  box.innerHTML = `
-    <div class="card-title" style="margin-bottom:6px">属性 · ${task.id}</div>
-    <label>id</label><input id="fp-id" class="flow-prop-input" value="${task.id}">
-    <label>标题</label><input id="fp-title" class="flow-prop-input" value="${(task.title || "").replace(/"/g, "&quot;")}" style="width:100%;margin:2px 0 6px">
-    <label>角色</label><input id="fp-role" class="flow-prop-input" value="${task.role}" style="width:100%;margin:2px 0 6px">
-    <label>优先级 1-9</label><input id="fp-priority" class="flow-prop-input" type="number" min="1" max="9" value="${task.priority}" style="width:100%;margin:2px 0 6px">
-    <label>描述</label><textarea id="fp-desc" class="flow-prop-input" style="width:100%;height:52px;margin:2px 0 6px">${task.description || ""}</textarea>
-    <label>依赖（逗号）</label><input id="fp-deps" class="flow-prop-input" value="${task.dependencies.join(",")}" style="width:100%;margin:2px 0 6px">
-    <label>条件标签（逗号，可空）</label><input id="fp-when" class="flow-prop-input" value="${(task.when_outcomes || []).join(",")}" style="width:100%;margin:2px 0 6px">
-    <label>产物（每行 path|kind|说明）</label><textarea id="fp-deliv" class="flow-prop-input" style="width:100%;height:52px;margin:2px 0 6px">${(task.deliverables || []).map(d => `${d.path}|${d.kind}|${d.description || ""}`).join("\n")}</textarea>
-    <label>验收标准（每行一条）</label><textarea id="fp-accept" class="flow-prop-input" style="width:100%;height:44px;margin:2px 0 6px">${(task.acceptance_criteria || []).join("\n")}</textarea>
-    <button class="small" onclick="flowApplyProps()">应用</button>
-  `;
+  // 属性值可能来自导入的流程 YAML（外部输入），一律走 value 赋值而不是拼
+  // 进 HTML 属性——拼属性时一个 `"><script` 就能跳出 input 执行脚本。
+  const title = el("div", "card-title", `属性 · ${task.id}`);
+  title.style.marginBottom = "6px";
+  box.appendChild(title);
+  const addField = (label, node) => {
+    box.appendChild(el("label", null, label));
+    box.appendChild(node);
+    return node;
+  };
+  const input = (id, value, extra) => {
+    const node = el("input", "flow-prop-input");
+    node.id = id;
+    node.value = value === undefined || value === null ? "" : String(value);
+    node.style.width = "100%";
+    node.style.margin = "2px 0 6px";
+    if (extra === "number") { node.type = "number"; node.min = "1"; node.max = "9"; }
+    return node;
+  };
+  const textarea = (id, value, height) => {
+    const node = el("textarea", "flow-prop-input",
+                    value === undefined || value === null ? "" : String(value));
+    node.id = id;
+    node.style.width = "100%";
+    node.style.margin = "2px 0 6px";
+    node.style.height = height;
+    return node;
+  };
+  addField("id", input("fp-id", task.id));
+  addField("标题", input("fp-title", task.title || ""));
+  addField("角色", input("fp-role", task.role));
+  addField("优先级 1-9", input("fp-priority", task.priority, "number"));
+  addField("描述", textarea("fp-desc", task.description || "", "52px"));
+  addField("依赖（逗号）", input("fp-deps", (task.dependencies || []).join(",")));
+  addField("条件标签（逗号，可空）",
+           input("fp-when", (task.when_outcomes || []).join(",")));
+  addField("产物（每行 path|kind|说明）", textarea("fp-deliv",
+    (task.deliverables || []).map(d => `${d.path}|${d.kind}|${d.description || ""}`).join("\n"),
+    "52px"));
+  addField("验收标准（每行一条）",
+           textarea("fp-accept", (task.acceptance_criteria || []).join("\n"), "44px"));
+  const apply = el("button", "small", "应用");
+  apply.addEventListener("click", flowApplyProps);
+  box.appendChild(apply);
 }
 
 function flowApplyProps() {

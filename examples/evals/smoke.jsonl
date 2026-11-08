@@ -1,0 +1,13 @@
+# AgentCrew 评测集：smoke（离线、确定性）
+#
+# 一行一条 case（JSONL：必须是**单行** JSON）。sample 指向 examples/samples 里
+# 登记的样例（夹具随样例走），checks 是对「一次完整 run 的产物与轨迹」的断言。
+#
+# 约定：artifacts 里包含平台生成的 MANIFEST.json 与 DELIVERY.md，
+# 所以 artifact_count 的期望值 = 任务交付物数 + 2。
+#
+# 跑：python main.py eval examples/evals/smoke.jsonl -k 3
+{"id": "linear-completes", "sample": "linear", "description": "串行样例跑到底，四个交付物齐全", "checks": [{"kind": "run_status", "status": "completed"}, {"kind": "no_failed_tasks"}, {"kind": "artifact_exists", "path": "README.md"}, {"kind": "artifact_exists", "path": "logstat/core.py"}, {"kind": "artifact_contains", "path": "README.md", "text": "logstat"}, {"kind": "artifact_matches", "path": "logstat/core.py", "pattern": "def\\s+\\w+"}, {"kind": "artifact_min_lines", "path": "README.md", "lines": 20}, {"kind": "task_status", "task": "T-004", "status": "succeeded"}, {"kind": "event_count", "event": "gate_result", "min": 4}]}
+{"id": "linear-no-template-junk", "sample": "linear", "description": "产物里不该有未填的占位符 / TODO 残留", "checks": [{"kind": "artifact_not_contains", "path": "README.md", "text": "{{"}, {"kind": "artifact_not_contains", "path": "logstat/core.py", "text": "TODO:"}, {"kind": "artifact_not_contains", "path": "docs/PRD.md", "text": "待补充"}]}
+{"id": "hierarchy-parallel-join", "sample": "hierarchy", "description": "层级样例：三个实现路径都落地，用例与文档齐全", "checks": [{"kind": "run_status", "status": "completed"}, {"kind": "artifact_exists", "path": "kb/index.py"}, {"kind": "artifact_exists", "path": "kb/api.py"}, {"kind": "artifact_exists", "path": "tests/test_index.py"}, {"kind": "artifact_min_lines", "path": "tests/test_index.py", "lines": 20}, {"kind": "event_count", "event": "task_finished", "min": 6}]}
+{"id": "todo-mixed-shape", "sample": "todo", "description": "混合并发样例：任务数最多的一条，验证汇总任务与产物多样性", "checks": [{"kind": "run_status", "status": "completed"}, {"kind": "no_failed_tasks"}, {"kind": "artifact_exists", "path": "README.md"}, {"kind": "event_count", "event": "task_started", "min": 8}]}

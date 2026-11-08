@@ -16,7 +16,9 @@
 
 1. **服务自身是明文 HTTP，没有 TLS、没有内置守护进程、没有用户体系。** 公网暴露必须
    前面放反向代理做 TLS 终止，并显式开启 API Key 认证。见 §2.2、§3.3。
-2. **认证默认关闭**（`api_auth_enabled=false`）。不改就是匿名可访问，这是最常见的上线事故。
+2. **认证默认开启**（`api_auth_enabled=true`），且**一个密钥都没有时拒绝启动**（退出码 3，
+   回环地址也一样）。本机开发要么 `keys add` 建一个，要么显式设 `api_auth_enabled=false`
+   ——后者只允许绑回环地址，绑 `0.0.0.0` 仍然退 3。
 3. **默认监听 `127.0.0.1:8765`**，不是 8000。要对外就得显式 `--host` + 反代。
 4. **数据全在本地磁盘**，没有数据库：`output_dir` 下的 run 目录、跨 run 知识库、
    Webhook 待投队列都是文件。备份与扩容都围绕这个目录做。见 §4。
@@ -24,6 +26,9 @@
    `output_dir` 会互相看不见对方、且 `Ledger.emit` 无锁——不要这样扩容。见 §4.4。
 6. **密钥绝不落盘**：`.env` 不进版本库、`config export` 脱敏、run 的
    `config_snapshot` 打码、日志与 spool 都走脱敏词表。见 §3.3。
+
+> 本手册讲「怎么配才安全」，[THREAT_MODEL.md](THREAT_MODEL.md) 讲「这些配置到底挡住了谁、
+> 没挡住谁」。上线签字前两份都要过：前者给你命令，后者给你**已知缺口清单**（G-1…G-15）。
 
 ---
 
@@ -104,11 +109,10 @@ python main.py run --sample todo --no-live --auto
 ### 2.2 常驻 HTTP API（生产主形态）
 
 ```bash
-# 本机调试（默认 127.0.0.1:8765，匿名可访问）
-python main.py serve
+# 本机调试：只绑回环，无密钥也能起（会打印一条警告，明确告诉你现在是匿名）
+python main.py serve --host 127.0.0.1
 
-# 生产：显式开认证 + 限流，绑内网地址，由反代对外
-AGENTCREW_API_AUTH_ENABLED=true \
+# 生产：必须有密钥；绑非回环地址时无密钥直接退 3
 AGENTCREW_API_KEYS="替换成随机长串A,替换成随机长串B" \
 AGENTCREW_API_RATE_LIMIT_ENABLED=true \
 AGENTCREW_API_RATE_LIMIT_MAX=100 \
@@ -117,11 +121,21 @@ AGENTCREW_LOG_JSON=1 \
 python main.py serve --host 127.0.0.1 --port 8765
 ```
 
-也可以用 `--api-key KEY` 临时加一个 key（与 `AGENTCREW_API_KEYS` 合并，给出即开启认证）。
+也可以用 `--api-key KEY` 临时加一个 key（与 `AGENTCREW_API_KEYS` 合并，等价 admin 角色）。
 请求带 `Authorization: Bearer <key>` 或 `X-API-Key: <key>`。
 
-**认证是 fail-closed 的**：`api_auth_enabled=true`（或传了 `--api-key`）却没有任何有效 key，
-`serve` 会拒绝启动并打印提示，不会退化成匿名服务。限流三参数**都能配**（R18 补齐）：
+**认证是 fail-closed 的**，判定只看「有没有密钥」与「要不要认证」：
+
+| 情况 | 行为 |
+|---|---|
+| 有 legacy `api_keys` / `--api-key` / RBAC 密钥库里有活跃密钥 | 认证**必开**（401 拦未带 key 的请求） |
+| 没有密钥，`api_auth_enabled=true`（**默认**） | **拒绝启动，退出码 3**，并打印三条补救命令。回环地址也一样：开了认证却没密钥 ≠ 匿名放行 |
+| 没有密钥，`api_auth_enabled=false`（显式关闭），绑回环 | 允许启动，stderr 打**匿名警告** |
+| 没有密钥，`api_auth_enabled=false`，绑非回环（`0.0.0.0` / `::` / 网卡 / 域名） | **拒绝启动，退出码 3**：关认证不能顺手对外 |
+
+为什么回环也 fail-closed：否则「我明明开了认证」和「忘了配密钥」在日志里长得一样，
+还会顺手起一个匿名服务（`AGENTCREW_API_AUTH_ENABLED=1` 却无密钥的用例会挂在启动后的
+等待上而不是退错，就是这个问题暴露出来的）。限流三参数**都能配**（R18 补齐）：
 `AGENTCREW_API_RATE_LIMIT_ENABLED` / `_MAX` / `_WINDOW` 环境变量、`agentcrew.yaml`
 同名顶层标量，以及 `config export/import` 往返。`api_rate_limit_window` 默认 60 秒、
 下限 1 秒——非法值在配置加载期就报错；`serve` 启动期仍保留同一条兜底校验，防止
@@ -292,7 +306,11 @@ python main.py config import /etc/agentcrew/new.yaml
 | Provider Key（`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `DASHSCOPE_API_KEY` …） | 空 | 必填 | `.env.example` 列了全部支持的 Key；`--mock` 时不需要 |
 | `AGENTCREW_DEFAULT_MODEL` | `openai:gpt-4o-mini` | 按实际改 | `<provider>:<model>` 别名，`doctor` 会校验可解析性 |
 | `AGENTCREW_OUTPUT_DIR` | `./output` | 独立数据盘绝对路径 | 所有 run 与跨 run 数据都在这里 |
-| `AGENTCREW_API_AUTH_ENABLED` | `false` | **`true`** | 不开就是匿名可访问 |
+| `AGENTCREW_API_AUTH_ENABLED` | `true` | 保持 `true` | 关掉仅限可信内网；非回环地址无密钥仍会拒启动 |
+| `AGENTCREW_CODE_EXEC_ENABLED` | `false` | 按需 | 打开才把 `run_python` 注册进 run（无网络/系统沙箱，边界见 §3.3） |
+| `AGENTCREW_OTEL_ENABLED` | `false` | 有 collector 时开 | 每次 run 导出一条 OTel trace（OTLP/HTTP JSON，零依赖），见 §5.5 |
+| `AGENTCREW_OTEL_ENDPOINT` | `http://127.0.0.1:4318` | collector 地址 | 不带 `/v1/traces` 后缀；导出失败只记 warning，不影响 run |
+| `AGENTCREW_OTEL_CAPTURE_CONTENT` | `false` | 保持 `false` | 是否采集 prompt / completion 文本（含源码与用户数据，**默认不采**） |
 | `AGENTCREW_API_KEYS` | 空 | 随机长串，逗号分隔 | 轮换时新旧 key 可并存一段时间 |
 | `AGENTCREW_API_RATE_LIMIT_ENABLED` / `_MAX` / `_WINDOW` | 关 / 100 次 / 60s | 按调用方调 | 按客户端 IP 滑动窗口，超限 429；三者都支持 env / YAML / `config export`（R18） |
 | `AGENTCREW_LOG_LEVEL` / `AGENTCREW_LOG_JSON` | `INFO` / 关 | 生产开 JSON | 结构化日志进采集系统，已脱敏 |
@@ -306,6 +324,10 @@ HANDOVER §4 与 `python main.py config export`。
 
 ### 3.3 密钥与网络边界
 
+下面这张表是**当前边界的事实清单**。每条为什么存在、残留风险有多大、什么条件下会失效，
+见 [THREAT_MODEL.md](THREAT_MODEL.md) §5（威胁）与 §6（缺口）——尤其 G-1 提示词注入、
+G-2 配置即 RCE、G-9 `run_python` 无隔离这三条，是部署方必须自己决定「能不能接受」的。
+
 | 边界 | 现状 |
 |---|---|
 | 版本库 | `.env` / `.env.*` 被忽略；`output/` 被忽略 |
@@ -316,7 +338,12 @@ HANDOVER §4 与 `python main.py config export`。
 | R15 spool | `<output_dir>/_webhook_spool/` 只存 URL 短哈希与脱敏 payload，不存 URL / 密钥 |
 | HTTP 入口 | `POST /runs` 的 options 不接收 `webhook_secret`；API Key 只在服务端配置 |
 | 工具侧 | `web_fetch` 仅公网 80/443 且拒绝私网 / 重定向（防 SSRF）；Webhook **不做**内网黑名单，因为目标是运维显式配置的 |
-| MCP | 连接的是外部子进程，命令来自配置；`tools_enabled=false` 时零子进程、零网络 |
+| `run_python` | **默认不注册**（`code_exec_enabled=false`）。打开后有：`-I` 隔离模式、裁剪环境变量（只留 PATH/SYSTEMROOT/TEMP/TMP/PYTHONIOENCODING）、`cwd` 锁在 run 目录、默认 10s 超时并杀进程。**没有**的：网络隔离、CPU/内存上限、系统调用沙箱——代码可以出网。容器级隔离（Docker/gVisor）属 P3，需要时自行在前面套一层 |
+| 工具试跑 | `POST /tools/{name}/test` 与 `main.py tool` 与 run 内注册表同一口径：`code_exec_enabled=false` 时 `run_python` 不在清单里，也跑不了——调试入口不是绕过开关的后门 |
+| 工具 guardrails | `agentcrew.yaml` 的 `tool_guards:` 段按正则/长度在**工具执行前**拦截（`phase: input`）或在**结果回灌前**遮掉泄漏（`phase: output`）。`block` 的工具一次都不执行，原因回灌给模型；命中记 `tool_guard_triggered`。规则在配置加载期校验（正则写错、action 拼错、缺 `pattern`/`max_length` 都直接退 3） |
+| 路径解析 | 授权与分发共用一份规范路径（`api/paths.py`）：先解码一次再匹配，`%2f`/`%5c`/`%00`/`..` 一律 400。此前两侧各解一次，`/%6beys` 能绕过作用域检查 |
+| SSE | 事件按 `run_id` 分桶：订阅 `/runs/{id}/events` 只收本 run 的事件（无 `run_id` 的服务级事件仍广播） |
+| MCP | 连接的是外部子进程 / 外部服务，命令与 URL 来自配置；`tools_enabled=false` 时零子进程、零网络。`http` 传输按官方 streamable HTTP 处理会话与协议版本，且**只支持 `http://`**（TLS 由反代终止）；单次响应有 8 MiB / 1000 事件上限 |
 
 ---
 
@@ -377,6 +404,41 @@ stderr 提示可 `resume`。升级前的老 run 没有 `heartbeat.json`，仍走
 的旧判据（不会因一次升级被批量改状态）；`awaiting_approval` 挂起态不参与收敛。
 `clean --protect-running` 的删除守卫与这套收敛是两回事：前者决定「能不能删」，
 后者只修正状态、从不删目录。
+
+**工具 guardrails（P2-4）**：`tool_guards` 是「副作用前拦截」的唯一开关，示例：
+
+```yaml
+tool_guards:
+  - name: block-recursive-delete
+    tools: [run_python]          # 省略 = 全部工具
+    phase: input                 # input（执行前）| output（回灌前）
+    field: code                  # 可选：只查这个入参字段
+    pattern: "rm\\s+-rf"         # pattern / max_length 至少给一个
+    action: block                # block | warn | allow
+  - name: redact-credentials
+    phase: output
+    pattern: "(sk-[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{16})"
+    action: block                # 命中则整段输出不回灌给模型
+```
+
+三态的含义：`block` 拒绝执行/拒绝回灌；`warn` 照常执行但留痕（灰度期用）；
+`allow` 是显式放行（把规则写下来但不动手，便于评审时看清楚「我们知道这个模式」）。
+**默认没有规则**，此时每次工具调用只多一次 `None` 判断，行为与改造前逐字一致。
+
+**半步恢复（P2-2）**：`run.json` / `tasks.json` 只在事件落地后写，进程被强杀时
+「一批任务已派发没收尾」「工具已开始执行没回灌」这两种半步会丢失。现在补了两样：
+
+- `<run_id>/superstep.json`：每轮调度开始记「第 N 轮、在跑哪些任务」，本轮正常结束
+  改写为 `idle`。原子写（临时文件 + `os.replace`），看到 `phase=dispatch` 就是
+  「上次停在半路」。
+- `<run_id>/ledger.jsonl` 里的 `tool_call_started` / `tool_call` 配对：有 started
+  没有配对的 finished = 被中断的工具调用（原生按 `call_id`、围栏按 `fence_index`）。
+
+`resume` 时若发现这两种痕迹，会记一条 `superstep_recovered`（含 `last_phase` /
+`running_tasks` / `pending_tool_calls` / `pending_count`），把「上一次到底动过什么」
+写进审计；任务本身由既有的 `repair_statuses`（RUNNING → READY）重派。**不做结果
+重放**：`write_file` / `run_python` 的副作用不可回滚，与其假装能无缝续上，不如
+如实标注后重跑。排障时先看这条事件，再看 `tool_call` 的 `success`。
 
 ### 4.4 容量与扩容
 
@@ -452,6 +514,33 @@ with AgentCrewClient("http://127.0.0.1:8765", api_key="<key>") as client:
 出站 Webhook 的语义是 **at-least-once**：进程退出、收尾超时、接收端故障都会把
 未投递记录留在 `_webhook_spool/`，下一次启用 Webhook 的 run 启动补投；24 小时或累计
 5 次后丢弃并记 `replay_discarded`。接收端必须按 `X-AgentCrew-Delivery` 幂等。
+
+### 5.5 分布式追踪（P2-3，OTel GenAI 语义）
+
+**一次 run = 一条 trace**。打开 `AGENTCREW_OTEL_ENABLED=true` 后，run 收尾时会向
+`{AGENTCREW_OTEL_ENDPOINT}/v1/traces` POST 一份 OTLP/HTTP **JSON**（零依赖手写，
+不装 `opentelemetry-sdk`）：
+
+| span | 属性 |
+|---|---|
+| `agentcrew.run`（根） | `agentcrew.run_id` / `goal` / `default_model` / `tools_enabled` / `code_exec_enabled` / `max_concurrency` / `run_status` |
+| `agentcrew.task <id>` | `agentcrew.task_id` / `task_title` / `role` / `attempt` / `task_status` |
+| `chat <model>` | `gen_ai.operation.name` / `gen_ai.system` / `gen_ai.request.model` / `gen_ai.response.model` / `gen_ai.usage.input_tokens` / `gen_ai.usage.output_tokens` / `gen_ai.request.temperature` / `gen_ai.request.max_tokens` / `gen_ai.response.finish_reasons` / `agentcrew.model_alias` |
+| `execute_tool <name>` | `gen_ai.tool.name` / `gen_ai.tool.call.id` / `agentcrew.tool.success` / `agentcrew.tool.duration_ms` |
+
+三个必须知道的行为：
+
+1. **默认不采集 prompt / completion**。`AGENTCREW_OTEL_CAPTURE_CONTENT=true` 才带内容，
+   且截断到 4000 字符。内容里有源码、用户数据，也可能有脱敏词表没覆盖的凭据——
+   采集必须是显式决定。
+2. **导出不阻塞业务、不影响结局**：POST 在 `asyncio.to_thread` 里做，超时 3s；
+   端点不可达只打一条 warning，run 的退出码与产物一个都不变。
+3. **只记真实调用**：响应缓存命中不进 trace（会出现时长 0、token 0 的假 span）。
+   想看「省了多少」看 ledger 的 `llm_call(cached=true)`。
+
+接入 Langfuse / Phoenix / Tempo / Jaeger：让它们的 OTLP 接收端监听 4318（HTTP/JSON），
+或在本机起一个 `otel-collector` 转 protobuf 后转发。**不引入**任何采集 SDK 与
+vendor 专有格式。
 
 ---
 
@@ -592,7 +681,8 @@ run 仍是 `interrupted`，是否重跑由人决定。排障时先看 `approvals
 <name> --args '{"path":"a.txt"}'` 在 `<output>/_tool_trial/` 沙箱里试跑一个工具；
 HTTP 等价物是 `GET /tools` 与 `POST /tools/{name}/test`，看板首页「工具」标签页
 也能跑。**需要 `tools_enabled=true`**（未开时试跑回 409/退出码 3，清单仍可看）；
-试跑只写自己的沙箱，不碰 run 目录与仓库文件。
+试跑只写自己的沙箱，不碰 run 目录与仓库文件。`run_python` 额外需要
+`AGENTCREW_CODE_EXEC_ENABLED=true`（默认关，与 run 内注册表同口径）。
 
 ### 7.5 已知环境问题（Windows + Git Bash）
 
@@ -609,7 +699,9 @@ HTTP 等价物是 `GET /tools` 与 `POST /tools/{name}/test`，看板首页「�
 ## 8. 上线前检查清单
 
 - [ ] `python main.py doctor --json` 的 `ok=true`，`provider:*` 为 healthy
-- [ ] `AGENTCREW_API_AUTH_ENABLED=true` 且已下发随机长 key；`/health` 带 key 返回 200
+- [ ] 已下发随机长 key（`keys add` 或 `AGENTCREW_API_KEYS`）；`/health` 带 key 返回 200。
+      无密钥时 `serve` 直接退 3（任何地址）——这是期望行为，不要用改代码绕过
+- [ ] 确认 `AGENTCREW_CODE_EXEC_ENABLED` 保持关闭，除非确实需要模型执行 Python
 - [ ] 反代已配 TLS、`client_max_body_size 4m`、SSE 关闭缓冲并放长读超时
 - [ ] `8765` 只监听内网地址，公网入口只有反代
 - [ ] `AGENTCREW_OUTPUT_DIR` 指向独立数据盘，权限仅服务账号可写，已设容量告警

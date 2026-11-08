@@ -334,6 +334,7 @@ class ModelFactory:
         fixtures_dir: Path | None = None,
         cache: LLMCache | None = None,
         calibrator: ComplexityCalibrator | None = None,
+        tracer: Any | None = None,
     ) -> None:
         """``calibrator``（2026-11 会话隔离改造）：本工厂专属的复杂度校准器。
 
@@ -343,6 +344,9 @@ class ModelFactory:
         """
         self._settings = settings
         self._calibrator = calibrator
+        #: P2-3：OTel tracer（``None`` = 不采集，整条链路零开销）。类型用 ``Any``
+        #: 是为了不让 models 层反向依赖 runtime（分层护栏）。
+        self._tracer = tracer
         self._ledger = ledger
         # P3-2：可选响应缓存。``None``（默认）时所有 LLM 调用都不缓存，行为与
         # 改造前逐字节一致；只有 ``temperature == 0`` 的确定性调用才走缓存。
@@ -710,6 +714,22 @@ class ModelFactory:
             self._cache[alias] = provider
         return provider
 
+    def supports_native_tools(self, alias: str) -> bool:
+        """该别名能否走**原生** function calling（P2-1）。
+
+        判据只有一条：``capabilities.supports_tool_calls``。默认全 False，也就是
+        默认仍走 ``<tool_call>`` 文本围栏——这是刻意的：兼容网关里不支持 tools 的
+        不少，默认打开会让「本来能跑」的部署突然 400。要启用就在
+        ``provider_overrides.<provider>.capabilities.supports_tool_calls: true``。
+
+        取 Provider 失败（别名不存在 / 缺 Key）时返回 ``False``：那种情况真正的
+        错误会在随后的 ``call()`` 里以原有方式抛出，这里不该抢先报一个错。
+        """
+        try:
+            return bool(self.get(alias).capabilities.supports_tool_calls)
+        except Exception:  # noqa: BLE001 —— 只做能力探测，错误留给真正的调用
+            return False
+
     def alias_for_task(self, task: TaskLike) -> str:
         """按任务复杂度选模型别名（V2：按认知复杂度自动选模型）。
 
@@ -845,6 +865,8 @@ class ModelFactory:
         role: str,
         response_format: ResponseFormat | None = None,
         session_id: str | None = None,
+        tools: Sequence[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> CompletionResult:
         """取信号量 → 调用 Provider → 释放 → 记账并落 ledger。
 
@@ -878,7 +900,12 @@ class ModelFactory:
                 role=role,
                 response_format=response_format,
                 session_id=session_id,
-                use_cache=plan.is_ordered,
+                tools=tools,
+                tool_choice=tool_choice,
+                # P2-1：带工具的请求不参与响应缓存。缓存键只含
+                # alias+messages+temperature+max_tokens，不含工具声明；命中一条
+                # 「没带工具时」的结果会把整轮 ReAct 变成单次调用。
+                use_cache=plan.is_ordered and not tools,
             ),
             mark_cooldown=True,
         )
@@ -893,6 +920,8 @@ class ModelFactory:
         purpose: str,
         role: str,
         response_format: ResponseFormat | None = None,
+        tools: Sequence[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> AsyncIterator[StreamChunk]:
         """流式调用入口（P3-3）：逐块 yield :class:`StreamChunk`，流结束后统一记账。
 
@@ -935,11 +964,16 @@ class ModelFactory:
             success = False
             try:
                 async with self._slots(sem):
+                    # P2-5：流式也支持原生工具调用（tools 透传给 provider）。
+                    stream_kwargs: dict[str, Any] = (
+                        {"tools": tools, "tool_choice": tool_choice}
+                        if tools else {})
                     async for chunk in provider.stream_complete(
                         cast("Sequence[Message]", masked_messages),
                         temperature=temperature,
                         max_tokens=max_tokens,
                         response_format=response_format,
+                        **stream_kwargs,
                     ):
                         yielded_first = True
                         # V7-P0：逐块还原脱敏占位符（处理占位符被拆分到两个 chunk）
@@ -1152,6 +1186,8 @@ class ModelFactory:
         response_format: ResponseFormat | None = None,
         session_id: str | None = None,
         use_cache: bool = True,
+        tools: Sequence[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> CompletionResult:
         """对一个别名做一次完整尝试：缓存 → 配额 → 信号量 → 脱敏 → 记账。
 
@@ -1191,15 +1227,24 @@ class ModelFactory:
             async with self._slots(sem):
                 redactor = self._make_redactor()
                 masked_messages = redactor.mask_messages(messages)
+                # P2-1：不带工具时**连关键字都不传**。这样既有 Provider（含
+                # 第三方实现与测试替身）的 ``complete()`` 签名不必改一个字，
+                # 「没有工具 = 与改造前逐字节一致」也就是字面意义上的真。
+                # 带工具时由能力位保证实现侧接受这两个参数。
+                tool_kwargs: dict[str, Any] = (
+                    {"tools": tools, "tool_choice": tool_choice}
+                    if tools else {})
                 result = await provider.complete(
                     cast("Sequence[Message]", masked_messages),
                     temperature=temperature,
                     max_tokens=max_tokens,
-                    response_format=response_format)
+                    response_format=response_format,
+                    **tool_kwargs)
                 result = self._redact_result(result, redactor)
             self._account(
                 result, purpose=purpose, role=role,
-                binding=provider.binding, alias=alias)
+                binding=provider.binding, alias=alias,
+                temperature=temperature, max_tokens=max_tokens)
             self._reset_cooldown(alias)
             # V7-P3：记录亲和性（成功调用后绑定会话到当前别名）
             if session_id is not None:
@@ -1287,7 +1332,8 @@ class ModelFactory:
                 for result in collecting.results:
                     self._account(
                         result, purpose=purpose, role=role,
-                        binding=provider.binding, alias=alias)
+                        binding=provider.binding, alias=alias,
+                        temperature=temperature, max_tokens=max_tokens)
             finally:
                 self._quota_tracker.release(alias, estimated)
         # 阶梯成功：把最后一次（产出合法 schema 的）结果文本写入响应缓存。
@@ -1629,6 +1675,50 @@ class ModelFactory:
                         timestamps.pop(0)
             timestamps.append(time.monotonic())
 
+    @property
+    def tracer(self) -> Any | None:
+        """P2-3：本次 run 的 tracer（``None`` = 未启用）。Agent 用它记工具 span。"""
+        return self._tracer
+
+    def _record_llm_span(
+        self,
+        result: CompletionResult,
+        *,
+        binding: ModelBinding,
+        alias: str | None,
+        temperature: float,
+        max_tokens: int,
+    ) -> None:
+        """P2-3：把一次真实调用记成 ``gen_ai.*`` span（未启用时零开销）。
+
+        只记**真实调用**：缓存命中走 ``_account_cached``，不在这里留 span——否则
+        trace 里会出现时长 0、token 0 的假调用，误导「这个 run 花在哪」。
+        内容默认不采集（``otel_capture_content``），采集时也先过一遍脱敏。
+        """
+        tracer = self._tracer
+        if tracer is None:
+            return
+        request_preview = response_preview = None
+        if getattr(tracer, "capture_content", False):
+            response_preview = result.text
+        try:
+            tracer.record_llm(
+                model=binding.model,
+                provider=binding.provider,
+                prompt_tokens=result.prompt_tokens,
+                completion_tokens=result.completion_tokens,
+                latency_ms=result.latency_ms,
+                finish_reason=result.finish_reason,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_model=result.model,
+                alias=alias,
+                request_preview=request_preview,
+                response_preview=response_preview,
+            )
+        except Exception:  # noqa: BLE001 —— 可观测性不许打断真实调用
+            pass
+
     def _account_cached(
         self, result: CompletionResult, *, purpose: str, role: str
     ) -> None:
@@ -1766,6 +1856,8 @@ class ModelFactory:
         role: str,
         binding: ModelBinding | None = None,
         alias: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> None:
         """累加用量、估算成本并发一条 ``llm_call`` —— **所有调用路径共用**。
 
@@ -1817,6 +1909,13 @@ class ModelFactory:
         if alias is not None:
             self._quota_tracker.consume(
                 alias, result.prompt_tokens, result.completion_tokens, cost)
+        # P2-3：span 也走这条「所有调用路径共用」的记账口——放在 ``call()`` 里
+        # 只能覆盖 ReAct 路径，plan / review（走 complete_structured 的阶梯）
+        # 会整段缺失，trace 看起来像「run 只调了 5 次模型」。
+        if binding is not None:
+            self._record_llm_span(
+                result, binding=binding, alias=alias,
+                temperature=temperature, max_tokens=max_tokens)
         if self._ledger is not None:
             self._ledger.emit(
                 "llm_call",
