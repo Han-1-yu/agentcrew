@@ -897,6 +897,9 @@ AGENTCREW_LLM_CACHE_ENABLED=true
   文本的片段，可能把字符串字面量切成两半），所以只做「按 `index` 收集」，流结束
   后由 `assemble_tool_calls()` 一次性拼接 + 解析。流式与非流式在工具调用上共用同
   一条消费路径：ReAct 循环照常执行，ledger 的 `tool_call.mode` 仍是 `native`。
+- **流式正文上 UI（P3-3）**：`stream_sink` 把增量正文逐块推到 SSE 的
+  `agent_stream_delta` 事件（瞬态、不落 ledger、不触发 Webhook），看板「看板」页
+  有「流式输出」面板实时累积；`curl -N /runs/{id}/events` 同样能看到增量。
 - **工厂入口**：`ModelFactory.stream_call()` 与 `call()` 同形，只是走流式路径；
   信号量同样只包住流消费。**流式不做故障转移**（已吐出的块无法回滚），Provider
   不可用直接上抛。流完整消费后把全部 `delta` 拼成全文，按同口径估算 token 并

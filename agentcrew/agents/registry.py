@@ -94,6 +94,7 @@ class AgentFactory:
         tool_registry: ToolRegistry | None = None,
         tool_guard: Any | None = None,
         stream: bool = False,
+        stream_sink: Callable[[str, str, str], None] | None = None,
     ) -> None:
         self._models = models
         self._store = store
@@ -121,6 +122,8 @@ class AgentFactory:
         #: P3-3：流式开关。``False``（默认）时每个 Agent 走 ``models.call``；
         #: ``True`` 时走 ``stream_call`` 并记 ``agent_stream_chunk``。
         self._stream = stream
+        #: P3-3：流式增量正文出口，透传给每个 Agent（``None`` = 不推正文）。
+        self._stream_sink = stream_sink
         #: R5：跨角色咨询路由。``None``（默认）时不检测 ``<message>`` 围栏。
         #: 实际类型要么是二参回调，要么是提供 ``bind()`` 的 PeerRouter（本身
         #: 不可调用），所以按 duck typing 存 ``Any``，由 _bind_router 统一解析。
@@ -483,6 +486,8 @@ class AgentFactory:
             # P3-3：流式开关。此前 BaseAgent(stream=...) 只有测试在传，生产路径
             # 永远 False——现在由 Settings.stream 一路下发，成为真能力。
             stream=self._stream,
+            # P3-3 → UI：流式增量正文出口（None = 不推正文，仅 ledger 摘要）。
+            stream_sink=self._stream_sink,
         )
         if resolved is not None:
             agent.path_scope = list(resolved.path_scope)

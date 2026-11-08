@@ -134,6 +134,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .log-entry { margin-bottom: 4px; opacity: 0.9; }
   .log-entry .ts { color: var(--muted); }
   .log-entry .evt { color: var(--warn); font-weight: 600; }
+  .stream-box { margin-bottom: 12px; }
+  .stream-box .stream-title { margin: 0 0 6px; font-size: 13px; color: var(--muted); }
+  .stream-output { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; height: 220px; overflow-y: auto; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+  .stream-output .task-head { color: var(--warn); font-weight: 600; }
   .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
   .stat-card .num { font-size: 22px; font-weight: 700; color: var(--accent); }
   .stat-card .label { font-size: 12px; color: var(--muted); margin-top: 4px; }
@@ -213,6 +217,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     <div class="tab-pane active" id="pane-board">
   <div class="board" id="board"></div>
+  <div class="stream-box">
+    <div class="stream-title">流式输出（实时正文，仅开启 AGENTCREW_STREAM 时出现）</div>
+    <div class="stream-output" id="stream-output"></div>
+  </div>
   <div class="log" id="log"></div>
 </div>
 <div class="tab-pane" id="pane-ledger">
@@ -571,6 +579,22 @@ function logEvent(event, data) {
   log.scrollTop = log.scrollHeight;
 }
 
+let streamTask = null;
+function onStreamDelta(data) {
+  const out = document.getElementById("stream-output");
+  if (!out) return;
+  const taskId = data.task_id || "";
+  if (streamTask !== taskId) {
+    streamTask = taskId;
+    const head = el("div", "task-head");
+    head.textContent = "── " + taskId +
+      (data.role ? " · " + data.role : "") + " ──";
+    out.appendChild(head);
+  }
+  out.appendChild(document.createTextNode(data.delta || ""));
+  out.scrollTop = out.scrollHeight;
+}
+
 function setStatus(status) {
   const badge = document.getElementById("run-status");
   badge.textContent = status;
@@ -628,6 +652,10 @@ async function connect() {
   loadLedger();
   loadStats();
 
+  streamTask = null;
+  const so = document.getElementById("stream-output");
+  if (so) so.textContent = "";
+
   eventSource = new EventSource(`/runs/${runId}/events`);
   eventSource.onopen = () => setConn(true);
   eventSource.onerror = () => setConn(false);
@@ -639,6 +667,9 @@ async function connect() {
   };
   eventSource.addEventListener("connected", (e) => {
     logEvent("connected", JSON.parse(e.data));
+  });
+  eventSource.addEventListener("agent_stream_delta", (e) => {
+    try { onStreamDelta(JSON.parse(e.data)); } catch (err) {}
   });
   eventSource.addEventListener("task_transition", (e) => {
     const data = JSON.parse(e.data);

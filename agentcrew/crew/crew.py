@@ -737,7 +737,9 @@ class Crew:
                 # P2-4：工具级 guardrails（未配置规则时为 None，零开销）。
                 tool_guard=build_tool_guard(self._settings.tool_guards),
                 # P3-3：流式开关从配置一路下发（默认 False，与改造前逐字一致）。
-                stream=self._settings.stream),
+                stream=self._settings.stream,
+                # P3-3 → UI：流式增量正文出口（SSE-only，不落 ledger、不触发 Webhook）。
+                stream_sink=self._make_stream_sink(record.run_id)),
             base_stats=record.stats.model_copy(deep=True),
             journal=SuperStepJournal(checkpoint.run_dir, ledger),
             tracer=tracer,
@@ -1446,6 +1448,24 @@ class Crew:
             self._on_event(name, payload)
         if self._webhook is not None:
             self._webhook.emit(name, payload)
+
+    def _make_stream_sink(self, run_id: str) -> Callable[[str, str, str], None]:
+        """造一个流式增量正文的出口（P3-3 → UI）。
+
+        只走 ``on_event``（SSE / 看板 / ``curl -N``）：正文是**瞬态**的，ledger 里
+        只留 ``agent_stream_chunk`` 的 ``delta_length``（审计不膨胀）；Webhook 是
+        事件通知不是正文流，几千个块不该打爆接收端——所以这里**刻意跳过**
+        :meth:`_dispatch_event`（它会把 Webhook 一起带上）。
+        """
+        def sink(task_id: str, role: str, delta: str) -> None:
+            if self._on_event is not None and delta:
+                self._on_event("agent_stream_delta", {
+                    "run_id": run_id,
+                    "task_id": task_id,
+                    "role": role,
+                    "delta": delta,
+                })
+        return sink
 
     def _build_webhook(
         self, ledger: Ledger, *, spool_dir: Path | None = None

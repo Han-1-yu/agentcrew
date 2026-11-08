@@ -1431,6 +1431,25 @@ judge、MCP streamable HTTP 仅 http。每条四段（状态/背景/决策/后�
 **验证**：`test_mcp_client / mcp_transports / mcp_streamable_http / mcp_wiring`
 **55 例**全过；`ruff` 全绿。
 
+### 3.53 R40：流式增量正文上 SSE（P3-3 → UI 收尾）（2026-11-08）
+
+方案「真实流式（Provider SSE → Settings → UI）」的最后一段。此前流式只把
+``agent_stream_chunk``（``delta_length``）写进 ledger——正文不落审计（避免膨胀），但
+看板也看不到实时正文。
+
+| 层 | 改动 |
+|---|---|
+| Agent | `BaseAgent(stream_sink=…)` 新增出口 `(task_id, role, delta)`；流式循环里每个非空增量块在记完 ledger 后回调它 |
+| Crew | `_make_stream_sink(run_id)` 造闭包 → `on_event("agent_stream_delta", {run_id/task_id/role/delta})`；**刻意不走 `_dispatch_event`**（正文只上 SSE，不落 ledger、不触发 Webhook——几千个块不该打爆审计与接收端） |
+| 工厂 | `AgentFactory` 透传 `stream_sink`（与 `stream` 同路） |
+| 看板 | 看板「看板」页加「流式输出」面板：`agent_stream_delta` 事件按 task 分段累积，`textContent` 追加（XSS 安全），连新 run 时清空 |
+
+**验收**（方案的「`curl -N` 看到增量」）：新增 `tests/test_stream_delta_2026_11_08.py`
+5 例——Agent 逐块 sink、Crew 包成 `agent_stream_delta` 推给 on_event、无 on_event 时
+no-op、看板有面板与处理器、**端到端**（mock+stream 跑完整 run，`on_event` 收到带正文
+的 `agent_stream_delta`，拼接 >20 字符且 run_id 一致）。回归 `streaming / dashboard /
+api_server / crew` **124 例**全过；`ruff` 全绿。
+
 ---
 ## 4. 历史报告汇总（已并入本文，原文归档）
 

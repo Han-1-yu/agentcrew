@@ -467,6 +467,7 @@ class BaseAgent(ABC):
         max_message_rounds: int = 5,
         max_subtask_corrections: int = 1,
         tool_guard: Any | None = None,
+        stream_sink: Callable[[str, str, str], None] | None = None,
     ) -> None:
         """``catalog`` 是本 run 的角色目录（含自定义角色），可为 ``None``。
 
@@ -533,6 +534,11 @@ class BaseAgent(ABC):
         #: R8：子任务被拒时，把原因回灌并重问 LLM 的次数上限（``0`` = 不回灌，
         #: 行为与 R8 之前逐字一致）。只有回调提供了 ``last_rejection`` 才可能触发。
         self._max_subtask_corrections = max(0, int(max_subtask_corrections))
+        #: P3-3：流式增量正文的出口 ``(task_id, role, delta)``。``None``（默认）=
+        #: 不推正文（只有 ledger 的 ``agent_stream_chunk`` 长度摘要）。由 Crew 注入，
+        #: 一路到 SSE 总线，给看板 / ``curl -N`` 看实时增量；正文是瞬态的，不落
+        #: ledger、不触发 Webhook——否则一个 run 几千个块把审计和接收端都打爆。
+        self._stream_sink = stream_sink
         #: P2-4：工具级 guardrails（``None`` = 没配规则，整段逻辑是一次判断）。
         self._tool_guard = tool_guard
 
@@ -911,6 +917,8 @@ class BaseAgent(ABC):
                 role=self.spec.key,
                 delta_length=len(chunk.delta),
             )
+            if self._stream_sink is not None and chunk.delta:
+                self._stream_sink(task.id, self.spec.key, chunk.delta)
         provider = self._models.get(alias)
         return CompletionResult(
             text="".join(parts),
