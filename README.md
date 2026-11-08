@@ -129,6 +129,9 @@ python main.py run --demo
 > ——真实端口与认证、systemd / 反代示例、配置三通道与生产必配、日志与备份、
 > 扩容边界、监控告警、升级步骤和上线前检查清单。
 >
+> **架构决策记录（为什么这么做）**：见 [docs/adr/](docs/adr/)
+> ——认证 fail-closed、`run_python` 默认关、guardrails 不用 LLM 判等 7 条有取舍的决策。
+>
 > **安全评审 / 上线签字**：见 [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)
 > ——信任边界、资产、46 条威胁与当前控制、**15 条已知缺口及补偿措施**、
 > 控制到测试的证据映射。想知道「这个系统能防什么、不能防什么」，看它。

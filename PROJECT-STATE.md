@@ -1410,6 +1410,27 @@ healthy）做三档实跑，暴露并修掉一个会拒绝合法计划的误伤�
 **验证**：`test_stream_config` 5 例、`test_tool_production_wiring` 22 例（+3）、
 `test_planner` 55 例（+2）全过；`ruff` 全绿。实跑：流式（见上表）全绿。
 
+### 3.52 R39：MCP `outputSchema`/`structuredContent` + ADR（2026-11-08）
+
+按方案收尾两条 P2-11/P3 的明确缺口。
+
+**1) MCP 结构化输出兼容**（方案 P2-11 的「补 `outputSchema`/`structuredContent`」）：
+此前 `MCPToolResult.text` 只拼 `content` 里的 `type=text` 块——MCP 2025-06-18 起工具
+可以**只回 `structuredContent`**，那种结果会被整个丢掉，模型看到空串。现在：
+`MCPTool` 增加 `outputSchema` 字段；`MCPToolResult` 增加 `structuredContent` 字段，
+`text` 的优先级为「text 块 → structuredContent 序列化 JSON → 非文本块类型提示 → 空串」。
+`tests/test_mcp_client.py` +4。协议版本仍用协商制（默认 `2025-06-18`，服务端可协商成
+更新版本），不硬编码方案里提到的版本号——版本是协商值不是常量。
+
+**2) ADR（方案 P3「THREAT_MODEL + ADR」的后半）**：新增 `docs/adr/`（README 索引 +
+7 条），把本轮有取舍的关键决策落成记录：认证 fail-closed、`run_python` 默认关、
+原生 FC 与围栏共用消费端、OTel 零依赖 OTLP、guardrails 不用 LLM 判、evals 不用 LLM
+judge、MCP streamable HTTP 仅 http。每条四段（状态/背景/决策/后果），并写明「何时重审」。
+`README` / `OPERATIONS §0` / `THREAT_MODEL` 头部加了指向 ADR 的入口。
+
+**验证**：`test_mcp_client / mcp_transports / mcp_streamable_http / mcp_wiring`
+**55 例**全过；`ruff` 全绿。
+
 ---
 ## 4. 历史报告汇总（已并入本文，原文归档）
 

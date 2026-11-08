@@ -114,6 +114,36 @@ class TestMCPClient:
         ])
         assert result.text == "hello\nworld"
 
+    def test_mcp_tool_output_schema(self):
+        """tools/list 里的 outputSchema 要被解析成字段，而不是丢进 extra。"""
+        tool = MCPTool(name="q", outputSchema={
+            "type": "object", "properties": {"count": {"type": "integer"}}})
+        assert tool.outputSchema["type"] == "object"
+
+    def test_mcp_tool_result_structured_content(self):
+        """结构化结果（无 text 块）→ 序列化成 JSON 回灌，不能被整个丢掉。
+
+        这是真实兼容缺口：MCP 2025-06-18 起工具可以只回 structuredContent，
+        没有这一条时模型看到的 text 是空串。
+        """
+        result = MCPToolResult(structuredContent={"count": 42, "unit": "ms"})
+        assert '"count": 42' in result.text
+        assert '"unit": "ms"' in result.text
+
+    def test_mcp_tool_result_text_beats_structured_content(self):
+        """两者都有时文本优先（既有语义不变）。"""
+        result = MCPToolResult(
+            content=[{"type": "text", "text": "plain"}],
+            structuredContent={"count": 42},
+        )
+        assert result.text == "plain"
+
+    def test_mcp_tool_result_non_text_blocks_placeholder(self):
+        """只有 image/resource 等非文本块时给类型提示，而不是空串。"""
+        result = MCPToolResult(content=[{"type": "image", "data": "aa"}])
+        assert "image" in result.text and result.text
+
+
     @pytest.mark.asyncio
     async def test_start_stop_explicit(self, mock_server_script):
         client = MCPClient([sys.executable, mock_server_script])
