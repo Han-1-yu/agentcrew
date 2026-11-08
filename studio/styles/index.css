@@ -25,6 +25,7 @@
 @import './components/modal.css';
 @import './components/toast.css';
 @import './components/empty.css';
+@import './components/stream.css';
 
 /* 功能页 */
 @import './features/providers.css';

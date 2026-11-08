@@ -5,6 +5,7 @@
  * 也不改写 agentcrew.yaml —— 矩阵改完只生成 YAML 片段供复制，与供应商页同一约定。
  */
 import { h } from '../../lib/dom.js';
+import { S } from '../../lib/store.js';
 
 import { toast } from '../../ui/toast.js';
 
@@ -197,11 +198,15 @@ function buildGroup() {
       '生成配置片段'));
 
   async function load() {
+    // 只用 navToken 判断过期：buildGroup 在 section 还没挂进 document 时就调
+    // load()，isConnected 此刻恒为 false，不能拿它做判据。
+    const token = S.navToken;
     body.innerHTML = '';
     body.appendChild(h('div', { class: 'ag-hint' }, '正在读取…'));
     let res;
     try { res = await window.studio.agentsConfig(); }
     catch (e) { res = { ok: false, error: String(e.message || e) }; }
+    if (token !== S.navToken) return;
     if (!res || !res.ok) {
       body.innerHTML = '';
       body.appendChild(h('div', { class: 'ag-hint err' },
@@ -209,8 +214,10 @@ function buildGroup() {
         h('div', { class: 'ag-hint-sub' }, '确认 agentcrew.yaml 可被 `python main.py agents --json` 解析')));
       return;
     }
-    state.profiles = res.data.profiles || [];
-    state.roles = res.data.roles || [];
+    // ok=true 但 data 缺失时别抛 TypeError（async 续体没人接会变成全局提示）。
+    const cfg = res.data || {};
+    state.profiles = cfg.profiles || [];
+    state.roles = cfg.roles || [];
     for (const role of state.roles) {
       state.assign[role.role] = {};
       for (const a of role.agents) state.assign[role.role][a.ref] = a.duty;
@@ -225,7 +232,7 @@ function buildGroup() {
     h('div', { class: 'ag-desc' },
       '一个角色可绑定多个执行体：primary 写产物，review 只出意见，judge 在 N 选 1 时择优。'),
     actions, body);
-  load();
+  load().catch(() => {});
   return section;
 }
 

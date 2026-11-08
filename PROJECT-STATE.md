@@ -17,7 +17,7 @@
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
-| Studio | `npm run check` **63** 模块 / 37 分片通过、selftest 16/16、e2e 28/28、probe 24/24 |
+| Studio | `npm run check` **64** 模块 / 38 分片通过、selftest 16/16、e2e 28/28、probe 24/24、verify:api 8/8、verify:transitions 11/11（11-09 前端缺陷修复后新增后两项） |
 | Git | `master` 与 `origin/master` 同步（`792503d`；178 个提交于 2026-11-07 推送，含 CI 3.10 修复与三次 API 补推）；**工作区干净** |
 | 角色 | 8 个内置岗位角色 + 执行体（Agent Profile）可多绑 |
 

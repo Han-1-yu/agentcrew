@@ -8,7 +8,7 @@ contextBridge.exposeInMainWorld('studio', {
   // 设置与探测
   getSettings: () => invoke('settings:get'),
   setSettings: (next) => invoke('settings:set', next),
-  detectPython: () => invoke('python:detect'),
+  detectPython: (candidate) => invoke('python:detect', candidate),
   agentsConfig: () => invoke('agents:config'),
   // 运行列表 / 快照 / 事件
   listRuns: () => invoke('runs:list'),
@@ -45,6 +45,13 @@ contextBridge.exposeInMainWorld('studio', {
   // 实时拉取供应商可用模型列表 / 批量端点测速（Key 仅在主进程读取）
   providerFetchModels: (opts) => invoke('provider:fetchModels', opts),
   providerTestEndpoints: (opts) => invoke('provider:testEndpoints', opts),
+  // 后端 API 代理（主进程绕开 CORS；Key 只存主进程 safeStorage，不回传）
+  apiRequest: (path, options) => invoke('api:request', { path, options }),
+  apiStreamStart: (runId) => invoke('api:stream:start', { runId }),
+  apiStreamStop: () => invoke('api:stream:stop'),
+  apiKeyStatus: () => invoke('api:keyStatus'),
+  apiKeySave: (value) => invoke('api:keySave', { value }),
+  apiKeyClear: () => invoke('api:keyClear'),
   // F4：最近目标
   recentGoals: () => invoke('goals:recent'),
   // 主进程推送

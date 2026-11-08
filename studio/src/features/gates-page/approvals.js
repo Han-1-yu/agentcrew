@@ -47,6 +47,7 @@ async function decide(rid, item, action) {
 }
 
 async function load(box, rid) {
+  const token = S.navToken;
   box.innerHTML = '';
   box.appendChild(h('div', { class: 'page-head' },
     h('h2', {}, '人工审批'),
@@ -55,9 +56,11 @@ async function load(box, rid) {
   try {
     payload = await apiFetch(`/runs/${encodeURIComponent(rid)}/approvals`);
   } catch (err) {
-    box.appendChild(emptyState('审批单不可读', String(err.detail || err.message || err)));
+    if (token === S.navToken) box.appendChild(emptyState('审批单不可读', String(err.detail || err.message || err)));
     return;
   }
+  // 等审批单回来时用户可能已经切页，别再往已卸载的容器写内容。
+  if (token !== S.navToken) return;
   const items = (payload && payload.approvals) || [];
   if (!items.length) {
     box.appendChild(emptyState('暂无审批单', '本次运行没有需要人工裁决的节点。'));
@@ -104,7 +107,7 @@ function renderApprovalsSection(container) {
       '连接后端 API 并选择 run 后，可在此处理人工审批单。'));
     return box;
   }
-  load(box, rid);
+  load(box, rid).catch(() => {});
   return box;
 }
 

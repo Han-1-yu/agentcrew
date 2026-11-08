@@ -23,8 +23,13 @@ function buildPageHead(cfg) {
       const { values: next, error } = collectSettings(cfg);
       if (error) { toast('error', '设置未保存', error); return; }
       try {
+        const prevApi = (S.settings && S.settings.apiBaseUrl) || '';
         await window.studio.setSettings(next);
         S.settings = Object.assign({}, S.settings, next);
+        // 后端地址变了要立刻重建实时通道，否则仍连着旧地址 / 仍是文件监听。
+        if (String(next.apiBaseUrl || '') !== String(prevApi)) {
+          window.dispatchEvent(new Event('studio:reconnect'));
+        }
         toast('success', '已保存', '设置已更新');
       } catch (e) { toast('error', '保存失败', String(e.message || e)); }
     } }, '保存'));

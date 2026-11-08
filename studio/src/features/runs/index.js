@@ -12,6 +12,7 @@ import { toast } from '../../ui/toast.js';
 
 import { loadRealRun } from '../../app/data.js';
 import { initMockData } from '../../app/mock.js';
+import { resetRealtime, updateConnIndicator } from '../../app/realtime.js';
 
 import { renderDashboard } from '../dashboard/index.js';
 import { openCompareModal } from './compare.js';
@@ -71,7 +72,15 @@ async function loadRunList() {
                 if (isActive) {
                   const remaining = await window.studio.listRuns();
                   if (remaining && remaining.length) await switchRun(remaining[0].dir);
-                  else { S.realMode = false; initMockData(); renderDashboard(); }
+                  else {
+                    // 删掉最后一个 run：resetRealtime 会停掉 watcher 与 SSE，
+                    // 否则 500ms 轮询会持续扫已删除目录、指示器也停在「文件监听」。
+                    resetRealtime();
+                    S.watchDir = null; S._eventKeys = null; S.realMode = false;
+                    initMockData();
+                    renderDashboard();
+                    updateConnIndicator();
+                  }
                 }
                 loadRunList();
               } catch (err) { toast('error', '删除失败', String(err.message || err)); }

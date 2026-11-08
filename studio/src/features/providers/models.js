@@ -146,7 +146,7 @@ async function applyModel(alias) {
     try {
       await window.studio.switchModel(S.dash.run.dir, alias);
       S.dash.run.model = alias;
-      if (S.settings) { S.settings.defaultModel = alias; window.studio.setSettings(S.settings).catch(() => {}); }
+      if (S.settings) { S.settings.defaultModel = alias; window.studio.setSettings({ defaultModel: alias }).catch(() => {}); }
       pushEvent('llm_model_switched', { from: prev, to: alias });
       renderChrome(); renderDashboard();
       toast('success', '模型已切换', alias);
@@ -155,7 +155,7 @@ async function applyModel(alias) {
     }
   } else {
     S.dash.run.model = alias;
-    if (S.settings) { S.settings.defaultModel = alias; window.studio.setSettings(S.settings).catch(() => {}); }
+    if (S.settings) { S.settings.defaultModel = alias; window.studio.setSettings({ defaultModel: alias }).catch(() => {}); }
     pushEvent('llm_model_switched', { from: prev, to: alias });
     renderChrome(); renderDashboard();
     toast('success', '模型已切换', alias);

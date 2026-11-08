@@ -8,6 +8,7 @@ const path = require('path');
 const fs = require('fs');
 const { spawn, spawnSync } = require('child_process');
 const { buildZipFromDir } = require('./zip');
+const { createBackendApi } = require('./backend-api');
 
 const IS_SELFTEST = process.argv.includes('--selftest');
 const IS_E2E = process.argv.includes('--e2e');
@@ -47,6 +48,7 @@ const DEFAULT_REPO_ROOT = path.resolve(__dirname, '..');
 
 let win = null;
 let settings = null;
+let backendApi = null;
 const settingsPath = () => path.join(app.getPath('userData'), 'settings.json');
 
 function defaultSettings() {
@@ -73,7 +75,8 @@ function loadSettings() {
     Object.assign(s, JSON.parse(raw));
     // 迁移：旧字段 pythonCommand → 标准字段 pythonCmd
     if (!s.pythonCmd && s.pythonCommand) {
-      s.pythonCmd = raw.pythonCommand;
+      // raw 是文件内容字符串，取 .pythonCommand 恒为 undefined；旧字段在解析后的 s 上。
+      s.pythonCmd = s.pythonCommand;
       delete s.pythonCommand;
       try { fs.writeFileSync(settingsPath(), JSON.stringify(s, null, 2), 'utf8'); } catch { /* 非致命 */ }
     }
@@ -301,6 +304,10 @@ function send(channel, payload) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
 }
 
+// IPC 参数兜底：渲染端理论上都传对象，但误传 undefined/null 时不该让主进程
+// 抛 TypeError（invoke 会 reject 成渲染端的「未处理异常」提示）。
+const objArg = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
+
 // GUI 进程直接 spawn 解释器可能被安全软件/沙箱间歇性拦截（ENOENT 或启动后被杀），
 // 所以：候选命令链逐个尝试，每条重试两次，并把子进程输出落盘便于诊断。
 function spawnCli(kind, args, outputDir, extraEnv) {
@@ -404,7 +411,7 @@ function discoverRunDir(rec, once = false) {
   if (!once && !rec.poller) {
     discoverRunDir(rec, true);
     rec.poller = setInterval(() => {
-      if (rec.runDir || rec.proc.exitCode !== null) { clearInterval(rec.poller); return; }
+      if (rec.runDir || !rec.proc || rec.proc.exitCode !== null) { clearInterval(rec.poller); return; }
       discoverRunDir(rec, true);
     }, 400);
   }
@@ -415,6 +422,8 @@ function killProc(key) {
   if (!rec) return false;
   if (rec.proc && rec.proc.exitCode !== null) return false;
   rec.killed = true;
+  // kill 之后 Windows 上可能收不到 exit 事件，目录发现 poller 会永久残留。
+  if (rec.poller) { clearInterval(rec.poller); rec.poller = null; }
   if (rec.proc) {
     try { rec.proc.kill(); } catch { /* 已退出 */ }
     // Windows 上（尤其 Store 版 Python 的 alias stub）kill 后可能收不到 exit 事件，
@@ -605,6 +614,14 @@ function parseModelsPayload(json) {
 // ---------- IPC ----------
 
 function registerIpc() {
+  // 后端 HTTP/SSE 统一由主进程代理：绕开 CORS、凭据只留主进程（见 backend-api.js）。
+  backendApi = createBackendApi({
+    ipcMain,
+    userDataPath: app.getPath('userData'),
+    getSettings: () => settings,
+    getWin: () => win,
+  });
+
   // 角色绑定矩阵：直接问 CLI（与执行期同一套解析），主进程不解析 YAML
   ipcMain.handle('agents:config', async () => {
     try {
@@ -628,7 +645,12 @@ function registerIpc() {
   ipcMain.handle('settings:get', () => {
     const repoOk = fs.existsSync(path.join(settings.repoRoot, 'main.py'));
     const outOk = fs.existsSync(settings.outputDir);
-    return { settings, effectiveTheme: resolveEffectiveTheme(settings.theme), env: { repoOk, outOk, electron: process.versions.electron, node: process.versions.node } };
+    return {
+      settings,
+      effectiveTheme: resolveEffectiveTheme(settings.theme),
+      apiKeyConfigured: !!(backendApi && backendApi.isKeyConfigured()),
+      env: { repoOk, outOk, electron: process.versions.electron, node: process.versions.node },
+    };
   });
   ipcMain.handle('settings:set', (_e, next) => saveSettings(next || {}));
   ipcMain.handle('python:detect', async (_e, candidate) => detectPython(candidate || null));
@@ -638,7 +660,8 @@ function registerIpc() {
   ipcMain.handle('ledger:history', (_e, dir, maxLines) =>
     ledgerHistory(path.join(String(dir), 'ledger.jsonl'), Number(maxLines) || 400));
 
-  ipcMain.handle('run:start', (_e, p) => {
+  ipcMain.handle('run:start', (_e, arg) => {
+    const p = objArg(arg);
     let outputDir = p.outputDir || settings.outputDir;
     // P3：多项目/工作区 — 指定 project 时在 outputDir/project/ 下创建 run
     if (p.project) {
@@ -664,8 +687,9 @@ function registerIpc() {
     if (chosenMaxCost > 0) args.push('--max-cost', String(chosenMaxCost));
     if (p.maxLlmCalls && Number(p.maxLlmCalls) > 0) args.push('--max-llm-calls', String(p.maxLlmCalls));
     args.push('--no-live', '--output-dir', outputDir);
+    // spawnCli 恒返回 { key }；启动失败由 proc:error / proc:exit 推送，
+    // 原来这里的 if (r.error) 是永远不触发的死分支。
     const r = spawnCli('run', args, outputDir, p.env || null);
-    if (r.error) throw new Error(r.error);
     // F4：记录最近目标（去重、最多 5 条、非 demo）
     if (!p.demo && p.goal && String(p.goal).trim()) {
       try {
@@ -679,24 +703,29 @@ function registerIpc() {
     return { key: r.key };
   });
 
-  ipcMain.handle('run:resume', (_e, p) => {
-    const runDir = String(p.runDir);
+  ipcMain.handle('run:resume', (_e, arg) => {
+    const p = objArg(arg);
+    const runDir = String(p.runDir || '');
     const args = ['resume', path.basename(runDir)];
     if (p.mock) args.push('--mock');
     if (p.auto) args.push('--auto');
     args.push('--no-live', '--output-dir', path.dirname(runDir));
+    // spawnCli 恒返回 { key }；启动失败由 proc:error 推送，没有 r.error。
     const r = spawnCli('resume', args, path.dirname(runDir));
-    if (r.error) throw new Error(r.error);
+    // 启动秒退时 spawnCli 的 fallback 会 procs.delete(key)，这里拿不到记录；
+    // 直接解引用会抛 TypeError。
     const rec = procs.get(r.key);
-    rec.runDir = runDir;
-    rec.runId = path.basename(runDir);
-    send('proc:run-dir', { key: r.key, runDir, runId: rec.runId });
+    if (rec) {
+      rec.runDir = runDir;
+      rec.runId = path.basename(runDir);
+      send('proc:run-dir', { key: r.key, runDir, runId: rec.runId });
+    }
     return { key: r.key };
   });
 
-  ipcMain.handle('run:cancel', (_e, p) => ({ killed: killProc(String(p.key)) }));
-  ipcMain.handle('run:cancelOffline', (_e, p) => { offlineCancel(String(p.runDir)); return { ok: true }; });
-  ipcMain.handle('run:delete', (_e, p) => deleteRunSync(String(p.runDir)));
+  ipcMain.handle('run:cancel', (_e, p) => ({ killed: killProc(String(objArg(p).key)) }));
+  ipcMain.handle('run:cancelOffline', (_e, p) => { offlineCancel(String(objArg(p).runDir)); return { ok: true }; });
+  ipcMain.handle('run:delete', (_e, p) => deleteRunSync(String(objArg(p).runDir)));
   ipcMain.handle('procs:list', () => [...procs.values()]
     .filter((r) => r.proc && r.proc.exitCode === null)
     .map((r) => ({ key: r.key, kind: r.kind, runDir: r.runDir, runId: r.runId })));
@@ -723,11 +752,11 @@ function registerIpc() {
     return { saved: r.filePath, size: zip.length };
   });
 
-  ipcMain.handle('shell:showItemInFolder', (_e, p) => { shell.showItemInFolder(String(p.fullPath)); return { ok: true }; });
-  ipcMain.handle('shell:openPath', (_e, p) => shell.openPath(String(p.fullPath)));
+  ipcMain.handle('shell:showItemInFolder', (_e, p) => { shell.showItemInFolder(String(objArg(p).fullPath)); return { ok: true }; });
+  ipcMain.handle('shell:openPath', (_e, p) => shell.openPath(String(objArg(p).fullPath)));
   // 在系统浏览器中打开外部 URL（如获取 API Key 的官方页面）；仅放行 http/https，避免任意协议
   ipcMain.handle('shell:openExternal', async (_e, p) => {
-    const url = String(p && p.url || '');
+    const url = String(objArg(p).url || '');
     if (!/^https?:\/\//i.test(url)) { throw new Error('仅支持 http/https 链接'); }
     await shell.openExternal(url);
     return { ok: true };
@@ -743,7 +772,8 @@ function registerIpc() {
     fs.renameSync(tmp, file);
   }
 
-  ipcMain.handle('model:switch', (_e, p) => {
+  ipcMain.handle('model:switch', (_e, arg) => {
+    const p = objArg(arg);
     const runDir = String(p.runDir);
     const alias = String(p.alias || '');
     if (!alias) throw new Error('alias 不能为空');
@@ -759,7 +789,8 @@ function registerIpc() {
     return { ok: true, alias };
   });
 
-  ipcMain.handle('task:action', (_e, p) => {
+  ipcMain.handle('task:action', (_e, arg) => {
+    const p = objArg(arg);
     const runDir = String(p.runDir);
     const taskId = String(p.taskId);
     const action = String(p.action); // retry | skip | manual
@@ -783,7 +814,8 @@ function registerIpc() {
     return { ok: true, taskId, action, status: task.status };
   });
 
-  ipcMain.handle('gate:action', (_e, p) => {
+  ipcMain.handle('gate:action', (_e, arg) => {
+    const p = objArg(arg);
     const runDir = String(p.runDir);
     const layer = String(p.layer); // G1 | G2 | G3
     const action = String(p.action); // approve | reject
@@ -816,7 +848,7 @@ function registerIpc() {
   // 同时注入主进程 process.env —— keyStatus / 在线拉取立即生效，CLI 子进程继承。
   // .env 已被 .gitignore 忽略；Key 值只落盘本机，绝不回传渲染进程。
   ipcMain.handle('provider:saveKey', (_e, opts) => {
-    const o = opts || {};
+    const o = objArg(opts);
     const envName = String(o.env_name || o.envName || '').trim();
     const value = String(o.value == null ? '' : o.value).trim();
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(envName)) throw new Error(`环境变量名非法：${envName}`);
@@ -842,7 +874,7 @@ function registerIpc() {
 
   // 用 Electron net.fetch 测试 provider 连通性（主进程天然绕开渲染进程 CORS）
   ipcMain.handle('provider:test', async (_e, opts) => {
-    const o = opts || {};
+    const o = objArg(opts);
     const base_url = o.base_url == null ? null : String(o.base_url);
     if (!base_url) return { ok: false, latency_ms: 0, status: 0, error: '该 provider 无 HTTP 端点（mock/cli）' };
     const models_path = o.models_path ? String(o.models_path) : '/models';
@@ -866,7 +898,7 @@ function registerIpc() {
   // Key 只在主进程从环境变量读取，绝不回传渲染进程。
   // 兼容三种响应：OpenAI/Anthropic/智谱v4 {data:[{id,owned_by}]}、智谱Responses/Cohere {models:[{slug|name}]}。
   ipcMain.handle('provider:fetchModels', async (_e, opts) => {
-    const o = opts || {};
+    const o = objArg(opts);
     const baseUrl = o.base_url == null ? '' : String(o.base_url).trim();
     if (!baseUrl) return { ok: false, models: [], error: '该 provider 无 HTTP 端点（mock/cli）' };
     const family = String(o.family || 'openai_compat');
@@ -906,7 +938,7 @@ function registerIpc() {
 
   // 批量端点测速（借鉴 cc-switch EndpointSpeedTest），返回每个 URL 的延迟与状态
   ipcMain.handle('provider:testEndpoints', async (_e, opts) => {
-    const o = opts || {};
+    const o = objArg(opts);
     const urls = Array.isArray(o.urls) ? o.urls.map(u => String(u)).filter(Boolean) : [];
     if (!urls.length) return { ok: false, results: [], error: '无候选端点' };
     const results = await Promise.all(urls.map(async (url) => {
@@ -1036,13 +1068,16 @@ if (!gotLock) {
     watchers.clear();
     for (const r of procs.values()) {
       r.killed = true;
+      if (r.poller) { clearInterval(r.poller); r.poller = null; }
       if (r.proc && r.proc.exitCode === null) { try { r.proc.kill(); } catch { /* 已退出 */ } }
     }
     app.quit();
   });
   app.on('before-quit', () => {
+    if (backendApi) backendApi.stopStream();
     for (const r of procs.values()) {
       r.killed = true;
+      if (r.poller) { clearInterval(r.poller); r.poller = null; }
       if (r.proc && r.proc.exitCode === null) { try { r.proc.kill(); } catch { /* 已退出 */ } }
     }
   });

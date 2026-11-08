@@ -15,7 +15,7 @@ import { closeRunDropdown, loadRunList, toggleRunDropdown } from '../features/ru
 
 import { loadRealRun } from './data.js';
 import { initMockData, startSim } from './mock.js';
-import { onWatchLedger, onWatchSnapshot } from './realtime.js';
+import { initRealtime, onWatchLedger, onWatchSnapshot } from './realtime.js';
 import { switchNav } from './router.js';
 import { applyTheme, cycleTheme, openUserMenu, renderChrome } from './shell.js';
 /** 首屏加载遮罩：getSettings / detectPython / listRuns / loadRealRun 都是异步 IPC，
@@ -77,13 +77,17 @@ async function bootSequence(){
       if(pages[idx]){ switchNav(pages[idx]); }
     }
     // 空格：暂停/恢复（仅在 dashboard 且运行中）
-    if(e.key===' '&&S.nav==='dashboard'&&S.dash.run){
+    if(e.key===' '&&S.nav==='dashboard'&&S.dash&&S.dash.run){
       const run=S.dash.run;
       if(run.status==='running'){ e.preventDefault(); /* 暂停按钮逻辑 */ }
     }
   });
 
-  try { const r=await window.studio.getSettings(); S.settings=r.settings; S.env=r.env; } catch { S.settings={}; }
+  try {
+    const r=await window.studio.getSettings();
+    S.settings=r.settings; S.env=r.env;
+    S.apiKeyConfigured=!!r.apiKeyConfigured;
+  } catch { S.settings={}; S.apiKeyConfigured=false; }
   // 应用初始主题（light/dark/system）
   applyTheme();
   // 主进程推送系统主题变化（system 模式下自动跟随）
@@ -100,7 +104,14 @@ async function bootSequence(){
   try {
     window.studio.on('watch:snapshot', onWatchSnapshot);
     window.studio.on('watch:ledger', onWatchLedger);
+    initRealtime();   // sse:frame / sse:closed + 流式面板按钮
   } catch {}
+  // 实时通道只发「该刷新了」的信号，装配层决定重绘范围：看板可见时全量重绘，
+  // 否则只刷顶栏（其它页也看得到运行数字）；切回看板时补一次全量重绘。
+  window.addEventListener('studio:refresh', () => {
+    if (S.nav === 'dashboard') renderDashboard(); else renderChrome();
+  });
+  window.addEventListener('studio:dashboard-show', () => renderDashboard());
 
   // CLI 进程生命周期：秒退且未产生 run 目录时正常监控链路完全看不到，必须显式报错
   try {

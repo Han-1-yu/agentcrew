@@ -1,26 +1,52 @@
 /**
- * 本机 HTTP API 客户端（后端 `main.py serve` 暴露的 REST 接口）。
- * 注意：Electron 主进程的 IPC 走 preload 暴露的 window.studio，不在本文件内。
+ * 后端 REST 客户端。
+ *
+ * 请求由主进程代理（window.studio.apiRequest → net.fetch），不再在渲染进程直接
+ * fetch：后端 serve 没有 CORS 头，file:// 源的请求会被浏览器拦下；同时认证头
+ * 由主进程统一注入，Key 不必进入渲染进程。
+ *
+ * 对外契约保持不变：成功返回解析后的 JSON；失败抛带 code / detail 的 Error，
+ * 调用方的静默降级与 explain() 文案都不用改。
  */
 import { S } from './store.js';
 
-/* 后端 API 调用：无 apiBaseUrl 直接 reject；8s 超时；失败由调用方静默降级（不弹 toast） */
+function noApi() {
+  const e = new Error('未配置后端 API 地址');
+  e.code = 'NO_API';
+  return e;
+}
+
 async function apiFetch(path, options = {}) {
-  const base = S.settings && S.settings.apiBaseUrl ? String(S.settings.apiBaseUrl).replace(/\/+$/, '') : '';
-  if (!base) { const e = new Error('未配置后端 API 地址'); e.code = 'NO_API'; throw e; }
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), options.timeoutMs || 8000);
+  if (!window.studio || !window.studio.apiRequest) throw noApi();
+  // 实际地址由主进程 settings 决定，这里只判「有没有配」。
+  if (!(S.settings && S.settings.apiBaseUrl)) throw noApi();
+
+  // 只传可结构化克隆的字段；AbortSignal / 函数等留在渲染进程。
+  const wire = {
+    method: options.method || 'GET',
+    headers: options.headers || {},
+    timeoutMs: options.timeoutMs || 8000,
+  };
+  if (options.body != null) wire.body = options.body;
+
+  let r;
   try {
-    const res = await fetch(base + path, { ...options, signal: ctrl.signal });
-    if (!res.ok) {
-      const e = new Error('HTTP ' + res.status);
-      e.code = 'HTTP_' + res.status;
-      // 后端把可读原因放在 {"error": "..."}：带上它，调用方才能说人话
-      try { const j = await res.json(); if (j && j.error) e.detail = String(j.error); } catch {}
-      throw e;
-    }
-    return await res.json();
-  } finally { clearTimeout(timer); }
+    r = await window.studio.apiRequest(String(path), wire);
+  } catch (e) {
+    const err = new Error(String((e && e.message) || e));
+    err.code = 'TRANSPORT';
+    throw err;
+  }
+  if (!r || !r.ok) {
+    const status = (r && r.status) || 0;
+    const e = new Error('HTTP ' + status);
+    // status=0 = 后端没起 / 超时 / 主进程侧没配地址。沿用 NO_API，
+    // 让 explain() 给出「先启动 serve」的引导，而不是落到通用的 HTTP_0。
+    e.code = status === 0 ? 'NO_API' : 'HTTP_' + status;
+    e.detail = (r && r.error) || '';
+    throw e;
+  }
+  return r.data;
 }
 
 export { apiFetch };

@@ -202,6 +202,18 @@
             <div id="cost-panel"></div>
           </section>
 
+          <!-- 6.6 实时流式输出：R40 agent_stream_delta，收到首帧才显示 -->
+          <section class="dash-block hidden" id="stream-section">
+            <div class="block-head">
+              <h2 class="block-title">实时流式输出</h2>
+              <div class="stream-tools">
+                <span class="stream-live" id="stream-live">待接收</span>
+                <button class="btn btn-sm" id="stream-clear" type="button">清空</button>
+              </div>
+            </div>
+            <div class="stream-output" id="stream-output"></div>
+          </section>
+
           <!-- 7. 最近事件时间线 -->
           <section class="dash-block" id="events-section">
             <div class="block-head">

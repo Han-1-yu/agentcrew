@@ -1,0 +1,34 @@
+/* 实时流式输出面板（R40 agent_stream_delta）。 */
+
+.stream-tools { display: flex; align-items: center; gap: var(--sp-2); }
+
+.stream-live {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: var(--fs-xs); color: var(--text-ter);
+}
+.stream-live::before {
+  content: ''; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--text-ter); opacity: 0.6;
+}
+.stream-live:not(:empty) { color: var(--text-sub); }
+#stream-section:not(.hidden) .stream-live::before {
+  background: var(--accent); opacity: 1;
+}
+
+.stream-output {
+  max-height: 260px; overflow-y: auto;
+  padding: var(--sp-2) 12px;
+  border: 1px solid var(--border-weak); border-radius: var(--r-md, 8px);
+  background: var(--bg-inset);
+  font-family: var(--font-mono); font-size: var(--fs-xs);
+  line-height: 1.65; color: var(--text);
+  white-space: pre-wrap; word-break: break-word;
+}
+
+.stream-task-head {
+  margin: 10px 0 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-weak);
+  color: var(--text-ter); font-family: var(--font-ui); font-size: var(--fs-xs);
+}
+.stream-task-head:first-child { margin-top: 0; padding-top: 0; border-top: 0; }

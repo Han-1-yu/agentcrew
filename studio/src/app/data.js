@@ -4,8 +4,11 @@
 import { h, s } from '../lib/dom.js';
 import { S } from '../lib/store.js';
 
-import { nowTs } from './mock.js';
+import { nowTs, stopSim } from './mock.js';
 import { connectSSE, resetRealtime } from './realtime.js';
+
+/* 快速连点两个 run 时，旧 loadRealRun 的异步续体不能覆盖新 run 的状态。 */
+let loadSeq = 0;
 /* 将真实 task（tasks.json）映射为渲染层期望的格式 */
 function mapRealTask(t) {
   const status = t.status || 'pending';
@@ -111,17 +114,23 @@ function enrichRun(run) {
 
 /* 加载真实 run 数据并启动 watch */
 async function loadRealRun(dir) {
+  const my = ++loadSeq;
+  // 从「无 run 的演示模式」启动第一个真实运行时，2.5s 的 mock 推演定时器
+  // 还在跑，会按演示逻辑改写真实任务状态、伪造事件。进真实模式前必须停掉。
+  stopSim();
   // 换 run（或重刷）前先收掉上一条实时通道：否则旧 SSE 仍往 S.dash.events
   // 推事件，500ms 的快照防抖定时器也可能用旧 watchDir 覆盖新数据。
   resetRealtime();
   try {
     const snap = await window.studio.loadRun(dir);
+    if (my !== loadSeq) return false;
     if (!snap || !snap.run) return false;
     const tasks = (snap.tasks || []).map(mapRealTask);
     // 加载 ledger 历史
     let events = [];
     try {
       const h = await window.studio.ledgerHistory(dir, 300);
+      if (my !== loadSeq) return false;
       events = (h && h.events) || [];
     } catch {}
     S.dash = {
@@ -140,10 +149,13 @@ async function loadRealRun(dir) {
     // 被下面的 catch 吞掉后表现为「切换失败」。用纯字符串取目录名兜底。
     const fallbackId = String(dir).split(/[\\/]/).filter(Boolean).pop() || String(dir);
     const runId = snap.run.run_id || fallbackId;
-    if (!connectSSE(runId)) {
+    // connectSSE 现在是异步的：只有主进程真的拿到 200 响应头才算连上，
+    // 401 / 连接失败一律回退文件 watch（旧实现恒返回 true，实时刷新会全静止）。
+    if (!(await connectSSE(runId))) {
+      if (my !== loadSeq) return false;
       try { await window.studio.watchRun(dir, true); } catch {}
     }
-    return true;
+    return my === loadSeq;
   } catch (e) {
     console.error('loadRealRun failed', e);
     return false;

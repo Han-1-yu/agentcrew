@@ -31,7 +31,8 @@ function currentProfile(data, role) {
 
 /** 把 HTTP 错误翻成"用户下一步该做什么"。 */
 function explain(e, label) {
-  if (e.code === 'NO_API') return ['未连接后端：先启动 python main.py serve 并在设置里填地址', 'warn'];
+  if (e.code === 'NO_API') return [`未连接后端：先启动 python main.py serve 并在设置里填地址${e.detail ? `（${e.detail}）` : ''}`, 'warn'];
+  if (e.code === 'TRANSPORT') return ['主进程代理不可用：请重启 Studio', 'err'];
   if (e.code === 'HTTP_409') return ['该 run 不在运行中：用 CLI switch 写入后 resume', 'warn'];
   if (e.code === 'HTTP_400') return [e.detail || `后端拒绝：${label || '该操作'} 不被接受`, 'err'];
   return [`请求失败：${e.detail || e.message}`, 'err'];

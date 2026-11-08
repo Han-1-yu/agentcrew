@@ -31,7 +31,12 @@ function switchNav(key){
   // 无论去哪一页都先清空占位区：dashboard 分支此前只加 .hidden，上一页的
   // 监听器与 DOM 会一直挂到下次切换，行为与其余分支不一致。
   ph.innerHTML='';
-  if(key==='dashboard'){ ph.classList.add('hidden'); dash.classList.remove('hidden'); return; }
+  if(key==='dashboard'){
+    ph.classList.add('hidden'); dash.classList.remove('hidden');
+    // 隐藏期间实时通道跳过了全量重绘，切回来必须补一次，否则看到旧 DOM。
+    window.dispatchEvent(new Event('studio:dashboard-show'));
+    return;
+  }
   dash.classList.add('hidden'); ph.classList.remove('hidden');
   // 统一的无运行数据态：8 个页面都直接读 S.dash.tasks / S.dash.run，为空时
   // 逐页抛 TypeError。给一个明确的空态 + 启动入口，而不是空白页或报错。

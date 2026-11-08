@@ -83,7 +83,12 @@ function renderRunStatusBar() {
   host.innerHTML='';
   host.appendChild(h('div',{},
     h('div',{class:'rs-top'},
-      h('span',{class:'rs-id',title:'点击复制 Run ID',onclick:(e)=>{navigator.clipboard.writeText(run.run_id);toast('success','已复制',run.run_id);}},run.run_id),
+      h('span',{class:'rs-id',title:'点击复制 Run ID',onclick:async()=>{
+        // writeText 返回 Promise：不 await 会「报成功但没复制」，还会触发全局
+        // unhandledrejection（file:// 下 navigator.clipboard 也可能不存在）。
+        try { await navigator.clipboard.writeText(run.run_id); toast('success','已复制',run.run_id); }
+        catch { toast('error','复制失败','请手动选择文本复制'); }
+      }},run.run_id),
       h('span',{class:'rs-goal',title:run.project_goal}, simplifyGoal(run.project_goal)),
       h('div',{class:'rs-stage-seg'}, PHASES.map((p,i)=>h('button',{class:(['planning','execution','delivery'][i])===run.phase?'on':'',disabled:true},p))),
       h('span',{class:`rs-status-chip ${meta.chip}`}, h('span',{class:`dot ${meta.dot}`}), meta.label)),

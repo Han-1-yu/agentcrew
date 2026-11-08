@@ -12,36 +12,43 @@ import { readNumber, readUrl, showFieldError } from '../../lib/validate.js';
  * 返回 ``{ values, error }``：数值与 URL 统一走 lib/validate，非法时**不保存**
  * 并把错误回报给调用方（此前负数 / Infinity / 随便一个字符串都会直接落盘，
  * 之后所有 fetch 与 SSE 才开始莫名其妙地失败）。
+ *
+ * 整段包 try：某个分组渲染异常时，保存按钮不该抛成全局「未处理异常」toast，
+ * 而应给出可读的错误并放弃本次写入。
  */
 function collectSettings(cfg) {
-  const maxCostEl = $('#set-maxcost');
-  const ttlEl = $('#set-affinity-ttl');
-  const apiEl = $('#set-api');
-  const cost = readNumber(maxCostEl,
-    { min: 0, max: 1000000, fallback: 0, label: '预算上限' });
-  const ttl = readNumber(ttlEl,
-    { min: 1, max: 30, integer: true, fallback: 7, label: '亲和 TTL' });
-  const api = readUrl(apiEl, { label: '后端 API 地址' });
-  showFieldError(maxCostEl, null, cost.error);
-  showFieldError(ttlEl, null, ttl.error);
-  showFieldError(apiEl, null, api.error);
-  const values = {
-    pythonCmd: $('#set-python').value.trim() || 'python',
-    outputDir: $('#set-output').value.trim(),
-    defaultModel: $('#set-model-custom').value.trim() || $('#set-model').value.trim(),
-    maxCostUsd: cost.value,
-    apiBaseUrl: api.value,
-    // V7 网关高级功能
-    redactEnabled: $('#set-redact-enabled').checked,
-    redactApiKeys: $('#set-redact-apikeys').checked,
-    redactPii: $('#set-redact-pii').checked,
-    redactCredentials: $('#set-redact-creds').checked,
-    redactCustomWords: $('#set-redact-custom').value.trim(),
-    routingStrategy: cfg.routingStrategy || 'weighted',
-    affinityMode: cfg.affinityMode || 'off',
-    affinityTtlDays: ttl.value,
-  };
-  return { values, error: cost.error || ttl.error || api.error };
+  try {
+    const maxCostEl = $('#set-maxcost');
+    const ttlEl = $('#set-affinity-ttl');
+    const apiEl = $('#set-api');
+    const cost = readNumber(maxCostEl,
+      { min: 0, max: 1000000, fallback: 0, label: '预算上限' });
+    const ttl = readNumber(ttlEl,
+      { min: 1, max: 30, integer: true, fallback: 7, label: '亲和 TTL' });
+    const api = readUrl(apiEl, { label: '后端 API 地址' });
+    showFieldError(maxCostEl, null, cost.error);
+    showFieldError(ttlEl, null, ttl.error);
+    showFieldError(apiEl, null, api.error);
+    const values = {
+      pythonCmd: $('#set-python').value.trim() || 'python',
+      outputDir: $('#set-output').value.trim(),
+      defaultModel: $('#set-model-custom').value.trim() || $('#set-model').value.trim(),
+      maxCostUsd: cost.value,
+      apiBaseUrl: api.value,
+      // V7 网关高级功能
+      redactEnabled: $('#set-redact-enabled').checked,
+      redactApiKeys: $('#set-redact-apikeys').checked,
+      redactPii: $('#set-redact-pii').checked,
+      redactCredentials: $('#set-redact-creds').checked,
+      redactCustomWords: $('#set-redact-custom').value.trim(),
+      routingStrategy: (cfg && cfg.routingStrategy) || 'weighted',
+      affinityMode: (cfg && cfg.affinityMode) || 'off',
+      affinityTtlDays: ttl.value,
+    };
+    return { values, error: cost.error || ttl.error || api.error };
+  } catch (e) {
+    return { values: {}, error: `设置读取失败：${String((e && e.message) || e)}` };
+  }
 }
 
 export { collectSettings };

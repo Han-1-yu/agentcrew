@@ -53,11 +53,22 @@ Electron userData 目录的 `settings.json`，可在「设置」里手动修改�
 ## 自测
 
 ```bash
-npm run check      # 结构护栏：分层、导入完整性、单文件体量、入口收敛（秒级，无需 GUI）
-npm run e2e        # 端到端：9 页导航 / 详情 / 运行切换 / 新建运行 / 成本 / 供应商全链路（28 项）
-npm run selftest   # 真实 UI 驱动一次 --mock 运行：列表 → 看板 → 事件 → 产物 → 设置 → 启动/取消（16 项）
-npm run visual     # 视觉回归：把 e2e 的 16 张截图与本机基线比对（版式/配色变了会失败）
+npm run check        # 结构护栏：分层、导入完整性、单文件体量、入口收敛（秒级，无需 GUI）
+npm run e2e          # 端到端：9 页导航 / 详情 / 运行切换 / 新建运行 / 成本 / 供应商全链路（28 项）
+npm run selftest     # 真实 UI 驱动一次 --mock 运行：列表 → 看板 → 事件 → 产物 → 设置 → 启动/取消（16 项）
+npm run verify:api          # 后端 API 代理：认证头注入 + SSE 命名帧解析（8 项，无需 GUI / 无需真后端）
+npm run verify:transitions  # 状态切换：演示→真实运行 / 快速连点切 run / 单通道纪律（11 项）
+npm run visual              # 视觉回归：把 e2e 的 16 张截图与本机基线比对（版式/配色变了会失败）
 ```
+
+`verify:api` 自带一个要求 Bearer 认证的假后端，覆盖的是**可选的 HTTP API 通道**（e2e / selftest
+都跑在默认的「CLI + 文件监听」路径上，碰不到它）。若宿主环境注入了 `ELECTRON_RUN_AS_NODE=1`，
+Electron 会退化成纯 Node 并在 `main.js` 报 `app.getPath undefined`——先清掉该变量再跑任何 Electron 脚本。
+
+**连接后端 serve**：在「设置 → 连接」填 API 地址，并保存 `serve` 的 API Key（R36 起认证默认强制开启，
+没有 Key 的请求一律 401）。Key 用系统安全存储加密后只放主进程，不进 `settings.json`、不回显。
+所有 HTTP / SSE 请求由主进程 `net.fetch` 代理（后端没有 CORS 头，渲染进程直连会被浏览器拦下）；
+SSE 也走代理，因为原生 `EventSource` 无法携带 `Authorization` 头。SSE 连不上时自动回退文件监听。
 
 视觉基线依赖本机 DPI 与字体，因此 `visual-baseline/` 不入库：**首次** `npm run visual:update` 建立本机基线，
 之后改样式跑 `npm run e2e && npm run visual` 即可发现"顺手改坏了别的页面"。实测：把强调色从铜换成蓝，16 张里 9 张会被拦下
@@ -69,19 +80,20 @@ npm run visual     # 视觉回归：把 e2e 的 16 张截图与本机基线比�
 
 ```
 studio/
-├── package.json          # 依赖只有 electron；scripts: start / check / e2e / selftest
+├── package.json          # 依赖只有 electron；scripts: start / check / e2e / selftest / verify:api / visual
 ├── main.js               # 主进程：设置、Python 探测、run 扫描、CLI 子进程、ledger 轮询、IPC
-├── preload.js            # contextBridge 暴露 window.studio（约 35 个通道）
+├── backend-api.js        # 主进程后端 API 代理：认证头注入 + SSE 帧解析（绕开 CORS）
+├── preload.js            # contextBridge 暴露 window.studio（IPC 通道）
 ├── index.html            # 窗口骨架：只引 styles/index.css 与 src/app/boot.js
 ├── src/
 │   ├── contracts/        # 契约：enums（状态/角色/事件元数据）、providers（内置供应商目录）
 │   ├── lib/              # 通用能力：dom（h/s/$/$$）、format（数字/时间/字节）、store（全局状态）、api（本机 HTTP）
 │   ├── ui/               # 原子组件：toast、modal、icons
 │   ├── app/              # 装配层：boot（启动）、router（导航）、shell（顶栏/主题/快捷键）、
-│   │   └── mock/         #   realtime（SSE + 文件监听）、data（真实数据适配）
+│   │   └── mock/         #   realtime（命名事件 SSE + 文件监听）、data（真实数据适配）
 │   │                     #   mock.js 是对外入口，fixtures（假快照）/ simulator（状态推演）在内部分工
 │   └── features/         # 按域拆分的功能页
-│       ├── dashboard/    #   看板：index（组合）、dag（依赖图）、status-bar / agents / gates / cost / events
+│       ├── dashboard/    #   看板：index（组合）、dag（依赖图）、status-bar / agents / gates / cost / events / stream（流式正文）
 │       ├── detail/       #   右侧详情抽屉（任务 / Agent）
 │       ├── providers/    #   供应商页：index、card、forms、modals、models（切换器）
 │       ├── settings/     #   设置页 + 配额弹窗
@@ -94,7 +106,8 @@ studio/
 │   ├── components/       #   按钮、区块、状态条、成本、DAG、Agent、门禁、事件、详情、模态、Toast、空态
 │   └── features/         #   各功能页样式（providers / settings / events / plan / artifacts …）
 ├── tools/
-│   └── check-architecture.js  # npm run check：结构护栏
+│   ├── check-architecture.js  # npm run check：结构护栏
+│   └── verify-api-bridge.js   # npm run verify:api：API 代理 + SSE 帧解析（自带假后端）
 ├── zip.js                # 纯 JS ZIP（STORE）导出
 ├── e2e.js / selftest.js  # 自动化测试驱动（--e2e / --selftest 时加载）
 ├── e2e-out/  selftest/   # 测试产物（截图 + results.json，gitignore）
