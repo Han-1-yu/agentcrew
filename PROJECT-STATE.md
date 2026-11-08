@@ -1475,6 +1475,24 @@ api_server / crew` **124 例**全过；`ruff` 全绿。
 `test_sdk.py` 34 例全过；`scripts/test.py --coverage -k test_stream_delta` 全流程
 （combine → report → 阈值判定）通过。`ruff` 全绿。
 
+### 3.55 R42：uv lock + Windows CI（P1「环境重建 + uv lock + windows CI」收尾）（2026-11-09）
+
+方案 P1 的最后一组。此前卡在「本机无 uv」，现在 `pip install uv` 后落地：
+
+| 件 | 内容 |
+|---|---|
+| 依赖声明 | `pyproject.toml` 补 `[project].dependencies`（6 个运行时）与 `[dependency-groups].dev`（pytest / pytest-asyncio / pytest-cov / ruff==0.17.3 / mypy==2.4.1）；与 `requirements.txt` 保持同一份清单 |
+| 锁文件 | `uv lock` 生成 `uv.lock`（46 包，1548 行），`uv lock --check` 通过 |
+| Windows CI | `ci.yml` 加 `windows` job：`astral-sh/setup-uv` + `uv lock --check` + `uv sync --all-groups` + `uv run ruff` + `uv run pytest`（Python 3.12）。与既有 ubuntu 的「单进程 pytest -q」互补：本机用分批跑器，CI 用单进程 |
+| 一致性测试 | `tests/test_config.py` +2：`test_runtime_deps_match_between_pyproject_and_requirements`（两处声明不一致 CI 必红）、`test_uv_lock_exists`（锁文件已提交） |
+
+**为什么 CI 里 Windows 用 uv、ubuntu 仍用 pip**：ubuntu 那条要的是「requirements.txt
+路径 + 多 Python 版本矩阵」；Windows 这条要的是「锁文件可复现 + 本项目实际运行的平台
+单进程也能绿」。两条各验一条依赖路径，改依赖时任何一处不一致都会红。
+
+**验证**：`uv lock --check` 通过；`test_config.py` 32 例（+2）；`ci.yml` YAML 解析通过。
+`ruff` 全绿。`uv` / `uv.lock` 均已纳入，未在 CI 实跑（本地无 GitHub Actions runner）。
+
 ---
 ## 4. 历史报告汇总（已并入本文，原文归档）
 

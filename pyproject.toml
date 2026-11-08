@@ -3,6 +3,25 @@ name = "agentcrew"
 version = "1.0.0"
 description = "多智能体协作平台：项目经理调度 8 个专职 Agent 完成从需求到交付的全流程"
 requires-python = ">=3.10"   # 与设计规格 §1 的目标运行时一致
+# 与 requirements.txt 保持同一份清单：pip 路径读 requirements.txt，uv 路径读这里。
+# 改依赖必须两处同步改（CI 会分别用 pip 与 uv 各跑一遍，不一致立刻红）。
+dependencies = [
+    "openai>=1.40.0",        # 同时用于 OpenAI 兼容端点（豆包/通义/DeepSeek/Ollama）
+    "anthropic>=0.34.0",     # Anthropic 原生 Messages API
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.7.0",
+    "rich>=13.7.0",
+    "PyYAML>=6.0.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=7.0.0",
+    "ruff==0.17.3",
+    "mypy==2.4.1",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

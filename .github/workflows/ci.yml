@@ -55,3 +55,31 @@ jobs:
           # 测试使用 mock provider，不需要任何 API key。
           # conftest.py 的 autouse 夹具会中和 .env 对测试的影响。
           AGENTCREW_MOCK: "true"
+
+  # 本项目的开发与排障都在 Windows 上进行（本机跑器 scripts/test.py 就是为 Windows
+  # 的随机崩溃而写）。这条 job 用 uv + uv.lock 验证「锁文件可复现」且 Windows 下
+  # 单进程 pytest 也能跑绿——与本机「分批隔离」互补：本机用跑器，CI 用单进程。
+  windows:
+    name: "Windows · Python 3.12 (uv)"
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify lockfile is current
+        run: uv lock --check
+
+      - name: Install (uv sync)
+        run: uv sync --all-groups
+
+      - name: ruff
+        run: uv run ruff check .
+
+      - name: pytest
+        run: uv run pytest -q
+        env:
+          AGENTCREW_MOCK: "true"

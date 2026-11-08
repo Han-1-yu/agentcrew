@@ -102,6 +102,8 @@ AgentCrew 把一次交付拆成**两个阶段**：
 ```bash
 # 1. 安装依赖（运行与测试都在这份清单里）
 pip install -r requirements.txt
+#    或走 uv（锁文件 uv.lock 已提交，可复现）：
+#    uv sync --all-groups
 
 # 2. 配置模型 Key（Windows cmd / PowerShell 用 copy .env.example .env）
 cp .env.example .env

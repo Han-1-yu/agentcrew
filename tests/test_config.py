@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 import pytest
 import yaml
@@ -401,3 +402,40 @@ def test_config_version_too_high_raises(monkeypatch, tmp_path):
 def test_config_version_default_is_1(monkeypatch, tmp_path):
     _yaml_config(monkeypatch, tmp_path, {})
     assert Settings.load().config_version == 1
+
+
+# ── 依赖清单一致性（R42：pyproject ↔ requirements.txt ↔ uv.lock）──────────
+
+
+def _pyproject_dependency_names() -> set[str]:
+    """从 pyproject.toml 的 ``[project] dependencies`` 里取包名（正则，不依赖 tomllib）。"""
+    import re
+
+    text = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8")
+    block = re.search(r"dependencies = \[(.*?)\]", text, re.S)
+    assert block, "pyproject.toml 里找不到 [project] dependencies 块"
+    return {name for name in re.findall(r'"([A-Za-z0-9_.-]+)', block.group(1))}
+
+
+def _requirements_runtime_names() -> set[str]:
+    """requirements.txt 里「# 测试」标记之前的运行时包名。"""
+    text = (Path(__file__).resolve().parents[1] / "requirements.txt").read_text(encoding="utf-8")
+    runtime = text.split("# 测试", 1)[0]
+    names: set[str] = set()
+    for line in runtime.splitlines():
+        stripped = line.split("#", 1)[0].strip()
+        if not stripped:
+            continue
+        names.add(stripped.split(">=", 1)[0].split("==", 1)[0].split("<", 1)[0].strip())
+    return names
+
+
+def test_runtime_deps_match_between_pyproject_and_requirements():
+    """两处声明必须同一份清单：pip 读 requirements、uv 读 pyproject，不一致 CI 必红。"""
+    assert _pyproject_dependency_names() == _requirements_runtime_names()
+
+
+def test_uv_lock_exists():
+    """uv.lock 已生成且提交（Windows CI 的 `uv lock --check` 依赖它）。"""
+    lock = Path(__file__).resolve().parents[1] / "uv.lock"
+    assert lock.is_file() and lock.stat().st_size > 1000
