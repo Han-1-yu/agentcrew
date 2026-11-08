@@ -93,6 +93,7 @@ class AgentFactory:
         run_id: str = "",
         tool_registry: ToolRegistry | None = None,
         tool_guard: Any | None = None,
+        stream: bool = False,
     ) -> None:
         self._models = models
         self._store = store
@@ -117,6 +118,9 @@ class AgentFactory:
         #: P2-4：工具级 guardrails。``None``（默认 / 未配置规则）时 Agent 侧
         #: 每次工具调用只多一次 ``None`` 判断。
         self._tool_guard = tool_guard
+        #: P3-3：流式开关。``False``（默认）时每个 Agent 走 ``models.call``；
+        #: ``True`` 时走 ``stream_call`` 并记 ``agent_stream_chunk``。
+        self._stream = stream
         #: R5：跨角色咨询路由。``None``（默认）时不检测 ``<message>`` 围栏。
         #: 实际类型要么是二参回调，要么是提供 ``bind()`` 的 PeerRouter（本身
         #: 不可调用），所以按 duck typing 存 ``Any``，由 _bind_router 统一解析。
@@ -476,6 +480,9 @@ class AgentFactory:
             tool_guard=self._tool_guard,
             # R5：对话路由同理——None 时系统提示词里连这段能力都不会出现。
             message_router=self._bind_router(role_key),
+            # P3-3：流式开关。此前 BaseAgent(stream=...) 只有测试在传，生产路径
+            # 永远 False——现在由 Settings.stream 一路下发，成为真能力。
+            stream=self._stream,
         )
         if resolved is not None:
             agent.path_scope = list(resolved.path_scope)

@@ -735,7 +735,9 @@ class Crew:
                 settings=self._settings, run_id=record.run_id,
                 tool_registry=tool_registry,
                 # P2-4：工具级 guardrails（未配置规则时为 None，零开销）。
-                tool_guard=build_tool_guard(self._settings.tool_guards)),
+                tool_guard=build_tool_guard(self._settings.tool_guards),
+                # P3-3：流式开关从配置一路下发（默认 False，与改造前逐字一致）。
+                stream=self._settings.stream),
             base_stats=record.stats.model_copy(deep=True),
             journal=SuperStepJournal(checkpoint.run_dir, ledger),
             tracer=tracer,
@@ -1516,6 +1518,14 @@ class Crew:
         """
         if registry is None or not self._settings.mcp_servers:
             return
+        # G-1：不可信输入预设下不装配任何 MCP 工具——外部子进程谈不上只读，
+        # 挂上去等于在「只读模式」里开一个后门。
+        if self._settings.untrusted_inputs:
+            ledger.emit(
+                "mcp_skipped_untrusted",
+                servers=sorted(self._settings.mcp_servers),
+            )
+            return
         for server, raw in self._settings.mcp_servers.items():
             if not isinstance(raw, Mapping):
                 ledger.emit(
@@ -1730,13 +1740,17 @@ class Crew:
             ListFilesTool(workdir=run_dir),
             GrepTool(workdir=run_dir),
         ]
-        # P1：``run_python`` 默认不进注册表。它有进程内隔离（``-I`` / 裁剪环境 /
-        # cwd 限制 / 超时杀进程），但没有网络与系统调用沙箱——默认打开等于把
-        # 「配置写错」升级成「远程执行面」。需要时用 AGENTCREW_CODE_EXEC_ENABLED
-        # 显式打开，边界写在 docs/OPERATIONS.md。
-        if self._settings.code_exec_enabled:
-            tools.append(RunPythonTool(workdir=run_dir))
-        tools.extend((WriteFileTool(workdir=workspace), WebFetchTool()))
+        # G-1 不可信输入预设：只给只读工具。写工具（write_file / run_python /
+        # web_fetch）一律不下发，code_exec_enabled 在这里也不管用——处理不可信
+        # 第三方文档时，「能读不能写」是提示词注入面前唯一可靠的边界。
+        if not self._settings.untrusted_inputs:
+            # P1：``run_python`` 默认不进注册表。它有进程内隔离（``-I`` / 裁剪
+            # 环境 / cwd 限制 / 超时杀进程），但没有网络与系统调用沙箱——默认
+            # 打开等于把「配置写错」升级成「远程执行面」。需要时用
+            # AGENTCREW_CODE_EXEC_ENABLED 显式打开，边界写在 docs/OPERATIONS.md。
+            if self._settings.code_exec_enabled:
+                tools.append(RunPythonTool(workdir=run_dir))
+            tools.extend((WriteFileTool(workdir=workspace), WebFetchTool()))
         for tool in tools:
             registry.register(tool)
         permissioned: list[str] = []
@@ -1752,6 +1766,7 @@ class Crew:
             tools=[tool.name for tool in registry.list_tools()],
             workspace=workspace.name,
             permissioned_roles=sorted(permissioned),
+            untrusted_inputs=bool(self._settings.untrusted_inputs),
         )
         return registry
 

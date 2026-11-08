@@ -195,6 +195,57 @@ def test_injected_registry_wins_over_disabled_config(tmp_path: Path):
     assert ledger.count("tool_registry_ready") == 0  # 不自动装配、不冒发事件
 
 
+# ── G-1 不可信输入预设：只给只读工具 ──────────────────────────────────
+
+
+def test_untrusted_inputs_limits_registry_to_read_only(tmp_path: Path, monkeypatch):
+    """打开不可信输入后，写/执行/网络工具一律不下发，code_exec 也压不住它。"""
+    monkeypatch.setenv("AGENTCREW_TOOLS_ENABLED", "true")
+    monkeypatch.setenv("AGENTCREW_CODE_EXEC_ENABLED", "true")
+    settings = Settings.load(untrusted_inputs=True)
+    ledger = _ledger(tmp_path)
+    registry = Crew(settings)._build_tool_registry(
+        _stub_checkpoint(tmp_path), ledger
+    )
+    names = [tool.name for tool in registry.list_tools()]
+    assert names == ["read_file", "list_files", "grep"]
+    assert registry.get("run_python") is None
+    assert registry.get("write_file") is None
+    assert registry.get("web_fetch") is None
+    event = list(ledger.events("tool_registry_ready"))[0]
+    assert event.data["untrusted_inputs"] is True
+
+
+def test_untrusted_inputs_default_keeps_write_tools(tmp_path: Path, monkeypatch):
+    """默认关：行为与改造前一致，写工具照常下发。"""
+    monkeypatch.setenv("AGENTCREW_TOOLS_ENABLED", "true")
+    settings = Settings.load()
+    registry = Crew(settings)._build_tool_registry(
+        _stub_checkpoint(tmp_path), _ledger(tmp_path)
+    )
+    names = [tool.name for tool in registry.list_tools()]
+    assert "write_file" in names and "web_fetch" in names
+
+
+@pytest.mark.asyncio
+async def test_untrusted_inputs_skips_mcp_tools(tmp_path: Path, monkeypatch):
+    """不可信输入下 MCP 工具一个都不挂：外部子进程谈不上只读。"""
+    monkeypatch.setenv("AGENTCREW_TOOLS_ENABLED", "true")
+    settings = Settings.load(
+        untrusted_inputs=True,
+        mcp_servers={"gh": {"command": ["nope"], "transport": "stdio"}},
+    )
+    ledger = _ledger(tmp_path)
+    crew = Crew(settings)
+    registry = crew._build_tool_registry(_stub_checkpoint(tmp_path), ledger)
+    before = len(registry.list_tools())
+    await crew._attach_mcp_tools(registry, ledger)
+    assert len(registry.list_tools()) == before          # 没多任何工具
+    skipped = list(ledger.events("mcp_skipped_untrusted"))
+    assert len(skipped) == 1
+    assert skipped[0].data["servers"] == ["gh"]
+
+
 # ── AgentFactory 下发 ──────────────────────────────────────────────────
 
 def _factory(tmp_path: Path, settings: Settings, registry: ToolRegistry | None):

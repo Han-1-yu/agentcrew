@@ -341,6 +341,7 @@ G-2 配置即 RCE、G-9 `run_python` 无隔离这三条，是部署方必须自�
 | `run_python` | **默认不注册**（`code_exec_enabled=false`）。打开后有：`-I` 隔离模式、裁剪环境变量（只留 PATH/SYSTEMROOT/TEMP/TMP/PYTHONIOENCODING）、`cwd` 锁在 run 目录、默认 10s 超时并杀进程。**没有**的：网络隔离、CPU/内存上限、系统调用沙箱——代码可以出网。容器级隔离（Docker/gVisor）属 P3，需要时自行在前面套一层 |
 | 工具试跑 | `POST /tools/{name}/test` 与 `main.py tool` 与 run 内注册表同一口径：`code_exec_enabled=false` 时 `run_python` 不在清单里，也跑不了——调试入口不是绕过开关的后门 |
 | 工具 guardrails | `agentcrew.yaml` 的 `tool_guards:` 段按正则/长度在**工具执行前**拦截（`phase: input`）或在**结果回灌前**遮掉泄漏（`phase: output`）。`block` 的工具一次都不执行，原因回灌给模型；命中记 `tool_guard_triggered`。规则在配置加载期校验（正则写错、action 拼错、缺 `pattern`/`max_length` 都直接退 3） |
+| 不可信输入 | `AGENTCREW_UNTRUSTED_INPUTS=true`（或 YAML `untrusted_inputs`）时，run 内工具表**只保留只读工具**（`read_file`/`list_files`/`grep`），`write_file`/`run_python`/`web_fetch` 一律不下发，`mcp_servers` 全跳过（记 `mcp_skipped_untrusted`）。处理第三方文档 / 网页时用它兜住提示词注入（G-1） |
 | 路径解析 | 授权与分发共用一份规范路径（`api/paths.py`）：先解码一次再匹配，`%2f`/`%5c`/`%00`/`..` 一律 400。此前两侧各解一次，`/%6beys` 能绕过作用域检查 |
 | SSE | 事件按 `run_id` 分桶：订阅 `/runs/{id}/events` 只收本 run 的事件（无 `run_id` 的服务级事件仍广播） |
 | MCP | 连接的是外部子进程 / 外部服务，命令与 URL 来自配置；`tools_enabled=false` 时零子进程、零网络。`http` 传输按官方 streamable HTTP 处理会话与协议版本，且**只支持 `http://`**（TLS 由反代终止）；单次响应有 8 MiB / 1000 事件上限 |

@@ -2279,6 +2279,8 @@ models:
 | `AGENTCREW_API_RATE_LIMIT_MAX` | `100` | 滑动窗口内每 IP 最大请求数 |
 | `AGENTCREW_TOOLS_ENABLED` | `false` | R3：把 6 个内置工具接进真实 run 的 ReAct 循环（见「R3 能力完善」） |
 | `AGENTCREW_CODE_EXEC_ENABLED` | `false` | P1：是否把 `run_python` 注册进 run（无网络/系统沙箱，见 `docs/OPERATIONS.md` §3.3） |
+| `AGENTCREW_STREAM` | `false` | P3-3：Agent 走流式 LLM 路径（逐块记 `agent_stream_chunk`；默认关，实时性需要时开） |
+| `AGENTCREW_UNTRUSTED_INPUTS` | `false` | G-1：不可信输入预设——只给只读工具（read_file/list_files/grep），不挂 MCP |
 | `AGENTCREW_OTEL_ENABLED` | `false` | P2-3：每次 run 导出一条 OTel trace（`gen_ai.*` 语义 + OTLP/HTTP JSON，零依赖） |
 | `AGENTCREW_OTEL_CAPTURE_CONTENT` | `false` | P2-3：是否采集 prompt/completion 内容（默认不采，含源码与用户数据） |
 | `AGENTCREW_ENTITY_MEMORY_ENABLED` | `false` | R3：跨 run 实体记忆的沉淀与规划注入 |

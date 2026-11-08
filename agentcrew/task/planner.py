@@ -292,6 +292,14 @@ _EXPLAIN_VERB_OBJECTS = (
 #: 这类要求由代码本身就能满足，不该逼着任务额外交一份 markdown。
 _IN_CODE_DOC_HINTS = ("docstring", "注释", "代码内", "行内")
 
+#: 「说明」只有在这种语境下才表示「要产出一份文档」：
+#: 前面跟着一个产出动作（提供/编写/给出/输出…），或本身就是句尾的交付物名词。
+#: 反例（都不算）：「需求说明中约定」= 引用目标里已有的需求文本；「说明参数」= 动词。
+_DOC_PRODUCTION_VERBS = (
+    "提供", "给出", "写出", "编写", "撰写", "附上", "附带", "输出", "补充",
+    "包含", "生成", "添加", "增加", "整理",
+)
+
 #: 能充当「文档」的产物类型。
 _DOC_ARTIFACT_KINDS = frozenset({"markdown", "text", "html"})
 
@@ -305,30 +313,58 @@ _NOT_A_DOCUMENT = (
 )
 
 
+def _shuoming_is_doc_demand(text: str, idx: int) -> bool:
+    """「说明」在 ``idx`` 处出现时，它是不是在要求一份文档。
+
+    三个否：①后接宾语是动词（说明参数/说明返回值）；②前面有产出动词但「说明」
+    是「需求说明」「规格说明」这类**引用既有上下文**的名词；③后面紧跟「中/里」
+    表示「按照说明……」（引用，不是产出）。只有「产出动词 + 说明」或「句尾的
+    说明」才判真。
+    """
+    tail = text[idx + 2: idx + 2 + 4]
+    if any(tail.startswith(obj) for obj in _EXPLAIN_VERB_OBJECTS):
+        return False
+    after = text[idx + 2:]
+    if not after or after[0] in "，。；：、,;:\n":
+        return True
+    # 「需求说明」「规格说明」「任务说明」是引用上下文；「说明中/里约定」同。
+    window_before = text[max(0, idx - 4): idx]
+    if window_before.endswith(("需求", "规格", "任务", "目标")) and             (after[0] in "中里" or after[:2] in ("约定", "要求", "规定")):
+        return False
+    if after[0] in "中里":
+        return False
+    window = text[max(0, idx - 6): idx]
+    return any(verb in window for verb in _DOC_PRODUCTION_VERBS)
+
+
 def _demands_document(criterion: str) -> str | None:
     """这条验收标准是否在**要求一份文档**？返回命中的关键词，否则 ``None``。
 
-    比裸子串匹配多做两件事，都是被真实运行逼出来的：
+    比裸子串匹配多做的判断，全是被真实运行逼出来的：
 
-    1. ``说明`` 作动词时跳过（后接 ``参数`` / ``返回值`` / ``用法`` …）——
-       「docstring 说明参数与返回值」是要代码内的注释，不是要一份 markdown；
-    2. 标准里出现 ``docstring`` / ``注释`` 时跳过——这类要求代码本身即可满足。
+    - 标准里出现 ``docstring`` / ``注释`` 时跳过——代码内说明由代码本身满足；
+    - 「说明」作动词（说明参数/说明返回值）时跳过；
+    - 「需求说明」「规格说明」或「说明中/里约定」是**引用既有需求文本**，跳过；
+    - 只有「产出动词 + 说明」或「句尾的说明」才算要求文档。
 
-    其余关键词（``文档`` / ``手册`` / ``指南`` / ``readme`` …）没有这种动宾歧义，
-    仍是直接命中。
+    其余关键词（``文档`` / ``手册`` / ``指南`` / ``readme`` …）没有这种歧义，直接命中。
     """
     lowered = criterion.lower()
     if any(hint in lowered for hint in _IN_CODE_DOC_HINTS):
         return None
     for word in _DOC_DEMANDING_KEYWORDS:
-        start = lowered.find(word)
-        while start != -1:
-            if word != "说明":
+        if word != "说明":
+            if word in lowered:
                 return word
-            tail = lowered[start + len(word): start + len(word) + 4]
-            if not any(tail.startswith(obj) for obj in _EXPLAIN_VERB_OBJECTS):
+            continue
+        start = 0
+        while True:
+            idx = lowered.find(word, start)
+            if idx == -1:
+                break
+            if _shuoming_is_doc_demand(lowered, idx):
                 return word
-            start = lowered.find(word, start + 1)
+            start = idx + 1
     return None
 
 

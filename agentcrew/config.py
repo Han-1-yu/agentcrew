@@ -46,6 +46,8 @@ _ENV_TO_FIELD: dict[str, str] = {
     "AGENTCREW_OUTPUT_DIR": "output_dir",
     "AGENTCREW_LOG_LEVEL": "log_level",
     "AGENTCREW_MOCK": "mock",
+    "AGENTCREW_STREAM": "stream",
+    "AGENTCREW_UNTRUSTED_INPUTS": "untrusted_inputs",
     "AGENTCREW_MOCK_LATENCY_MS": "mock_latency_ms",
     "AGENTCREW_REVIEW_SCORE_THRESHOLD": "review_score_threshold",
     "AGENTCREW_MAX_COST_USD": "max_cost_usd",
@@ -106,6 +108,11 @@ _YAML_SCALAR_KEYS = (
     # R3：两个能力开关都是顶层标量，走与 max_concurrency 同一条读取/合并路径。
     "tools_enabled", "code_exec_enabled", "entity_memory_enabled",
     "approval_mode",
+    # P3-3：流式开关（默认关）。此前 ``BaseAgent(stream=...)`` 只有测试在传，
+    # 生产 run 路径没有任何入口能打开它——等于一个「测过但从未跑过」的能力。
+    "stream",
+    # 不可信输入预设（G-1）：处理第三方文档时只给只读工具。
+    "untrusted_inputs",
     # P2-3：OTel GenAI 导出（默认关；开关与端点都是运维显式决定）。
     "otel_enabled", "otel_endpoint", "otel_service_name",
     "otel_capture_content",
@@ -788,6 +795,36 @@ class Settings(BaseModel):
       并且**只有此时**才有该能力，边界写在 ``docs/OPERATIONS.md``。
 
     真正的容器级沙箱（Docker / gVisor）是 P3 的事，不在这一步假装做到。
+    """
+
+    stream: bool = False
+    """是否让 Agent 走流式 LLM 路径（默认**关闭**，P3-3）。
+
+    开启后 ``BaseAgent`` 经 ``models.stream_call`` 逐块消费补全，每个增量块记一条
+    ``agent_stream_chunk`` ledger 事件。此前这个参数只在单测里被直接传给
+    ``BaseAgent``，生产 run 没有任何配置入口能打开它；现在补成一等配置：
+    ``AGENTCREW_STREAM=true`` 或 YAML 顶层 ``stream: true``，经
+    :class:`~agentcrew.agents.registry.AgentFactory` 下发给每个 agent。
+
+    流式与原生工具调用不冲突（P2-6 已让流式解析 ``delta.tool_calls``），但流式会
+    让每个任务多出 ``agent_stream_chunk`` 事件，审计体积与前端刷新频率随之上升——
+    所以默认关，需要实时性时再开。
+    """
+
+    untrusted_inputs: bool = False
+    """不可信输入预设（默认**关闭**，对应 `THREAT_MODEL.md` 的 G-1 补偿措施）。
+
+    提示词注入无法根除：当 run 要读**不可信第三方**提供的文档 / 网页时，模型可能
+    被内容诱导调用写工具（改文件、外发数据）。这一项是「场景化收口」——打开后，
+    run 的工具注册表**只保留只读工具**（``read_file`` / ``list_files`` / ``grep``），
+    且**不装配任何 MCP 工具**：
+
+    - ``write_file`` / ``run_python`` / ``web_fetch`` 一律不下发（无视
+      ``code_exec_enabled`` —— 只读模式优先）；
+    - ``mcp_servers`` 里声明的外部工具同样跳过（外部子进程谈不上只读）。
+
+    只作用于 run 内注册表；工具实验台 / ``main.py tool`` 是**管理员显式动作**，
+    不受此开关约束。环境变量 ``AGENTCREW_UNTRUSTED_INPUTS`` 或 YAML 顶层同名键。
     """
     approval_timeout_seconds: int = 0
     """R30：审批单等待窗口（秒）；``0`` = 永不超时（默认，与 R30 之前一致）。

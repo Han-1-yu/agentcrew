@@ -447,6 +447,28 @@ def test_explain_as_verb_is_not_a_document_demand(catalog):
         validate_plan([t], catalog)
 
 
+def test_requirement_spec_reference_is_not_a_document_demand(catalog):
+    """「需求说明中约定」/「按需求说明约定」是**引用目标里已有的需求文本**，不是产出文档。
+
+    真实 run 复现：`greet('World') 返回需求说明中约定的问候语` 与
+    `按需求说明约定处理` 都被误判成「要求文档」而整份计划退出码 2——任务是写
+    hello.py，需求说明指的是目标文本本身，不是要额外交一份 markdown。
+    """
+    for criterion in (
+        "hello.py 可被 import，且 greet('World') 返回需求说明中约定的问候语",
+        "对空字符串、None、非字符串输入按需求说明约定处理，不抛出未捕获异常",
+    ):
+        t = _task("T2", [criterion], [_py("hello.py")])
+        validate_plan([t], catalog)
+
+
+def test_production_verb_with_shuoming_still_demands_document(catalog):
+    """产出动词 + 说明 仍是要求文档：编写使用说明 / 提供安装说明。"""
+    t = _task("T1", ["编写使用说明"], [_py("a.py")])
+    with pytest.raises(PlanValidationError):
+        validate_plan([t], catalog)
+
+
 def test_noun_usage_still_demands_document(catalog):
     """收窄不能把原意弄丢：「提供使用说明」仍是要求文档（名词用法，说明在句尾）。"""
     t = _task("T1", ["提供使用说明"], [_py("a.py")])

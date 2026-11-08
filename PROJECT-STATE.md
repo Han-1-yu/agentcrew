@@ -1378,6 +1378,37 @@ healthy）做三档实跑，暴露并修掉一个会拒绝合法计划的误伤�
 | 基线（无工具） | 3 任务 / 10 调用 / $0.01 / 36s；产物 `slugify.py` 自带 pytest **18 例全过**，交互边界（空串/纯中文/多余空白）正确 |
 | 工具链（fence） | 5 任务 / 16 调用 / $0.03；ledger 7 次 `tool_call(mode=fence)` 全成功 |
 | **原生 function calling** | 5 任务 / 30 调用 / $0.04；ledger **60 次 `mode=native`、带真实 `call_id`**——`assistant(tool_calls)` + `role="tool"(tool_call_id)` 回传被 DeepSeek 接受（此前只有单测覆盖，从未对真端点验证） |
+| **流式** | 4 任务 / 11 调用 / $0.01；ledger **3727 个 `agent_stream_chunk`**，产物 `greet('World') → Hello, World!`。此前 `BaseAgent(stream=True)` 只有单测在传，生产无入口（见 §3.51） |
+
+### 3.51 R38：流式补成真配置 + 不可信输入预设 + 计划校验再收窄（2026-11-08）
+
+三件事，前两件是上一轮「下一步建议」的 ①②，第三件是实跑又撞出来的。
+
+**1) 流式从「只有单测传参」补成「可从配置打开」**：查证发现 ``BaseAgent(stream=True)``
+在**生产 run 路径没有任何入口**——`AgentFactory` 不接 `stream`，等于一个「测过但从未
+跑过」的能力。补了 `Settings.stream`（env `AGENTCREW_STREAM` / YAML `stream`），沿
+`Crew → AgentFactory → BaseAgent` 一路下发。`tests/test_stream_config_2026_11_08.py`
+5 例。实跑：4 任务 / 3727 chunk / 产物正确。**附带发现**：流式每块都落一条 ledger
+事件（逐行 fsync），一个 4 任务的小 run 要 1m29s——实时性有了、审计体积也上去了，这
+正是「默认关」的理由。
+
+**2) 不可信输入预设（G-1 的场景化收口）**：`Settings.untrusted_inputs`（env
+`AGENTCREW_UNTRUSTED_INPUTS` / YAML `untrusted_inputs`）。打开后 run 内工具表**只留
+只读工具**（read_file / list_files / grep），`write_file` / `run_python` / `web_fetch`
+一律不下发（`code_exec_enabled` 也压不住），`mcp_servers` 全跳过（记
+`mcp_skipped_untrusted`）。处理不可信第三方文档时，「能读不能写」是提示词注入面前唯一
+可靠的边界。`tests/test_tool_production_wiring.py` +3。威胁模型 G-1 补偿措施、OPERATIONS
+§3.3 边界表、README env 表同步。
+
+**3) 计划校验第 8 条又撞出一种误伤**（第二次，同为「说明」歧义）：这次是
+「greet('World') 返回**需求说明中约定**的问候语」「按需求说明约定处理」——「说明」是
+名词「需求规格」，指目标里已有的需求文本，不是要产出一份文档。第一次修的是动词用法
+（说明参数），这次是「引用既有上下文」。判据升级为：只有「**产出动词**（提供/编写/给出/
+输出…）+ 说明」或「**句尾的说明**」才算要求文档；「需求说明 / 规格说明」或「说明中/里
+约定」都判引用、跳过。`tests/test_planner.py` +2（需求说明引用、产出动词仍拦）。
+
+**验证**：`test_stream_config` 5 例、`test_tool_production_wiring` 22 例（+3）、
+`test_planner` 55 例（+2）全过；`ruff` 全绿。实跑：流式（见上表）全绿。
 
 ---
 ## 4. 历史报告汇总（已并入本文，原文归档）
