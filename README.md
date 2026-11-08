@@ -84,7 +84,7 @@ AgentCrew 把一次交付拆成**两个阶段**：
 | `architect` | 架构师 | 技术选型、模块划分、接口定义 | `docs/architecture.md`、`docs/api-spec.yaml` | project_manager |
 | `backend_dev` | 后端开发工程师 | 业务逻辑、数据模型、API 实现 | `backend/app/` 下的代码（附依赖与运行说明） | architect |
 | `frontend_dev` | 前端开发工程师 | 页面、交互、样式 | `frontend/` 下的 HTML / CSS / JS | architect |
-| `qa_engineer` | 测试工程师 | 测试用例、执行测试、Bug 报告 | `tests/` 下的测试与 `docs/test-report.md` | backend_dev |
+| `qa_engineer` | 测试工程师 | 测试用例、执行测试、Bug 报告 | `tests/` 下的测试与 `docs/TEST-REPORT.md` | backend_dev |
 | `devops_engineer` | 运维工程师 | 部署方案、Docker、CI/CD | `Dockerfile`、`docker-compose.yml`、`docs/deploy.md` | architect |
 | `technical_writer` | 文档工程师 | README、使用文档、接口文档 | `README.md`、`docs/usage.md` | product_manager |
 
@@ -2544,7 +2544,7 @@ CLI `resume` 遇到锁冲突给可读提示（退出码 3），HTTP `POST /runs/
 pip install "ruff==0.17.3" "mypy==2.4.1"   # 与 ci.yml 钉同一版本
 ruff check .                                # 全仓 14 项历史告警清零
 mypy agentcrew/                             # 114 个源文件零错误
-pytest -q                                   # Windows 本机需按 HANDOVER §5.1 分 5 批
+pytest -q                                   # CI 单进程路径；本机用 python scripts/test.py
 ```
 
 Windows 下可直接跑 `scripts/ci-check.ps1`（自动建 `.venv-ci`、装同版本工具）。

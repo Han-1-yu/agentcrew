@@ -492,12 +492,12 @@ python main.py status <最近一次 run_id>
   pip install "ruff==0.17.3" "mypy==2.4.1"   # 与 ci.yml 钉同一版本
   ruff check .
   mypy agentcrew/
-  pytest -q                                  # CI 单进程；本机 Windows 需分 5 批
+  pytest -q                                  # CI 单进程路径；本机用 python scripts/test.py
   ```
 
   `.github/workflows/ci.yml` 在 3.10–3.13 四版本跑同一套检查；Windows 下用
   `scripts/ci-check.ps1`（自动建 `.venv-ci`、装同版本工具）一键复现。本机
-  Windows 全量回归需分 5 批，见 HANDOVER §5.1。
+  Windows 全量回归用 `python scripts/test.py`（崩溃自动重试），见 HANDOVER §5.1。
 
 ---
 
@@ -598,7 +598,8 @@ HTTP 等价物是 `GET /tools` 与 `POST /tools/{name}/test`，看板首页「�
 
 | 现象 | 处理 |
 |---|---|
-| 全量 pytest 偶发 `access violation` / `SystemError: bad format string` | 本机 pytest 在大量用例下的内存问题，**不是回归**；按 HANDOVER §5.1 分 5 批跑（3.12.10 + `--assert=plain`） |
+| 全量 pytest 偶发 `access violation` / `SystemError: bad format string` | 本机 pytest 在大量用例下的内存问题，**不是回归**；用 `python scripts/test.py` 跑全量（崩溃自动重试），见 HANDOVER §5.1 |
+| 崩溃/失败一次一次变（同一批换个文件挂） | 本机进程级随机故障。**判定方法**：单文件重跑能过 = 环境噪音；连续三次都挂在同一用例 = 回归 |
 | `SandboxError: center 规则快照不可用` | 环境问题，命令实际会执行（输出标注 bypassed），重试即可 |
 | `api/server.py` 写入偶发被独占锁 | 用「写临时文件 → `os.replace`」原子替换 |
 | 中文输出乱码 | CLI 入口已包编码安全流；重定向到文件时用 UTF-8 读取 |

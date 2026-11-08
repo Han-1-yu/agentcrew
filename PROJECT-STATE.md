@@ -8,11 +8,11 @@
 
 ## 0. 一句话现状
 
-**引擎与管线健康，无 P0/P1 阻断项。** 全量测试 **2626 passed / 1 skipped / 0 failed**（2627 用例收集，2026-11-07 R25 后分 5 批实测），三个预设样例 100% 通过，真实模型通道可用（`doctor` 6/6 通过）；Studio 架构检查 / e2e 28/28 / selftest 16/16 全绿。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道；R19 给主管审核开了独立、不阻塞的 `suggestions` 建议通道；R20 补上单步/断点调试——每个任务派发前可挂起裁决，第二档功能项全部闭环；R21 给 API 契约装上守卫，openapi.yaml 与代码路由双向锁死、不再漏端点；R22 补上 resume 状态白名单与 MCP 管道显式关闭；R23 产出 2501 用例的模块/场景覆盖矩阵（`docs/TEST-REPORT.md`），验收报告遗留的最后一项小项闭环；R24 补上工具管理页与单工具试跑；R25 把共享 API Key 升级为多用户 RBAC（密钥/角色/作用域/归属/审计）；R26 补上拖拽式可视化编排（画布 + YAML 双向 + 图校验）；R27 给检索加向量通道（混合打分 + 磁盘缓存 + 本地退化）；R28 打通「画布 → run」直通规划；R29 让实体记忆也走向量混合（不加列、不迁移）；R30 给审批单加等待窗口与过期告警；R31 给条件边补否定/兜底写法；R32 把控制台 UI 重构成令牌化 + 明暗主题 + 侧栏布局；R33 把单层主管复核扩成可配的多级链；R34 修好本机测试环境（崩溃隔离跑器，一条命令出可信结论）。
+**引擎与管线健康，无 P0/P1 阻断项。** 全量测试 **2632 passed / 1 skipped / 0 failed**（2633 用例收集，R34 后由 `scripts/test.py` 一次跑出），三个预设样例 100% 通过，真实模型通道可用（`doctor` 6/6 通过）；Studio 架构检查 / e2e 28/28 / selftest 16/16 全绿。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道；R19 给主管审核开了独立、不阻塞的 `suggestions` 建议通道；R20 补上单步/断点调试——每个任务派发前可挂起裁决，第二档功能项全部闭环；R21 给 API 契约装上守卫，openapi.yaml 与代码路由双向锁死、不再漏端点；R22 补上 resume 状态白名单与 MCP 管道显式关闭；R23 产出 2501 用例的模块/场景覆盖矩阵（`docs/TEST-REPORT.md`），验收报告遗留的最后一项小项闭环；R24 补上工具管理页与单工具试跑；R25 把共享 API Key 升级为多用户 RBAC（密钥/角色/作用域/归属/审计）；R26 补上拖拽式可视化编排（画布 + YAML 双向 + 图校验）；R27 给检索加向量通道（混合打分 + 磁盘缓存 + 本地退化）；R28 打通「画布 → run」直通规划；R29 让实体记忆也走向量混合（不加列、不迁移）；R30 给审批单加等待窗口与过期告警；R31 给条件边补否定/兜底写法；R32 把控制台 UI 重构成令牌化 + 明暗主题 + 侧栏布局；R33 把单层主管复核扩成可配的多级链；R34 修好本机测试环境（崩溃隔离跑器，一条命令出可信结论）。
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | 2627 collected / 2626 passed / 1 skipped / 0 failed（3.12.10 + pytest 9.1.1，`--assert=plain`；R4 +38、R5 +16、R6 +21、R7 +14、R8 +9、R9 +6、R10 +13、R11 +17、R12 +21、R13 +12、R14 +12、R15 +18、R16 +34、R17 +24、R18 +10、R19 +5、R20 +17、R21 +24、R22 +10、R23 +0、R24 +19、R25 +26、R26 +25（含契约守卫 5 条新路由探测）、R27 +11、R28 +8、R29 +5、R30 +6、R31 +5、R32 +6、R33 +7、R34 +5，本机断言重写 segfault 后按 §6 分 5 批累计） |
+| 全量测试 | 2633 collected / 2632 passed / 1 skipped / 0 failed（3.12.10 + pytest 9.1.1，`--assert=plain`；R4 +38、R5 +16、R6 +21、R7 +14、R8 +9、R9 +6、R10 +13、R11 +17、R12 +21、R13 +12、R14 +12、R15 +18、R16 +34、R17 +24、R18 +10、R19 +5、R20 +17、R21 +24、R22 +10、R23 +0、R24 +19、R25 +26（含契约守卫 3 条新路由探测，合计 +29）、R26 +25（含契约守卫 5 条新路由探测）、R27 +11、R28 +8、R29 +5、R30 +6、R31 +5、R32 +6、R33 +7、R34 +11，由 `scripts/test.py` 一次跑出（崩溃自动重试）） |
 | 静态检查 | `ruff check .` **全绿**（全仓，14 项历史告警清零）；`mypy agentcrew/` **114 文件零错误**（2.4.1）。CI 等价检查链在本机 3.12 首次跑通 |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
@@ -23,7 +23,7 @@
 
 ```bash
 cd E:/agentcrew
-python -m pytest -q --assert=plain                   # 全量回归（**须用 3.12.10 解释器**，路径见 §6）
+python scripts/test.py                               # 全量回归（崩溃隔离跑器，一条命令；人工分批只作兜底，见 §6）
 python main.py run --sample linear --no-live --auto  # 离线演示（无需 Key；非交互环境须加 --auto）
 AGENTCREW_TOOLS_ENABLED=true python main.py run --sample linear --no-live --auto  # R3：带工具链跑
 python main.py run --sample linear --no-live --gate plan --approval-mode deferred  # R4：跑到审批挂起
@@ -721,7 +721,7 @@ duck-type 对象，字段/getter/setter 放宽为 `Any | None`）· `registry` �
 
 **刻意未做**：3.10 / 3.11 / 3.13 的矩阵**仍需 GitHub Actions 实跑**（本机只有
 3.12.10）；`zip(strict=)` 要求 3.10+，与 `pyproject.toml` 的下界一致。CI 的
-`pytest -q` 是单进程全量，本机 Windows 仍按 §6 分 5 批规避断言重写段错误。
+`pytest -q` 是单进程全量；本机 Windows 用 `python scripts/test.py`（崩溃自动重试），人工分批只作兜底。
 
 **刻意未做（下一轮再定）**：SDK 扩封新端点（契约已由 R21 守卫锁死）·
 异步客户端 · 发布到 PyPI。
@@ -1055,11 +1055,11 @@ R9 遗留「多级主管链（当前只有一层）」。
 2 次）→ 汇总；新增 `--retry-failed N` 把「首次失败、重试通过」与「真失败」分开打印。
 退出码只反映最终结论。
 
-**实测**（`--batch 4 --retry-failed 1`）：2621 passed / 0 failed / 1 skipped，
-其中 8 批靠崩溃重试恢复、4 批首次失败后重试通过（均在报告里列出），**一次命令得到可信
+**实测**（默认 `--batch 4`，崩溃自动重试）：129 个文件 / 33 批 / 约 210s，
+2632 passed / 0 failed / 1 skipped，1 批靠崩溃重试恢复，**一次命令得到可信
 结论**——此前需要人工分 5 批再手工加总。
 
-**验证**：新增 `tests/test_test_runner.py` 5 例（计数解析、环境净化、详情摘取、
+**验证**：新增 `tests/test_test_runner.py` 11 例（计数解析、环境净化、详情摘取、
 文件发现、空输入不乱猜）。
 
 ---
@@ -1118,7 +1118,7 @@ R9 遗留「多级主管链（当前只有一层）」。
 | R19 | 主管 `suggestions` 通道（见 §3.24） | 2449 |
 | R20 | 单步/断点调试（见 §3.25） | 2466 |
 | R21 | API 契约守卫（见 §3.26） | 2490 |
-| R22 | resume 白名单 + MCP 管道关闭（见 §3.27） | **2500（当前）** |
+| R22 | resume 白名单 + MCP 管道关闭（见 §3.27） | 2500 |
 | R23 | 功能测试报告：覆盖矩阵（见 §3.28，无新增用例） | 2500 |
 | R24 | 工具管理页与单工具试跑（见 §3.29） | 2519 |
 | R25 | 多用户与 RBAC（见 §3.30） | 2548 |
@@ -1130,7 +1130,7 @@ R9 遗留「多级主管链（当前只有一层）」。
 | R31 | 条件边否定/兜底（见 §3.36） | 2608 |
 | R32 | 控制台 UI 重构（见 §3.37） | 2614 |
 | R33 | 多级主管链（见 §3.38） | 2621 |
-| R34 | 本机环境修复·崩溃隔离跑器（见 §3.39） | **2626（当前）** |
+| R34 | 本机环境修复·崩溃隔离跑器（见 §3.39） | **2632（当前）** |
 
 ---
 
@@ -1169,7 +1169,7 @@ R9 遗留「多级主管链（当前只有一层）」。
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
 | `pytest` 裸命令找不到 | PATH 无 pytest 入口 | 统一 `python -m pytest` |
-| 全量回归 `Segmentation fault`（EXIT 139 / `access violation`），偶发 `TypeError: required field "id" missing from Name`、偶发单条断言失败 | **pytest 断言重写的 AST 编译在本机不稳定**，崩在 `ast.iter_fields` / `ast.walk`；3.13.12+pytest9.2.0 与 3.12.10+pytest9.1.1 均复现，与 `PYTHONPATH` / shim 无关（清空并绕过 `sitecustomize.py` 后仍崩）。11-06 实测 3.12.10 上 4 次执行有 1 次 EXIT 139、1 次 `test_crew.py` 交付卡点用例的偶发断言失败（单跑 / 整文件 / 组合 / 重跑均通过）→ 间歇性、非项目代码 | **全量回归统一用 `<3.12.10 python> -m pytest -q --assert=plain`**；本机解释器为 `C:/Users/33793/AppData/Local/Microsoft/WindowsApps/python.exe`（3.12.10 + pytest 9.1.1）。清空环境变量用 `PYTHONPATH= PYTHONDONTWRITEBYTECODE= python ...` 前缀——**别用 `env -u`**，本机 `env` 是 `/c/Users/33793/.local/bin/env` shim，会静默吞掉整条命令（零输出、退出码 0）。崩溃时按文件分 4 批重跑覆盖，累计口径与全量一致；单点调试仍可用默认模式拿断言详情。`PYTHONDONTWRITEBYTECODE=1` 是放大器；3.13 上关掉重写仍崩，勿用 |
+| 全量回归 `Segmentation fault`（EXIT 139 / `access violation`），偶发 `TypeError: required field "id" missing from Name`、偶发单条断言失败 | **pytest 断言重写的 AST 编译在本机不稳定**，崩在 `ast.iter_fields` / `ast.walk`；3.13.12+pytest9.2.0 与 3.12.10+pytest9.1.1 均复现，与 `PYTHONPATH` / shim 无关（清空并绕过 `sitecustomize.py` 后仍崩）。11-06 实测 3.12.10 上 4 次执行有 1 次 EXIT 139、1 次 `test_crew.py` 交付卡点用例的偶发断言失败（单跑 / 整文件 / 组合 / 重跑均通过）→ 间歇性、非项目代码 | **全量回归统一用 `python scripts/test.py`**（R34 崩溃隔离跑器：自动清 `__pycache__` + 分批 + 崩溃重试，人工分批只作兜底）；本机解释器为 `C:/Users/33793/AppData/Local/Microsoft/WindowsApps/python.exe`（3.12.10 + pytest 9.1.1）。清空环境变量用 `PYTHONPATH= PYTHONDONTWRITEBYTECODE= python ...` 前缀——**别用 `env -u`**，本机 `env` 是 `/c/Users/33793/.local/bin/env` shim，会静默吞掉整条命令（零输出、退出码 0）。崩溃重试由跑器自动完成，累计口径与全量一致；单点调试仍可用默认模式拿断言详情。`PYTHONDONTWRITEBYTECODE=1` 是放大器；3.13 上关掉重写仍崩，勿用 |
 | 默认 PyPI 源不可达 | 网络环境 | `--index-url https://mirrors.ustc.edu.cn/pypi/simple/` |
 | Electron 启动 / e2e 报 `app is undefined` | 继承了 `ELECTRON_RUN_AS_NODE=1`；**把它设成空字符串仍会触发** | `scripts/launch-studio.bat` 已清空该变量；手动跑用 `unset ELECTRON_RUN_AS_NODE && npm run e2e` |
 | Windows 重定向 stdout 崩在状态符号 | GBK 无 `✓`/`⟳` 码位 | 入口已包 `_EncodingSafeStream`，勿删 |
@@ -1279,7 +1279,7 @@ R9 遗留「多级主管链（当前只有一层）」。
 
 | 文档 | 用途 |
 | --- | --- |
-| `README.md` | 项目介绍、8 角色说明、V2–V5 与 R3–R16 能力完善、配置与用法全文 |
+| `README.md` | 项目介绍、8 角色说明、V2–V5 与 R3–R34 能力完善、配置与用法全文 |
 | `PROJECT-STATE.md` | 本文，唯一状态源 |
 | `docs/HANDOVER.md` | **接手必读**：当前状态、代码从哪读起、已知的坑、开发者视角排障、剩余工作 |
 | `docs/OPERATIONS.md` | **运维部署/排障手册**：五种运行形态（CLI / serve / Studio / 库 / MCP 客户端）、配置三通道与生产必配、密钥与网络边界、`output_dir` 数据与备份、监控告警、升级、按症状排障、上线前检查清单 |

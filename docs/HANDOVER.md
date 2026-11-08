@@ -11,9 +11,9 @@
 
 | 项 | 值 |
 |---|---|
-| 已提交 | R3–R18；R18 是最新提交（具体 hash 以 `git log -1` 为准） |
-| **未提交** | **无，工作区干净**（R18 已于 2026-11-07 提交） |
-| 测试 | R34 后全量 **2626 passed / 1 skipped / 0 failed**（2627 collected；分 5 批实测） |
+| 已提交 | R3–R34；最新提交 R34（具体 hash 以 `git log -1` 为准） |
+| **未提交** | **无，工作区干净**（R34 已于 2026-11-07 提交） |
+| 测试 | R34 后全量 **2632 passed / 1 skipped / 0 failed**（2633 collected；`scripts/test.py` 一次跑出） |
 | 静态检查 | `ruff check .` 全绿 · `mypy agentcrew/` 114 文件零错误（本机 3.12 首次跑通 CI 等价检查链） |
 | 离线样例 | `todo` 9/9 · `linear` 5/5 · `hierarchy` 7/7，全部 `completed` |
 | 一句话定位 | 8 角色多 Agent 编排器：规划 → 执行 → 三层门禁 → 交付；可完全离线（mock）跑通 |
@@ -164,15 +164,11 @@ Crew.run(goal)
 ### 5.1 单条命令速查
 
 ```bash
-# 全量回归：必须用 3.12.10 解释器 + --assert=plain，分 5 批
-# （本机 pytest 断言重写在大量用例下会偶发 access violation / 段错误）
-PY="C:/Users/33793/AppData/Local/Microsoft/WindowsApps/python.exe"
-PYTHONPATH= "$PY" -m pytest tests/test_[a-b]*.py -q --assert=plain   # 448 passed, 1 skipped
-PYTHONPATH= "$PY" -m pytest tests/test_[c-e]*.py -q --assert=plain   # 547
-PYTHONPATH= "$PY" -m pytest tests/test_[f-l]*.py -q --assert=plain   # 300
-PYTHONPATH= "$PY" -m pytest tests/test_[m-r]*.py -q --assert=plain   # 744
-PYTHONPATH= "$PY" -m pytest tests/test_[s-z]*.py -q --assert=plain   # 405
-# 累计 2444 passed / 1 skipped / 0 failed（2445 collected）
+# 全量回归（R34 起）：`python scripts/test.py` 一条命令，崩溃自动重试
+# （本机 pytest 断言重写在大量用例下会偶发 access violation / 段错误，由跑器隔离；
+#   pytest -q 单进程只作为 CI 路径）
+python scripts/test.py
+# 当前全量：2632 passed / 1 skipped / 0 failed（2633 collected）
 
 # R18 起 CI 等价静态检查（钉版本，与 .github/workflows/ci.yml 一致）
 pip install "ruff==0.17.3" "mypy==2.4.1"
@@ -330,7 +326,7 @@ PROJECT-STATE §3.19–§3.23 与本文 §0 的状态口径已对齐，工作区
 
 ---
 
-## 8. 改动历史（R3–R14）
+## 8. 改动历史（R3–R34）
 
 每一轮的完整设计取舍在 PROJECT-STATE §3.8–§3.19，这里只给索引。
 
