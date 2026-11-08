@@ -2998,6 +2998,9 @@ python scripts/test.py                 # 逐批跑全部，自动重试并汇总
 python scripts/test.py --batch 1       # 最彻底隔离（每文件一个进程）
 python scripts/test.py --retry-failed 1 -k rbac   # 失败也重试一次，只跑匹配文件
 python scripts/test.py --python .venv/Scripts/python.exe -- -x
+
+# P1 覆盖率基线 + 门槛：逐批 parallel 采、最后 combine 出报告（基线约 58%，门槛 55%）
+python scripts/test.py --coverage --cov-fail-under 55
 ```
 
 它做的事：
@@ -3008,6 +3011,9 @@ python scripts/test.py --python .venv/Scripts/python.exe -- -x
 - 汇总四类结果，并把「重试后恢复」与「首次失败但重试通过（疑似环境抖动）」分开打印——
   环境噪音可见，但不冒充回归；
 - 退出码只反映**最终**结论：有真失败或重试后仍崩 → 1，否则 0。
+- `--coverage`：每个批次改由 `coverage run --parallel-mode` 启动，最后
+  `coverage combine --keep` + `coverage report`；`--cov-fail-under N` 设总门槛
+  （基线约 58%，建议 55%）。需先 `pip install pytest-cov`；产物 `.coverage*` 已 gitignore。
 
 CI 仍然用 `pytest -q`（Linux 单进程稳定，且要的就是一次跑完）。跑器的目的只是让
 **本机**也能给出一个可信结论，而不是拿「分 5 批手工加总」凑数。

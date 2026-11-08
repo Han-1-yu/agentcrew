@@ -472,14 +472,16 @@ def test_end_to_end_against_real_serve(tmp_path, monkeypatch):
     })
     log_path = tmp_path / "serve.log"
     with log_path.open("w", encoding="utf-8") as log:
+        # R36 起认证 fail-closed：无密钥 serve 直接退 3（回环也一样）。本用例验的是
+        # SDK 与真实 serve 的装配，不是认证，所以给一个显式 key 让 serve 起得来。
         process = subprocess.Popen(
             [sys.executable, "main.py", "serve", "--host", "127.0.0.1",
-             "--port", str(port)],
+             "--port", str(port), "--api-key", "sdk-test-key"],
             cwd=root, env=env, stdout=log, stderr=subprocess.STDOUT,
         )
         try:
             client = AgentCrewClient(
-                f"http://127.0.0.1:{port}", timeout=30.0)
+                f"http://127.0.0.1:{port}", api_key="sdk-test-key", timeout=30.0)
             ready = False
             for _ in range(50):
                 try:

@@ -19,3 +19,8 @@ logs/
 # 生成素材（体积大、非源码）
 generated-images/
 generated-videos/
+
+# 覆盖率产物（scripts/test.py --coverage 的 parallel 数据与合并结果）
+.coverage
+.coverage.*
+htmlcov/

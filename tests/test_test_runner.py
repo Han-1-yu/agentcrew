@@ -59,6 +59,18 @@ def test_parse_counts_takes_last_summary_line():
     assert (counts["passed"], counts["failed"]) == (9, 0)
 
 
+def test_parse_coverage_total():
+    """TOTAL 行解析：取百分比数值；缺 TOTAL 或数值非法时返回 None。"""
+    assert runner._parse_coverage_total(
+        "Name  Stmts  Miss  Cover\n"
+        "agentcrew/a.py  10  5  50.0%\n"
+        "TOTAL  100  40  60.0%\n"
+    ) == 60.0
+    assert runner._parse_coverage_total("TOTAL  100  40  58.6%") == 58.6
+    assert runner._parse_coverage_total("no total here") is None
+    assert runner._parse_coverage_total("TOTAL  1  1  n/a") is None
+
+
 def test_parse_counts_empty_and_killed_midrun():
     assert runner._parse_counts("") == {
         "passed": 0, "failed": 0, "skipped": 0, "error": 0}

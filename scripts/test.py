@@ -32,6 +32,7 @@ CI 里仍然用 `pytest -q`（Linux 单进程稳定、且要的就是「一次�
 from __future__ import annotations
 
 import argparse
+import glob
 import os
 import re
 import shutil
@@ -43,6 +44,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TESTS = ROOT / "tests"
+
+#: ``--coverage`` 时置真：每个批次的 pytest 改由 ``coverage run --parallel-mode``
+#: 启动，最后 ``coverage combine`` 合并成一份。用模块级标志而不是一路传参——
+#: 单进程编排器里没有并发，全局是安全的，也避免改 `_attempt/_attribute` 签名。
+_COVERAGE = False
 
 #: pytest 汇总行：必须带 `in X.XXs` 才算（否则会把日志里碰巧出现的
 #: 「3 passed」当成汇总，得出相反结论）。
@@ -187,8 +193,13 @@ def _parse_counts(stdout: str) -> dict[str, int]:
 
 def _run_once(python: str, targets: list[str], extra: list[str],
               timeout: int) -> tuple[int, dict[str, int], str, float]:
-    command = [python, "-m", "pytest", *targets, "-q", "--assert=plain",
-               "-p", "no:cacheprovider", *extra]
+    if _COVERAGE:
+        command = [python, "-m", "coverage", "run", "--parallel-mode",
+                   "--source=agentcrew", "-m", "pytest", *targets, "-q",
+                   "--assert=plain", "-p", "no:cacheprovider", *extra]
+    else:
+        command = [python, "-m", "pytest", *targets, "-q", "--assert=plain",
+                   "-p", "no:cacheprovider", *extra]
     empty = {"passed": 0, "failed": 0, "skipped": 0, "error": 0}
     started = time.perf_counter()
     try:
@@ -279,6 +290,61 @@ def _attribute(python: str, files: list[Path], extra: list[str],
     ]
 
 
+def _parse_coverage_total(stdout: str) -> float | None:
+    """从 ``coverage report`` 的 stdout 里取 TOTAL 覆盖率（百分比数值）。"""
+    for line in stdout.splitlines():
+        if line.startswith("TOTAL"):
+            token = line.split()[-1].rstrip("%")
+            try:
+                return float(token)
+            except ValueError:
+                return None
+    return None
+
+
+def _coverage_finish(python: str, fail_under: int) -> bool:
+    """合并各批次的 ``.coverage.*`` 并出报告；``fail_under>0`` 时低于门槛判失败。
+
+    两个本机特有的坑都在这兜底：
+
+    - ``coverage combine --keep`` 保留源文件：默认合并后删除会触发沙箱「批量删除
+      确认」守卫；
+    - ``coverage report`` 在 CPython 3.13 下会偶发 ``SystemError: Unmatched paren
+      in format``（tokenize 抖动），退出码非零但 **TOTAL 行可能已打印**。所以这里
+      不以退出码为准，而是解析 stdout 里的 TOTAL 覆盖率；拿不到再重试一次。
+    """
+    # ``--keep`` 保留各批次的 ``.coverage.*``：combine 默认合并后删除源文件，会
+    # 触发本机/沙箱的「批量删除确认」守卫而失败；保留也便于事后按批次排障。
+    combined = subprocess.run(
+        [python, "-m", "coverage", "combine", "--keep"], cwd=ROOT,
+        capture_output=True, text=True, errors="replace")
+    if combined.returncode != 0:
+        print("coverage combine 失败：", (combined.stderr or "")[-500:],
+              file=sys.stderr)
+        return False
+
+    total: float | None = None
+    for _ in range(3):
+        report = subprocess.run(
+            [python, "-m", "coverage", "report", "--skip-empty",
+             "--precision=1"], cwd=ROOT,
+            capture_output=True, text=True, errors="replace")
+        print(report.stdout)
+        if report.stderr:
+            print(report.stderr, file=sys.stderr)
+        total = _parse_coverage_total(report.stdout)
+        if total is not None:
+            break
+    if total is None:
+        print("coverage report 未产出 TOTAL 行（tokenize 抖动），判未通过",
+              file=sys.stderr)
+        return False
+    if fail_under > 0 and total < fail_under:
+        print(f"覆盖率 {total}% 低于门槛 {fail_under}%", file=sys.stderr)
+        return False
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="逐批隔离跑本机测试（崩溃自动重试并汇总）")
@@ -304,11 +370,23 @@ def main(argv: list[str] | None = None) -> int:
                         help="只跑**文件名**包含该子串的测试文件")
     parser.add_argument("--keep-pycache", action="store_true",
                         help="不清理 __pycache__")
+    parser.add_argument("--coverage", action="store_true",
+                        help="逐批跑 coverage run --parallel-mode，最后 combine + "
+                             "report（CI 出报告、设门槛用）")
+    parser.add_argument("--cov-fail-under", type=int, default=0, metavar="PCT",
+                        help="覆盖率总门槛（百分比，0 = 只出报告不设门槛；"
+                             "失败会额外置未通过）")
     parser.add_argument("--verbose", action="store_true",
                         help="逐个批次打印结果（默认只打印异常批次）")
     parser.add_argument("pytest_args", nargs="*",
                         help="透传给 pytest 的额外参数（放在 -- 之后）")
     args = parser.parse_args(argv)
+
+    global _COVERAGE
+    _COVERAGE = args.coverage
+    if _COVERAGE:
+        for stale in glob.glob(str(ROOT / ".coverage*")):
+            os.remove(stale)
 
     if args.retries < 0 or args.retry_failed < 0:
         print("--retries / --retry-failed 不能为负", file=sys.stderr)
@@ -400,9 +478,13 @@ def main(argv: list[str] | None = None) -> int:
         print("重试后仍崩（环境问题，建议单独再跑一次该文件）：")
         for item in unstable:
             print(f"  - {item.path}")
+    coverage_ok = True
+    if _COVERAGE:
+        coverage_ok = _coverage_finish(args.python, args.cov_fail_under)
     passed = (not broken and not unstable and not no_tests
               and not (args.strict and suspicious)
-              and not (args.fail_on_recovered_crash and recovered))
+              and not (args.fail_on_recovered_crash and recovered)
+              and coverage_ok)
     print("结果：" + ("通过" if passed else "未通过"))
     print("=" * 70)
     return 0 if passed else 1

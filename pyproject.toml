@@ -21,6 +21,23 @@ extend-exclude = ["examples/fixtures", "output", ".venv"]
 select = ["E", "F", "W", "I", "UP", "B"]
 ignore = ["E501"]  # 行长由 formatter / 评审把关，起步阶段不设硬线
 
+# ── 覆盖率（P1「覆盖率基线 + 门槛」）────────────────────────────────────
+# 只测 agentcrew 本体；报告在 `scripts/test.py --coverage` 里 combine 后统一出。
+[tool.coverage.run]
+source = ["agentcrew"]
+
+[tool.coverage.report]
+precision = 1
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "raise AssertionError",
+    "@abstractmethod",
+    "@overload",
+    "def __repr__",
+]
+
 [tool.mypy]
 python_version = "3.10"  # 与 ruff target-version 同一口径：检查声明的最低版本
 ignore_missing_imports = true

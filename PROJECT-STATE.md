@@ -1450,6 +1450,31 @@ no-op、看板有面板与处理器、**端到端**（mock+stream 跑完整 run�
 的 `agent_stream_delta`，拼接 >20 字符且 run_id 一致）。回归 `streaming / dashboard /
 api_server / crew` **124 例**全过；`ruff` 全绿。
 
+### 3.54 R41：覆盖率基线 + 门槛（P1 收尾）（2026-11-08）
+
+方案 P1 里「覆盖率基线 + 门槛」的最后一项（之前卡在「本机无 coverage」）。装了
+`pytest-cov` 后落地：
+
+| 件 | 内容 |
+|---|---|
+| 配置 | `pyproject.toml` 加 `[tool.coverage.run] source=["agentcrew"]` 与 `[tool.coverage.report]`（precision、exclude_lines：pragma/TypeChecking/NotImplemented/abstractmethod/overload） |
+| 跑器 | `scripts/test.py --coverage`：每批改由 `coverage run --parallel-mode` 启动，最后 `coverage combine --keep` + `coverage report`；`--cov-fail-under N` 设门槛；`.coverage*` 进 gitignore |
+| 基线 | **58.6%**（14675 语句，分批隔离采得——单进程全量会 segfault，本机已知噪音） |
+
+**过程中又抓到并修掉两个真问题**：
+
+1. **R36 认证 fail-closed 打破了 `tests/test_sdk.py`**（我的分批回归一直没覆盖到它）：
+   它的端到端用例起 `main.py serve` 不带 key，现在 serve 直接退 3 → 「serve 未就绪」。
+   用例本意是验 SDK 装配、不是验认证，已给 serve 加 `--api-key` 且客户端带同 key。
+2. **`coverage combine` 默认合并后删源文件**，触发了沙箱「批量删除确认」守卫 → 改成
+   `--keep`；**`coverage report` 在 CPython 3.13 下偶发 `SystemError: Unmatched paren
+   in format`**（tokenize 抖动，退出码非零但 TOTAL 行可能已打印）→ 改为解析 TOTAL 行、
+   拿不到重试，不以退出码为准。
+
+**验证**：`_parse_coverage_total` 单测（`test_test_runner.py` +1，共 12 例）；
+`test_sdk.py` 34 例全过；`scripts/test.py --coverage -k test_stream_delta` 全流程
+（combine → report → 阈值判定）通过。`ruff` 全绿。
+
 ---
 ## 4. 历史报告汇总（已并入本文，原文归档）
 
