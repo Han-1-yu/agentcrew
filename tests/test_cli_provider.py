@@ -62,7 +62,9 @@ class TestCliProvider:
 
     @pytest.mark.asyncio
     async def test_nonzero_exit_raises(self):
-        provider = CliProvider(_binding(command="cmd /c exit 1"))
+        # 用解释器自身退出码 1 触发非零退出，跨平台（Windows/Linux 的 shell 不同）。
+        provider = CliProvider(_binding(
+            command=f'"{sys.executable}" -c "import sys; sys.exit(1)"'))
         with pytest.raises(RuntimeError, match="退出码"):
             await provider.complete(
                 [{"role": "user", "content": "hi"}],

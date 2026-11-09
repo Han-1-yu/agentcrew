@@ -42,6 +42,12 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# Windows 下 stdout/stderr 默认可能是 cp1252（尤其 CI runner），print 中文会
+# UnicodeEncodeError；强制 UTF-8，保证本机与 CI 的输出一致。
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 ROOT = Path(__file__).resolve().parents[1]
 TESTS = ROOT / "tests"
 
