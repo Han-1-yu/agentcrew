@@ -381,9 +381,10 @@ class Scheduler:
             # 非预期异常（provider 网络/鉴权、门禁崩溃…）也收敛成结局回流：
             # 让主循环按板上状态决定重试/失败，绝不让 run() 等在空队列上。
             outcome = _error_outcome(task.id, exc)
-        if span is not None:
+        tracer = self._tracer
+        if span is not None and tracer is not None:
             try:
-                self._tracer.end_span(
+                tracer.end_span(
                     span,
                     status="error" if outcome.error is not None else "ok",
                     attributes={

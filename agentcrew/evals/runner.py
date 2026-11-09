@@ -82,6 +82,9 @@ async def run_case(
                 return await _run_crew(settings, goal, root)
             finally:
                 model_factory.DEFAULT_FIXTURES_DIR = saved
+        # 走到这里说明 case.sample 为空，而 load_dataset 已保证 sample 与 goal
+        # 至少给一个，故 goal 必非 None（此处仅作类型收窄，不会触发）。
+        assert goal is not None
         return await _run_crew(settings, goal, root)
     except Exception as exc:  # noqa: BLE001 —— 评测要如实记录失败，不是中断整批
         return CaseOutput(error=f"{type(exc).__name__}: {exc}"[:500])

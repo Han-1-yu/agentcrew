@@ -171,12 +171,12 @@ class OTLPTracer:
             return Span(name=name, trace_id=self.trace_id,
                         span_id=secrets.token_hex(8), attributes={},
                         status="dropped")
+        parent_span = parent or self._root
         span = Span(
             name=name,
             trace_id=self.trace_id,
             span_id=secrets.token_hex(8),
-            parent_span_id=(parent or self._root).span_id
-            if (parent or self._root) is not None else None,
+            parent_span_id=parent_span.span_id if parent_span is not None else None,
             attributes=dict(attributes or {}),
         )
         if self._root is None:

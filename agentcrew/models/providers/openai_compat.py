@@ -359,9 +359,9 @@ class OpenAICompatProvider(BaseProvider):
             return prepared
         system_text = "\n\n".join(system_parts)
         rest = [m for m in prepared if m["role"] != "system"]
-        for message in rest:
-            if message["role"] == "user":
-                message["content"] = f"{system_text}\n\n{message['content']}"
+        for msg in rest:
+            if msg["role"] == "user":
+                msg["content"] = f"{system_text}\n\n{msg['content']}"
                 return rest
         # 没有 user 消息（异常调用方）也不能丢 system 内容：作为首条 user 发出。
         return [{"role": "user", "content": system_text}, *rest]

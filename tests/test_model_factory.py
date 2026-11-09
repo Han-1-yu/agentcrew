@@ -19,6 +19,7 @@ import asyncio
 from collections.abc import Sequence
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from pydantic import BaseModel
@@ -441,6 +442,8 @@ class _StructuredProvider(BaseProvider):
         temperature: float,
         max_tokens: int,
         response_format: ResponseFormat | None = None,
+        tools: Sequence[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> CompletionResult:
         self.calls += 1
         self.live += 1
@@ -885,7 +888,7 @@ async def test_failover_complete_structured_switches_backup(settings, tmp_path, 
             super().__init__(parse_alias("mock:primary"))
 
         async def complete(self, messages, *, temperature, max_tokens,
-                           response_format=None):
+                           response_format=None, tools=None, tool_choice=None):
             raise TransientError("503")
 
     failing = _FailingProvider()

@@ -1686,8 +1686,8 @@ class ModelFactory:
         *,
         binding: ModelBinding,
         alias: str | None,
-        temperature: float,
-        max_tokens: int,
+        temperature: float | None,
+        max_tokens: int | None,
     ) -> None:
         """P2-3：把一次真实调用记成 ``gen_ai.*`` span（未启用时零开销）。
 
@@ -2076,6 +2076,8 @@ class _CollectingProvider(BaseProvider):
         temperature: float,
         max_tokens: int,
         response_format: ResponseFormat | None = None,
+        tools: Sequence[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> CompletionResult:
         if self._redactor is not None and self._redactor.enabled:
             masked = self._redactor.mask_messages(messages)
@@ -2083,7 +2085,9 @@ class _CollectingProvider(BaseProvider):
                 cast("Sequence[Message]", masked),
                 temperature=temperature,
                 max_tokens=max_tokens,
-                response_format=response_format)
+                response_format=response_format,
+                tools=tools,
+                tool_choice=tool_choice)
             result = result.model_copy(
                 update={"text": self._redactor.unmask_text(result.text)})
         else:
@@ -2091,6 +2095,8 @@ class _CollectingProvider(BaseProvider):
                 messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
-                response_format=response_format)
+                response_format=response_format,
+                tools=tools,
+                tool_choice=tool_choice)
         self.results.append(result)
         return result
