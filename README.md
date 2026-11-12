@@ -131,11 +131,15 @@ python main.py run --demo
 > ——真实端口与认证、systemd / 反代示例、配置三通道与生产必配、日志与备份、
 > 扩容边界、监控告警、升级步骤和上线前检查清单。
 >
+> **能力补齐（C1 搜索 / C2 沙箱 / C3 执行验证）**：见
+> [docs/CAPABILITIES-C1-C3.md](docs/CAPABILITIES-C1-C3.md)
+> ——三个开关怎么开、边界在哪、哪些已经验证过、哪些还等着目标机（Docker）验证。
+>
 > **架构决策记录（为什么这么做）**：见 [docs/adr/](docs/adr/)
 > ——认证 fail-closed、`run_python` 默认关、guardrails 不用 LLM 判等 7 条有取舍的决策。
 >
 > **安全评审 / 上线签字**：见 [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)
-> ——信任边界、资产、46 条威胁与当前控制、**15 条已知缺口及补偿措施**、
+> ——信任边界、资产、49 条威胁与当前控制、**15 条已知缺口及补偿措施**、
 > 控制到测试的证据映射。想知道「这个系统能防什么、不能防什么」，看它。
 >
 > **测试覆盖情况**：见 [docs/TEST-REPORT.md](docs/TEST-REPORT.md)
@@ -208,6 +212,13 @@ python main.py run --sample todo --no-live       # 混合并发（等价于 --de
 # P2-5：把样例当评测集跑——断言产物内容，得出可复现的结论
 python main.py eval examples/evals/smoke.jsonl            # pass@1
 python main.py eval examples/evals/smoke.jsonl --repeat 3 # pass^3（稳定性）
+
+# R51：能力接线回归（新工具是否真的进注册表、默认是否仍只 5 个工具）
+python main.py eval examples/evals/capabilities.jsonl
+
+# C11：真实模型能力证据（23 条小目标，必须带成本硬上限）
+python main.py eval examples/evals/capability-live.jsonl --live --max-cost 1.50
+python scripts/nightly_eval.py --max-cost 1.50   # 夜间跑并落盘 bench/eval-*.json
 ```
 
 评测集是 **JSONL**（一行一条 case，`#` 开头是注释），`checks` 只做确定性断言
@@ -251,7 +262,7 @@ examples/samples/<name>/
 | `python main.py serve` | 启动 HTTP API + Web UI 面板（V2） | `--host HOST`（默认 127.0.0.1）；`--port PORT`（默认 8765） |
 | `python main.py doctor` | 诊断配置 / 环境 / 依赖 / Provider 连通性，输出健康报告 | `--config PATH`（指定 agentcrew.yaml）；`--output-dir DIR`；`--json`（机器可读） |
 | `python main.py diff <a> <b>` | 对比两个 run 的配置 / 任务 / 产物 / 事件统计差异 | `--output-dir DIR`；`--json`（机器可读） |
-| `python main.py eval <dataset>` | P2-5：跑离线评测集，用产物断言给出 `pass@1` / `pass^k` | `--repeat K`（每 case 跑 K 次）；`--json`；`--output-dir DIR`（留账） |
+| `python main.py eval <dataset>` | P2-5 / C11：跑评测集，用产物断言给出 `pass@1` / `pass^k` | `--repeat K`（每 case 跑 K 次）；`--live`（真实模型）；`--max-cost USD`（硬上限）；`--json`；`--output-dir DIR`（留账） |
 
 行为说明：
 
@@ -518,9 +529,12 @@ DELETE /runs/{run_id}?confirm=1
 外部 MCP 工具）获取信息，再写交付物。**默认关闭**——不传 `tool_registry` 时行为
 与之前完全一致。
 
-- **统一工具接口**：`agentcrew/tools/` 提供 `Tool` 基类、`ToolRegistry`、四个
-  内置沙箱工具（`read_file` / `list_files` / `grep` / `run_python`），以及
+- **统一工具接口**：`agentcrew/tools/` 提供 `Tool` 基类、`ToolRegistry`、六个
+  内置沙箱工具（`read_file` / `list_files` / `grep` / `run_python` / `run_tests` /
+  `write_file`）、网络工具（`web_fetch` / `web_search`），以及
   `MCPToolAdapter`——把 `tools/list` 发现的外部 MCP 工具包成同一接口登记进注册表。
+  `run_python` 与 `run_tests` 共用可插拔执行后端（`sandbox_backend=local|docker`）；
+  `web_search` 只在配置了 `search_provider` 时出现。
 - **ReAct 协议**：模型在回复里用 `<tool_call>` 围栏发出
   `{"name": ..., "args": {...}}`；工具结果以 `<tool_result name="...">` 回灌，
   可连续多轮，最多 `max_tool_calls`（默认 10）轮；触顶仍想调工具时降级为把最后
@@ -2292,8 +2306,12 @@ models:
 | `AGENTCREW_API_KEYS` | 空 | 有效 API Key 白名单（逗号分隔；只参与认证比对，不落盘） |
 | `AGENTCREW_API_RATE_LIMIT_ENABLED` | `false` | REST API 的 IP 速率限制总开关（E-3） |
 | `AGENTCREW_API_RATE_LIMIT_MAX` | `100` | 滑动窗口内每 IP 最大请求数 |
-| `AGENTCREW_TOOLS_ENABLED` | `false` | R3：把 6 个内置工具接进真实 run 的 ReAct 循环（见「R3 能力完善」） |
-| `AGENTCREW_CODE_EXEC_ENABLED` | `false` | P1：是否把 `run_python` 注册进 run（无网络/系统沙箱，见 `docs/OPERATIONS.md` §3.3） |
+| `AGENTCREW_TOOLS_ENABLED` | `false` | R3：把内置工具接进真实 run 的 ReAct 循环（见「R3 能力完善」） |
+| `AGENTCREW_CODE_EXEC_ENABLED` | `false` | P1：是否把 `run_python` / `run_tests` 注册进 run（默认 `local` 后端无网络/系统隔离，见 `docs/OPERATIONS.md` §3.3） |
+| `AGENTCREW_SANDBOX_BACKEND` | `local` | C2：代码在哪跑。`local` = 现有进程隔离；`docker` = 容器隔离（禁网 / 非 root / 资源上限 / 只挂 run 目录），缺 docker 直接报错 |
+| `AGENTCREW_SANDBOX_IMAGE` / `_MEMORY_MB` / `_CPUS` / `_ALLOW_NETWORK` | `python:3.12-slim` / `512` / `1.0` / `false` | C2：容器后端的镜像与资源上限；`run_tests` 需要镜像内有 pytest |
+| `AGENTCREW_SEARCH_PROVIDER` | 空 | C1：`tavily` / `brave` / `duckduckgo`；空 = 不注册 `web_search`。密钥只从 `TAVILY_API_KEY` / `BRAVE_API_KEY` / `AGENTCREW_SEARCH_API_KEY` 读 |
+| `AGENTCREW_SEARCH_MAX_RESULTS` / `_TIMEOUT_SECONDS` | `5` / `15` | C1：单次搜索条数与超时 |
 | `AGENTCREW_STREAM` | `false` | P3-3：Agent 走流式 LLM 路径（逐块记 `agent_stream_chunk`；默认关，实时性需要时开） |
 | `AGENTCREW_UNTRUSTED_INPUTS` | `false` | G-1：不可信输入预设——只给只读工具（read_file/list_files/grep），不挂 MCP |
 | `AGENTCREW_OTEL_ENABLED` | `false` | P2-3：每次 run 导出一条 OTel trace（`gen_ai.*` 语义 + OTLP/HTTP JSON，零依赖） |

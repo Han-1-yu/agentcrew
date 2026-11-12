@@ -1,6 +1,6 @@
 # AgentCrew 威胁模型
 
-> **版本**：v1（2026-11-08）  
+> **版本**：v1.1（2026-11-12：补 C1 搜索 / C2 沙箱 / C3 执行校验）  
 > **适用代码**：本轮 P0/P1/P2 加固之后的工作区（路径规范化、认证默认开、SSE 分桶、
 > 工具 guardrails、原生工具调用、super-step、OTel、evals）  
 > **读者**：部署方（运维 / 安全评审）、二次开发者、写新工具与新入口的人  
@@ -96,9 +96,10 @@ B5  配置（agentcrew.yaml / .env）──▶ CLI 命令模板、MCP server 命
 | 模型发起的 `tool_calls` | B4 | **不可信** | 同上 + 原生路径与围栏路径共用同一执行层 |
 | 工具读到的文件内容 | B3 | **不可信**（文件可能被别人写过） | 路径锁在 workdir、输出相位 guard |
 | `web_fetch` 抓回的网页 | B3 | **不可信**（典型注入载体） | 私网拒绝、无重定向、正文截断 |
+| `web_search` 返回的条目 | B3（第三方搜索 API） | **不可信** | URL 逐个过 `validate_fetch_url`、去重、截断；正文仍需 `web_fetch` 才拿到（同一套 SSRF 防护）；扩大的是内容注入面（G-1/T-48） |
 | MCP 工具的描述与返回值 | B3（外部子进程） | **不可信** | 适配器透传，schema 仅用于提示 |
 | `agentcrew.yaml` / `.env` | B5 运维 | **可信**（写它等于拿到本机执行权） | 加载期校验、脱敏、导出剔除 secret |
-| 交付物（artifacts） | B4 模型产出 | **不可信** | 平台**从不执行**交付物，只落盘 |
+| 交付物（artifacts） | B4 模型产出 | **不可信** | 默认**不执行**，只落盘；`exec_verify=true` 时只在隔离目录副本里跑测试文件（沙箱后端同上，T-28/T-49） |
 
 ---
 
@@ -188,10 +189,10 @@ B5  配置（agentcrew.yaml / .env）──▶ CLI 命令模板、MCP server 命
 |---|---|---|---|
 | **T-23** | `read_file ../../../../etc/passwd` | `_resolve()`：拒绝绝对路径与 `..`，解析后必须仍在 `workdir` 内 | 无 |
 | **T-24** | 用符号链接 / Windows 重解析点跳出 workdir | `_crosses_link()` 逐段检查，任一段是链接即拒绝 | 检查与打开之间有 TOCTOU 窗口（毫秒级，需要本机写权限才能利用） |
-| **T-25** | 模型写的 Python 执行任意命令、读环境变量里的 key、出网外发 | `run_python` **默认不注册**（`code_exec_enabled=false`）；打开后有 `-I`、裁剪环境变量（只留 PATH/SYSTEMROOT/TEMP/TMP/PYTHONIOENCODING）、`cwd` 锁 run 目录、默认 10s 超时并 kill | ⚠️ **无网络隔离、无 CPU/内存上限、无系统调用沙箱**——代码可以出网（见 G-9）。这是本模型里**风险最高**的开关 |
-| **T-26** | 用工具试跑入口绕过 `code_exec_enabled` | run 装配、`POST /tools/{name}/test`、`main.py tool` **三处同口径**；关着时 `run_python` 连清单都不出现 | 无 |
+| **T-25** | 模型写的 Python 执行任意命令、读环境变量里的 key、出网外发 | `run_python` **默认不注册**（`code_exec_enabled=false`）。打开后默认 `local` 后端：`-I`、裁剪环境变量（只留 PATH/SYSTEMROOT/TEMP/TMP/PYTHONIOENCODING）、`cwd` 锁 run 目录、默认 10s 超时并 kill。**C2 起可选 `sandbox_backend=docker`**：`--network none`、`--user 65534:65534`、`--cap-drop ALL`、`no-new-privileges`、`--read-only` + `/tmp` tmpfs、`--memory`/`--cpus`/`--pids-limit`、只挂 `<run_dir>:/workspace:rw` | ⚠️ `local` 后端**无网络 / 资源 / 系统调用隔离**（见 G-9）——生产跑模型代码必须显式设 `docker`。`docker` 后端依赖宿主机内核隔离，容器逃逸类漏洞不在本平台防御范围 |
+| **T-26** | 用工具试跑入口绕过 `code_exec_enabled` | run 装配、`POST /tools/{name}/test`、`main.py tool` **三处同口径**；关着时 `run_python` / `run_tests` 连清单都不出现。试跑同样走 `sandbox_backend`（`POST /tools/...` 在装配失败时回 409，不降级） | 无 |
 | **T-27** | `grep` 扫到 workdir 外的敏感文件 | 同 `_resolve`，且遍历时逐文件复查 `_crosses_link` | 无 |
-| **T-28** | 交付物被平台执行（例如自动跑生成的脚本） | **平台从不执行 artifacts**：只写盘、只做交付校验 | 下游若自行执行交付物，风险转移给下游 |
+| **T-28** | 交付物被平台执行（例如自动跑生成的脚本） | **默认不执行**（只写盘、只做交付校验）。**C3 例外**：`gate_config.exec_verify=true` 时，会把该任务的产物**复制**到 `<run_dir>/verify/<task_id>/` 并跑其中的 `test_*.py` / `*_test.py`——只跑测试文件，不执行任意产物；执行环境与 `run_python` 同一后端 | ⚠️ 打开执行校验后，模型写的测试代码会被执行：`local` 后端等于在宿主上跑，必须配 `docker`；执行目录是副本，写坏也碰不到 `artifacts/` 原件 |
 | **T-29** | MCP server 拿到不该拿的数据 | MCP 工具经适配器登记进同一 `ToolRegistry`，受同一 `tool_permissions` 与 guard 约束 | ⚠️ MCP 子进程**本身不受限**（它能做任何进程能做的事），见 G-2 |
 
 ### 5.6 秘密泄露（对手 A1 / A2 / A3）
@@ -226,6 +227,8 @@ B5  配置（agentcrew.yaml / .env）──▶ CLI 命令模板、MCP server 命
 | **T-44** | 审计被悄悄篡改 | ledger 追加写 + 逐行 flush；读取容忍断尾行 | ⚠️ **无签名、无 WORM、无远端副本**——有本机写权限的人可以改（见 G-13） |
 | **T-45** | 多个 `serve` 共享同一 `output_dir` | 文档明确禁止；`Ledger.emit` 无跨进程锁 | ⚠️ 无运行时检测，只靠文档约束（见 G-14） |
 | **T-47** | Ledger observer 回调抛异常会中断 `emit` 调用方 | observer 默认 `None`（向后兼容）；内置 `_make_ledger_observer` 与内置 `on_event`（`ApiServer.on_event` / `_BoardHook.__call__`）均不抛异常 | ⚠️ 库层自定义 `on_event` 若抛异常，会从 `emit` 向上抛——文件已落盘、审计不受损，但调用方须遵守「observer 不得抛异常」契约（见 `ledger.py` docstring）；observer 只转发明细、不触发 Webhook（刻意，防打爆接收端） |
+| **T-48** | `web_search` 结果把模型引向内网服务或本地文件（SSRF / 投毒） | 端点固定为公网 https、不跟随重定向；返回的每条 URL 先过 `validate_fetch_url`（拒私网 / 回环 / `file://` / 带凭据）；搜到的正文不会自动抓取，要模型再调 `web_fetch`（同一套 SSRF 防护） | ⚠️ 摘要文本本身仍可能含注入指令（G-1）；搜索扩大的是**内容注入面**，不是网络边界 |
+| **T-49** | 执行校验被用来持久化（测试里写文件 / 起进程） | 校验目录是 `<run_dir>/verify/<task_id>/` 的**副本**，不写 `artifacts/`；`docker` 后端下容器 `--read-only` 且超时即杀 | ⚠️ `local` 后端下测试代码可在进程权限内读写宿主文件并起后台进程——与 `run_python` 同级风险，故必须配 `docker` |
 
 ---
 
@@ -243,7 +246,7 @@ B5  配置（agentcrew.yaml / .env）──▶ CLI 命令模板、MCP server 命
 | **G-6** | `web_fetch` 的 **DNS rebinding TOCTOU** | 理论上可让请求落到内网 | 彻底修复需「解析一次后按 IP 连接 + 自定义 Host 头」，改动面大且易伤兼容性 | 已逐个检查解析结果、禁重定向；**触发升级**：Agent 需要访问不可信第三方 URL 且内网有高价值目标时，用出站代理做出口管控 |
 | **G-7** | 跨 run 知识库（`knowledge/`）**有意共享** | 一个 run 写的内容别的 run 能读 | 这是「知识复利」的设计目标 | 多租户场景必须按 owner 分区（当前未做） |
 | **G-8** | **guardrails 是可绕过的启发式**（正则/长度） | 变形写法（双空格、base64、转义）可绕过 | 用 LLM 判 LLM 不稳定且贵，失败模式恰是「该拦的没拦」 | 定位为「挡明显的错」而非沙箱；真正的边界是 `code_exec_enabled` 与 `tool_permissions` |
-| **G-9** | **`run_python` 无网络/资源/系统调用隔离** | 打开后模型代码可出网、可读写 run 目录外（在进程权限内）、可吃满 CPU | 容器级隔离（Docker/gVisor）属部署层，平台内置会引入重依赖 | 默认关；打开时边界写进 OPERATIONS §3.3；**触发升级**：必须套容器或 seccomp |
+| **G-9** | **`local` 后端的代码执行无网络/资源/系统调用隔离** | 默认后端下模型代码可出网、可读写 run 目录外（进程权限内）、可吃满 CPU | 默认 `local` 是为了「零依赖 + 离线可测」；容器隔离做成了**可选后端**而不是默认值 | ①默认不注册 `run_python` / `run_tests` ②生产设 `sandbox_backend=docker`（禁网 / 非 root / cap 全丢 / 资源上限 / 只挂 run 目录）③`config_snapshot` 记录 `sandbox_backend`，审计可查 ④docker 缺失时构造期报错，不静默降级。**触发升级**：需要更强隔离（gVisor / microVM）时新增一个 `ExecutionBackend` 实现即可 |
 | **G-10** | OTel 打开内容采集即外发 prompt | 源码/用户数据进 collector | 默认 `false`，是运维显式决定 | collector 必须在内网、与业务同信任级别 |
 | **G-11** | 审计无签名 / 无 WORM | 有本机权限者可篡改 ledger | 单机文件的固有限制 | 生产建议 `output_dir` 挂只追加存储或定期远端同步 |
 | **G-12** | 无 per-run 磁盘配额、无自动清理 | 长期运行会写满盘 | 配额需配合保留策略（业务决定） | 定时 `main.py clean --keep N`；监控 `output_dir` 用量 |

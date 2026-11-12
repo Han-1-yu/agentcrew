@@ -308,7 +308,10 @@ python main.py config import /etc/agentcrew/new.yaml
 | `AGENTCREW_DEFAULT_MODEL` | `openai:gpt-4o-mini` | 按实际改 | `<provider>:<model>` 别名，`doctor` 会校验可解析性 |
 | `AGENTCREW_OUTPUT_DIR` | `./output` | 独立数据盘绝对路径 | 所有 run 与跨 run 数据都在这里 |
 | `AGENTCREW_API_AUTH_ENABLED` | `true` | 保持 `true` | 关掉仅限可信内网；非回环地址无密钥仍会拒启动 |
-| `AGENTCREW_CODE_EXEC_ENABLED` | `false` | 按需 | 打开才把 `run_python` 注册进 run（无网络/系统沙箱，边界见 §3.3） |
+| `AGENTCREW_CODE_EXEC_ENABLED` | `false` | 按需 | 打开才把 `run_python` / `run_tests` 注册进 run（边界见 §3.3） |
+| `AGENTCREW_SANDBOX_BACKEND` | `local` | 真要跑模型代码时设 `docker` | `local` 无网络/资源隔离；`docker` 禁网、非 root、cap 全丢、资源上限、只挂 run 目录（C2） |
+| `AGENTCREW_SANDBOX_IMAGE` | `python:3.12-slim` | 自建镜像（带 pytest） | `run_tests` 需要镜像里有 pytest，否则会明确失败 |
+| `AGENTCREW_SEARCH_PROVIDER` | 空 | 需要调研能力时设 `tavily` / `brave` | 空 = 不注册 `web_search`；密钥只在环境变量（`TAVILY_API_KEY` / `BRAVE_API_KEY`） |
 | `AGENTCREW_OTEL_ENABLED` | `false` | 有 collector 时开 | 每次 run 导出一条 OTel trace（OTLP/HTTP JSON，零依赖），见 §5.5 |
 | `AGENTCREW_OTEL_ENDPOINT` | `http://127.0.0.1:4318` | collector 地址 | 不带 `/v1/traces` 后缀；导出失败只记 warning，不影响 run |
 | `AGENTCREW_OTEL_CAPTURE_CONTENT` | `false` | 保持 `false` | 是否采集 prompt / completion 文本（含源码与用户数据，**默认不采**） |
@@ -339,7 +342,10 @@ G-2 配置即 RCE、G-9 `run_python` 无隔离这三条，是部署方必须自�
 | R15 spool | `<output_dir>/_webhook_spool/` 只存 URL 短哈希与脱敏 payload，不存 URL / 密钥 |
 | HTTP 入口 | `POST /runs` 的 options 不接收 `webhook_secret`；API Key 只在服务端配置 |
 | 工具侧 | `web_fetch` 仅公网 80/443 且拒绝私网 / 重定向（防 SSRF）；Webhook **不做**内网黑名单，因为目标是运维显式配置的 |
-| `run_python` | **默认不注册**（`code_exec_enabled=false`）。打开后有：`-I` 隔离模式、裁剪环境变量（只留 PATH/SYSTEMROOT/TEMP/TMP/PYTHONIOENCODING）、`cwd` 锁在 run 目录、默认 10s 超时并杀进程。**没有**的：网络隔离、CPU/内存上限、系统调用沙箱——代码可以出网。容器级隔离（Docker/gVisor）属 P3，需要时自行在前面套一层 |
+| `run_python` | **默认不注册**（`code_exec_enabled=false`）。打开后默认走 `local` 后端：`-I` 隔离、裁剪环境变量（只留 PATH/SYSTEMROOT/TEMP/TMP/PYTHONIOENCODING）、`cwd` 锁 run 目录、默认 10s 超时并杀进程。**没有**网络 / CPU / 内存 / 系统调用隔离。C2 起可选 `sandbox_backend=docker`：`--network none`、非 root（65534）、`--cap-drop ALL`、`no-new-privileges`、只读根 + `/tmp` tmpfs、`--memory`/`--cpus`/`--pids-limit`、只挂 `<run_dir>:/workspace`。选了 docker 而没有 docker 时 run 直接失败，不静默退回 local |
+| `run_tests`（C3） | 与 `run_python` **同一开关**（`code_exec_enabled`）与**同一后端**。只接受 `path` / `timeout`，不接受任意 pytest 参数（否则 `--rootdir=` 能绕过路径边界）；路径走 `resolve_in_workdir`；不写 `.pytest_cache`；输出保留尾部并标注省略量 |
+| G1 执行校验（C3） | `gate_config.exec_verify: true`（默认关）。静态校验放行后，把该任务产物铺进 `<run_dir>/verify/<task_id>/` 跑它自己的 pytest；失败并入 G1 issue 走既有返工通道；无测试文件记 `skipped`；mock 通道显式跳过并记 `g1_exec_check_skipped` |
+| `web_search`（C1） | `search_provider` 为空时**不注册**。端点固定为公网 https、不跟随重定向；结果按 URL 去重并逐个过 `validate_fetch_url`（内网 IP / `file://` / 带凭据一律丢弃）；输出上限 8000 字符；密钥只从环境变量读 |
 | 工具试跑 | `POST /tools/{name}/test` 与 `main.py tool` 与 run 内注册表同一口径：`code_exec_enabled=false` 时 `run_python` 不在清单里，也跑不了——调试入口不是绕过开关的后门 |
 | 工具 guardrails | `agentcrew.yaml` 的 `tool_guards:` 段按正则/长度在**工具执行前**拦截（`phase: input`）或在**结果回灌前**遮掉泄漏（`phase: output`）。`block` 的工具一次都不执行，原因回灌给模型；命中记 `tool_guard_triggered`。规则在配置加载期校验（正则写错、action 拼错、缺 `pattern`/`max_length` 都直接退 3） |
 | 不可信输入 | `AGENTCREW_UNTRUSTED_INPUTS=true`（或 YAML `untrusted_inputs`）时，run 内工具表**只保留只读工具**（`read_file`/`list_files`/`grep`），`write_file`/`run_python`/`web_fetch` 一律不下发，`mcp_servers` 全跳过（记 `mcp_skipped_untrusted`）。处理第三方文档 / 网页时用它兜住提示词注入（G-1） |
@@ -775,7 +781,12 @@ HTTP 等价物是 `GET /tools` 与 `POST /tools/{name}/test`，看板首页「�
 - [ ] 已下发随机长 key（`keys add` 或 `AGENTCREW_API_KEYS`）；`/health` 带 key 返回 200。
       无密钥时 `serve` 直接退 3（任何地址）——这是期望行为，不要用改代码绕过
 - [ ] 监控已接入：`/metrics` 带 key 可抓取，且配好错误率与「在跑 run 数长期不降」两条告警（见 §5.1）
-- [ ] 确认 `AGENTCREW_CODE_EXEC_ENABLED` 保持关闭，除非确实需要模型执行 Python
+- [ ] 确认 `AGENTCREW_CODE_EXEC_ENABLED` 保持关闭，除非确实需要模型执行 Python；
+      需要时同时确认 `AGENTCREW_SANDBOX_BACKEND=docker`（`local` 不隔离网络与资源）
+- [ ] 若开了 `gate_config.exec_verify`：目标机 `docker` 可用、镜像内有 pytest，
+      并跑过一次真实任务确认 `g1_exec_check` 出现 `passed`（不是一直 `skipped`）
+- [ ] 若开了 `AGENTCREW_SEARCH_PROVIDER`：对应 API Key 已在环境变量中，
+      `python main.py tool web_search --args '{"query":"smoke"}'` 能出结果
 - [ ] 反代已配 TLS、`client_max_body_size 4m`、SSE 关闭缓冲并放长读超时
 - [ ] `8765` 只监听内网地址，公网入口只有反代
 - [ ] `AGENTCREW_OUTPUT_DIR` 指向独立数据盘，权限仅服务账号可写，已设容量告警

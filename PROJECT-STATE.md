@@ -8,12 +8,12 @@
 
 ## 0. 一句话现状
 
-**引擎与管线健康，无 P0/P1 阻断项。** 全量测试 **3115 passed / 2 skipped / 0 failed**（3117 用例收集，`scripts/test.py` 一次跑出），三个预设样例 100% 通过，真实模型通道可用（`doctor` 6/6 通过）；Studio 架构检查 73 模块 / 42 分片、`test:unit` 18 passed 全绿。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道；R19 给主管审核开了独立、不阻塞的 `suggestions` 建议通道；R20 补上单步/断点调试——每个任务派发前可挂起裁决，第二档功能项全部闭环；R21 给 API 契约装上守卫，openapi.yaml 与代码路由双向锁死、不再漏端点；R22 补上 resume 状态白名单与 MCP 管道显式关闭；R23 产出 2501 用例的模块/场景覆盖矩阵（`docs/TEST-REPORT.md`），验收报告遗留的最后一项小项闭环；R24 补上工具管理页与单工具试跑；R25 把共享 API Key 升级为多用户 RBAC（密钥/角色/作用域/归属/审计）；R26 补上拖拽式可视化编排（画布 + YAML 双向 + 图校验）；R27 给检索加向量通道（混合打分 + 磁盘缓存 + 本地退化）；R28 打通「画布 → run」直通规划；R29 让实体记忆也走向量混合（不加列、不迁移）；R30 给审批单加等待窗口与过期告警；R31 给条件边补否定/兜底写法；R32 把控制台 UI 重构成令牌化 + 明暗主题 + 侧栏布局；R33 把单层主管复核扩成可配的多级链；R34 修好本机测试环境（崩溃隔离跑器，一条命令出可信结论）；R50 按差距报告 69 条完成上线前加固——8 项 P0 全关、时钟容错让"前跳误杀/回拨死锁"不再可能、审批与预算的并发边界收口、`/metrics` 补齐可观测入口、Studio 断线可自愈（明细见 `docs/REMEDIATION-STATUS.md`）。
+**引擎与管线健康，无 P0/P1 阻断项。** 全量测试 **3177 passed / 2 skipped / 0 failed**（160 文件 / 40 批次，`scripts/test.py` 一次跑出），三个预设样例 100% 通过，真实模型通道可用（`doctor` 6/6 通过）；Studio 架构检查 73 模块 / 42 分片、`test:unit` 18 passed 全绿。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道；R19 给主管审核开了独立、不阻塞的 `suggestions` 建议通道；R20 补上单步/断点调试——每个任务派发前可挂起裁决，第二档功能项全部闭环；R21 给 API 契约装上守卫，openapi.yaml 与代码路由双向锁死、不再漏端点；R22 补上 resume 状态白名单与 MCP 管道显式关闭；R23 产出 2501 用例的模块/场景覆盖矩阵（`docs/TEST-REPORT.md`），验收报告遗留的最后一项小项闭环；R24 补上工具管理页与单工具试跑；R25 把共享 API Key 升级为多用户 RBAC（密钥/角色/作用域/归属/审计）；R26 补上拖拽式可视化编排（画布 + YAML 双向 + 图校验）；R27 给检索加向量通道（混合打分 + 磁盘缓存 + 本地退化）；R28 打通「画布 → run」直通规划；R29 让实体记忆也走向量混合（不加列、不迁移）；R30 给审批单加等待窗口与过期告警；R31 给条件边补否定/兜底写法；R32 把控制台 UI 重构成令牌化 + 明暗主题 + 侧栏布局；R33 把单层主管复核扩成可配的多级链；R34 修好本机测试环境（崩溃隔离跑器，一条命令出可信结论）；R50 按差距报告 69 条完成上线前加固——8 项 P0 全关、时钟容错让"前跳误杀/回拨死锁"不再可能、审批与预算的并发边界收口、`/metrics` 补齐可观测入口、Studio 断线可自愈（明细见 `docs/REMEDIATION-STATUS.md`）。R51 按能力路线第一批补上三根支柱的关键缺口：**能查**（`web_search`，四提供方、默认关、密钥只走环境变量）、**敢跑**（可插拔执行后端，默认 `local` 行为逐字不变，`docker` 可选：禁网/非 root/资源上限/只挂 run 目录，缺 docker 即报错）、**跑得出结论**（`run_tests` + G1 执行校验，失败并入既有返工通道），并把评测做成 mock/真实双轨（`eval --live` + 23 条真实小目标 + 夜间脚本）。
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | **3117 collected / 3115 passed / 2 skipped / 0 failed**（`python scripts/test.py`，崩溃隔离跑器一次跑出；R50 新增 111 例：时钟容错 17、A-19 计数持久化 7、`/metrics` 5、实时重连 4、批次 7/8 回归 37、契约补强 39、一致性 12、时间守规 3，其余为各批次适配） |
-| 静态检查 | `ruff check .` **全绿**（全仓，14 项历史告警清零）；`mypy agentcrew/` **114 文件零错误**（2.4.1）。CI 等价检查链在本机 3.12 首次跑通 |
+| 全量测试 | **3177 passed / 2 skipped / 0 failed**（`python scripts/test.py`，崩溃隔离跑器一次跑出；R51 新增 62 例：沙箱后端 17、联网搜索 17、run_tests 9、执行校验 10、配置通道 8、工具实验台 +1） |
+| 静态检查 | `ruff check agentcrew/ main.py tests/` **全绿**；`mypy agentcrew/` **137 文件零新增错误**（本机基线有 5 条 HEAD 既存错误，见 §3.64） |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
@@ -66,16 +66,16 @@ contracts.py（零依赖契约层：EventSink / TaskLike）
 | --- | --- |
 | 编排 | DAG 调度 + Kahn 环检测；`(priority, id)` 就绪排序；两级并发（任务槽位与门禁不嵌套，构造性防死锁）；动态子任务（`<subtask>` 围栏）；树状拆解（`parent_id`） |
 | 编排（R4） | 静态 AND 依赖之上叠加**按结果标签的条件边**：Agent 用 `<outcome>` 声明结果、下游用 `when_outcomes` 选分支；未命中分支以「预期跳过」传播、互斥分支在汇合节点收敛。**持久化人工审批**：审批单 `pending → decided → consumed` 三态追加写，run 以 `awaiting_approval` 非终态挂起，CLI / API / Studio 三端跨进程裁决，`resume` 回原卡点继续 |
-| 执行 | 8 角色 Agent；自我修正（`max_self_corrections=2`）；任务级超时 300s；停滞检测 300s（退出码 4）；任务级执行体覆盖 |
+| 执行 | 8 角色 Agent；自我修正（`max_self_corrections=2`）；任务级超时 300s；停滞检测 300s（退出码 4）；任务级执行体覆盖。R51：代码执行有**可插拔后端**（`local` 默认 / `docker` 可选，后者禁网、非 root、cap 全丢、资源上限、只挂 run 目录） |
 | 协作（R5） | `<message to="…">` 接成**目标角色的一次真实模型调用**（`BaseAgent.consult`，不带产物协议、不落盘、不建任务）；`peer_dialogue_enabled` 默认关闭；`max_peer_messages` 配额 + 同问题去重 + 问自己/未知角色零成本拒绝；mock 通道自动降级、Provider 异常不打断提问方 |
 | 委派（R6） | 动态子任务四道闸：角色必须存在（拼错不再静默落通用兜底）/ `manager_only` 时只有经理能派 / 层数 ≤ `max_delegation_depth` / 总数 ≤ `max_dynamic_tasks`；拒绝留 `subtask_rejected_by_policy` 带原因、run 不停；`Task.delegated_by` 留痕派发者。咨询带上提问方任务背景（contextvar 透传，不改回调签名）；`peer_consult_capture_enabled` 可把真实问答沉淀进经验库 |
 | 委派（R8） | 被拒原因**回灌模型**：`SubtaskDispatcher` 暴露 `last_rejection`，Agent 据此回灌并重问一次（`max_subtask_corrections`，默认 1）；裸闭包不回灌（调用次数不变）；只纠正一轮不套娃 |
-| 门禁 | G1 静态校验（语法/危险导入/非空/契约）；G2 并行多评审 + Jaccard 去重（收敛默认关）；G3 人工卡点；`bump_rework` 唯一调用点在 Gatekeeper |
+| 门禁 | G1 静态校验（语法/危险导入/非空/契约）；G2 并行多评审 + Jaccard 去重（收敛默认关）；G3 人工卡点；`bump_rework` 唯一调用点在 Gatekeeper。R51：G1 增加**执行校验档**（`gate_config.exec_verify`，默认关）——在沙箱里跑任务自己交付的 pytest，失败并入 G1 issue 走既有返工通道 |
 | 门禁（R7/R9/R10） | 主管审核：动态委派任务在 G1/G2 放行后，由**派活的人**再评一次（`layer="supervisor"`），复用同一套返工通道；不受 score / 收敛旁路保护。R9 起 `supervisor_scope=all` 时规划期任务回落到 `supervisor_role`（默认 PM）验收，主管已在 G2 评审人里则跳过。R10 起主管驳回可**换人**：按 `role_fallback` 挑替代角色、改 `task.role` 后仍走 REWORK，上限 `max_supervisor_reassignments` 且换人消耗返工额度。默认关闭、mock 通道明确跳过 |
 | 模型 | 7 类 provider（openai 兼容 / anthropic / mock / cli / 三传输 MCP）；27 个预设；四级别名解析；故障转移 + 冷却矩阵（402=30min，429=Retry-After 或指数退避，5xx=指数退避）；per-provider 并发信号量 + 60s RPM 滑动窗口；复杂度自动选模 + 动态校准；响应缓存（temperature=0）；预算硬上限 + 80%/90% 软阈值 |
 | 可观测 | `ledger.jsonl` 全事件审计（run/task/llm_call/gate/error…）；contextvars 链路追踪（`utils/trace.py`，`llm_call` 自动带 `task_id`/`attempt`）；`log_level` + `AGENTCREW_LOG_JSON=1` 结构化日志（含脱敏）；`diff` / `status` / 统计端点 |
 | 产物 | 契约校验（路径/类型/最小字节/必需符号）+ 命名空间隔离 + `MANIFEST.json` + sha256；安全落盘（双侧路径规范化） |
-| 工具（R3/R13） | 6 个内置工具（`read_file` / `list_files` / `grep` / `run_python` / `write_file` / `web_fetch`）+ **R13 起 MCP 服务器的工具**（`server__tool` 前缀防撞名、schema 原样透传、单服务器失败只跳过）；`tools_enabled` 默认关闭的 run 级自动装配 + `tool_permissions` 执行期下发；执行前 JSON Schema 子集强校验（失败带正确形状回灌、绝不执行）；`web_fetch` 全链路 SSRF 防护 |
+| 工具（R3/R13/R51） | 7 个内置工具（`read_file` / `list_files` / `grep` / `run_python` / `run_tests` / `write_file` / `web_fetch`）+ `web_search`（C1，配置提供方才出现）+ **R13 起 MCP 服务器的工具**（`server__tool` 前缀防撞名、schema 原样透传、单服务器失败只跳过）；`tools_enabled` 默认关闭的 run 级自动装配 + `tool_permissions` 执行期下发；执行前 JSON Schema 子集强校验（失败带正确形状回灌、绝不执行）；`web_fetch` / `web_search` 全链路 SSRF 防护 |
 | 知识（R3/R11） | 经验库（R11 起为中文二元组 + BM25 检索：IDF 压虚词、长度归一、单字命中不算相关）+ 实体记忆（纯规则抽取五类实体、跨 run 追加归并、加权检索注入 PM 上下文）；`entity_memory_enabled` 默认关闭 |
 | 对外通知（R12/R14/R15） | 出站 Webhook：后台线程投递（不阻塞 run）、HMAC-SHA256 签名（时间戳纳入签名防重放）、`delivery` id 重试不变、失败重试有上限且不改 run 结局；默认推五个 run 级节点；密钥不导出/不进快照/进脱敏词表；默认关闭。R14 支持多接收端各自 `secret`/`events`/`only_failures`。R15 起每条「事件 × 接收端」入队前落盘、成功即删，进程退出或收尾超时的遗留记录由下一次启用 Webhook 的 run 补投（at-least-once，24h / 5 次淘汰），spool 不存 URL 与密钥 |
 | 接口 | CLI（`run/resume/status/roles/agents/switch/samples/clean/cancel/delete/serve/doctor/diff/providers/models/config`）；HTTP API + SSE + Web UI；API Key 认证 + IP 限流；并发 run 上限 `AGENTCREW_MAX_CONCURRENT_RUNS=8` |
@@ -1704,7 +1704,33 @@ Studio 架构检查 73 模块 / 42 分片通过、`test:unit` 18 passed。
 - **D-16 的「写盘注入 OSError」**：注入点与 `_finalize` 内部原子写耦合过紧，维护成本高于收益；
   已覆盖心跳被删 / 时钟回拨 / 锁互斥 / 状态矩阵四类更常见的边界。
 
+### 3.64 R51：能力补齐第一批 —— 联网搜索 / 沙箱后端 / 执行验证 / 评测证据（2026-11-12）
+
+按 `完善/AgentCrew落地完善路线-2026-11-12.md` §5「第一批（P0）」落地。三条判断贯穿全批：
+**默认关闭**（不配就没有这些能力）、**local 行为逐字不变**（离线可测不被破坏）、
+**fail loud**（选了 docker 却没有 docker 就报错，不静默降级）。
+
+| 能力 | 落地方式 | 边界 / 证据 |
+| --- | --- | --- |
+| **C1 联网搜索** | 新增 `tools/search.py`：`SearchProvider` 接口 + `tavily` / `brave` / `duckduckgo` / `mock` 四实现 + `WebSearchTool`。`search_provider` 为空时**不注册**；密钥只从 `TAVILY_API_KEY` / `BRAVE_API_KEY` / `AGENTCREW_SEARCH_API_KEY` 读 | 端点固定公网 https、不跟随重定向；结果按 URL 去重并逐个过 `validate_fetch_url`（私网 / `file://` / 带凭据一律丢弃）；输出 8000 字符截断。`tests/test_web_search.py` 17 例 |
+| **C2 沙箱执行后端** | 新增 `tools/sandbox.py`：`ExecutionBackend` 接口 + `LocalBackend`（与 R35 逐字一致）+ `DockerBackend`（禁网、非 root 65534、`--cap-drop ALL`、`no-new-privileges`、只读根 + `/tmp` tmpfs、`--memory`/`--cpus`/`--pids-limit`、只挂 `<run_dir>:/workspace`）。`run_python` / `run_tests` / G1 执行校验共用 | 配置 `sandbox_backend` / `sandbox_image` / `sandbox_memory_mb` / `sandbox_cpus` / `sandbox_allow_network`；`build_backend` 在构造期探测 docker，缺失即 `SandboxError`。`tests/test_sandbox_backend.py` 17 例（含 argv 逐项断言、缺 docker 报错、启动崩溃重试一次） |
+| **C3 执行-测试-修正** | 新增 `tools/testing.py`（`run_tests`：只接受 `path`/`timeout`，不写 `.pytest_cache`，输出保留尾部）+ `gate/execute_verify.py`（G1 执行校验档，`gate_config.exec_verify` 默认关）。失败并入 G1 issue/hint，走**既有** `REWORK` 通道 | 校验目录是 `<run_dir>/verify/<task_id>/` 的产物副本；无测试文件记 `skipped`、mock 通道记 `g1_exec_check_skipped`；本地/容器后端同一份。`tests/test_run_tests.py` 9 例 + `tests/test_exec_verify.py` 10 例（含与 Gatekeeper 的接线与默认关闭） |
+| **C11 评测证据** | `eval --live`（真实模型）+ `--max-cost` 硬上限；新增断言 `event_field` / `artifact_any_contains` / `artifact_any_matches`；`CaseOutput.events` 事件快照；两份数据集（`capabilities.jsonl` 4 条 mock 接线、`capability-live.jsonl` 23 条真实小目标：代码 8 / 文档 6 / 数据 6 / 驳回 3）；`scripts/nightly_eval.py` 夜间跑并落盘 `bench/eval-*.json` | mock 能力接线 **4/4 通过**（见 `bench/eval-capabilities-offline-2026-11-12.json`）；真实 23 条需密钥，尚未跑（§7） |
+| **C12 发布证据** | 全量回归 + ruff/mypy 复核；`docs/CAPABILITIES-C1-C3.md` 落地说明；OPERATIONS / THREAT_MODEL / example.yaml 同步 | 见下方验证；Docker 与推送两项本机不可验证，如实记在 §7 |
+
+**新增测试 62 例**（沙箱 17 / 搜索 17 / run_tests 9 / 执行校验 10 / 配置通道 8 /
+工具实验台 +1），全量 **3177 passed / 0 failed / 2 skipped**（160 文件 / 40 批次，
+`python scripts/test.py` 一次跑出）。
+`ruff check agentcrew/ main.py tests/` 全绿；`mypy agentcrew/` 137 文件**零新增错误**
+（HEAD 基线本机就有 5 条既存错误：`flow/spec.py` 3 条 `TaskDraft` 参数、`api/server.py`
+2 条 Optional 访问——与本次改动无关，未在本批处理）。
+
+**明确不做**：不引 docker SDK（拼 CLI 参数即可）、不实现 gVisor/microVM（留
+`ExecutionBackend` 接口）、不把 `sandbox_backend` 开进 API options（防隔离降级）、
+不做「搜索结果自动抓正文」（保持搜索/抓取两步，SSRF 边界只有一处）。
+
 ---
+
 ## 4. 历史报告汇总（已并入本文，原文归档）
 
 | 报告 | 时间 | 核心结论 | 现状 |
@@ -1866,8 +1892,11 @@ Studio 架构检查 73 模块 / 42 分片通过、`test:unit` 18 passed。
 | 「写盘注入 OSError」一致性用例（D-16 剩余） | 🟡 其余四类边界已覆盖 | 若重构封版路径，同步补该注入点 |
 | 覆盖率门槛 50% | 已配 `fail_under`，本机 Win 测不准 | 看首次 CI 的 `--cov-fail-under` 结果 |
 | Docker 三件套 | 已交付，本机无 docker | 在 CI/目标机 `docker compose build`，验非 root 对 `output/` 写权限 |
+| C2 docker 执行后端 | ✅ 已交付（`sandbox_backend=docker`），参数逐项有测试，**容器未真跑** | 目标机跑一次 `run_tests` + 三条逃逸用例（出网 / 读宿主 / 资源耗尽），结果补进 THREAT_MODEL |
+| C3 执行校验 | ✅ 已交付（默认关，`gate_config.exec_verify`） | 真实模型端到端一次「生成函数+测试 → 首跑失败 → 自修正 → 通过」，确认 ledger 里 `g1_exec_check` 与返工闭环可见 |
 | CI 首次实跑 | 已补 studio job + 覆盖率 + 回滚手册 | 看 GitHub Actions 四版本矩阵 + 新 job 结果 |
-| `web_search` 工具 | 未做 | 需外部搜索 API 与密钥，独立设计 |
+| ~~`web_search` 工具~~ | ✅ **R51 已交付** | 四提供方（tavily/brave/duckduckgo/mock）+ SSRF 过滤 + 默认关 + 离线可测，见 §3.64 |
+| 真实评测报告（C11） | 数据集与脚本已就绪（23 条 + `--live` + 夜间脚本） | 有密钥的机器上 `python scripts/nightly_eval.py --max-cost 1.50`，把 `bench/eval-*-live-*.json` 的 pass^k / 成本 / 失败归因回填本文 |
 | 向量检索 / RAG | 未做（BM25 + 二元组已覆盖经验库） | 大项，需先定 embedding 通道与存储 |
 | run 目录静态加密 | 未做 | 依赖部署侧决策（LUKS / 云盘加密） |
 

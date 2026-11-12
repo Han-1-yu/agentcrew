@@ -24,6 +24,25 @@ tools_enabled: true             # 允许 Agent 使用工具（读写文件 / 检
 code_exec_enabled: false        # 允许执行代码；生产不需要就关掉
 untrusted_inputs: false         # 输入来自外部文档时置 true（只给只读工具）
 
+# ── C2：代码到底在哪跑 ──────────────────────────────────────────────────
+# local  = 现有进程内子进程（-I / 裁剪环境 / cwd / 超时）。没有网络与系统调用隔离。
+# docker = 容器内执行：禁网、非 root、cap 全丢、只读根、CPU/内存/PID 上限、只挂 run 目录。
+#          宿主机没有 docker 时 run 直接失败（fail loud），不会静默退回 local。
+#          跑 run_tests 需要镜像里带 pytest。
+sandbox_backend: local
+sandbox_image: python:3.12-slim
+sandbox_memory_mb: 512
+sandbox_cpus: 1.0
+sandbox_allow_network: false    # docker 模式下是否允许出网（默认禁）
+
+# ── C1：联网搜索（空 = 关闭，不注册 web_search）────────────────────────
+# 可选 tavily / brave / duckduckgo。密钥只从环境变量读，绝不写在这里：
+#   TAVILY_API_KEY / BRAVE_API_KEY（或通用的 AGENTCREW_SEARCH_API_KEY）
+# duckduckgo 免密钥，适合本机 smoke，不适合生产主力。
+search_provider: ""
+search_max_results: 5
+search_timeout_seconds: 15
+
 # ══════════════════════════════════════════════════════════════════════════════
 # 2. 门禁（G1 静态校验 / G2 LLM 评审 / G3 人工卡点）
 # ══════════════════════════════════════════════════════════════════════════════
@@ -42,6 +61,12 @@ gate_config:
 
   # 收敛检测：同一批 issue 连续出现 N 轮则提前判失败，不再烧返工额度
   # convergence_threshold: 2
+
+  # C3：G1 执行校验（默认关）。打开后，静态校验通过的任务会在沙箱里跑它自己
+  # 交付的 pytest 用例；失败并入 G1 issue，走既有返工通道（不新增第二条路径）。
+  # mock 通道会显式跳过并记 g1_exec_check_skipped（夹具跨任务引用，跑不出结论）。
+  # exec_verify: true
+  # exec_verify_timeout_seconds: 120
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 3. 模型绑定
