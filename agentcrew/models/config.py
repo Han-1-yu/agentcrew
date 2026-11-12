@@ -35,6 +35,11 @@ class ProviderCapabilities(BaseModel):
     supports_json_schema: bool = False
     supports_json_object: bool = False
     supports_tool_calls: bool = False
+    #: C4：多模态输入（图片理解）。与 ``supports_tool_calls`` 同一先例：
+    #: 默认 ``False``（纯文本路径逐字节不变），要启用就在
+    #: ``provider_overrides.<provider>.capabilities.supports_vision: true``。
+    #: 关闭时带图消息**只发文本**并落 ``vision_unsupported`` 事件，绝不静默。
+    supports_vision: bool = False
     supports_system_role: bool = True
     max_context_tokens: int = 128_000
     max_output_tokens: int = 8_192

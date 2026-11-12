@@ -253,7 +253,7 @@ examples/samples/<name>/
 
 | 子命令 | 用途 | 常用参数 |
 |---|---|---|
-| `python main.py run` | 执行一次完整 run（规划 → 执行 → 交付） | `--goal TEXT` 与 `--demo` 二选一；`--mock`；`--auto`；`--gate both\|plan\|delivery\|none`；`--max-concurrency N`；`--default-model ALIAS`；`--output-dir DIR`；`--context-budget N`；`--no-live` |
+| `python main.py run` | 执行一次完整 run（规划 → 执行 → 交付） | `--goal TEXT` 与 `--demo` 二选一；`--mock`；`--image PATH`（C4 多模态，可重复最多 4 张）；`--auto`；`--gate both\|plan\|delivery\|none`；`--max-concurrency N`；`--default-model ALIAS`；`--output-dir DIR`；`--context-budget N`；`--no-live` |
 | `python main.py resume <run_id>` | 续跑一个中断或未完成的 run | `--force`（配置快照不一致时仍继续）；以及 `run` 的全部配置参数 |
 | `python main.py status <run_id>` | 打印 run 记录、统计、任务看板与待审批条数 | `--output-dir DIR` |
 | `python main.py approvals <run_id>` | R4：列出该 run 的持久化人工审批单 | `--output-dir DIR` |
@@ -547,6 +547,11 @@ DELETE /runs/{run_id}?confirm=1
 - **安全**：所有文件操作限制在项目根内（`safe_relpath` 拒绝 `../`、绝对路径、
   盘符）；`run_python` 用独立子进程（`-I` 隔离、cwd 受限、默认 10s 超时、裁剪
   环境变量），生成代码不在宿主进程执行。
+- **多模态输入（C4）**：`run --image 截图.png` 或 `POST /runs` 的 `images`
+  数组（内联 base64，最多 4 张）。是否真发给模型由
+  `capabilities.supports_vision` 决定（默认关）；不支持时降级纯文本并落
+  `vision_unsupported` 事件——降级可见，不静默。图片落盘到
+  `<run_dir>/context/images/` 并记 `images_attached`。
 - **诚实留痕**：每次工具调用都记 ledger `tool_call` 事件（工具名、入参摘要、
   success、耗时、**mode**）。
 - **原生 function calling（P2-1，默认关闭）**：把 provider 的

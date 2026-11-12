@@ -464,6 +464,13 @@ def _add_run_flags(parser: argparse.ArgumentParser) -> None:
              "并自动开启 --mock。run 时与 --goal / --demo 互斥。")
     parser.add_argument("--mock", action="store_true",
                         help="强制 mock provider（覆盖所有角色绑定，无需 API Key）")
+    # C4：随目标附带的图片（多模态输入）。可重复（最多 4 张）；单张 ≤2.6 MB，
+    # png/jpg/webp/gif。是否真发给模型由 provider 的 supports_vision 能力位决定，
+    # 不支持时降级为纯文本并落 vision_unsupported 事件（降级可见，不静默）。
+    parser.add_argument(
+        "--image", action="append", default=None, metavar="PATH",
+        help="随目标附带图片（可重复，最多 4 张；单张 ≤2.6 MB，png/jpg/webp/gif）。"
+             "仅在 provider 开启 capabilities.supports_vision 时真正生效")
     parser.add_argument("--auto", action="store_true",
                         help="等价于 --gate none（全自动，跳过人工闸门）")
     parser.add_argument("--plan-only", action="store_true",
@@ -643,6 +650,47 @@ def _reconcile_on_startup(settings: Settings) -> None:
             )
 
 
+#: CLI ``--image`` 的上限与白名单（与 API 侧 validate_images 同口径）。
+_IMAGE_MAX_BYTES = 2_600_000
+_IMAGE_MIME_BY_SUFFIX = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".webp": "image/webp", ".gif": "image/gif",
+}
+
+
+def _load_cli_images(paths: list[str] | None) -> tuple[list[dict], str | None]:
+    """读取 ``--image`` 指定的文件并转成 Crew 的 images 形状。
+
+    返回 ``(images, 错误文案)``；错误文案非 None 时调用方 ``_fail``。
+    """
+    import base64 as _base64
+
+    if not paths:
+        return [], None
+    if len(paths) > 4:
+        return [], "--image 最多 4 张"
+    images: list[dict] = []
+    for raw_path in paths:
+        path = Path(raw_path)
+        mime = _IMAGE_MIME_BY_SUFFIX.get(path.suffix.lower())
+        if mime is None:
+            return [], (
+                f"--image {raw_path}：不支持的格式 {path.suffix!r}"
+                "（可用 png / jpg / webp / gif）")
+        try:
+            data = path.read_bytes()
+        except OSError as exc:
+            return [], f"--image {raw_path}：读取失败（{exc}）"
+        if len(data) > _IMAGE_MAX_BYTES:
+            return [], (f"--image {raw_path}：单张上限 2.6 MB，"
+                        f"实际 {len(data) / 1e6:.1f} MB")
+        images.append({
+            "mime": mime,
+            "data": _base64.b64encode(data).decode("ascii"),
+        })
+    return images, None
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     """``run --goal TEXT | --demo | --sample NAME``：三选一，否则退出码 3。"""
     chosen = [
@@ -702,8 +750,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
                       "（跳过 PM 规划）")
     assert goal is not None
     hook = _BoardHook(goal, enabled=not args.no_live, console=console)
+    images, image_error = _load_cli_images(getattr(args, "image", None))
+    if image_error:
+        return _fail(image_error)
     crew = Crew(settings, catalog=catalog, prompter=prompter, on_event=hook,
-                preset_tasks=preset_tasks)
+                preset_tasks=preset_tasks, images=images)
     hook.bind(crew)
     return _drive(crew, lambda: crew.run(goal), hook=hook, console=console)
 

@@ -28,6 +28,16 @@ class _OptionalMessageFields(TypedDict, total=False):
     tool_call_id: str
     """role="tool" 的消息对应的调用 id（与 assistant 的 tool_calls[].id 对齐）。"""
 
+    images: list[dict[str, Any]]
+    """C4：随消息附带的图片（多模态输入）。
+
+    每项 ``{"mime": "image/png", "data": "<base64>"}``（内联图片）。是否真的
+    发给模型由 Provider 决定：``capabilities.supports_vision`` 为真时转换成
+    各自 API 的内容块（OpenAI ``image_url`` / Anthropic ``image`` source），
+    否则**原样丢弃**（只发文本，行为与 C4 之前逐字节一致）——降级必须可见，
+    由 Agent 层落 ``vision_unsupported`` ledger 事件，而不是静默假装看过了。
+    """
+
 
 class Message(_OptionalMessageFields):
     """一次对话中的单条消息。

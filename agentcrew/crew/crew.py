@@ -33,6 +33,7 @@ carry-forward 是 load-bearing 的：``ArtifactStore.load_manifest`` 重建产�
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 from collections.abc import Callable, Mapping, Sequence
@@ -321,6 +322,7 @@ class Crew:
         tool_registry: ToolRegistry | None = None,
         entity_memory_enabled: bool | None = None,
         preset_tasks: Sequence[Any] | None = None,
+        images: Sequence[Mapping[str, Any]] | None = None,
     ) -> None:
         """``catalog`` / ``store`` 缺省由本类按需构造；``prompter`` **原样透传**。
 
@@ -394,6 +396,9 @@ class Crew:
         self._finalized = False
         #: C2：执行后端惰性构造一次（docker 模式下探测也要花一次进程调用）。
         self._sandbox_backend: ExecutionBackend | None = None
+        #: C4：随 run 附带的图片（多模态输入）。空 = 纯文本路径，零开销。
+        self._images: list[dict[str, Any]] = [
+            dict(item) for item in (images or [])]
         # P3-1（2026-11 会话隔离改造）：校准器从「模块级全局单例」改为 **Crew
         # 实例属性**，构造 ModelFactory 时显式注入。原实现每次构造 Crew 都调用
         # ``set_calibrator(ComplexityCalibrator())`` 全量替换全局单例——API 服务器
@@ -776,6 +781,9 @@ class Crew:
         # 所以 clean / delete_run 不会碰它。
         self._webhook = self._build_webhook(
             ledger, spool_dir=checkpoint.run_dir.parent / SPOOL_DIR_NAME)
+        # C4：把附带图片落盘到 run 目录（输入证据，随 run 保留），并记一条
+        # ``images_attached``——「模型这次能看到图」必须能从审计读出来。
+        self._persist_images(checkpoint.run_dir, ledger)
         goal = record.project_goal if goal is None else goal
         # R3：工具链装配。默认关闭时返回 None，AgentFactory 与改造前完全一致。
         tool_registry = self._build_tool_registry(checkpoint, ledger)
@@ -808,6 +816,7 @@ class Crew:
             agents=AgentFactory(
                 models, store, ledger, goal, self._catalog,
                 settings=self._settings, run_id=record.run_id,
+                images=self._images,
                 tool_registry=tool_registry,
                 # P2-4：工具级 guardrails（未配置规则时为 None，零开销）。
                 tool_guard=build_tool_guard(self._settings.tool_guards),
@@ -1875,6 +1884,38 @@ class Crew:
         if status is RunStatus.AWAITING_APPROVAL:
             return EXIT_CODES["ok"]
         return EXIT_CODES["failed"]
+
+    def _persist_images(self, run_dir: Path, ledger: Ledger) -> None:
+        """C4：把附带图片写成 ``<run_dir>/context/images/NN.<ext>``（输入证据）。
+
+        每个文件独立落盘、失败只记 warning 不炸 run——图片是输入增强，不是
+        交付路径上的必需品；写盘失败时模型看不到图，``vision_unsupported``
+        的降级语义仍然成立。
+        """
+        if not self._images:
+            return
+        image_dir = run_dir / "context" / "images"
+        extensions = {"image/png": "png", "image/jpeg": "jpg",
+                      "image/webp": "webp", "image/gif": "gif"}
+        saved: list[str] = []
+        total_bytes = 0
+        for index, image in enumerate(self._images):
+            extension = extensions.get(str(image.get("mime", "")), "png")
+            try:
+                image_dir.mkdir(parents=True, exist_ok=True)
+                path = image_dir / f"{index:02d}.{extension}"
+                path.write_bytes(base64.b64decode(image.get("data", "")))
+                saved.append(path.name)
+                total_bytes += path.stat().st_size
+            except (OSError, ValueError) as exc:
+                _logger.warning("图片落盘失败 #%s: %s", index, exc)
+        if saved:
+            ledger.emit(
+                "images_attached",
+                count=len(saved),
+                total_bytes=total_bytes,
+                files=saved,
+            )
 
     def _execution_backend(self) -> ExecutionBackend:
         """C2：按配置构造执行后端（local 默认；docker 可选，缺失即报错）。

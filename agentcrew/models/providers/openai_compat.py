@@ -347,8 +347,23 @@ class OpenAICompatProvider(BaseProvider):
         """
         prepared: list[dict[str, Any]] = []
         for message in messages:
+            content: Any = message["content"]
+            images = message.get("images") or []
+            # C4：带图 + provider 支持 vision → 文本 + image_url 内容块
+            # （base64 内联或 URL）。不支持 / 纯文本路径 → 与改造前逐字节一致。
+            if images and self.capabilities.supports_vision                     and message["role"] in ("user", "assistant"):
+                parts: list[dict[str, Any]] = [
+                    {"type": "text", "text": message["content"]}]
+                for image in images:
+                    url = (f"data:{image.get('mime', 'image/png')};base64,"
+                           f"{image['data']}" if image.get("data")
+                           else image.get("url"))
+                    if url:
+                        parts.append({"type": "image_url",
+                                      "image_url": {"url": url}})
+                content = parts
             item: dict[str, Any] = {
-                "role": message["role"], "content": message["content"]}
+                "role": message["role"], "content": content}
             tool_calls = message.get("tool_calls")
             if tool_calls:
                 item["tool_calls"] = list(tool_calls)

@@ -18,6 +18,7 @@ Crew 覆写为 none，``output_dir`` / ``api_keys`` 等属于服务端配置，�
 
 from __future__ import annotations
 
+import base64
 import math
 from collections.abc import Mapping
 from typing import Any
@@ -201,3 +202,55 @@ def apply_run_options(settings: Any, options: Mapping[str, Any]) -> tuple[Any, s
         return settings.model_copy(update=dict(options)), None
     except (TypeError, ValueError) as exc:
         return settings, f"options 无法应用：{exc}"
+
+
+# ── C4：随 run 附带图片的入口校验 ────────────────────────────────────────
+
+#: 允许的 MIME（与 Provider 侧转换支持的类型一致）。
+_ALLOWED_IMAGE_MIMES = frozenset({
+    "image/png", "image/jpeg", "image/webp", "image/gif",
+})
+#: 单张图片 base64 字符数上限（约 2.6 MB 原始字节；HTTP body 总上限 4 MiB
+#: 由服务器层先卡一道，这里再卡单张，防止一张图吃掉整个请求预算）。
+_MAX_IMAGE_B64_CHARS = 3_500_000
+_MAX_IMAGES = 4
+
+
+def validate_images(images: Any) -> list[dict[str, str]]:
+    """校验并规范化 ``POST /runs`` body 里的 ``images``；非法抛 ``ValueError``。
+
+    只接受**内联 base64**（``{"data": ..., "mime": ...}``）：URL 形式会让服务器
+    替调用方出网抓取（SSRF 面 + 不可控内容），v1 刻意不支持——调用方自己取好图、
+    编好 base64 再发。返回规范化后的 ``[{"mime", "data"}]`` 列表。
+    """
+    if not isinstance(images, list):
+        raise ValueError("images 必须是数组")
+    if len(images) > _MAX_IMAGES:
+        raise ValueError(f"images 最多 {_MAX_IMAGES} 张，收到 {len(images)} 张")
+    normalized: list[dict[str, str]] = []
+    for index, item in enumerate(images):
+        if not isinstance(item, dict):
+            raise ValueError(f"images[{index}] 必须是对象")
+        mime = str(item.get("mime") or "image/png").strip().lower()
+        if mime not in _ALLOWED_IMAGE_MIMES:
+            raise ValueError(
+                f"images[{index}].mime 不支持：{mime!r}"
+                f"（可用：{', '.join(sorted(_ALLOWED_IMAGE_MIMES))}）")
+        if item.get("url"):
+            raise ValueError(
+                f"images[{index}] 不支持 url 形式（服务端不代抓外链）："
+                "请自行下载后以 base64 data 传入")
+        data = item.get("data")
+        if not isinstance(data, str) or not data.strip():
+            raise ValueError(f"images[{index}].data 必须是非空 base64 字符串")
+        if len(data) > _MAX_IMAGE_B64_CHARS:
+            raise ValueError(
+                f"images[{index}] 超过单张上限（base64 长度 "
+                f"{len(data)} > {_MAX_IMAGE_B64_CHARS}）")
+        try:
+            base64.b64decode(data, validate=True)
+        except Exception as exc:  # noqa: BLE001 —— binascii.Error 体系不稳定
+            raise ValueError(
+                f"images[{index}].data 不是合法 base64：{exc}") from None
+        normalized.append({"mime": mime, "data": data})
+    return normalized

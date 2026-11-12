@@ -95,6 +95,7 @@ class AgentFactory:
         tool_guard: Any | None = None,
         stream: bool = False,
         stream_sink: Callable[[str, str, str], None] | None = None,
+        images: list[dict[str, Any]] | None = None,
     ) -> None:
         self._models = models
         self._store = store
@@ -108,6 +109,8 @@ class AgentFactory:
         #: P2-1：动态子任务回调；``setter`` 会同步刷新已缓存的 Agent 实例
         #: （调度器在交付打回后换板重入时，缓存实例仍指向旧面板的闭包）。
         self._subtask_creator: Callable[[dict], str | None] | None = subtask_creator
+        #: C4：随 run 附带的图片（多模态输入）；下发到每个 Agent。
+        self._images = list(images or [])
         #: 多 agent：配置来自 Settings；未注入时等价于"每个角色一个默认执行体"。
         self._settings = settings
         self._run_id = run_id
@@ -488,6 +491,8 @@ class AgentFactory:
             stream=self._stream,
             # P3-3 → UI：流式增量正文出口（None = 不推正文，仅 ledger 摘要）。
             stream_sink=self._stream_sink,
+            # C4：多模态输入——是否真发给模型由 provider 能力位决定（降级可见）。
+            images=self._images,
         )
         if resolved is not None:
             agent.path_scope = list(resolved.path_scope)

@@ -49,7 +49,7 @@ from agentcrew.api.rbac import (
     set_current,
     write_owner,
 )
-from agentcrew.api.run_options import validate_run_options
+from agentcrew.api.run_options import validate_images, validate_run_options
 from agentcrew.models.config import PROVIDER_PRESETS as PROVIDER_PRESETS_NAMES
 from agentcrew.utils.logger import redact
 
@@ -227,7 +227,7 @@ class ApiServer:
         event_bus: EventBus | None = None,
         output_dir: Path | None = None,
         settings: Any | None = None,
-        crew_factory: Callable[[str, Mapping[str, Any]], Any] | None = None,
+        crew_factory: Callable[..., Any] | None = None,
         auth: APIKeyAuth | None = None,
         rate_limiter: RateLimiter | None = None,
         model_factory: Any | None = None,
@@ -902,8 +902,17 @@ class ApiServer:
         if option_error is not None:
             await self._send_json(writer, 400, {"error": option_error})
             return
+        # C4：可选的随 run 图片（多模态输入）。校验失败回 400——
+        # 带着坏图片起跑，模型只会看到半截 base64。
+        images = data.get("images") or []
         try:
-            crew = self._build_crew(goal, options)
+            images = validate_images(images)
+        except ValueError as exc:
+            await self._send_json(
+                writer, 400, {"error": f"images 不合法：{exc}"})
+            return
+        try:
+            crew = self._build_crew(goal, options, images)
         except (ValueError, TypeError) as exc:
             await self._send_json(
                 writer, 400, {"error": f"options 无法应用：{exc}"})
@@ -1025,11 +1034,19 @@ class ApiServer:
             _logger.warning("run_triggered 落账失败 run=%s: %s", run_id, exc)
 
     def _build_crew(
-        self, goal: str, options: Mapping[str, Any]
+        self, goal: str, options: Mapping[str, Any],
+        images: list[dict[str, str]] | None = None,
     ) -> Any | None:
-        """经 ``crew_factory`` 建 Crew；缺省用 ``settings`` 现场造一个无人值守实例。"""
+        """经 ``crew_factory`` 建 Crew；缺省用 ``settings`` 现场造一个无人值守实例。
+
+        ``images``（C4）：随 run 附带的图片，交给 Crew 下发给每个 Agent；
+        自定义 ``crew_factory`` 优先尝试三参签名，旧的两参替身照常兼容。
+        """
         if self._crew_factory is not None:
-            return self._crew_factory(goal, options)
+            try:
+                return self._crew_factory(goal, options, images)
+            except TypeError:
+                return self._crew_factory(goal, options)
         if self._settings is None:
             return None
         from agentcrew.crew.crew import Crew
@@ -1059,10 +1076,11 @@ class ApiServer:
             settings = settings.model_copy(update={"gate": gate})
             return Crew(settings, on_event=self.on_event,
                         prompter=DeferredPrompter(),
-                        preset_tasks=preset_tasks)
+                        preset_tasks=preset_tasks, images=images)
         # 其余情况：API 服务器无人值守，人工卡点会在 await prompter 上永久挂起。
         settings = settings.model_copy(update={"gate": "none"})
-        return Crew(settings, on_event=self.on_event, preset_tasks=preset_tasks)
+        return Crew(settings, on_event=self.on_event, preset_tasks=preset_tasks,
+                    images=images)
 
     def _preset_tasks_from_options(
         self, flow_options: Mapping[str, Any]

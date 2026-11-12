@@ -737,6 +737,19 @@ class ModelFactory:
             return bool(self.get(alias).capabilities.supports_tool_calls)
         except Exception:  # noqa: BLE001 —— 只做能力探测，错误留给真正的调用
             return False
+    def supports_vision(self, alias: str) -> bool:
+        """该别名能否接收图片输入（C4）。
+
+        判据与 :meth:`supports_native_tools` 同构：``capabilities.supports_vision``。
+        默认全 False——纯文本路径逐字节不变；要启用就在
+        ``provider_overrides.<provider>.capabilities.supports_vision: true``。
+        取 Provider 失败时返回 ``False``（错误留给真正的调用）。
+        """
+        try:
+            return bool(self.get(alias).capabilities.supports_vision)
+        except Exception:  # noqa: BLE001 —— 只做能力探测，错误留给真正的调用
+            return False
+
 
     def alias_for_task(self, task: TaskLike) -> str:
         """按任务复杂度选模型别名（V2：按认知复杂度自动选模型）。

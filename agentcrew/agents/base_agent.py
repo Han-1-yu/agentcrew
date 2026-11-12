@@ -469,6 +469,7 @@ class BaseAgent(ABC):
         max_subtask_corrections: int = 1,
         tool_guard: Any | None = None,
         stream_sink: Callable[[str, str, str], None] | None = None,
+        images: list[dict[str, Any]] | None = None,
     ) -> None:
         """``catalog`` 是本 run 的角色目录（含自定义角色），可为 ``None``。
 
@@ -542,6 +543,11 @@ class BaseAgent(ABC):
         self._stream_sink = stream_sink
         #: P2-4：工具级 guardrails（``None`` = 没配规则，整段逻辑是一次判断）。
         self._tool_guard = tool_guard
+        #: C4：随任务附带的图片（多模态输入）。``None``/空 = 纯文本路径，
+        #: 行为与 C4 之前逐字节一致。只有 provider 声明 ``supports_vision``
+        #: 才会真的发给模型；否则降级为只发文本并落 ``vision_unsupported`` 事件。
+        self._images = list(images or [])
+        self._vision_warned = False
 
     def set_tool_guard(self, guard: Any | None) -> None:
         """运行时更换 guard（AgentFactory 在配置变更后刷新缓存实例用，P2-4）。"""
@@ -698,9 +704,24 @@ class BaseAgent(ABC):
         if self._message_router is not None:
             system_parts.append(_MESSAGE_SECTION)
         system = "\n\n".join(system_parts)
+        user_message: Message = {
+            "role": "user", "content": _render_pack(pack, fix_hints)}
+        if self._images:
+            if self._models.supports_vision(self._resolve_alias(task)):
+                user_message["images"] = list(self._images)
+            elif not self._vision_warned:
+                # 降级必须可见：模型没看到图这件事，要能从审计里读出来，
+                # 而不是静默地按纯文本跑完（那会让「截图改前端」类目标
+                # 无声地变成盲写）。
+                self._vision_warned = True
+                self._ledger.emit(
+                    "vision_unsupported",
+                    role=self.spec.key,
+                    images=len(self._images),
+                )
         return [
             {"role": "system", "content": system},
-            {"role": "user", "content": _render_pack(pack, fix_hints)},
+            user_message,
         ]
 
     def parse_output(self, raw: str, task: Task) -> ParsedOutput:

@@ -1,4 +1,4 @@
-# 能力补齐第二批：MCP server / 浏览器接入 / 事件触发（C7 · C6 · C8）
+# 能力补齐第二批：MCP server / 浏览器接入 / 事件触发 / 多模态（C7 · C6 · C8 · C4）
 
 > 立项依据：`完善/AgentCrew落地完善路线-2026-11-12.md` §5 第二批（P1）。
 > 本批交付：C7（暴露为 MCP server，杠杆最大）、C6 第一步（借现成浏览器 MCP，
@@ -124,7 +124,26 @@ curl -X POST http://127.0.0.1:8765/webhooks/trigger \
 
 ---
 
-## 4. 已验证 / 未完成
+## 4. C4 · 多模态输入（图片理解）
+
+入口：`POST /runs` body 的可选 `images` 数组，或 CLI `run --image PATH`（可重复）。
+
+- **形状**：`[{"mime": "image/png", "data": "<base64>"}]`。最多 4 张、单张
+  base64 ≤ 3.5M 字符（约 2.6 MB）；**只收内联 base64**——URL 形式会让服务端
+  代抓外链（SSRF 面 + 不可控内容），刻意不支持，校验失败回 400。
+- **能力位**：`provider_overrides.<provider>.capabilities.supports_vision: true`
+  才会真的把图发给模型（与 `supports_tool_calls` 同一先例，默认全 False——
+  纯文本路径逐字节不变）。开启后 OpenAI 兼容端点转 `image_url` 内容块、
+  Anthropic 转 `image` source 块。
+- **降级可见**：provider 不支持 vision 时图片被丢弃，只发文本，并落一条
+  `vision_unsupported` ledger 事件（每个 Agent 一次，不刷屏）——「截图改前端」
+  类目标无声地变成盲写，这件事必须能从审计里读出来。
+- **留证**：图片写入 `<run_dir>/context/images/NN.<ext>` 并记
+  `images_attached(count/total_bytes/files)`，随 run 保留、可 diff。
+- **明确不做**：不代抓 URL 图片；不做「截图→再截图对比」的工具闭环（需要
+  截图能力，属浏览器工具组的事）；图片不计入 context token 预算（预算管文本）。
+
+## 5. 已验证 / 未完成
 
 | 项 | 状态 |
 | --- | --- |
@@ -132,5 +151,5 @@ curl -X POST http://127.0.0.1:8765/webhooks/trigger \
 | C6 浏览器模板 | ✅ 模板经配置层加载 + 工具前缀登记 + 适配器转发 4 例；真实浏览器端到端（打开网页→提取→截图）待装 Playwright MCP 后补 |
 | C8 入站触发 | ✅ 8 例（正确签名触发 / 坏签名 / 时间戳过期 / 缺时间戳 / 未启用 503 / 认证不变量 / 作用域 / 密钥脱敏） |
 | C8 定时运行 | ✅ 此前已交付（`main.py schedule`） |
-| C4 多模态 | ⬜ 未开始（providers 图像通道 + Studio 预览，约 3–5 人日） |
+| C4 多模态 | ✅ 通道已交付（消息 images 字段 + 两 provider 转换 + 能力位 + API/CLI 入口 + 落盘留证 + 降级事件，14 例）；真实模型「截图→改前端」端到端待有 vision 模型环境补 |
 | C5 文档 RAG | ⬜ 未开始（摄取管线 + 检索注入，约 3–5 人日） |

@@ -128,17 +128,38 @@ class AnthropicProvider(BaseProvider):
         except Exception as exc:
             raise classify_http_error(exc)(str(exc)) from exc
 
-    @staticmethod
     def _split_system(
-        messages: Sequence[Message],
-    ) -> tuple[str | None, list[dict[str, str]]]:
-        """拆出 system 内容（多条以空行拼接）与其余消息；无 system 时返回 ``None``。"""
+        self, messages: Sequence[Message],
+    ) -> tuple[str | None, list[dict[str, Any]]]:
+        """拆出 system 内容（多条以空行拼接）与其余消息；无 system 时返回 ``None``。
+
+        C4：带图消息在 ``supports_vision`` 时转成 content 块（文本块 + image 块，
+        base64 内联或 URL）；不支持时图片原样丢弃，与 C4 之前逐字节一致。
+        """
         system_parts = [m["content"] for m in messages if m["role"] == "system"]
-        chat_messages: list[dict[str, str]] = [
-            {"role": m["role"], "content": m["content"]}
-            for m in messages
-            if m["role"] != "system"
-        ]
+        chat_messages: list[dict[str, Any]] = []
+        for m in messages:
+            if m["role"] == "system":
+                continue
+            content: Any = m["content"]
+            images = m.get("images") or []
+            if images and self.capabilities.supports_vision \
+                    and m["role"] in ("user", "assistant"):
+                blocks: list[dict[str, Any]] = [
+                    {"type": "text", "text": m["content"]}]
+                for image in images:
+                    if image.get("data"):
+                        blocks.append({"type": "image", "source": {
+                            "type": "base64",
+                            "media_type": image.get("mime", "image/png"),
+                            "data": image["data"],
+                        }})
+                    elif image.get("url"):
+                        blocks.append({"type": "image", "source": {
+                            "type": "url", "url": image["url"],
+                        }})
+                content = blocks
+            chat_messages.append({"role": m["role"], "content": content})
         if not system_parts:
             return None, chat_messages
         return "\n\n".join(system_parts), chat_messages

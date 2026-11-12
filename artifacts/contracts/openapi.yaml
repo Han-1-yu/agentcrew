@@ -1511,6 +1511,23 @@ components:
           type: object
           description: 可选配置覆盖（merge 进 settings；API 服务器会强制 gate=none）
           additionalProperties: true
+      images:
+        type: array
+        maxItems: 4
+        description: |
+          C4 可选：随目标附带的图片（内联 base64，png/jpeg/webp/gif，
+          单张 base64 ≤ 3.5M 字符）。是否真发给模型由 provider 的
+          capabilities.supports_vision 决定；不支持时降级为纯文本并落
+          vision_unsupported 事件。不接受 url 形式（服务端不代抓外链）。
+        items:
+          type: object
+          required: [data]
+          properties:
+            data: { type: string, description: 图片内容的 base64 编码 }
+            mime:
+              type: string
+              enum: [image/png, image/jpeg, image/webp, image/gif]
+              default: image/png
 
     CreateRunResponse:
       type: object
