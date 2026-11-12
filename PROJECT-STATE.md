@@ -18,7 +18,7 @@
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
 | Studio | `npm run check` **73** 模块 / 42 分片通过、`test:unit` 18/18（e2e / selftest / probe 等脚本保持不变，需 Electron 环境才跑） |
-| Git | 已与 `origin/master` 同步（R51 三个提交已推送：`258a8f0` 能力主体 / `62996a2` 文档 / `2a25718` CI 修复）；**CI 首次全绿**（run 43215021310，六 job 全 success） |
+| Git | 已与 `origin/master` 同步（R51/R52 五个提交已推送）；**CI 连续两轮全绿**（R51: run 43215021310；R52: run 43224838619，六 job 全 success） |
 | 角色 | 8 个内置岗位角色 + 执行体（Agent Profile）可多绑 |
 
 ```bash
@@ -1722,7 +1722,7 @@ Studio 架构检查 73 模块 / 42 分片通过、`test:unit` 18 passed。
 工具实验台 +1），全量 **3177 passed / 0 failed / 2 skipped**（160 文件 / 40 批次，
 `python scripts/test.py` 一次跑出）。
 `ruff check agentcrew/ main.py tests/` 全绿；`mypy agentcrew/` 137 文件**零新增错误**
-（CI 已全绿；R52 新增 MCP server / 入站触发 / 浏览器模板三项，见 §3.65。首次 CI 实跑暴露的 5 条随 e4add0f 带入、从未被 CI 检出的既存错误，已在本批
+（CI 两轮全绿；R52 新增 MCP server / 入站触发 / 浏览器模板三项，见 §3.65。首次 CI 实跑暴露的 5 条随 e4add0f 带入、从未被 CI 检出的既存错误，已在本批
 顺手修掉：`flow/spec.py` 三处 `TaskDraft` 显式补 `timeout_seconds=300`、
 `api/server.py` 两处 Optional 访问补空值守卫；Studio job 的
 `package-lock.json` 被 `studio/.gitignore` 忽略导致 `npm ci` 无锁可用，已改为
