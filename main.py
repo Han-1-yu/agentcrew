@@ -355,6 +355,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_eval.add_argument(
         "--matrix-out", default=None, metavar="PATH",
         help="R45：把矩阵结果写成 JSON（默认不落盘，只在终端打印）")
+    p_eval.add_argument(
+        "--live", action="store_true",
+        help="C11：走**真实模型**跑（默认 mock）。真实能力证据只能来自这里；"
+             "建议配合 --max-cost 设硬上限，夜间限额跑")
+    p_eval.add_argument(
+        "--max-cost", type=float, metavar="USD",
+        help="C11：本次评测的成本硬上限（真实通道必备护栏；超预算 run 会失败）")
 
     clean_cmd = sub.add_parser(
         "clean", help="保留最近 N 个 run，删除更旧的（默认 N=5）")
@@ -1038,7 +1045,10 @@ def _cmd_tools(args: argparse.Namespace) -> int:
     from agentcrew.tools.lab import describe_tools
 
     # P1：run_python 只在 code_exec_enabled 打开时进清单（与 run 内注册表同口径）。
-    tools = describe_tools(code_exec=Settings.load().code_exec_enabled)
+    settings = Settings.load()
+    tools = describe_tools(
+        code_exec=settings.code_exec_enabled,
+        search_provider=settings.search_provider)
     if args.json:
         print(json.dumps({"tools": tools}, ensure_ascii=False, indent=2))
         return EXIT_CODES["ok"]
@@ -1083,10 +1093,24 @@ def _cmd_tool(args: argparse.Namespace) -> int:
         return _fail(f"--args 不是合法 JSON：{exc}")
     if not isinstance(payload, dict):
         return _fail("--args 必须是 JSON 对象")
+    from agentcrew.tools.lab import build_backend_from_config
+
+    try:
+        backend = build_backend_from_config(
+            kind=settings.sandbox_backend,
+            image=settings.sandbox_image,
+            memory_mb=settings.sandbox_memory_mb,
+            cpus=settings.sandbox_cpus,
+            allow_network=settings.sandbox_allow_network,
+        )
+    except Exception as exc:  # noqa: BLE001 —— 配置类错误统一退 3
+        return _fail(f"执行后端不可用：{exc}")
     try:
         result = asyncio.run(
             run_trial(args.name, payload, output_dir=settings.output_dir,
-                      code_exec=settings.code_exec_enabled))
+                      code_exec=settings.code_exec_enabled,
+                      search_provider=settings.search_provider,
+                      backend=backend))
     except ToolLabError as exc:
         return _fail(str(exc))
     if args.json:
@@ -1561,12 +1585,16 @@ def _cmd_eval(args: argparse.Namespace) -> int:
         return _fail(f"数据集不合法：{exc}")
     repeat = max(1, int(getattr(args, "repeat", 1) or 1))
     output_dir = getattr(args, "output_dir", None)
+    live = bool(getattr(args, "live", False))
+    base = _eval_base_settings(args)
+    if isinstance(base, str):  # 参数非法，已经是可展示的错误文案
+        return _fail(base)
     variants_raw = getattr(args, "variant", None)
     if variants_raw:
-        return _eval_matrix(args, cases, repeat, output_dir, variants_raw)
+        return _eval_matrix(args, cases, repeat, output_dir, variants_raw, base)
     try:
         report = asyncio.run(run_dataset(
-            cases, repeat=repeat,
+            cases, repeat=repeat, base_settings=base, live=live,
             output_dir=Path(output_dir) if output_dir else None))
     except Exception as exc:  # noqa: BLE001 —— 评测跑不起来是环境/配置问题
         return _fail(f"评测执行失败：{type(exc).__name__}: {exc}")
@@ -1596,9 +1624,30 @@ def _cmd_eval(args: argparse.Namespace) -> int:
     return EXIT_CODES["ok"] if report.pass_pow_k >= 1.0 else EXIT_CODES["failed"]
 
 
+def _eval_base_settings(args: argparse.Namespace):
+    """C11：评测的基线 Settings——``--live`` 切真实通道、``--max-cost`` 设硬上限。
+
+    返回 ``Settings``，或在参数非法时返回错误文案字符串（调用方 ``_fail``）。
+    预算校验刻意放在这里：``nan`` / ``inf`` 与成本比较恒为 False，等于没设上限。
+    """
+    from agentcrew.config import Settings
+
+    settings = Settings.load()
+    max_cost = getattr(args, "max_cost", None)
+    if max_cost is not None:
+        if isinstance(max_cost, bool) or not isinstance(max_cost, (int, float)):
+            return "--max-cost 必须是数值"
+        if not math.isfinite(float(max_cost)) or float(max_cost) < 0:
+            return "--max-cost 必须是 >= 0 的有限数"
+        settings = settings.model_copy(update={"max_cost_usd": float(max_cost)})
+    if getattr(args, "live", False):
+        settings = settings.model_copy(update={"mock": False})
+    return settings
+
+
 def _eval_matrix(
     args: argparse.Namespace, cases: list, repeat: int,
-    output_dir: str | None, variants_raw: list[str],
+    output_dir: str | None, variants_raw: list[str], base_settings=None,
 ) -> int:
     """``eval --variant``：同一批 case × 多套配置，给出可对比的数字。
 
@@ -1618,7 +1667,8 @@ def _eval_matrix(
             return _fail(f"变体不合法：{exc}")
     try:
         matrix = asyncio.run(run_matrix(
-            variants, cases, repeat=repeat,
+            variants, cases, repeat=repeat, base_settings=base_settings,
+            live=bool(getattr(args, "live", False)),
             output_dir=Path(output_dir) if output_dir else None))
     except ValueError as exc:
         return _fail(f"矩阵评测无法开始：{exc}")
@@ -2293,6 +2343,21 @@ def _cmd_config_export(args: argparse.Namespace) -> int:
     # R20：单步断点只在开启时导出（默认导出文档保持不变）。
     if snap.get("debug_step"):
         export_doc["debug_step"] = True
+    # R51：C1/C2 的执行与搜索配置同样只在偏离默认值时导出——否则 `config export`
+    # 会静默丢掉「代码在哪跑」这类关键安全设置（同 R18 / P2-4 的教训）。
+    for key, default in (
+        ("sandbox_backend", "local"),
+        ("sandbox_image", "python:3.12-slim"),
+        ("sandbox_memory_mb", 512),
+        ("sandbox_cpus", 1.0),
+        ("sandbox_allow_network", False),
+        ("search_provider", ""),
+        ("search_max_results", 5),
+        ("search_timeout_seconds", 15.0),
+    ):
+        value = snap.get(key)
+        if value not in (None, default):
+            export_doc[key] = value
     # 去掉空段
     export_doc["models"] = {
         k: v for k, v in export_doc["models"].items() if v
@@ -2413,6 +2478,10 @@ def _cmd_config_import(args: argparse.Namespace) -> int:
         "api_rate_limit_enabled", "api_rate_limit_max",  # R18 限流配置通道
         "api_rate_limit_window",
         "debug_step",                                 # R20 单步断点
+        "sandbox_backend", "sandbox_image",           # R51 C2 执行后端
+        "sandbox_memory_mb", "sandbox_cpus", "sandbox_allow_network",
+        "search_provider", "search_max_results",      # R51 C1 联网搜索
+        "search_timeout_seconds",
     ):
         if key in data:
             existing[key] = data[key]

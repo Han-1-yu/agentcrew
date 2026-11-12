@@ -59,6 +59,15 @@ class _NoRedirect(HTTPRedirectHandler):
         return None
 
 
+def build_no_redirect_opener():  # noqa: ANN201
+    """返回一个**不跟随重定向**的 opener（web_fetch 与 web_search 共用）。
+
+    搜索提供方的接口也会 302；跟随重定向等于把「只允许访问固定公网端点」这条
+    边界交给对方服务器决定。两个工具用同一个实现，避免各写一份后漂移。
+    """
+    return build_opener(_NoRedirect())
+
+
 def _is_forbidden_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     return bool(
         ip.is_private

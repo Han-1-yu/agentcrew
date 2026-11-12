@@ -52,6 +52,11 @@ ALLOWED_RUN_OPTIONS: frozenset[str] = frozenset({
     "webhook_max_retries",
     # R28：流程直通——flow 是内联流程对象，flow_name 指向流程库里的名字。
     "flow", "flow_name",
+    # C1：搜索提供方与条数可以按 run 覆盖（密钥永远只从服务端环境变量读）。
+    # C2 的 ``sandbox_backend`` **刻意不在白名单里**：它决定「代码在哪跑」，
+    # 允许按 run 覆盖等于允许任意 runs:write key 把隔离从 docker 降回 local，
+    # 与服务端安全承诺冲突（同 webhook_url 的理由）。
+    "search_provider", "search_max_results",
 })
 
 _BOOL_KEYS = frozenset({
@@ -138,6 +143,18 @@ def validate_run_options(options: Mapping[str, Any]) -> str | None:
             for item in value:
                 if not isinstance(item, str) or not item.strip():
                     return "options.webhook_events 的每一项都必须是非空字符串"
+        elif key == "search_provider":
+            if not isinstance(value, str):
+                return "options.search_provider 必须是字符串"
+            if value.strip() and value.strip().lower() not in (
+                    "tavily", "brave", "duckduckgo", "mock"):
+                return ("options.search_provider 必须是 "
+                        "tavily / brave / duckduckgo / mock 或空串")
+        elif key == "search_max_results":
+            if isinstance(value, bool) or not isinstance(value, int):
+                return "options.search_max_results 必须是整数"
+            if not 1 <= value <= 20:
+                return "options.search_max_results 必须落在 1~20 之间"
         elif key == "default_model":
             if not isinstance(value, str) or not value.strip():
                 return "options.default_model 必须是非空字符串"

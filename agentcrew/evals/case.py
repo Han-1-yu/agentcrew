@@ -95,6 +95,14 @@ class CaseOutput(BaseModel):
     event_counts: dict[str, int] = Field(default_factory=dict)
     """ledger 事件名 → 次数。"""
 
+    events: list[dict[str, Any]] = Field(default_factory=list)
+    """关键事件的 ``{event, data}`` 快照（上限 800 条、长字段截断）。
+
+    C11 新增：只数次数答不了「这个能力真的被装配/触发了吗」。``event_field``
+    断言直接读这里的载荷（如 ``tool_registry_ready.tools`` 里有没有
+    ``run_tests``），比断言「事件出现了 1 次」实在。
+    """
+
     cost_usd: float = 0.0
     """本次 run 的估算成本（mock 通道恒为 0；真实通道才有区分度）。
 

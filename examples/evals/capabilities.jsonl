@@ -1,0 +1,12 @@
+# AgentCrew 评测集：C1/C2/C3 能力接线（离线、确定性）
+#
+# 这批 case 不判「模型写得好不好」，只判「新能力有没有被真的装上去」：
+#   * 开关打开后 run_python / run_tests / web_search 是否进注册表；
+#   * 默认状态下是否仍然只有 5 个工具（红线：默认关闭）；
+#   * 执行校验在 mock 通道是否显式跳过并留痕（不静默假通过）。
+#
+# 跑：python main.py eval examples/evals/capabilities.jsonl --repeat 2
+{"id": "cap-tools-registry", "sample": "linear", "description": "C1/C3：开启工具链后 run_python/run_tests/web_search 都进注册表，后端记录为 local", "options": {"tools_enabled": true, "code_exec_enabled": true, "search_provider": "mock"}, "checks": [{"kind": "run_status", "status": "completed"}, {"kind": "event_field", "event": "tool_registry_ready", "field": "tools", "contains": "run_python"}, {"kind": "event_field", "event": "tool_registry_ready", "field": "tools", "contains": "run_tests"}, {"kind": "event_field", "event": "tool_registry_ready", "field": "tools", "contains": "web_search"}, {"kind": "event_field", "event": "tool_registry_ready", "field": "sandbox_backend", "equals": "local"}]}
+{"id": "cap-tools-default-off", "sample": "linear", "description": "默认只注册 5 个工具：代码执行与搜索都是 opt-in（红线：默认关闭）", "options": {"tools_enabled": true}, "checks": [{"kind": "run_status", "status": "completed"}, {"kind": "event_field", "event": "tool_registry_ready", "field": "tools", "equals": ["read_file", "list_files", "grep", "write_file", "web_fetch"]}, {"kind": "event_field", "event": "tool_registry_ready", "field": "sandbox_backend", "equals": ""}]}
+{"id": "cap-search-only", "sample": "linear", "description": "C1：只配搜索、不开代码执行时，run_python/run_tests 不该出现", "options": {"tools_enabled": true, "search_provider": "duckduckgo"}, "checks": [{"kind": "run_status", "status": "completed"}, {"kind": "event_field", "event": "tool_registry_ready", "field": "tools", "equals": ["read_file", "list_files", "grep", "web_search", "write_file", "web_fetch"]}]}
+{"id": "cap-exec-verify-skipped-on-mock", "sample": "linear", "description": "C3：exec_verify 打开时 mock 通道显式跳过并留痕（不静默假通过）", "options": {"gate_config": {"exec_verify": true}}, "checks": [{"kind": "run_status", "status": "completed"}, {"kind": "event_field", "event": "g1_exec_check_skipped", "field": "reason", "equals": "mock_channel"}]}

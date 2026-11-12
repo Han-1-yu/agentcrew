@@ -1,0 +1,137 @@
+{
+  "date": "2026-11-12",
+  "dataset": "examples/evals/capabilities.jsonl",
+  "offline": true,
+  "duration_seconds": 13.1,
+  "max_cost_usd": null,
+  "summary": {
+    "cases": 4,
+    "runs": 4,
+    "repeat": 1,
+    "pass_at_1": 1.0,
+    "pass_pow_k": 1.0,
+    "cost_usd": 0.0338,
+    "llm_calls": 48,
+    "failure_kinds": {},
+    "failed_cases": []
+  },
+  "report": {
+    "repeat": 1,
+    "cases": 4,
+    "runs": 4,
+    "pass_at_1": 1.0,
+    "pass_pow_k": 1.0,
+    "strict_cases": [
+      "cap-tools-registry",
+      "cap-tools-default-off",
+      "cap-search-only",
+      "cap-exec-verify-skipped-on-mock"
+    ],
+    "results": [
+      {
+        "case_id": "cap-tools-registry",
+        "ok": true,
+        "checks": [
+          {
+            "kind": "run_status",
+            "ok": true,
+            "detail": ""
+          },
+          {
+            "kind": "event_field",
+            "ok": true,
+            "detail": ""
+          },
+          {
+            "kind": "event_field",
+            "ok": true,
+            "detail": ""
+          },
+          {
+            "kind": "event_field",
+            "ok": true,
+            "detail": ""
+          },
+          {
+            "kind": "event_field",
+            "ok": true,
+            "detail": ""
+          }
+        ],
+        "status": "completed",
+        "error": "",
+        "cost_usd": 0.00865013,
+        "llm_calls": 12,
+        "revise_rounds": 0
+      },
+      {
+        "case_id": "cap-tools-default-off",
+        "ok": true,
+        "checks": [
+          {
+            "kind": "run_status",
+            "ok": true,
+            "detail": ""
+          },
+          {
+            "kind": "event_field",
+            "ok": true,
+            "detail": ""
+          },
+          {
+            "kind": "event_field",
+            "ok": true,
+            "detail": ""
+          }
+        ],
+        "status": "completed",
+        "error": "",
+        "cost_usd": 0.00849569,
+        "llm_calls": 12,
+        "revise_rounds": 0
+      },
+      {
+        "case_id": "cap-search-only",
+        "ok": true,
+        "checks": [
+          {
+            "kind": "run_status",
+            "ok": true,
+            "detail": ""
+          },
+          {
+            "kind": "event_field",
+            "ok": true,
+            "detail": ""
+          }
+        ],
+        "status": "completed",
+        "error": "",
+        "cost_usd": 0.008549420000000002,
+        "llm_calls": 12,
+        "revise_rounds": 0
+      },
+      {
+        "case_id": "cap-exec-verify-skipped-on-mock",
+        "ok": true,
+        "checks": [
+          {
+            "kind": "run_status",
+            "ok": true,
+            "detail": ""
+          },
+          {
+            "kind": "event_field",
+            "ok": true,
+            "detail": ""
+          }
+        ],
+        "status": "completed",
+        "error": "",
+        "cost_usd": 0.008128490000000002,
+        "llm_calls": 12,
+        "revise_rounds": 0
+      }
+    ]
+  }
+}

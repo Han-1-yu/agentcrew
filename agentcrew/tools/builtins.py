@@ -7,20 +7,22 @@
 
 :class:`RunPythonTool` 用独立子进程执行代码：``-I`` 隔离模式、``cwd=workdir``、
 裁剪过的环境变量、默认 10 秒超时——生成的代码不在宿主进程内跑，超时即杀。
+
+C2 起「在哪里跑」抽成 :class:`~agentcrew.tools.sandbox.ExecutionBackend`：
+默认仍是上面这条 local 路径（行为逐字不变），显式选 ``sandbox_backend=docker``
+时才换成容器执行（禁网、非 root、资源上限、只挂工作区）。
 """
 
 from __future__ import annotations
 
-import asyncio
 import math
-import os
 import re
-import sys
 from pathlib import Path, PurePath
 from typing import Any
 
 from pydantic import Field
 
+from agentcrew.tools.sandbox import ExecutionBackend, LocalBackend
 from agentcrew.tools.tool import Tool
 from agentcrew.utils.files import (
     UnsafePathError,
@@ -52,10 +54,12 @@ def _crosses_link(workdir: Path, rel: PurePath) -> bool:
     return False
 
 
-def _resolve(workdir: Path, raw: str) -> Path | None:
+def resolve_in_workdir(workdir: Path, raw: str) -> Path | None:
     """把模型给的相对路径安全解析到 ``workdir`` 内；越界或经链接返回 ``None``。
 
     ``.`` 与空串视作根目录本身（列目录 / grep 从项目根开始是常见调用）。
+    公开出来是给 ``run_tests`` 等同类工具复用同一条路径边界——每个工具各写一份
+    路径校验，迟早会漂移出一条更宽松的。
     """
     if raw.strip() in ("", "."):
         return workdir
@@ -66,6 +70,11 @@ def _resolve(workdir: Path, raw: str) -> Path | None:
     if _crosses_link(workdir, rel):
         return None
     return workdir / rel
+
+
+def _resolve(workdir: Path, raw: str) -> Path | None:
+    """内部别名（保留旧名，避免一次性改掉所有调用点）。"""
+    return resolve_in_workdir(workdir, raw)
 
 
 class ReadFileTool(Tool):
@@ -203,6 +212,17 @@ class RunPythonTool(Tool):
     })
     workdir: Path
     default_timeout: float = 10.0
+    #: C2：执行后端（构造期注入）。``None`` = local，与引入后端之前完全一致。
+    #: 注解用 ``Any`` 是为了让 pydantic 直接接受后端实例（Tool 带 extra=forbid，
+    #: 任意类型字段需要 arbitrary_types_allowed，这里不值得为它放开整个模型）。
+    backend: Any = None
+
+    @property
+    def _backend(self) -> ExecutionBackend:
+        backend = self.backend
+        if backend is None:
+            return LocalBackend()
+        return backend
 
     async def run(self, code: str = "", timeout: float | None = None,
                   **kwargs: Any) -> str:
@@ -220,38 +240,19 @@ class RunPythonTool(Tool):
                 return "错误：timeout 必须是数值（秒）"
             if not math.isfinite(limit) or not 0 < limit <= 60:
                 return "错误：timeout 必须落在 (0, 60] 秒内"
-        env = {
-            "PATH": os.environ.get("PATH", ""),
-            "SYSTEMROOT": os.environ.get("SYSTEMROOT", ""),
-            "TEMP": os.environ.get("TEMP", ""),
-            "TMP": os.environ.get("TMP", ""),
-            "PYTHONIOENCODING": "utf-8",
-        }
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable, "-I", "-c", code,
-                cwd=str(self.workdir),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
-            )
-        except OSError as exc:
-            return f"错误：无法启动子进程：{exc}"
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=limit)
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
+        result = await self._backend.run_python(
+            code, workdir=self.workdir, timeout=limit)
+        if result.timed_out:
             return f"错误：执行超时（>{limit:g}s），已终止进程"
-        out = stdout.decode("utf-8", errors="replace")
-        err = stderr.decode("utf-8", errors="replace")
+        if result.exit_code < 0:
+            # 后端连进程都没起来（解释器/容器不可用）：这是环境问题，不是代码问题。
+            return f"错误：{result.stderr.strip() or '无法启动子进程'}"
         parts: list[str] = []
-        if out.strip():
-            parts.append("stdout:\n" + out.rstrip())
-        if err.strip():
-            parts.append("stderr:\n" + err.rstrip())
-        parts.append(f"exit_code={proc.returncode}")
+        if result.stdout.strip():
+            parts.append("stdout:\n" + result.stdout.rstrip())
+        if result.stderr.strip():
+            parts.append("stderr:\n" + result.stderr.rstrip())
+        parts.append(f"exit_code={result.exit_code}")
         return "\n".join(parts)
 
 

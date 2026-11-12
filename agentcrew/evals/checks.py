@@ -13,6 +13,11 @@
 {"kind": "artifact_count", "count": 4}
 {"kind": "task_status", "task": "T-001", "status": "succeeded"}
 {"kind": "event_count", "event": "gate_result", "min": 4}
+{"kind": "artifact_any_matches", "pattern": "def\\s+\\w+", "path_pattern": "\\.py$"}
+{"kind": "event_field", "event": "tool_registry_ready", "field": "tools",
+ "contains": "run_tests"}
+{"kind": "event_field", "event": "g1_exec_check", "field": "status",
+ "equals": "passed"}
 {"kind": "run_status", "status": "completed"}
 {"kind": "no_failed_tasks"}
 ```
@@ -40,8 +45,11 @@ CHECK_KINDS: tuple[str, ...] = (
     "artifact_min_lines",
     "artifact_max_lines",
     "artifact_count",
+    "artifact_any_contains",
+    "artifact_any_matches",
     "task_status",
     "event_count",
+    "event_field",
     "run_status",
     "no_failed_tasks",
 )
@@ -70,6 +78,91 @@ def _evaluate(check: Mapping[str, Any], output: CaseOutput) -> CheckResult:
         return handler(check, output)
     except (KeyError, TypeError, ValueError) as exc:
         return CheckResult(kind=kind, ok=False, detail=f"check 参数不合法：{exc}")
+
+
+def _artifact_any(check: Mapping[str, Any], output: CaseOutput) -> tuple[bool, str]:
+    """在**任意**产物里找文本/正则（真实模型 case 用：文件路径由模型自己定）。
+
+    ``path_pattern`` 可先把范围收窄到匹配的产物（如只看 ``.py`` 后缀）。返回
+    ``(是否命中, 说明)``；没有产物时直接判失败，不做「空集恰好通过」。
+    """
+    if not output.artifacts:
+        return False, "本次 run 没有任何文本产物"
+    path_re = check.get("path_pattern")
+    compiled_path = re.compile(str(path_re)) if path_re else None
+    candidates = [
+        (path, text) for path, text in output.artifacts.items()
+        if compiled_path is None or compiled_path.search(path)
+    ]
+    if not candidates:
+        return False, f"没有路径匹配 /{path_re}/ 的产物（实际：{', '.join(sorted(output.artifacts))}）"
+    if "pattern" in check:
+        regex = re.compile(str(check["pattern"]))
+        for _path, text in candidates:
+            if regex.search(text):
+                return True, ""
+        return False, f"没有任何产物匹配 /{check['pattern']}/"
+    needle = str(check.get("text") or "")
+    for _path, text in candidates:
+        if needle in text:
+            return True, ""
+    return False, f"没有任何产物包含 {needle!r}"
+
+
+def _artifact_any_contains(
+    check: Mapping[str, Any], output: CaseOutput
+) -> CheckResult:
+    ok, detail = _artifact_any(check, output)
+    return CheckResult(kind="artifact_any_contains", ok=ok, detail=detail)
+
+
+def _artifact_any_matches(
+    check: Mapping[str, Any], output: CaseOutput
+) -> CheckResult:
+    ok, detail = _artifact_any(check, output)
+    return CheckResult(kind="artifact_any_matches", ok=ok, detail=detail)
+
+
+def _event_field(check: Mapping[str, Any], output: CaseOutput) -> CheckResult:
+    """断言某个事件的某个载荷字段（C11）。
+
+    ``contains``：字段是列表时判成员、是字符串时判子串；``equals``：严格相等。
+    两者都不给时只判字段存在且为真值——那种写法容易写出「假绿」，文档里不推荐。
+    同名事件有多条时取**最后一条**（run 收尾时的结论通常比中途的更有意义）。
+    """
+    name = str(check["event"])
+    field = str(check["field"])
+    matched = [item for item in output.events if item.get("event") == name]
+    if not matched:
+        return CheckResult(
+            kind="event_field", ok=False,
+            detail=f"没有事件 {name!r}（出现过的："
+                   f"{', '.join(sorted({str(e.get('event')) for e in output.events})) or '无'}）")
+    data = matched[-1].get("data") or {}
+    if field not in data:
+        return CheckResult(
+            kind="event_field", ok=False,
+            detail=f"事件 {name!r} 没有字段 {field!r}（实际字段："
+                   f"{', '.join(sorted(map(str, data))) or '无'}）")
+    value = data[field]
+    if "equals" in check:
+        ok = value == check["equals"]
+        return CheckResult(
+            kind="event_field", ok=ok,
+            detail="" if ok else f"{name}.{field} = {value!r}，期望 {check['equals']!r}")
+    needle = check.get("contains")
+    if needle is None:
+        ok = bool(value)
+        return CheckResult(
+            kind="event_field", ok=ok,
+            detail="" if ok else f"{name}.{field} 为空")
+    if isinstance(value, list):
+        ok = needle in value
+    else:
+        ok = str(needle) in str(value)
+    return CheckResult(
+        kind="event_field", ok=ok,
+        detail="" if ok else f"{name}.{field} = {value!r} 不含 {needle!r}")
 
 
 # ── 各断言的实现（都很短，刻意保持「一眼看完」）──────────────────────────
@@ -214,8 +307,11 @@ _HANDLERS = {
     "artifact_min_lines": _artifact_min_lines,
     "artifact_max_lines": _artifact_max_lines,
     "artifact_count": _artifact_count,
+    "artifact_any_contains": _artifact_any_contains,
+    "artifact_any_matches": _artifact_any_matches,
     "task_status": _task_status,
     "event_count": _event_count,
+    "event_field": _event_field,
     "run_status": _run_status,
     "no_failed_tasks": _no_failed_tasks,
 }

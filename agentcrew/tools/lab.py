@@ -32,7 +32,10 @@ from agentcrew.tools.builtins import (
 )
 from agentcrew.tools.network import WebFetchTool
 from agentcrew.tools.registry import ToolRegistry
+from agentcrew.tools.sandbox import ExecutionBackend, SandboxError, build_backend
 from agentcrew.tools.schema import validate_tool_args
+from agentcrew.tools.search import WebSearchTool, build_search_provider
+from agentcrew.tools.testing import RunTestsTool
 
 #: 试跑沙箱的根目录名（相对 ``output_dir``）。
 TRIAL_DIR_NAME = "_tool_trial"
@@ -47,6 +50,7 @@ class ToolLabError(ValueError):
 
 def build_tools(
     root: Path, *, create_workspace: bool = True, code_exec: bool = False,
+    search_provider: str = "", backend: ExecutionBackend | None = None,
 ) -> list[Any]:
     """在一组根目录上装配内置工具（与 ``Crew._build_tool_registry`` 同源）。
 
@@ -56,6 +60,10 @@ def build_tools(
     ``code_exec``（P1）与生产装配保持同一口径：``run_python`` 只在
     ``settings.code_exec_enabled`` 打开时才出现。否则「Agent 调不到、实验台却能
     跑」——调试入口就成了绕过那道开关的后门，而它恰恰是最容易被暴露的一面。
+    C3 的 ``run_tests`` 同理（它执行代码，比只读工具更高危）。
+
+    ``search_provider``（C1）同理：空串 = 不注册 ``web_search``；配置了才出现。
+    ``backend``（C2）由调用方按 ``sandbox_backend`` 构造，``None`` = local。
     """
     workspace = root / "workspace"
     if create_workspace:
@@ -66,34 +74,46 @@ def build_tools(
         GrepTool(workdir=root),
     ]
     if code_exec:
-        tools.append(RunPythonTool(workdir=root))
+        tools.append(RunPythonTool(workdir=root, backend=backend))
+        tools.append(RunTestsTool(workdir=root, backend=backend))
+    if search_provider.strip():
+        tools.append(WebSearchTool(provider=build_search_provider(search_provider)))
     tools.extend((WriteFileTool(workdir=workspace), WebFetchTool()))
     return tools
 
 
 def build_trial_registry(
     root: Path, *, create_workspace: bool = True, code_exec: bool = False,
+    search_provider: str = "", backend: ExecutionBackend | None = None,
 ) -> ToolRegistry:
     """试跑用注册表（无角色权限：实验台是管理员显式动作，不走 Agent 的授权链）。"""
     registry = ToolRegistry()
     for tool in build_tools(
-            root, create_workspace=create_workspace, code_exec=code_exec):
+            root, create_workspace=create_workspace, code_exec=code_exec,
+            search_provider=search_provider, backend=backend):
         registry.register(tool)
     return registry
 
 
 def _kind(tool: Any) -> str:
-    return "network" if tool.name == "web_fetch" else "sandbox"
+    if tool.name in ("web_fetch", "web_search"):
+        return "network"
+    return "sandbox"
 
 
-def describe_tools(code_exec: bool = False) -> list[dict[str, Any]]:
+def describe_tools(
+    code_exec: bool = False, search_provider: str = "",
+) -> list[dict[str, Any]]:
     """工具清单：名称 / 说明 / 入参 schema / 类别。管理页与 CLI 共用。
 
     构造工具只注入 ``workdir`` 字段，不建目录、不执行——纯元数据读取。
-    ``code_exec`` 为假时 ``run_python`` 不在清单里（它没被注册，列出来是误导）。
+    ``code_exec`` 为假时 ``run_python`` / ``run_tests`` 不在清单里；
+    ``search_provider`` 为空时 ``web_search`` 不在清单里（它们没被注册，
+    列出来是误导）。两者与 run 内注册表同一口径。
     """
     registry = build_trial_registry(
-        Path("."), create_workspace=False, code_exec=code_exec)
+        Path("."), create_workspace=False, code_exec=code_exec,
+        search_provider=search_provider)
     return [
         {
             "name": tool.name,
@@ -103,6 +123,24 @@ def describe_tools(code_exec: bool = False) -> list[dict[str, Any]]:
         }
         for tool in sorted(registry.list_tools(), key=lambda item: item.name)
     ]
+
+
+def build_backend_from_config(
+    *, kind: str, image: str = "", memory_mb: int = 512, cpus: float = 1.0,
+    allow_network: bool = False,
+) -> ExecutionBackend | None:
+    """按配置给试跑造后端；``local`` 返回 ``None``（工具内部即 local 默认）。
+
+    放在这里是为了让 CLI / API 两个入口用同一份装配口径：工具实验台不能成为
+    绕过 ``sandbox_backend`` 的后门（``code_exec`` 已是同一原则）。
+    """
+    normalized = (kind or "local").strip().lower()
+    if normalized == "local":
+        return None
+    return build_backend(
+        normalized, image=image, memory_mb=memory_mb, cpus=cpus,
+        allow_network=allow_network,
+    )
 
 
 def new_sandbox(output_dir: Path) -> Path:
@@ -121,6 +159,8 @@ async def run_trial(
     sandbox: Path | None = None,
     timeout: float = TRIAL_TIMEOUT_SECONDS,
     code_exec: bool = False,
+    search_provider: str = "",
+    backend: ExecutionBackend | None = None,
 ) -> dict[str, Any]:
     """跑一次单工具试跑，返回结果字典（**不抛运行时异常**）。
 
@@ -129,12 +169,20 @@ async def run_trial(
 
     ``sandbox`` 省略时每次新建独立目录；显式给出则复用（调试时先跑
     ``write_file`` 造夹具，再在同一目录试 ``read_file`` / ``grep``）。
+    ``search_provider`` / ``backend``（C1/C2）与生产装配同源，省略即「没配」/
+    local。
 
     入参形状不合法（未知工具 / schema 不符）抛 :class:`ToolLabError`，
     由调用方映射成 400/404——那是请求错误，不是工具执行失败。
     """
     root = Path(sandbox) if sandbox is not None else new_sandbox(output_dir)
-    registry = build_trial_registry(root, code_exec=code_exec)
+    try:
+        registry = build_trial_registry(
+            root, code_exec=code_exec, search_provider=search_provider,
+            backend=backend)
+    except (SandboxError, ValueError) as exc:
+        # 后端/提供方装配失败是配置问题，映射成请求错误而不是 500。
+        raise ToolLabError(f"工具装配失败：{exc}") from exc
     tool = registry.get(tool_name)
     if tool is None:
         known = ", ".join(sorted(item.name for item in registry.list_tools()))

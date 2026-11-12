@@ -1573,8 +1573,15 @@ class ApiServer:
             # P1：run_python 是否可用由 code_exec_enabled 单独控制（默认关），
             # 管理页据此决定是否渲染它——清单与实际注册表必须同一口径。
             "code_exec_enabled": bool(self._settings.code_exec_enabled),
+            # C2：代码到底在哪跑（local / docker），管理页要能显示——
+            # 「有沙箱」和「没沙箱」是两个完全不同的安全承诺。
+            "sandbox_backend": self._settings.sandbox_backend,
+            # C1：空串 = web_search 未启用（清单里也不会有它）。
+            "search_provider": self._settings.search_provider,
             "trial_dir": TRIAL_DIR_NAME,
-            "tools": describe_tools(code_exec=bool(self._settings.code_exec_enabled)),
+            "tools": describe_tools(
+                code_exec=bool(self._settings.code_exec_enabled),
+                search_provider=self._settings.search_provider),
         })
 
     async def _tool_test(
@@ -1613,9 +1620,25 @@ class ApiServer:
         from agentcrew.tools.lab import ToolLabError, run_trial
 
         try:
+            from agentcrew.tools.lab import build_backend_from_config
+            backend = build_backend_from_config(
+                kind=self._settings.sandbox_backend,
+                image=self._settings.sandbox_image,
+                memory_mb=self._settings.sandbox_memory_mb,
+                cpus=self._settings.sandbox_cpus,
+                allow_network=self._settings.sandbox_allow_network,
+            )
+        except Exception as exc:  # noqa: BLE001 —— 装配失败是配置问题，回 409
+            await self._send_json(writer, 409, {
+                "error": f"执行后端不可用：{exc}",
+            })
+            return
+        try:
             result = await run_trial(
                 name, args, output_dir=self._output_dir,
-                code_exec=bool(self._settings.code_exec_enabled))
+                code_exec=bool(self._settings.code_exec_enabled),
+                search_provider=self._settings.search_provider,
+                backend=backend)
         except ToolLabError as exc:
             status = 404 if str(exc).startswith("未知工具") else 400
             await self._send_json(writer, status, {"error": str(exc)})

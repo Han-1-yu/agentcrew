@@ -39,6 +39,22 @@ __all__ = [
 #: 只断言文本产物；超过这个大小的产物不读全文（评测不该把内存吃穿）。
 _MAX_ARTIFACT_BYTES = 512 * 1024
 
+#: 事件快照的上限条数与单字段长度（``event_field`` 断言只需关键载荷）。
+_MAX_EVENTS = 800
+_MAX_EVENT_STR = 400
+_MAX_EVENT_LIST = 40
+
+
+def _shrink(value: Any) -> Any:
+    """把事件载荷压到可安全放进报告的尺寸（长字符串/长列表截断）。"""
+    if isinstance(value, str):
+        return value[:_MAX_EVENT_STR]
+    if isinstance(value, list):
+        return [_shrink(item) for item in value[:_MAX_EVENT_LIST]]
+    if isinstance(value, dict):
+        return {str(key): _shrink(item) for key, item in value.items()}
+    return value
+
 
 def _readartifacts(root: Path) -> dict[str, str]:
     """读回产物全文（相对路径 → 文本）；二进制与超大文件跳过。"""
@@ -62,15 +78,21 @@ async def run_case(
     case: EvalCase, *,
     base_settings: Settings | None = None,
     output_root: Path | None = None,
+    live: bool = False,
 ) -> CaseOutput:
-    """跑一条 case 并返回可断言快照（不抛异常：失败收敛进 ``CaseOutput.error``）。"""
+    """跑一条 case 并返回可断言快照（不抛异常：失败收敛进 ``CaseOutput.error``）。
+
+    ``live=False``（默认）强制 mock 通道：离线、确定性、零成本，CI 与本地回归
+    都跑这条。``live=True`` 走真实模型——C11 的能力证据必须来自这里，否则
+    「mock 全绿 ≠ 真实可用」的老问题会原样复现（R48 的教训）。
+    """
     root = Path(output_root) if output_root else Path(
         tempfile.mkdtemp(prefix="agentcrew-eval-"))
     try:
         overrides: dict[str, Any] = {
             "output_dir": root,
-            # 评测要的是「一次跑到底的确定性结果」：mock + 不卡门禁。
-            "mock": True,
+            # 评测要的是「一次跑到底的结果」：不卡门禁；通道由 live 决定。
+            "mock": not live,
             "gate": "none",
         }
         overrides.update(case.options or {})
@@ -109,14 +131,18 @@ async def _run_crew(settings: Settings, goal: str, root: Path) -> CaseOutput:
     run_dir = root / record.run_id
     board = CheckpointStore(run_dir).load_board()
     counts: dict[str, int] = {}
+    events: list[dict[str, Any]] = []
     for event in Ledger(run_dir / "ledger.jsonl", run_id=record.run_id).events():
         counts[event.event] = counts.get(event.event, 0) + 1
+        if len(events) < _MAX_EVENTS:
+            events.append({"event": event.event, "data": _shrink(event.data)})
     return CaseOutput(
         status=record.status.value,
         run_id=record.run_id,
         artifacts=_readartifacts(run_dir / "artifacts"),
         task_status={task.id: task.status.value for task in board.all()},
         event_counts=counts,
+        events=events,
         cost_usd=float(getattr(record.stats, "estimated_cost_usd", 0.0) or 0.0),
     )
 
@@ -189,6 +215,7 @@ async def run_dataset(
     repeat: int = 1,
     base_settings: Settings | None = None,
     output_dir: Path | None = None,
+    live: bool = False,
 ) -> EvalReport:
     """跑完整个数据集：每条 case 跑 ``repeat`` 次（每次都独立目录）。
 
@@ -204,7 +231,7 @@ async def run_dataset(
                 root = Path(output_dir) / f"{case.id}-{index + 1}"
                 root.mkdir(parents=True, exist_ok=True)
             output = await run_case(
-                case, base_settings=base_settings, output_root=root)
+                case, base_settings=base_settings, output_root=root, live=live)
             checks = evaluate_checks(case.checks, output)
             report.results.append(CaseResult(
                 case_id=case.id,
@@ -325,6 +352,7 @@ async def run_matrix(
     repeat: int = 1,
     base_settings: Settings | None = None,
     output_dir: Path | None = None,
+    live: bool = False,
 ) -> MatrixReport:
     """同一批 case × 多套配置，逐变体跑一遍并汇总。
 
@@ -348,7 +376,8 @@ async def run_matrix(
             sub = Path(output_dir) / name
             sub.mkdir(parents=True, exist_ok=True)
         report = await run_dataset(
-            cases, repeat=repeat, base_settings=settings, output_dir=sub)
+            cases, repeat=repeat, base_settings=settings, output_dir=sub,
+            live=live)
         matrix.variants.append(
             VariantResult(name=name, overrides=dict(overrides), report=report))
     return matrix

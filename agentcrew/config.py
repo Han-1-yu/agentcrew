@@ -73,6 +73,16 @@ _ENV_TO_FIELD: dict[str, str] = {
     "AGENTCREW_AFFINITY_MODE": "affinity_mode",
     "AGENTCREW_TOOLS_ENABLED": "tools_enabled",
     "AGENTCREW_CODE_EXEC_ENABLED": "code_exec_enabled",
+    # C2：执行后端（local / docker）与其资源上限。
+    "AGENTCREW_SANDBOX_BACKEND": "sandbox_backend",
+    "AGENTCREW_SANDBOX_IMAGE": "sandbox_image",
+    "AGENTCREW_SANDBOX_MEMORY_MB": "sandbox_memory_mb",
+    "AGENTCREW_SANDBOX_CPUS": "sandbox_cpus",
+    "AGENTCREW_SANDBOX_ALLOW_NETWORK": "sandbox_allow_network",
+    # C1：联网搜索（默认关闭；密钥只从环境变量读，见 tools/search.py）。
+    "AGENTCREW_SEARCH_PROVIDER": "search_provider",
+    "AGENTCREW_SEARCH_MAX_RESULTS": "search_max_results",
+    "AGENTCREW_SEARCH_TIMEOUT_SECONDS": "search_timeout_seconds",
     "AGENTCREW_OTEL_ENABLED": "otel_enabled",
     "AGENTCREW_OTEL_ENDPOINT": "otel_endpoint",
     "AGENTCREW_OTEL_SERVICE_NAME": "otel_service_name",
@@ -115,6 +125,11 @@ _YAML_SCALAR_KEYS = (
     "max_concurrency", "context_budget_tokens", "gate", "roles_dir",
     # R3：两个能力开关都是顶层标量，走与 max_concurrency 同一条读取/合并路径。
     "tools_enabled", "code_exec_enabled", "entity_memory_enabled",
+    # C2：沙箱后端与其资源上限（docker 模式下才生效）。
+    "sandbox_backend", "sandbox_image", "sandbox_memory_mb", "sandbox_cpus",
+    "sandbox_allow_network",
+    # C1：联网搜索的提供方与配额。
+    "search_provider", "search_max_results", "search_timeout_seconds",
     "approval_mode",
     # P3-3：流式开关（默认关）。此前 ``BaseAgent(stream=...)`` 只有测试在传，
     # 生产 run 路径没有任何入口能打开它——等于一个「测过但从未跑过」的能力。
@@ -888,8 +903,58 @@ class Settings(BaseModel):
     - 显式打开（``AGENTCREW_CODE_EXEC_ENABLED=true`` 或 YAML 同名键）时注册，
       并且**只有此时**才有该能力，边界写在 ``docs/OPERATIONS.md``。
 
-    真正的容器级沙箱（Docker / gVisor）是 P3 的事，不在这一步假装做到。
+    C2 起容器级隔离是**可选后端**（:attr:`sandbox_backend` = ``docker``）：
+    上面的进程级边界不变，只是多了一个「真的敢跑」的选项。默认仍走 ``local`` ——
+    零依赖与离线可测不被破坏，而生产环境应当显式选 ``docker``。
     """
+
+    sandbox_backend: Literal["local", "docker"] = "local"
+    """C2：代码执行后端（默认 ``local``，行为与引入后端前**逐字一致**）。
+
+    - ``local``：``-I`` + 裁剪环境 + ``cwd`` 限制 + 超时杀进程。**没有**网络、
+      CPU/内存与系统调用隔离——一段代码可以出网。
+    - ``docker``：容器内执行，默认禁网、非 root（65534）、``--cap-drop ALL``、
+      ``--security-opt no-new-privileges``、只读根文件系统、CPU/内存/PID 上限、
+      **只**挂载本次 run 的工作区。宿主机没有 docker 时**构造期报错**（fail
+      loud），不会静默退回 local。
+
+    ``run_python`` / ``run_tests`` / G1 执行校验共用这一个后端。环境变量
+    ``AGENTCREW_SANDBOX_BACKEND=docker``，或 YAML 顶层同名键。
+    """
+
+    sandbox_image: str = "python:3.12-slim"
+    """C2：docker 后端使用的镜像（``sandbox_backend=docker`` 时生效）。
+
+    跑 ``run_tests`` 需要镜像里有 pytest —— 换自建镜像时请把 pytest 打进去，
+    否则执行校验会以「No module named pytest」失败（可见的失败，不是静默跳过）。
+    """
+
+    sandbox_memory_mb: int = Field(default=512, ge=64)
+    """C2：容器内存上限（MB，默认 512，``ge=64``）。"""
+
+    sandbox_cpus: float = Field(default=1.0, gt=0)
+    """C2：容器 CPU 上限（核心数，默认 1.0）。"""
+
+    sandbox_allow_network: bool = False
+    """C2：docker 容器是否允许出网（默认 **False** = ``--network none``）。
+
+    默认禁网是刻意的：模型写的代码不该能外发数据或探测内网。确有联网需求（装
+    依赖、调 API 的脚本）时由运维显式打开——这是人的决定，不是模型的。
+    """
+
+    search_provider: str = ""
+    """C1：联网搜索提供方（默认空 = **关闭**，``web_search`` 不注册）。
+
+    可选 ``tavily`` / ``brave`` / ``duckduckgo`` / ``mock``（离线夹具，仅测试与
+    评测用）。密钥只从环境变量读取（``TAVILY_API_KEY`` / ``BRAVE_API_KEY``，
+    或通用的 ``AGENTCREW_SEARCH_API_KEY``），**绝不落盘**；``duckduckgo`` 免密钥。
+    """
+
+    search_max_results: int = Field(default=5, ge=1, le=20)
+    """C1：单次搜索最多返回多少条结果（默认 5，1~20）。"""
+
+    search_timeout_seconds: float = Field(default=15.0, gt=0, le=60)
+    """C1：单次搜索请求超时（秒，默认 15）。"""
 
     stream: bool = False
     """是否让 Agent 走流式 LLM 路径（默认**关闭**，P3-3）。

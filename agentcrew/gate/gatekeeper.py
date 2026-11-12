@@ -47,6 +47,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.config import GateMode
 from agentcrew.context.context_bus import ContextBus
+from agentcrew.gate.execute_verify import ExecutionVerifier, run_exec_checks
 from agentcrew.gate.reassign import ReassignPolicy
 from agentcrew.gate.reviewer import Reviewer, normalize_issue_text
 from agentcrew.gate.static_checks import (
@@ -153,6 +154,7 @@ class Gatekeeper:
         gate_config: dict[str, Any] | None = None,
         supervisor: SupervisorReviewer | None = None,
         reassign: ReassignPolicy | None = None,
+        exec_verifier: ExecutionVerifier | None = None,
     ) -> None:
         cfg = dict(gate_config or {})
         g3_enabled = bool(cfg.get("g3_enabled", True))
@@ -201,6 +203,10 @@ class Gatekeeper:
         #: R10：主管驳回后换人做的策略。``None`` = 不换人（默认），驳回仍退回原
         #: 执行者；没有 ``role_fallback`` 映射时即使注入也永不生效。
         self._reassign = reassign
+        #: C3：G1 执行校验档。``None`` = 关闭（默认），行为与引入前逐字一致。
+        #: 打开后只对「静态校验已放行」的任务跑它自己交付的测试，失败并入 G1
+        #: issue 走既有返工通道——不新增第二条返工路径。
+        self._exec_verifier = exec_verifier
 
     # ---- 自动门禁 ----
 
@@ -230,6 +236,23 @@ class Gatekeeper:
                     "issues": static.issues + list(ext.errors),
                     "fix_hints": static.fix_hints + [
                         f"修正 {issue}" for issue in ext.errors],
+                })
+            # C3：执行校验档（默认关，``gate_config.exec_verify=true`` 才注入）。
+            # 只在结构已经放行时跑：缺文件 / 语法错的任务进容器也只是白烧一次
+            # 启动时间，而这些问题的修复提示已经足够明确。
+            exec_findings: list[tuple[str, str]] = []
+            if (self._exec_verifier is not None
+                    and static.verdict == "approve" and not ext.errors):
+                exec_findings = await run_exec_checks(
+                    self._exec_verifier, self._board.get(task_id),
+                    self._store, round_no=round_no)
+            if exec_findings:
+                static = static.model_copy(update={
+                    "verdict": "reject",
+                    "issues": static.issues + [
+                        issue for issue, _ in exec_findings],
+                    "fix_hints": static.fix_hints + [
+                        hint for _, hint in exec_findings],
                 })
         else:
             # P2-5：g1_enabled=False → 跳过静态校验，记一条「已停用」的放行记录。

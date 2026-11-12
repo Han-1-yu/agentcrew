@@ -52,6 +52,7 @@ from agentcrew.context.context_bus import ContextBus
 from agentcrew.context.summarizer import summarizer_from_factory
 from agentcrew.crew import report
 from agentcrew.crew.scheduler import Scheduler
+from agentcrew.gate.execute_verify import ExecutionVerifier
 from agentcrew.gate.gatekeeper import Gatekeeper, Prompter, Reviewer
 from agentcrew.gate.reassign import ReassignPolicy
 from agentcrew.gate.stepper import StepGate
@@ -119,11 +120,15 @@ from agentcrew.tools import (
     ListFilesTool,
     ReadFileTool,
     RunPythonTool,
+    RunTestsTool,
     WebFetchTool,
+    WebSearchTool,
     WriteFileTool,
 )
 from agentcrew.tools.guard import build_tool_guard
 from agentcrew.tools.registry import ToolRegistry
+from agentcrew.tools.sandbox import ExecutionBackend, build_backend
+from agentcrew.tools.search import build_search_provider
 from agentcrew.utils.clock import elapsed_since, seconds_between, utc_now
 from agentcrew.utils.files import atomic_write_text
 
@@ -387,6 +392,8 @@ class Crew:
         self._stalled = False
         self._active = False
         self._finalized = False
+        #: C2：执行后端惰性构造一次（docker 模式下探测也要花一次进程调用）。
+        self._sandbox_backend: ExecutionBackend | None = None
         # P3-1（2026-11 会话隔离改造）：校准器从「模块级全局单例」改为 **Crew
         # 实例属性**，构造 ModelFactory 时显式注入。原实现每次构造 Crew 都调用
         # ``set_calibrator(ComplexityCalibrator())`` 全量替换全局单例——API 服务器
@@ -1496,6 +1503,28 @@ class Crew:
                         max_reassignments=(
                             self._settings.max_supervisor_reassignments),
                     )
+        # C3：G1 执行校验档——默认关，``gate_config.exec_verify=true`` 才装配。
+        # ``mock`` 通道显式跳过并留痕：夹具里的产物是跨任务引用的（T-003 的
+        # test_*.py 常常 import T-002 的模块），只铺单个任务的产物必然 import
+        # 失败；那不是产物的问题，是夹具的形态。真实验证要跑真实模型端到端。
+        exec_verifier = None
+        if bool(self._settings.gate_config.get("exec_verify", False)):
+            if self._settings.mock:
+                run.ledger.emit(
+                    "g1_exec_check_skipped",
+                    run_id=run.record.run_id,
+                    reason="mock_channel",
+                )
+            else:
+                exec_verifier = ExecutionVerifier(
+                    backend=self._execution_backend(),
+                    # 校验目录与 artifacts/ 平级：都在 run 目录内，随 run 一起
+                    # 清理；不写进 artifacts/ 是为了不污染 MANIFEST 与产物清单。
+                    workspace_root=run.store.root.parent / "verify",
+                    ledger=run.ledger,
+                    timeout=float(self._settings.gate_config.get(
+                        "exec_verify_timeout_seconds", 120)),
+                )
         return Gatekeeper(
             reviewer,
             run.store,
@@ -1511,6 +1540,7 @@ class Crew:
             review_score_threshold=self._settings.review_score_threshold,
             supervisor=supervisor,
             reassign=reassign,
+            exec_verifier=exec_verifier,
         )
 
     @property
@@ -1846,6 +1876,25 @@ class Crew:
             return EXIT_CODES["ok"]
         return EXIT_CODES["failed"]
 
+    def _execution_backend(self) -> ExecutionBackend:
+        """C2：按配置构造执行后端（local 默认；docker 可选，缺失即报错）。
+
+        惰性构造且只构造一次：``build_backend`` 在 docker 模式下会探测 ``docker``
+        可执行文件，gatekeeper 每轮重建、工具注册表每次 run 重建，不该反复探测。
+        ``SandboxError`` 原样冒泡——「选了 docker 却没有 docker」是运维配置错误，
+        必须让 run 失败并说清原因，不能静默退回不隔离的 local。
+        """
+        if self._sandbox_backend is None:
+            settings = self._settings
+            self._sandbox_backend = build_backend(
+                settings.sandbox_backend,
+                image=settings.sandbox_image,
+                memory_mb=settings.sandbox_memory_mb,
+                cpus=settings.sandbox_cpus,
+                allow_network=settings.sandbox_allow_network,
+            )
+        return self._sandbox_backend
+
     def _build_tool_registry(
         self, checkpoint: CheckpointStore, ledger: Ledger
     ) -> ToolRegistry | None:
@@ -1887,7 +1936,20 @@ class Crew:
             # 打开等于把「配置写错」升级成「远程执行面」。需要时用
             # AGENTCREW_CODE_EXEC_ENABLED 显式打开，边界写在 docs/OPERATIONS.md。
             if self._settings.code_exec_enabled:
-                tools.append(RunPythonTool(workdir=run_dir))
+                # C2：同一份后端给 run_python 与 run_tests——「换后端」只改配置，
+                # 不改工具；``local`` 时行为与引入前逐字一致。
+                backend = self._execution_backend()
+                tools.append(RunPythonTool(workdir=run_dir, backend=backend))
+                # C3：执行验证——写完代码能当场跑，而不是等门禁判决。
+                tools.append(RunTestsTool(workdir=run_dir, backend=backend))
+            # C1：``web_search`` 只在配置了提供方时注册。没配就是没有这个工具，
+            # 而不是「有但一调就报错」——后者会让模型在提示词里被承诺一个假能力。
+            if self._settings.search_provider.strip():
+                tools.append(WebSearchTool(
+                    provider=build_search_provider(self._settings.search_provider),
+                    max_results=self._settings.search_max_results,
+                    timeout_secs=self._settings.search_timeout_seconds,
+                ))
             tools.extend((WriteFileTool(workdir=workspace), WebFetchTool()))
         for tool in tools:
             registry.register(tool)
@@ -1905,6 +1967,11 @@ class Crew:
             workspace=workspace.name,
             permissioned_roles=sorted(permissioned),
             untrusted_inputs=bool(self._settings.untrusted_inputs),
+            # C2：让审计能回答「这次的代码在哪跑的」——local 与 docker 的责任边界
+            # 完全不同，只记工具名不记后端等于没记。
+            sandbox_backend=(
+                self._settings.sandbox_backend
+                if self._settings.code_exec_enabled else ""),
         )
         return registry
 

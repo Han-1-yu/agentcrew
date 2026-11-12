@@ -37,10 +37,23 @@ def test_describe_tools_lists_builtins():
 
 
 def test_describe_tools_includes_run_python_when_code_exec_enabled():
-    """打开 code_exec 后 run_python 才进清单——与 run 内注册表同一口径。"""
+    """打开 code_exec 后 run_python / run_tests 才进清单——与 run 内注册表同口径。"""
     names = [item["name"] for item in describe_tools(code_exec=True)]
     assert "run_python" in names
-    assert len(names) == 6
+    # C3：run_tests 与 run_python 同属「会执行代码」的工具，开关口径必须一致
+    assert "run_tests" in names
+    assert len(names) == 7
+
+
+def test_describe_tools_includes_web_search_only_when_configured():
+    """C1：没配提供方就没有 web_search；配了才出现（默认关闭）。"""
+    names = [item["name"] for item in describe_tools()]
+    assert "web_search" not in names
+    names = [item["name"] for item in describe_tools(search_provider="mock")]
+    assert "web_search" in names
+    assert next(
+        t for t in describe_tools(search_provider="mock")
+        if t["name"] == "web_search")["kind"] == "network"
 
 
 async def test_write_then_read_roundtrip_in_sandbox(tmp_path):
@@ -122,5 +135,5 @@ def test_trial_registry_has_no_role_permissions(tmp_path):
     """实验台是管理员显式动作，不走 Agent 的角色授权链。"""
     registry = build_trial_registry(tmp_path)
     assert registry.is_allowed("backend_dev", "read_file") is True
-    assert len(registry.list_tools()) == 5            # 默认不含 run_python
-    assert len(build_trial_registry(tmp_path, code_exec=True).list_tools()) == 6
+    assert len(registry.list_tools()) == 5            # 默认不含 run_python / run_tests
+    assert len(build_trial_registry(tmp_path, code_exec=True).list_tools()) == 7
