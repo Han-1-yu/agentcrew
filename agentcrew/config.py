@@ -113,6 +113,7 @@ _ENV_TO_FIELD: dict[str, str] = {
     # R12：Webhook 的标量配置。webhook_events 是列表，下面单独解析。
     "AGENTCREW_WEBHOOK_URL": "webhook_url",
     "AGENTCREW_WEBHOOK_SECRET": "webhook_secret",
+    "AGENTCREW_WEBHOOK_TRIGGER_SECRET": "webhook_trigger_secret",
     "AGENTCREW_WEBHOOK_TIMEOUT_SECONDS": "webhook_timeout_seconds",
     "AGENTCREW_WEBHOOK_MAX_RETRIES": "webhook_max_retries",
 }
@@ -156,7 +157,8 @@ _YAML_SCALAR_KEYS = (
     "max_subtask_corrections", "supervisor_scope", "supervisor_role",
     "supervisor_chain",
     "max_supervisor_reassignments",
-    "webhook_url", "webhook_secret", "webhook_events", "webhook_timeout_seconds",
+    "webhook_url", "webhook_secret", "webhook_trigger_secret",
+    "webhook_events", "webhook_timeout_seconds",
     "webhook_max_retries", "webhooks",
     # E-3：限流三参数此前只有 env 通道，YAML 里写会被静默忽略（R18 补齐）。
     "api_rate_limit_enabled", "api_rate_limit_max", "api_rate_limit_window",
@@ -1185,6 +1187,17 @@ class Settings(BaseModel):
     接收方用同一密钥校验并比对时间戳即可防重放。密钥**不导出、不进配置快照**
     （``config_snapshot`` 里替换为 ``***``），推荐用环境变量注入。
     """
+    webhook_trigger_secret: str = ""
+    """C8：入站 Webhook 触发的 HMAC 密钥（默认空 = **关闭**，
+    ``POST /webhooks/trigger`` 回 503）。
+
+    与出站 ``webhook_secret`` 同一签名语义（``X-AgentCrew-Timestamp`` + 对
+    ``<timestamp>.<body>`` 求 ``sha256=<hex>``），时间戳偏离超过 300 秒拒绝
+    （防重放）。触发成功的主体记为 ``webhook``（只有 ``runs:write`` 作用域），
+    来源以 ``run_triggered`` 事件进 run ledger。密钥不进快照（同
+    ``webhook_secret`` 打码口径）、参与 ``secret_values()`` 脱敏。环境变量
+    ``AGENTCREW_WEBHOOK_TRIGGER_SECRET``。
+    """
     webhook_events: list[str] = Field(
         default_factory=lambda: [
             "run_started", "run_finished", "approval_requested",
@@ -1546,6 +1559,9 @@ class Settings(BaseModel):
         # R12：webhook 密钥同样不能进快照——它会随 run.json 落盘。
         if data.get("webhook_secret"):
             data["webhook_secret"] = "***"
+        # C8：入站触发密钥同样不能进快照——它会随 run.json 落盘。
+        if data.get("webhook_trigger_secret"):
+            data["webhook_trigger_secret"] = "***"
         return data
 
     def _api_key_env_name(self, provider: str) -> str:
@@ -1590,6 +1606,9 @@ class Settings(BaseModel):
         # 等于把签名能力交出去。
         if self.webhook_secret.strip():
             found.append(self.webhook_secret.strip())
+        # C8：入站触发密钥同样参与脱敏。
+        if self.webhook_trigger_secret.strip():
+            found.append(self.webhook_trigger_secret.strip())
         return list(dict.fromkeys(found))
 
     def api_key_for(self, provider: str) -> str | None:

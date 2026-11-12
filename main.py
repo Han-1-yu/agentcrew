@@ -435,6 +435,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     config = sub.add_parser("config", help="配置导入导出")
     config_sub = config.add_subparsers(dest="config_action")
+
+    # C7：把 AgentCrew 的编排能力（派活/看进度/裁决审批）经 MCP 暴露给
+    # Claude Desktop / Cursor 类客户端。stdio 传输；工具调用走本机 HTTP API，
+    # RBAC 与审计由 API 侧执行——MCP 入口不产生第二条权限语义。
+    p_mcp = sub.add_parser(
+        "mcp-serve", help="C7：以 MCP server（stdio）暴露编排能力，"
+                          "供 Claude Desktop / Cursor 等客户端调用")
+    p_mcp.add_argument("--api-url", default="http://127.0.0.1:8765",
+                       metavar="URL", help="AgentCrew API 地址（默认本机 8765）")
+    p_mcp.add_argument("--api-key", default=None, metavar="KEY",
+                       help="调用 API 用的密钥（默认读 AGENTCREW_MCP_API_KEY，"
+                            "再退到 AGENTCREW_API_KEY）；密钥不落盘")
     export_p = config_sub.add_parser("export", help="导出当前合并配置为 YAML")
     export_p.add_argument("--output", "-o", metavar="FILE",
                           help="写入文件而非 stdout")
@@ -1038,6 +1050,33 @@ def _cmd_roles(args: argparse.Namespace) -> int:
         f"共 {len(BUILTIN_ROLES)} 个内置角色；用 --gate plan 可在执行前人工确认拆解。",
     )
     return EXIT_CODES["ok"]
+
+
+def _cmd_mcp_serve(args: argparse.Namespace) -> int:
+    """C7：以 MCP server（stdio）暴露编排能力；工具调用走本机 HTTP API。
+
+    密钥来源（按序）：``--api-key`` → ``AGENTCREW_MCP_API_KEY`` →
+    ``AGENTCREW_API_KEY``。没有密钥也允许启动（服务端未开认证时可用），
+    但开认证的服务会拒绝每个调用——所以这里在 stderr 上提示一次。
+    """
+    import os
+    import sys as _sys
+
+    from agentcrew.mcp.server import ApiBridge, run_stdio
+
+    api_key = (
+        args.api_key
+        or os.environ.get("AGENTCREW_MCP_API_KEY", "").strip()
+        or os.environ.get("AGENTCREW_API_KEY", "").strip()
+    )
+    if not api_key:
+        print(
+            "提示：未配置 API 密钥（--api-key 或 AGENTCREW_MCP_API_KEY）。"
+            "若服务端开启了认证，所有调用都会被 401 拒绝。",
+            file=_sys.stderr,
+        )
+    bridge = ApiBridge(base_url=args.api_url, api_key=api_key)
+    return run_stdio(bridge, _sys.stdin, _sys.stdout)
 
 
 def _cmd_tools(args: argparse.Namespace) -> int:
@@ -2521,6 +2560,7 @@ _HANDLERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "models": _cmd_models,
     "config": _cmd_config,
     "schedule": _cmd_schedule,
+    "mcp-serve": _cmd_mcp_serve,
 }
 
 

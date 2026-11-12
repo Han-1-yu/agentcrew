@@ -1,0 +1,76 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# C6 第一步：浏览器操作「先借后建」——接现成的浏览器 MCP server，本仓零开发。
+#
+# 用法：复制需要的段到 agentcrew.yaml（或 AGENTCREW_CONFIG 指向本文件），
+# 然后启动（或重启）AgentCrew。R13 的 MCP 客户端会在 tools_enabled=true 时
+# 连接服务器、发现工具并以 `playwright__browser_navigate` 这样的带前缀名字
+# 登记进注册表（`server__tool`，防撞名）。
+#
+# 边界（写在使用之前）：
+#   1. 浏览器工具是「外部子进程」，不受 AgentCrew 沙箱约束——它以你的用户权限
+#      运行。只在本机信任环境使用。
+#   2. 网页内容是不可信输入：抓回来的页面快照可能含提示词注入（G-1）。给模型
+#      的工具白名单收窄到「读」类工具可以显著缩小打击面（见下方 tool_permissions）。
+#      ⚠️ 注意：`untrusted_inputs: true` 会跳过**全部** MCP 工具（外部子进程
+#      谈不上只读）——这与浏览器场景互斥，两者只能选一个。
+#   3. run 级自动化必须显式开 `tools_enabled`，且逐个授权（白名单默认关）。
+# ─────────────────────────────────────────────────────────────────────────────
+
+config_version: 1
+models:
+  default: openai:gpt-4o-mini
+
+tools_enabled: true
+code_exec_enabled: false         # 浏览器场景通常不需要执行代码；要用再开
+untrusted_inputs: false          # ⚠️ true 会禁用全部 MCP 工具（含浏览器）
+
+# ── 浏览器 MCP server（三选一或并用；命令按你本机安装方式调整）──────────────
+mcp_servers:
+  # Playwright 官方 MCP（微软维护）：截图 / 快照 / 点击 / 填表 / 控制台
+  playwright:
+    command: npx
+    args: ["@playwright/mcp@latest"]
+
+  # Chrome DevTools MCP（调试与性能分析场景）
+  # chrome-devtools:
+  #   command: npx
+  #   args: ["chrome-devtools-mcp@latest"]
+
+# ── 角色级工具白名单（P3-9）：浏览器页面内容不可信，默认只给「读」────────────
+# 未在此列的角色 = 全部工具可用（向后兼容）。要自动化浏览器请显式放开写类工具。
+tool_permissions:
+  project_manager:
+    - read_file
+    - list_files
+    - grep
+    - write_file
+    - web_fetch
+    - playwright__browser_navigate
+    - playwright__browser_snapshot
+    - playwright__browser_take_screenshot
+  backend_dev:
+    - read_file
+    - list_files
+    - grep
+    - write_file
+    - playwright__browser_navigate
+    - playwright__browser_snapshot
+    - playwright__browser_console_messages
+  technical_writer:
+    - read_file
+    - list_files
+    - grep
+    - write_file
+    - playwright__browser_navigate
+    - playwright__browser_snapshot
+
+# ── 需要自动化的角色再放开「写」类浏览器工具（点击 / 填表 / 提交）────────────
+# 放开 = 接受模型可能被页面内容诱导点击的风险（G-1），请配合人工卡点：
+#   gate: delivery   # 或用 --debug-step 逐任务裁决
+# tool_permissions:
+#   qa_engineer:
+#     - playwright__browser_navigate
+#     - playwright__browser_snapshot
+#     - playwright__browser_click
+#     - playwright__browser_type
+#     - playwright__browser_fill_form

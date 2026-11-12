@@ -346,6 +346,8 @@ G-2 配置即 RCE、G-9 `run_python` 无隔离这三条，是部署方必须自�
 | `run_tests`（C3） | 与 `run_python` **同一开关**（`code_exec_enabled`）与**同一后端**。只接受 `path` / `timeout`，不接受任意 pytest 参数（否则 `--rootdir=` 能绕过路径边界）；路径走 `resolve_in_workdir`；不写 `.pytest_cache`；输出保留尾部并标注省略量 |
 | G1 执行校验（C3） | `gate_config.exec_verify: true`（默认关）。静态校验放行后，把该任务产物铺进 `<run_dir>/verify/<task_id>/` 跑它自己的 pytest；失败并入 G1 issue 走既有返工通道；无测试文件记 `skipped`；mock 通道显式跳过并记 `g1_exec_check_skipped` |
 | `web_search`（C1） | `search_provider` 为空时**不注册**。端点固定为公网 https、不跟随重定向；结果按 URL 去重并逐个过 `validate_fetch_url`（内网 IP / `file://` / 带凭据一律丢弃）；输出上限 8000 字符；密钥只从环境变量读 |
+| `mcp-serve`（C7） | MCP server（stdio）把编排能力暴露给 Claude Desktop / Cursor 类客户端；**每个工具调用都走本机 HTTP API**——RBAC / 限流 / 审计由 API 侧执行，客户端拿到什么角色的 key 就只能做什么。不产生第二条权限语义 |
+| `POST /webhooks/trigger`（C8） | 入站触发：HMAC（复用 R12 签名语义，时间戳 ±300s 防重放）**或** API Key 两条认证路径；未配 `webhook_trigger_secret` 时带签名的请求回 503、无凭证请求照常 401；触发主体只有 `runs:write`，来源以 `run_triggered` 进 run ledger |
 | 工具试跑 | `POST /tools/{name}/test` 与 `main.py tool` 与 run 内注册表同一口径：`code_exec_enabled=false` 时 `run_python` 不在清单里，也跑不了——调试入口不是绕过开关的后门 |
 | 工具 guardrails | `agentcrew.yaml` 的 `tool_guards:` 段按正则/长度在**工具执行前**拦截（`phase: input`）或在**结果回灌前**遮掉泄漏（`phase: output`）。`block` 的工具一次都不执行，原因回灌给模型；命中记 `tool_guard_triggered`。规则在配置加载期校验（正则写错、action 拼错、缺 `pattern`/`max_length` 都直接退 3） |
 | 不可信输入 | `AGENTCREW_UNTRUSTED_INPUTS=true`（或 YAML `untrusted_inputs`）时，run 内工具表**只保留只读工具**（`read_file`/`list_files`/`grep`），`write_file`/`run_python`/`web_fetch` 一律不下发，`mcp_servers` 全跳过（记 `mcp_skipped_untrusted`）。处理第三方文档 / 网页时用它兜住提示词注入（G-1） |

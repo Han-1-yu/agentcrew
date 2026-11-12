@@ -1,6 +1,6 @@
 # AgentCrew 威胁模型
 
-> **版本**：v1.1（2026-11-12：补 C1 搜索 / C2 沙箱 / C3 执行校验）  
+> **版本**：v1.2（2026-11-12：补 C7 MCP server / C8 入站触发 / 浏览器 MCP 模板）  
 > **适用代码**：本轮 P0/P1/P2 加固之后的工作区（路径规范化、认证默认开、SSE 分桶、
 > 工具 guardrails、原生工具调用、super-step、OTel、evals）  
 > **读者**：部署方（运维 / 安全评审）、二次开发者、写新工具与新入口的人  
@@ -229,6 +229,7 @@ B5  配置（agentcrew.yaml / .env）──▶ CLI 命令模板、MCP server 命
 | **T-47** | Ledger observer 回调抛异常会中断 `emit` 调用方 | observer 默认 `None`（向后兼容）；内置 `_make_ledger_observer` 与内置 `on_event`（`ApiServer.on_event` / `_BoardHook.__call__`）均不抛异常 | ⚠️ 库层自定义 `on_event` 若抛异常，会从 `emit` 向上抛——文件已落盘、审计不受损，但调用方须遵守「observer 不得抛异常」契约（见 `ledger.py` docstring）；observer 只转发明细、不触发 Webhook（刻意，防打爆接收端） |
 | **T-48** | `web_search` 结果把模型引向内网服务或本地文件（SSRF / 投毒） | 端点固定为公网 https、不跟随重定向；返回的每条 URL 先过 `validate_fetch_url`（拒私网 / 回环 / `file://` / 带凭据）；搜到的正文不会自动抓取，要模型再调 `web_fetch`（同一套 SSRF 防护） | ⚠️ 摘要文本本身仍可能含注入指令（G-1）；搜索扩大的是**内容注入面**，不是网络边界 |
 | **T-49** | 执行校验被用来持久化（测试里写文件 / 起进程） | 校验目录是 `<run_dir>/verify/<task_id>/` 的**副本**，不写 `artifacts/`；`docker` 后端下容器 `--read-only` 且超时即杀 | ⚠️ `local` 后端下测试代码可在进程权限内读写宿主文件并起后台进程——与 `run_python` 同级风险，故必须配 `docker` |
+| **T-50** | 入站 Webhook 触发被伪造（外部系统无人值守建 run） | 复用 R12 HMAC 语义（签 `<timestamp>.<body>`）；时间戳偏离 300 秒拒绝；签名失败 401 并记 `webhook_signature_invalid`；无签名头时与全站同形要求 API Key（不给探测者额外信息）；触发主体只有 `runs:write` | ⚠️ 密钥泄露 = 任意建 run（成本风险）；建议同时设 `AGENTCREW_MAX_COST_USD` 与限流。签名窗口内可重放一次（与 R12 同口径，未引入 nonce） |
 
 ---
 

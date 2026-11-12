@@ -40,6 +40,8 @@ from agentcrew.api.auth import APIKeyAuth, RateLimiter
 from agentcrew.api.paths import PathRejected, canonical_target
 from agentcrew.api.rbac import (
     ALL_SCOPES,
+    SCOPE_RUNS_WRITE,
+    SCOPE_WEBHOOK_TRIGGER,
     Principal,
     current_principal,
     read_owner,
@@ -196,7 +198,14 @@ API_ROUTES: tuple[tuple[str, str], ...] = (
     ("GET", "/flows/{name}"),
     ("DELETE", "/flows/{name}"),
     ("POST", "/flows/validate"),
+    # C8：入站 Webhook 触发（认证方式是 HMAC 签名，见 _webhook_trigger）
+    ("POST", "/webhooks/trigger"),
 )
+
+
+#: C8：入站 Webhook 触发的签名时间戳容差（秒）。窗口内可重放一次的代价远小于
+#: 引入 nonce 存储的复杂度——与出站 R12 的口径一致。
+_WEBHOOK_TRIGGER_MAX_DRIFT = 300
 
 
 class ApiServer:
@@ -396,7 +405,8 @@ class ApiServer:
                         rest = getattr(exc, "partial", b"")
                     body += rest
                 if request.method == "POST":
-                    await self._handle_post(path, query_params, body, writer)
+                    await self._handle_post(path, query_params, body, writer,
+                                            headers=request.headers)
                 else:
                     await self._handle_put(path, query_params, body, writer)
             elif request.method == "DELETE":
@@ -459,6 +469,18 @@ class ApiServer:
                     extra_headers={"Retry-After": str(limiter.window_seconds)},
                 )
                 return True
+        # C8：入站 Webhook 触发有两条认证路径——
+        #   ① 携带 HMAC 签名头（X-AgentCrew-Signature）→ 免 API Key，进 handler
+        #      做签名校验（需要先读 body，只能在 handler 里做；失败 401 留痕）；
+        #   ② 没有签名头 → 按普通 API Key 路由走（无 key 同样 401，与全站
+        #      「每条路由无凭证必须 401」的不变量保持一致，不给探测者任何额外信息）。
+        if (method == "POST" and path == "/webhooks/trigger"
+                and headers.get("x-agentcrew-signature")):
+            # 标记为「待 HMAC 验证」：一个没有作用域的占位主体，让 handler 能
+            # 区分「认证已通过」与「签名待验」，不会被 anonymous-admin 兜底骗过。
+            set_current(Principal(name="webhook-pending", role="webhook",
+                                  scopes=frozenset()))
+            return False
         # 2) API Key 认证（Bearer / X-API-Key）+ 3) 作用域授权
         auth = self._auth
         principal: Any = None
@@ -767,10 +789,13 @@ class ApiServer:
 
     async def _handle_post(
         self, path: str, query: dict[str, list[str]], body: bytes,
-        writer: asyncio.StreamWriter,
+        writer: asyncio.StreamWriter, headers: dict[str, str] | None = None,
     ) -> None:
         # ``path`` 已是规范路径（见 _handle_get 的说明），不再二次 unquote。
         p = path
+        if p == "/webhooks/trigger":
+            await self._webhook_trigger(headers or {}, body, writer)
+            return
         if p == "/runs":
             await self._create_run(body, writer)
             return
@@ -848,8 +873,15 @@ class ApiServer:
 
     # ── P1-5：run 生命周期 ────────────────────────────────────────────────
 
-    async def _create_run(self, body: bytes, writer: asyncio.StreamWriter) -> None:
-        """``POST /runs``：校验 body → 建 Crew → 后台跑 → 回 run_id。"""
+    async def _create_run(
+        self, body: bytes, writer: asyncio.StreamWriter,
+        *, trigger_source: str | None = None,
+    ) -> None:
+        """``POST /runs``：校验 body → 建 Crew → 后台跑 → 回 run_id。
+
+        ``trigger_source``（C8）非空时，在 run ledger 里落一条 ``run_triggered``
+        ——「这次 run 是谁发起的」要能从审计里直接读出来，而不是靠猜。
+        """
         try:
             data = json.loads(body.decode("utf-8")) if body else {}
         except (json.JSONDecodeError, UnicodeDecodeError):
@@ -920,8 +952,77 @@ class ApiServer:
             return
         self.active_crews[run_id] = crew
         self._run_tasks[run_id] = task
+        if trigger_source and self._output_dir is not None:
+            self._emit_run_triggered(run_id, trigger_source)
         await self._send_json(
             writer, 202, {"run_id": run_id, "status": "running"})
+
+    async def _webhook_trigger(
+        self, headers: dict[str, str], body: bytes,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        """``POST /webhooks/trigger``（C8）：HMAC 签名认证 + 触发 run。
+
+        认证语义复用 R12 出站签名（``X-AgentCrew-Timestamp`` +
+        ``X-AgentCrew-Signature: sha256=<hex>``，签 ``<timestamp>.<body>``）：
+        时间戳偏离超过 300 秒拒绝（防重放），比较用常量时间。成功后以
+        ``webhook`` 主体（只有 ``runs:write``）创建 run，来源进 ledger。
+        """
+        from agentcrew.runtime.webhook import verify_signature
+
+        secret = ""
+        if self._settings is not None:
+            secret = str(getattr(self._settings, "webhook_trigger_secret", "")
+                         or "")
+        if not secret:
+            await self._send_json(writer, 503, {
+                "error": "入站触发未启用：请配置 webhook_trigger_secret"
+                         "（或 AGENTCREW_WEBHOOK_TRIGGER_SECRET）",
+            })
+            return
+        # 已持有效 API Key 且具备触发作用域（或认证整体关闭）→ 不要求 HMAC：
+        # 这条请求已经过了与全站一致的认证链，签名是给「不持 key 的外部系统」
+        # 用的另一条路径，不该变成对 key 调用方的额外负担。
+        if not current_principal().allows(SCOPE_WEBHOOK_TRIGGER):
+            timestamp = headers.get("x-agentcrew-timestamp", "")
+            signature = headers.get("x-agentcrew-signature", "")
+            try:
+                drift = abs(time.time() - int(timestamp))
+            except ValueError:
+                drift = None
+            if drift is None or drift > _WEBHOOK_TRIGGER_MAX_DRIFT:
+                self._record_security("webhook_signature_invalid", {
+                    "path": "/webhooks/trigger", "reason": "stale_timestamp"})
+                await self._send_json(
+                    writer, 401, {"error": "签名时间戳缺失或已过期（防重放）"})
+                return
+            if not verify_signature(secret, timestamp, body, signature):
+                self._record_security("webhook_signature_invalid", {
+                    "path": "/webhooks/trigger", "reason": "bad_signature"})
+                await self._send_json(writer, 401, {"error": "签名校验失败"})
+                return
+            # 签名即身份：这个主体只有 runs:write，不能看别人的 run、不能动审批。
+            set_current(Principal(
+                name="webhook", role="webhook",
+                scopes=frozenset({SCOPE_RUNS_WRITE})))
+        await self._create_run(body, writer, trigger_source="webhook")
+
+    def _emit_run_triggered(self, run_id: str, source: str) -> None:
+        """把「本次 run 由什么触发」写进 run ledger（C8；失败不影响 run）。"""
+        root = self._output_dir
+        if root is None:  # 调用方已保证非空；这里只为类型收窄
+            return
+        try:
+            from agentcrew.runtime.ledger import Ledger
+
+            # run 目录在真实 run 里由 Crew 创建；这里兜底建一次，保证审计事件
+            # 不会因为目录尚不存在而被吞掉（吞掉等于触发来源不可审计）。
+            ledger_path = root / run_id / "ledger.jsonl"
+            ledger_path.parent.mkdir(parents=True, exist_ok=True)
+            Ledger(ledger_path, run_id=run_id).emit(
+                "run_triggered", source=source)
+        except (OSError, RuntimeError) as exc:
+            _logger.warning("run_triggered 落账失败 run=%s: %s", run_id, exc)
 
     def _build_crew(
         self, goal: str, options: Mapping[str, Any]

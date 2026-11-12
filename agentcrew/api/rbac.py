@@ -45,11 +45,14 @@ SCOPE_TOOLS_TEST = "tools:test"
 SCOPE_CONFIG_READ = "config:read"
 SCOPE_KEYS_READ = "keys:read"
 SCOPE_KEYS_WRITE = "keys:write"
+#: C8：入站 Webhook 触发（HMAC 认证，不持 API Key 的外部系统用）。
+SCOPE_WEBHOOK_TRIGGER = "webhook:trigger"
 
 ALL_SCOPES: frozenset[str] = frozenset({
     SCOPE_RUNS_READ, SCOPE_RUNS_WRITE, SCOPE_RUNS_ADMIN,
     SCOPE_APPROVALS_WRITE, SCOPE_TOOLS_READ, SCOPE_TOOLS_TEST,
     SCOPE_CONFIG_READ, SCOPE_KEYS_READ, SCOPE_KEYS_WRITE,
+    SCOPE_WEBHOOK_TRIGGER,
 })
 
 ROLE_SCOPES: dict[str, frozenset[str]] = {
@@ -400,6 +403,9 @@ _ROUTE_SCOPES: tuple[tuple[str, str, str], ...] = (
     ("GET", r"^/keys$", SCOPE_KEYS_READ),
     ("POST", r"^/keys$", SCOPE_KEYS_WRITE),
     ("DELETE", r"^/keys/[^/]+$", SCOPE_KEYS_WRITE),
+    # C8：入站触发——认证方式是 HMAC（见 ``_webhook_trigger``），不走 API Key
+    # 链；登记作用域是为了让 required_scope 有明确答案，custom 角色可显式持有。
+    ("POST", r"^/webhooks/trigger$", SCOPE_WEBHOOK_TRIGGER),
 )
 
 _COMPILED = tuple((method, re.compile(pattern), scope)

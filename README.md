@@ -132,14 +132,16 @@ python main.py run --demo
 > 扩容边界、监控告警、升级步骤和上线前检查清单。
 >
 > **能力补齐（C1 搜索 / C2 沙箱 / C3 执行验证）**：见
-> [docs/CAPABILITIES-C1-C3.md](docs/CAPABILITIES-C1-C3.md)
+> [docs/CAPABILITIES-C1-C3.md](docs/CAPABILITIES-C1-C3.md)；
+> 第二批（C7 MCP server / C6 浏览器 / C8 触发）见
+> [docs/CAPABILITIES-P1-BATCH2.md](docs/CAPABILITIES-P1-BATCH2.md)
 > ——三个开关怎么开、边界在哪、哪些已经验证过、哪些还等着目标机（Docker）验证。
 >
 > **架构决策记录（为什么这么做）**：见 [docs/adr/](docs/adr/)
 > ——认证 fail-closed、`run_python` 默认关、guardrails 不用 LLM 判等 7 条有取舍的决策。
 >
 > **安全评审 / 上线签字**：见 [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)
-> ——信任边界、资产、49 条威胁与当前控制、**15 条已知缺口及补偿措施**、
+> ——信任边界、资产、50 条威胁与当前控制、**15 条已知缺口及补偿措施**、
 > 控制到测试的证据映射。想知道「这个系统能防什么、不能防什么」，看它。
 >
 > **测试覆盖情况**：见 [docs/TEST-REPORT.md](docs/TEST-REPORT.md)
@@ -262,6 +264,7 @@ examples/samples/<name>/
 | `python main.py serve` | 启动 HTTP API + Web UI 面板（V2） | `--host HOST`（默认 127.0.0.1）；`--port PORT`（默认 8765） |
 | `python main.py doctor` | 诊断配置 / 环境 / 依赖 / Provider 连通性，输出健康报告 | `--config PATH`（指定 agentcrew.yaml）；`--output-dir DIR`；`--json`（机器可读） |
 | `python main.py diff <a> <b>` | 对比两个 run 的配置 / 任务 / 产物 / 事件统计差异 | `--output-dir DIR`；`--json`（机器可读） |
+| `python main.py mcp-serve` | C7：以 MCP server（stdio）暴露编排能力（派活/看进度/裁决审批），供 Claude Desktop / Cursor 调用 | `--api-url URL`；`--api-key KEY`（默认读 `AGENTCREW_MCP_API_KEY`） |
 | `python main.py eval <dataset>` | P2-5 / C11：跑评测集，用产物断言给出 `pass@1` / `pass^k` | `--repeat K`（每 case 跑 K 次）；`--live`（真实模型）；`--max-cost USD`（硬上限）；`--json`；`--output-dir DIR`（留账） |
 
 行为说明：
@@ -2312,6 +2315,7 @@ models:
 | `AGENTCREW_SANDBOX_IMAGE` / `_MEMORY_MB` / `_CPUS` / `_ALLOW_NETWORK` | `python:3.12-slim` / `512` / `1.0` / `false` | C2：容器后端的镜像与资源上限；`run_tests` 需要镜像内有 pytest |
 | `AGENTCREW_SEARCH_PROVIDER` | 空 | C1：`tavily` / `brave` / `duckduckgo`；空 = 不注册 `web_search`。密钥只从 `TAVILY_API_KEY` / `BRAVE_API_KEY` / `AGENTCREW_SEARCH_API_KEY` 读 |
 | `AGENTCREW_SEARCH_MAX_RESULTS` / `_TIMEOUT_SECONDS` | `5` / `15` | C1：单次搜索条数与超时 |
+| `AGENTCREW_WEBHOOK_TRIGGER_SECRET` | 空 | C8：入站 Webhook 触发的 HMAC 密钥；空 = `POST /webhooks/trigger` 关闭（503） |
 | `AGENTCREW_STREAM` | `false` | P3-3：Agent 走流式 LLM 路径（逐块记 `agent_stream_chunk`；默认关，实时性需要时开） |
 | `AGENTCREW_UNTRUSTED_INPUTS` | `false` | G-1：不可信输入预设——只给只读工具（read_file/list_files/grep），不挂 MCP |
 | `AGENTCREW_OTEL_ENABLED` | `false` | P2-3：每次 run 导出一条 OTel trace（`gen_ai.*` 语义 + OTLP/HTTP JSON，零依赖） |
@@ -2330,7 +2334,7 @@ models:
 | `AGENTCREW_SUPERVISOR_ROLE` | `project_manager` | R9：`scope=all` 时规划期任务的主管角色 |
 | `AGENTCREW_MAX_SUPERVISOR_REASSIGNMENTS` | `1` | R10：主管驳回后换人做的次数上限（`0` = 不换人） |
 | `AGENTCREW_WEBHOOK_URL` | 空 | R12：出站 Webhook 地址（空 = 关闭） |
-| `AGENTCREW_WEBHOOK_SECRET` | 空 | R12：HMAC 签名密钥（空 = 不签名） |
+ | 空 | R12：HMAC 签名密钥（空 = 不签名） |
 | `AGENTCREW_WEBHOOK_EVENTS` | 五个 run 级节点 | R12：逗号分隔的事件名，`*` = 全推 |
 | `AGENTCREW_WEBHOOK_TIMEOUT_SECONDS` | `5` | R12：单次投递超时 |
 | `AGENTCREW_WEBHOOK_MAX_RETRIES` | `2` | R12：投递失败重试次数 |

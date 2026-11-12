@@ -1315,6 +1315,53 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /webhooks/trigger:
+    post:
+      tags: [runs]
+      summary: C8 入站 Webhook 触发 run（HMAC 签名认证，不需要 API Key）
+      description: |
+        外部系统（CI / 定时器 / IM 机器人）无人值守触发 run 的入口。认证有两条
+        路径：① 携带 `X-AgentCrew-Signature`（R12 出站签名语义：对
+        `<timestamp>.<body>` 求 HMAC-SHA256，密钥为 `webhook_trigger_secret`，
+        时间戳偏离超过 300 秒拒绝防重放）→ 免 API Key；② 不带签名头 → 与其他
+        路由相同，要求 API Key（无凭证 401，不给探测者任何额外信息）。
+        有效签名但未配置密钥 → 503（只对持有密钥的人可见）；签名失败 → 401 并
+        记安全事件。
+        触发成功的主体为 `webhook`（只有 `runs:write`），来源以
+        `run_triggered` 事件写入 run ledger。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRunRequest'
+      responses:
+        '202':
+          description: run 已创建并进入运行
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateRunResponse'
+        '400':
+          description: 请求体非法
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 签名缺失 / 校验失败 / 时间戳过期
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: 未配置 webhook_trigger_secret（入站触发未启用）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   ##########################################################################
   # 兜底：未匹配路径 → 404；未实现方法 → 405
   ##########################################################################

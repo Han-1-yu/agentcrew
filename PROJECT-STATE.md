@@ -8,11 +8,11 @@
 
 ## 0. 一句话现状
 
-**引擎与管线健康，无 P0/P1 阻断项。** 全量测试 **3177 passed / 2 skipped / 0 failed**（160 文件 / 40 批次，`scripts/test.py` 一次跑出），三个预设样例 100% 通过，真实模型通道可用（`doctor` 6/6 通过）；Studio 架构检查 73 模块 / 42 分片、`test:unit` 18 passed 全绿。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道；R19 给主管审核开了独立、不阻塞的 `suggestions` 建议通道；R20 补上单步/断点调试——每个任务派发前可挂起裁决，第二档功能项全部闭环；R21 给 API 契约装上守卫，openapi.yaml 与代码路由双向锁死、不再漏端点；R22 补上 resume 状态白名单与 MCP 管道显式关闭；R23 产出 2501 用例的模块/场景覆盖矩阵（`docs/TEST-REPORT.md`），验收报告遗留的最后一项小项闭环；R24 补上工具管理页与单工具试跑；R25 把共享 API Key 升级为多用户 RBAC（密钥/角色/作用域/归属/审计）；R26 补上拖拽式可视化编排（画布 + YAML 双向 + 图校验）；R27 给检索加向量通道（混合打分 + 磁盘缓存 + 本地退化）；R28 打通「画布 → run」直通规划；R29 让实体记忆也走向量混合（不加列、不迁移）；R30 给审批单加等待窗口与过期告警；R31 给条件边补否定/兜底写法；R32 把控制台 UI 重构成令牌化 + 明暗主题 + 侧栏布局；R33 把单层主管复核扩成可配的多级链；R34 修好本机测试环境（崩溃隔离跑器，一条命令出可信结论）；R50 按差距报告 69 条完成上线前加固——8 项 P0 全关、时钟容错让"前跳误杀/回拨死锁"不再可能、审批与预算的并发边界收口、`/metrics` 补齐可观测入口、Studio 断线可自愈（明细见 `docs/REMEDIATION-STATUS.md`）。R51 按能力路线第一批补上三根支柱的关键缺口：**能查**（`web_search`，四提供方、默认关、密钥只走环境变量）、**敢跑**（可插拔执行后端，默认 `local` 行为逐字不变，`docker` 可选：禁网/非 root/资源上限/只挂 run 目录，缺 docker 即报错）、**跑得出结论**（`run_tests` + G1 执行校验，失败并入既有返工通道），并把评测做成 mock/真实双轨（`eval --live` + 23 条真实小目标 + 夜间脚本）。
+**引擎与管线健康，无 P0/P1 阻断项。** 全量测试 **3204 passed / 2 skipped / 0 failed**（163 文件 / 41 批次，`scripts/test.py` 一次跑出），三个预设样例 100% 通过，真实模型通道可用（`doctor` 6/6 通过）；Studio 架构检查 73 模块 / 42 分片、`test:unit` 18 passed 全绿。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道；R19 给主管审核开了独立、不阻塞的 `suggestions` 建议通道；R20 补上单步/断点调试——每个任务派发前可挂起裁决，第二档功能项全部闭环；R21 给 API 契约装上守卫，openapi.yaml 与代码路由双向锁死、不再漏端点；R22 补上 resume 状态白名单与 MCP 管道显式关闭；R23 产出 2501 用例的模块/场景覆盖矩阵（`docs/TEST-REPORT.md`），验收报告遗留的最后一项小项闭环；R24 补上工具管理页与单工具试跑；R25 把共享 API Key 升级为多用户 RBAC（密钥/角色/作用域/归属/审计）；R26 补上拖拽式可视化编排（画布 + YAML 双向 + 图校验）；R27 给检索加向量通道（混合打分 + 磁盘缓存 + 本地退化）；R28 打通「画布 → run」直通规划；R29 让实体记忆也走向量混合（不加列、不迁移）；R30 给审批单加等待窗口与过期告警；R31 给条件边补否定/兜底写法；R32 把控制台 UI 重构成令牌化 + 明暗主题 + 侧栏布局；R33 把单层主管复核扩成可配的多级链；R34 修好本机测试环境（崩溃隔离跑器，一条命令出可信结论）；R50 按差距报告 69 条完成上线前加固——8 项 P0 全关、时钟容错让"前跳误杀/回拨死锁"不再可能、审批与预算的并发边界收口、`/metrics` 补齐可观测入口、Studio 断线可自愈（明细见 `docs/REMEDIATION-STATUS.md`）。R51 按能力路线第一批补上三根支柱的关键缺口：**能查**（`web_search`，四提供方、默认关、密钥只走环境变量）、**敢跑**（可插拔执行后端，默认 `local` 行为逐字不变，`docker` 可选：禁网/非 root/资源上限/只挂 run 目录，缺 docker 即报错）、**跑得出结论**（`run_tests` + G1 执行校验，失败并入既有返工通道），并把评测做成 mock/真实双轨（`eval --live` + 23 条真实小目标 + 夜间脚本）。R52 补上互操作与无人值守：**C7** 暴露为 MCP server（`mcp-serve`，5 个工具全走 HTTP API 复用 RBAC/审计）、**C6 第一步**借现成浏览器 MCP（配置模板 + 读优先白名单，零开发）、**C8** 入站 Webhook 触发（`POST /webhooks/trigger`，HMAC 或 API Key 两条认证路径，来源进 ledger）。
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | **3177 passed / 2 skipped / 0 failed**（`python scripts/test.py`，崩溃隔离跑器一次跑出；R51 新增 62 例：沙箱后端 17、联网搜索 17、run_tests 9、执行校验 10、配置通道 8、工具实验台 +1） |
+| 全量测试 | **3204 passed / 2 skipped / 0 failed**（`python scripts/test.py`，崩溃隔离跑器一次跑出；R51 新增 62 例、R52 新增 27 例，明细见 §3.64–§3.65） |
 | 静态检查 | `ruff check agentcrew/ main.py tests/` **全绿**；`mypy agentcrew/` **137 文件零错误**（本机与 CI 同口径；CI 首跑暴露的 5 条既存错误已在本批修复，见 §3.64） |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
@@ -1722,7 +1722,7 @@ Studio 架构检查 73 模块 / 42 分片通过、`test:unit` 18 passed。
 工具实验台 +1），全量 **3177 passed / 0 failed / 2 skipped**（160 文件 / 40 批次，
 `python scripts/test.py` 一次跑出）。
 `ruff check agentcrew/ main.py tests/` 全绿；`mypy agentcrew/` 137 文件**零新增错误**
-（首次 CI 实跑暴露了 5 条随 e4add0f 带入、从未被 CI 检出的既存错误，已在本批
+（CI 已全绿；R52 新增 MCP server / 入站触发 / 浏览器模板三项，见 §3.65。首次 CI 实跑暴露的 5 条随 e4add0f 带入、从未被 CI 检出的既存错误，已在本批
 顺手修掉：`flow/spec.py` 三处 `TaskDraft` 显式补 `timeout_seconds=300`、
 `api/server.py` 两处 Optional 访问补空值守卫；Studio job 的
 `package-lock.json` 被 `studio/.gitignore` 忽略导致 `npm ci` 无锁可用，已改为
@@ -1730,7 +1730,26 @@ Studio 架构检查 73 模块 / 42 分片通过、`test:unit` 18 passed。
 
 **明确不做**：不引 docker SDK（拼 CLI 参数即可）、不实现 gVisor/microVM（留
 `ExecutionBackend` 接口）、不把 `sandbox_backend` 开进 API options（防隔离降级）、
-不做「搜索结果自动抓正文」（保持搜索/抓取两步，SSRF 边界只有一处）。
+### 3.65 R52：能力补齐第二批 —— MCP server / 浏览器接入 / 事件触发（2026-11-12）
+
+按路线文档 §5「第二批（P1）」交付三项：C7（暴露为 MCP server，杠杆最大）、
+C6 第一步（借现成浏览器 MCP，本仓零开发）、C8 入站触发（定时运行此前已由
+`main.py schedule` 交付）。贯穿口径：**不造第二条权限语义**——MCP 与 Webhook
+触发都复用现有 API 层的 RBAC / 限流 / 审计。
+
+| 能力 | 落地方式 | 边界 / 证据 |
+| --- | --- | --- |
+| **C7 MCP server** | 新增 `mcp/server.py`：`ApiBridge`（urllib，零依赖）把 5 个工具（create_run / run_status / list_approvals / approve / wait_for_run）翻译成对 HTTP API 的请求；`run_stdio` 换行分隔 JSON-RPC 主循环；CLI `mcp-serve` | RBAC / 限流 / 审计由 API 侧执行——客户端拿到什么角色的 key 就只能做什么。协议面刻意窄（initialize/tools/list/tools/call/ping），streamable HTTP 传输等有真实远程调用方再做。`tests/test_mcp_server.py` 13 例（协议 + 对真实 in-process ApiServer 的桥接端到端） |
+| **C6 浏览器·第一步** | `examples/agentcrew.browser.example.yaml`：接 Playwright MCP（`mcp_servers`）+ 按角色「读优先」白名单（`playwright__browser_navigate/snapshot` 等）；写类工具需显式放开 | 零开发（R13 客户端既有能力）。`untrusted_inputs` 与 MCP 工具互斥这条边界写进模板并有测试钉住。`tests/test_browser_mcp.py` 4 例；真实浏览器端到端待装 Playwright MCP 后补 |
+| **C8 入站触发** | 新端点 `POST /webhooks/trigger`：两条认证路径——HMAC 签名（复用 R12 语义，±300s 防重放，给不持 key 的外部系统）或 API Key（无签名头时与全站同形，无凭证 401）；新作用域 `webhook:trigger`；触发主体只有 `runs:write`；来源以 `run_triggered` 事件进 run ledger | 配置 `webhook_trigger_secret`（默认空=关闭 503；不进快照、参与脱敏）；`_apply_middleware` 用「无作用域占位主体」区分两条路径，防 anonymous-admin 兜底骗过签名。`tests/test_webhook_trigger.py` 8 例 |
+
+**新增测试 27 例**，全量 **3204 passed / 0 failed / 2 skipped**（163 文件 / 41 批次）。
+ruff 全绿；mypy 138 文件零错误。`openapi.yaml` / `THREAT_MODEL v1.2`（新增 T-50）/
+`OPERATIONS` / `README` / `agentcrew.example.yaml` 同步。
+
+**明确不做**：MCP server 不做 resources/prompts/sampling；HTTP 传输不做；
+不内置 playwright（`agentcrew[browser]` 留待按需）；签名重放不引入 nonce
+（窗口内可重放一次的代价远小于 nonce 存储，与 R12 同口径）。
 
 ---
 
