@@ -1,4 +1,4 @@
-# 能力补齐第二批：MCP server / 浏览器接入 / 事件触发 / 多模态（C7 · C6 · C8 · C4）
+# 能力补齐第二批：MCP server / 浏览器 / 触发 / 多模态 / 文档 RAG（C7 · C6 · C8 · C4 · C5）
 
 > 立项依据：`完善/AgentCrew落地完善路线-2026-11-12.md` §5 第二批（P1）。
 > 本批交付：C7（暴露为 MCP server，杠杆最大）、C6 第一步（借现成浏览器 MCP，
@@ -143,7 +143,26 @@ curl -X POST http://127.0.0.1:8765/webhooks/trigger \
 - **明确不做**：不代抓 URL 图片；不做「截图→再截图对比」的工具闭环（需要
   截图能力，属浏览器工具组的事）；图片不计入 context token 预算（预算管文本）。
 
-## 5. 已验证 / 未完成
+## 5. C5 · 文档 RAG（团队手册/规范 → 上下文注入）
+
+把团队文档放进 `<output_dir>/knowledge/docs/`（`.md` / `.txt`，用户自放、平台只读），
+开启 `docs_rag_enabled: true`（env `AGENTCREW_DOCS_RAG_ENABLED`）后：
+
+- **摄取**：run 启动时按「Markdown 标题分节 + 超长段硬切（700 字符、80 重叠）」
+  分块；manifest 按 sha256 增量——内容没变的文档复用已有块，删掉的文档出索引；
+  ledger 记 `docs_ingested(docs/chunks/rebuilt/skipped)`。
+- **注入两处**：规划期 PM 提示词（`_prepare_knowledge_context` 末尾）与每个任务
+  的上下文包（ContextBus 级 5.5，`docs:<来源>` 节选，走同一 token 预算记账）。
+  ledger 记 `docs_context_used(hits)`。
+- **检索**：复用 R11/R27 的 BM25（中文二元组、单字命中不算相关）+ R27 混合打分。
+  规划期（异步）支持真实 embedding 端点；上下文组装（同步）对真实端点退化为
+  纯 BM25（不偷偷起线程，如实写进配置 docstring），本地哈希向量不受影响。
+- **管理入口**：`main.py docs list`（每篇文档块数）与 `main.py docs search <查询>`
+  （run 内同一套打分的检索演示——放对目录了没有，一条命令验证）。
+- **明确不做**：不做文档写接口（文档来源是用户与 git，不归平台管）；不做
+  跨目录/外部源摄取；不引入向量数据库（复用内存 BM25 + 磁盘向量缓存）。
+
+## 6. 已验证 / 未完成
 
 | 项 | 状态 |
 | --- | --- |
@@ -152,4 +171,4 @@ curl -X POST http://127.0.0.1:8765/webhooks/trigger \
 | C8 入站触发 | ✅ 8 例（正确签名触发 / 坏签名 / 时间戳过期 / 缺时间戳 / 未启用 503 / 认证不变量 / 作用域 / 密钥脱敏） |
 | C8 定时运行 | ✅ 此前已交付（`main.py schedule`） |
 | C4 多模态 | ✅ 通道已交付（消息 images 字段 + 两 provider 转换 + 能力位 + API/CLI 入口 + 落盘留证 + 降级事件，14 例）；真实模型「截图→改前端」端到端待有 vision 模型环境补 |
-| C5 文档 RAG | ⬜ 未开始（摄取管线 + 检索注入，约 3–5 人日） |
+| C5 文档 RAG | ✅ 已交付（DocStore 增量摄取 + 混合检索 + ContextBus/PM 双处注入 + `docs list/search` CLI，13 例） |

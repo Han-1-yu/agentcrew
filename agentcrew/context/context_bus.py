@@ -25,7 +25,7 @@
 
 import json
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from pathlib import Path
 
@@ -116,6 +116,7 @@ class ContextBus:
         excerpt_max_ratio: float = 0.4,
         tree_max_entries: int = 300,
         summarizer: Summarizer | None = None,
+        docs_retriever: Callable[[str], list[tuple[str, str]]] | None = None,
     ) -> None:
         self._goal = goal
         self._board = board
@@ -125,6 +126,9 @@ class ContextBus:
         self._tree_max_entries = tree_max_entries
         self._decisions: list[DecisionRecord] = []
         self._summarizer: Summarizer = summarizer or NullSummarizer()
+        #: C5：文档 RAG 检索回调（``None`` = 未启用，零开销）。``Callable(query)
+        #: -> [(来源标签, 片段文本)]``，由 Crew 提供（query_sync，见 knowledge.docs）。
+        self._docs_retriever = docs_retriever
         #: task_id → 已压缩的 summary 文本（prefetch_summaries 写入，build 读取）。
         self._summary_cache: dict[str, str] = {}
 
@@ -200,6 +204,20 @@ class ContextBus:
             )
             if was_truncated:
                 truncated = True
+
+        # 级 5.5（C5）：团队文档检索片段——按任务描述查，走同一预算记账。
+        # 放在任务产物节选之后：文档是「怎么做事」的背景，优先级低于本任务
+        # 直接相关的产物节选，高于更远的祖先摘要。
+        if self._docs_retriever is not None:
+            for source, snippet in self._docs_retriever(
+                    f"{self._goal}\n{task.description}"):
+                if not snippet.strip():
+                    continue
+                if not budget.try_consume(f"{source}\n{snippet}"):
+                    truncated = True
+                    break
+                key_excerpts.append(FileExcerpt(
+                    path=source, content=snippet, truncated=False))
 
         # 级 6：更远祖先的摘要（追加在直接上游之后，同样按实际大小计费）。
         for ancestor_id in self._distant_ancestor_ids(task, tasks):

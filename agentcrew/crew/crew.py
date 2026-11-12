@@ -399,6 +399,8 @@ class Crew:
         #: C4：随 run 附带的图片（多模态输入）。空 = 纯文本路径，零开销。
         self._images: list[dict[str, Any]] = [
             dict(item) for item in (images or [])]
+        #: C5：文档 RAG 索引（``docs_rag_enabled`` 开启时在 run 启动期摄取）。
+        self._docs_store: Any | None = None
         # P3-1（2026-11 会话隔离改造）：校准器从「模块级全局单例」改为 **Crew
         # 实例属性**，构造 ModelFactory 时显式注入。原实现每次构造 Crew 都调用
         # ``set_calibrator(ComplexityCalibrator())`` 全量替换全局单例——API 服务器
@@ -784,6 +786,8 @@ class Crew:
         # C4：把附带图片落盘到 run 目录（输入证据，随 run 保留），并记一条
         # ``images_attached``——「模型这次能看到图」必须能从审计读出来。
         self._persist_images(checkpoint.run_dir, ledger)
+        # C5：文档 RAG——摄取用户放进 knowledge/docs/ 的团队文档（默认关）。
+        await self._ingest_docs(ledger)
         goal = record.project_goal if goal is None else goal
         # R3：工具链装配。默认关闭时返回 None，AgentFactory 与改造前完全一致。
         tool_registry = self._build_tool_registry(checkpoint, ledger)
@@ -1276,6 +1280,7 @@ class Crew:
             run.goal, board, run.store,
             budget_tokens=self._settings.context_budget_tokens,
             summarizer=summarizer_from_factory(run.models),
+            docs_retriever=self._docs_query_sync(),
         )
         # 新 run 下该文件不存在（no-op）；resume 时载入既有决策供上下文包引用。
         bus.load_decisions(decisions_path)
@@ -1885,6 +1890,54 @@ class Crew:
             return EXIT_CODES["ok"]
         return EXIT_CODES["failed"]
 
+    async def _ingest_docs(self, ledger: Ledger) -> None:
+        """C5：摄取团队文档（``docs_rag_enabled`` 开启时）。
+
+        文档在 ``<output_dir>/knowledge/docs/``，由用户自己放置；摄取失败只记
+        warning——文档是上下文增强，不能让它把 run 拖死。留痕事件让「这次 run
+        有多少文档参与检索」能从审计读出来。
+        """
+        if not self._settings.docs_rag_enabled:
+            return
+        from agentcrew.knowledge.docs import DocStore
+        from agentcrew.knowledge.embeddings import build_embedder
+        from agentcrew.models.embedding import embedding_target
+
+        try:
+            embedder = build_embedder(
+                self._settings,
+                output_dir=self._settings.output_dir,
+                target=embedding_target(self._settings),
+            )
+            store = DocStore(
+                self._settings.output_dir / "knowledge" / "docs",
+                embedder=embedder,
+            )
+            result = await store.ingest()
+        except Exception as exc:  # noqa: BLE001 —— 检索增强失败不拖死 run
+            _logger.warning("文档摄取失败: %s", exc)
+            ledger.emit("docs_ingest_failed",
+                        error=f"{type(exc).__name__}: {exc}"[:200])
+            return
+        self._docs_store = store
+        ledger.emit("docs_ingested", docs=result.docs, chunks=result.chunks,
+                    rebuilt=result.rebuilt, skipped=result.skipped)
+
+    def _docs_query_sync(self) -> Any | None:
+        """C5：给 ContextBus 的同步检索回调；未启用返回 ``None``（零开销）。"""
+        docs_store = self._docs_store
+        if docs_store is None or self._settings.docs_rag_limit <= 0:
+            return None
+
+        def retrieve(query: str) -> list[tuple[str, str]]:
+            hits = docs_store.query_sync(
+                query, limit=self._settings.docs_rag_limit,
+                vector_weight=self._settings.docs_rag_vector_weight)
+            return [(f"docs:{hit.chunk.doc}", f"[{hit.chunk.heading}] "
+                                             f"{hit.chunk.text}") for hit in hits]
+
+        return retrieve
+
     def _persist_images(self, run_dir: Path, ledger: Ledger) -> None:
         """C4：把附带图片写成 ``<run_dir>/context/images/NN.<ext>``（输入证据）。
 
@@ -2062,6 +2115,23 @@ class Crew:
                     run.goal, limit=8, doc_vectors=entity_vectors[0],
                     query_vector=entity_vectors[1],
                     vector_weight=self._settings.retrieval_vector_weight))
+        # C5：团队文档——PM 拆解也要看到手册与规范（默认关，零开销）。
+        if self._docs_store is not None and self._settings.docs_rag_limit > 0:
+            hits = await self._docs_store.query(
+                run.goal, limit=self._settings.docs_rag_limit,
+                vector_weight=self._settings.docs_rag_vector_weight)
+            if hits:
+                run.ledger.emit(
+                    "docs_context_used",
+                    target="planning",
+                    hits=len(hits),
+                )
+                lines = ["## 团队文档（knowledge/docs/ 检索命中）"]
+                for hit in hits:
+                    lines.append(
+                        f"### {hit.chunk.doc} · {hit.chunk.heading}\n"
+                        f"{hit.chunk.text}")
+                blocks.append("\n".join(lines))
         return "\n\n".join(blocks)
 
     async def _retrieval_vectors(

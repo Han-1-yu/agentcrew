@@ -265,6 +265,7 @@ examples/samples/<name>/
 | `python main.py doctor` | 诊断配置 / 环境 / 依赖 / Provider 连通性，输出健康报告 | `--config PATH`（指定 agentcrew.yaml）；`--output-dir DIR`；`--json`（机器可读） |
 | `python main.py diff <a> <b>` | 对比两个 run 的配置 / 任务 / 产物 / 事件统计差异 | `--output-dir DIR`；`--json`（机器可读） |
 | `python main.py mcp-serve` | C7：以 MCP server（stdio）暴露编排能力（派活/看进度/裁决审批），供 Claude Desktop / Cursor 调用 | `--api-url URL`；`--api-key KEY`（默认读 `AGENTCREW_MCP_API_KEY`） |
+| `python main.py docs <list\|search>` | C5：团队文档 RAG——列出已索引文档 / 检索演示（`knowledge/docs/` 下的手册与规范会注入规划与执行上下文） | `search QUERY --limit N`；`--output-dir DIR` |
 | `python main.py eval <dataset>` | P2-5 / C11：跑评测集，用产物断言给出 `pass@1` / `pass^k` | `--repeat K`（每 case 跑 K 次）；`--live`（真实模型）；`--max-cost USD`（硬上限）；`--json`；`--output-dir DIR`（留账） |
 
 行为说明：
@@ -2321,6 +2322,8 @@ models:
 | `AGENTCREW_SEARCH_PROVIDER` | 空 | C1：`tavily` / `brave` / `duckduckgo`；空 = 不注册 `web_search`。密钥只从 `TAVILY_API_KEY` / `BRAVE_API_KEY` / `AGENTCREW_SEARCH_API_KEY` 读 |
 | `AGENTCREW_SEARCH_MAX_RESULTS` / `_TIMEOUT_SECONDS` | `5` / `15` | C1：单次搜索条数与超时 |
 | `AGENTCREW_WEBHOOK_TRIGGER_SECRET` | 空 | C8：入站 Webhook 触发的 HMAC 密钥；空 = `POST /webhooks/trigger` 关闭（503） |
+| `AGENTCREW_DOCS_RAG_ENABLED` | `false` | C5：文档 RAG——`knowledge/docs/` 下的团队文档（手册/规范）注入规划与执行上下文 |
+| `AGENTCREW_DOCS_RAG_LIMIT` / `_VECTOR_WEIGHT` | `4` / `0.5` | C5：单任务注入片段数上限与混合权重 |
 | `AGENTCREW_STREAM` | `false` | P3-3：Agent 走流式 LLM 路径（逐块记 `agent_stream_chunk`；默认关，实时性需要时开） |
 | `AGENTCREW_UNTRUSTED_INPUTS` | `false` | G-1：不可信输入预设——只给只读工具（read_file/list_files/grep），不挂 MCP |
 | `AGENTCREW_OTEL_ENABLED` | `false` | P2-3：每次 run 导出一条 OTel trace（`gen_ai.*` 语义 + OTLP/HTTP JSON，零依赖） |

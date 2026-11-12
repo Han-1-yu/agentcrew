@@ -8,11 +8,11 @@
 
 ## 0. 一句话现状
 
-**引擎与管线健康，无 P0/P1 阻断项。** 全量测试 **3218 passed / 2 skipped / 0 failed**（164 文件 / 41 批次，`scripts/test.py` 一次跑出），三个预设样例 100% 通过，真实模型通道可用（`doctor` 6/6 通过）；Studio 架构检查 73 模块 / 42 分片、`test:unit` 18 passed 全绿。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道；R19 给主管审核开了独立、不阻塞的 `suggestions` 建议通道；R20 补上单步/断点调试——每个任务派发前可挂起裁决，第二档功能项全部闭环；R21 给 API 契约装上守卫，openapi.yaml 与代码路由双向锁死、不再漏端点；R22 补上 resume 状态白名单与 MCP 管道显式关闭；R23 产出 2501 用例的模块/场景覆盖矩阵（`docs/TEST-REPORT.md`），验收报告遗留的最后一项小项闭环；R24 补上工具管理页与单工具试跑；R25 把共享 API Key 升级为多用户 RBAC（密钥/角色/作用域/归属/审计）；R26 补上拖拽式可视化编排（画布 + YAML 双向 + 图校验）；R27 给检索加向量通道（混合打分 + 磁盘缓存 + 本地退化）；R28 打通「画布 → run」直通规划；R29 让实体记忆也走向量混合（不加列、不迁移）；R30 给审批单加等待窗口与过期告警；R31 给条件边补否定/兜底写法；R32 把控制台 UI 重构成令牌化 + 明暗主题 + 侧栏布局；R33 把单层主管复核扩成可配的多级链；R34 修好本机测试环境（崩溃隔离跑器，一条命令出可信结论）；R50 按差距报告 69 条完成上线前加固——8 项 P0 全关、时钟容错让"前跳误杀/回拨死锁"不再可能、审批与预算的并发边界收口、`/metrics` 补齐可观测入口、Studio 断线可自愈（明细见 `docs/REMEDIATION-STATUS.md`）。R51 按能力路线第一批补上三根支柱的关键缺口：**能查**（`web_search`，四提供方、默认关、密钥只走环境变量）、**敢跑**（可插拔执行后端，默认 `local` 行为逐字不变，`docker` 可选：禁网/非 root/资源上限/只挂 run 目录，缺 docker 即报错）、**跑得出结论**（`run_tests` + G1 执行校验，失败并入既有返工通道），并把评测做成 mock/真实双轨（`eval --live` + 23 条真实小目标 + 夜间脚本）。R52 补上互操作与无人值守：**C7** 暴露为 MCP server（`mcp-serve`，5 个工具全走 HTTP API 复用 RBAC/审计）、**C6 第一步**借现成浏览器 MCP（配置模板 + 读优先白名单，零开发）、**C8** 入站 Webhook 触发（`POST /webhooks/trigger`，HMAC 或 API Key 两条认证路径，来源进 ledger）。
+**引擎与管线健康，无 P0/P1 阻断项。** 全量测试 **3231 passed / 2 skipped / 0 failed**（165 文件 / 42 批次，`scripts/test.py` 一次跑出），三个预设样例 100% 通过，真实模型通道可用（`doctor` 6/6 通过）；Studio 架构检查 73 模块 / 42 分片、`test:unit` 18 passed 全绿。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道；R19 给主管审核开了独立、不阻塞的 `suggestions` 建议通道；R20 补上单步/断点调试——每个任务派发前可挂起裁决，第二档功能项全部闭环；R21 给 API 契约装上守卫，openapi.yaml 与代码路由双向锁死、不再漏端点；R22 补上 resume 状态白名单与 MCP 管道显式关闭；R23 产出 2501 用例的模块/场景覆盖矩阵（`docs/TEST-REPORT.md`），验收报告遗留的最后一项小项闭环；R24 补上工具管理页与单工具试跑；R25 把共享 API Key 升级为多用户 RBAC（密钥/角色/作用域/归属/审计）；R26 补上拖拽式可视化编排（画布 + YAML 双向 + 图校验）；R27 给检索加向量通道（混合打分 + 磁盘缓存 + 本地退化）；R28 打通「画布 → run」直通规划；R29 让实体记忆也走向量混合（不加列、不迁移）；R30 给审批单加等待窗口与过期告警；R31 给条件边补否定/兜底写法；R32 把控制台 UI 重构成令牌化 + 明暗主题 + 侧栏布局；R33 把单层主管复核扩成可配的多级链；R34 修好本机测试环境（崩溃隔离跑器，一条命令出可信结论）；R50 按差距报告 69 条完成上线前加固——8 项 P0 全关、时钟容错让"前跳误杀/回拨死锁"不再可能、审批与预算的并发边界收口、`/metrics` 补齐可观测入口、Studio 断线可自愈（明细见 `docs/REMEDIATION-STATUS.md`）。R51 按能力路线第一批补上三根支柱的关键缺口：**能查**（`web_search`，四提供方、默认关、密钥只走环境变量）、**敢跑**（可插拔执行后端，默认 `local` 行为逐字不变，`docker` 可选：禁网/非 root/资源上限/只挂 run 目录，缺 docker 即报错）、**跑得出结论**（`run_tests` + G1 执行校验，失败并入既有返工通道），并把评测做成 mock/真实双轨（`eval --live` + 23 条真实小目标 + 夜间脚本）。R52 补上互操作与无人值守：**C7** 暴露为 MCP server（`mcp-serve`，5 个工具全走 HTTP API 复用 RBAC/审计）、**C6 第一步**借现成浏览器 MCP（配置模板 + 读优先白名单，零开发）、**C8** 入站 Webhook 触发（`POST /webhooks/trigger`，HMAC 或 API Key 两条认证路径，来源进 ledger）。R53 补上多模态输入（**C4**）：`run --image` / `POST /runs` 的 `images`（内联 base64，最多 4 张），provider 能力位 `supports_vision`（默认关）决定是否真发图，不支持时降级纯文本并落 `vision_unsupported`（降级可见），图片落盘留证。R54 补上文档 RAG（**C5**）：`knowledge/docs/` 下的团队手册/规范增量摄取分块，按相关性注入 PM 规划提示词与每个任务的上下文（复用 R11/R27 检索资产），`docs list/search` 管理入口。能力路线第二批至此全部落地。
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | **3218 passed / 2 skipped / 0 failed**（`python scripts/test.py`，崩溃隔离跑器一次跑出；R51 +62 / R52 +27 / R53 +14，明细见 §3.64–§3.66） |
+| 全量测试 | **3231 passed / 2 skipped / 0 failed**（`python scripts/test.py`，崩溃隔离跑器一次跑出；R51 +62 / R52 +27 / R53 +14 / R54 +13，明细见 §3.64–§3.67） |
 | 静态检查 | `ruff check agentcrew/ main.py tests/` **全绿**；`mypy agentcrew/` **137 文件零错误**（本机与 CI 同口径；CI 首跑暴露的 5 条既存错误已在本批修复，见 §3.64） |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
@@ -1768,6 +1768,26 @@ ruff 全绿；mypy 138 文件零错误。openapi `CreateRunRequest.images` 已�
 
 **明确不做**：不代抓 URL 图片；不做截图工具闭环（属浏览器工具组）；图片不计入
 context token 预算（预算管文本）。
+
+---
+
+### 3.67 R54：C5 文档 RAG —— 团队手册/规范注入规划与执行上下文（2026-11-12）
+
+第二批收尾项。完全复用既有检索资产（R11 的 BM25、R27 的混合打分与 embedding
+通道），新增的只有「文档摄取」这一条管线。
+
+| 层 | 落地方式 | 证据 |
+| --- | --- | --- |
+| 摄取 | 新增 `knowledge/docs.py`：`DocStore` 扫描 `<output_dir>/knowledge/docs/`（`.md/.txt`），按「Markdown 标题分节 + 超长段硬切（700 字符/80 重叠）」分块；manifest 按 sha256 **增量**——没变的文档复用块、删掉的文档出索引；ledger `docs_ingested(docs/chunks/rebuilt/skipped)` | `tests/test_docs_rag.py` 摄取/增量/删除 4 例 |
+| 检索 | BM25 + R27 混合打分（异步 `query` 支持真实 embedding 端点；同步 `query_sync` 对真实端点退化为纯 BM25——上下文组装是同步路径，不偷偷起线程，如实写进配置 docstring） | 同步/异步对拍钉住（哈希向量下结果一致） |
+| 注入 | 规划期：`_prepare_knowledge_context` 末尾追加「团队文档」块（ledger `docs_context_used`）；执行期：ContextBus 新增 `docs_retriever` 回调（级 5.5，`docs:<来源>` 节选，同一 token 预算记账，超预算标记 truncated） | 不传 retriever 时行为与 C5 之前逐字一致（向后兼容钉住） |
+| 入口 | CLI `main.py docs list / search`（list 打印每篇块数、search 用 run 内同一套打分做检索演示）；配置 `docs_rag_enabled / docs_rag_limit / docs_rag_vector_weight`（env/YAML/快照同源，默认全关） | CLI smoke（空目录 list 0 篇不炸） |
+
+**新增测试 13 例**，全量 **3231 passed / 0 failed / 2 skipped**（165 文件 / 42 批次）。
+ruff 全绿；mypy 139 文件零错误。THREAT_MODEL v1.3（§2.3 补两类输入源）同步。
+
+**明确不做**：文档写接口（来源是用户与 git）；跨目录/外部源摄取；向量数据库
+（复用内存 BM25 + 磁盘向量缓存，经验库同款）。
 
 ---
 

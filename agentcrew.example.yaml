@@ -43,6 +43,14 @@ search_provider: ""
 search_max_results: 5
 search_timeout_seconds: 15
 
+# ── C5：文档 RAG（默认关）────────────────────────────────────────────────
+# 把团队手册/规范（.md/.txt）放进 <output_dir>/knowledge/docs/ 后开启；
+# 规划期的 PM 提示词与每个任务的上下文会按相关性注入最相关的片段。
+# 管理入口：python main.py docs list / docs search <查询>
+docs_rag_enabled: false
+docs_rag_limit: 4
+docs_rag_vector_weight: 0.5
+
 # ══════════════════════════════════════════════════════════════════════════════
 # 2. 门禁（G1 静态校验 / G2 LLM 评审 / G3 人工卡点）
 # ══════════════════════════════════════════════════════════════════════════════

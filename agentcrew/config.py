@@ -114,6 +114,9 @@ _ENV_TO_FIELD: dict[str, str] = {
     "AGENTCREW_WEBHOOK_URL": "webhook_url",
     "AGENTCREW_WEBHOOK_SECRET": "webhook_secret",
     "AGENTCREW_WEBHOOK_TRIGGER_SECRET": "webhook_trigger_secret",
+    "AGENTCREW_DOCS_RAG_ENABLED": "docs_rag_enabled",
+    "AGENTCREW_DOCS_RAG_LIMIT": "docs_rag_limit",
+    "AGENTCREW_DOCS_RAG_VECTOR_WEIGHT": "docs_rag_vector_weight",
     "AGENTCREW_WEBHOOK_TIMEOUT_SECONDS": "webhook_timeout_seconds",
     "AGENTCREW_WEBHOOK_MAX_RETRIES": "webhook_max_retries",
 }
@@ -145,6 +148,8 @@ _YAML_SCALAR_KEYS = (
     # R27：向量检索通道与混合权重。
     "embedding_enabled", "embedding_model", "embedding_dim",
     "retrieval_vector_weight",
+    # C5：文档 RAG。
+    "docs_rag_enabled", "docs_rag_limit", "docs_rag_vector_weight",
     # R5：跨角色咨询的能力开关与配额。
     "peer_dialogue_enabled", "max_peer_messages",
     # R6：动态委派的治理参数。
@@ -1043,6 +1048,23 @@ class Settings(BaseModel):
 
     BM25 分先按本批最大值归一到 [0,1] 再加权——两种分的量纲差几个数量级，
     不归一的话权重参数等于假的。
+    """
+    docs_rag_enabled: bool = False
+    """C5：文档 RAG（默认**关闭**）。
+
+    开启后，``<output_dir>/knowledge/docs/`` 下的 Markdown / 文本团队文档
+    （手册、规范、约定）会在 run 启动时被摄取分块，并按任务相关性注入
+    上下文包（规划期的 PM 提示词 + 每个任务的上下文）。文档是用户自己放进
+    目录的——平台只读不写。环境变量 ``AGENTCREW_DOCS_RAG_ENABLED=true``。
+    """
+    docs_rag_limit: int = 4
+    """C5：单个任务最多注入的文档片段数（默认 4；0 = 不注入）。"""
+    docs_rag_vector_weight: float = 0.5
+    """C5：文档检索的混合权重（与 ``retrieval_vector_weight`` 同语义）。
+
+    注意：上下文组装是同步路径，真实 embedding 端点（异步）在文档检索里
+    用不上——启用 ``embedding_enabled`` 时文档检索也只走 BM25；本地哈希
+    向量（离线兜底）不受影响。
     """
     peer_dialogue_enabled: bool = False
     """R5：Agent 间真实咨询（``<message to="…">``）——默认**关闭**。

@@ -309,6 +309,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_switch.add_argument("--task", default="", metavar="TASK_ID",
                           help="只给这一个任务换（写 task_overrides.json）")
 
+    # C5：文档 RAG——团队文档（knowledge/docs/）的索引管理与检索演示。
+    p_docs = sub.add_parser(
+        "docs", help="C5：团队文档 RAG——列出/检索 knowledge/docs/ 下的文档索引")
+    docs_sub = p_docs.add_subparsers(dest="docs_action", required=True)
+    p_docs_list = docs_sub.add_parser(
+        "list", help="列出已索引的文档与块数（触发一次增量摄取）")
+    p_docs_list.add_argument("--output-dir", default=None)
+    p_docs_search = docs_sub.add_parser(
+        "search", help="检索演示：按查询词返回最相关的文档片段")
+    p_docs_search.add_argument("query", metavar="QUERY")
+    p_docs_search.add_argument("--limit", type=int, default=4)
+    p_docs_search.add_argument("--output-dir", default=None)
+
     p_schedule = sub.add_parser(
         "schedule", help="定时任务（Automations）：一次性 / 周期日程的增删查与到期触发")
     schedule_sub = p_schedule.add_subparsers(dest="schedule_action", required=True)
@@ -1102,6 +1115,58 @@ def _cmd_roles(args: argparse.Namespace) -> int:
     )
     return EXIT_CODES["ok"]
 
+
+def _cmd_docs(args: argparse.Namespace) -> int:
+    """C5：文档 RAG 的管理入口——``docs list`` / ``docs search``。
+
+    ``list`` 触发一次增量摄取并打印「每篇文档的块数」——这是「我的手册被
+    索引了吗」的直接答案。``search`` 是检索演示：run 内注入用的同一套
+    BM25 + 混合打分，给用户一个「放对目录了没有」的快速验证手段。
+    """
+    import asyncio as _asyncio
+
+    from agentcrew.config import Settings as _Settings
+    from agentcrew.knowledge.docs import DocStore
+    from agentcrew.knowledge.embeddings import build_embedder
+    from agentcrew.models.embedding import embedding_target
+
+    settings = _Settings.load()
+    if getattr(args, "output_dir", None):
+        settings = settings.model_copy(
+            update={"output_dir": Path(args.output_dir)})
+    embedder = build_embedder(
+        settings, output_dir=settings.output_dir,
+        target=embedding_target(settings))
+    store = DocStore(
+        settings.output_dir / "knowledge" / "docs", embedder=embedder)
+    result = _asyncio.run(store.ingest())
+    if getattr(args, "docs_action", "") == "list":
+        console = Console()
+        _out(console, f"文档根目录：{store.docs_dir}")
+        _out(console, f"已索引 {result.docs} 篇 / {result.chunks} 块"
+                      f"（本次重建 {len(result.rebuilt)}、复用 {len(result.skipped)}）")
+        by_doc: dict[str, int] = {}
+        for chunk in store._chunks:  # noqa: SLF001 —— 同仓管理命令直接读
+            by_doc[chunk.doc] = by_doc.get(chunk.doc, 0) + 1
+        for name, count in sorted(by_doc.items()):
+            _out(console, f"  {name} × {count} 块")
+        return EXIT_CODES["ok"]
+    query = args.query
+    # query_sync 是同步方法；上面 asyncio.run 只包了 ingest（异步摄取）。
+    hits = store.query_sync(
+        query, limit=max(1, int(args.limit)),
+        vector_weight=settings.docs_rag_vector_weight)
+    console = Console()
+    if not hits:
+        _out(console, f"没有命中（查询：{query!r}）。检查文档是否已放进 "
+                      f"{store.docs_dir} 且主题相关。")
+        return EXIT_CODES["ok"]
+    _out(console, f"查询：{query!r} · 命中 {len(hits)} 条：")
+    for rank, hit in enumerate(hits, start=1):
+        _out(console, f"{rank}. [{hit.score:.3f}] {hit.chunk.doc}"
+                      f" · {hit.chunk.heading}")
+        _out(console, f"   {hit.chunk.text[:160]}…")
+    return EXIT_CODES["ok"]
 
 def _cmd_mcp_serve(args: argparse.Namespace) -> int:
     """C7：以 MCP server（stdio）暴露编排能力；工具调用走本机 HTTP API。
@@ -2611,6 +2676,7 @@ _HANDLERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "models": _cmd_models,
     "config": _cmd_config,
     "schedule": _cmd_schedule,
+    "docs": _cmd_docs,
     "mcp-serve": _cmd_mcp_serve,
 }
 
