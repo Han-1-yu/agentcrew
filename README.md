@@ -134,7 +134,9 @@ python main.py run --demo
 > **能力补齐（C1 搜索 / C2 沙箱 / C3 执行验证）**：见
 > [docs/CAPABILITIES-C1-C3.md](docs/CAPABILITIES-C1-C3.md)；
 > 第二批（C7 MCP server / C6 浏览器 / C8 触发）见
-> [docs/CAPABILITIES-P1-BATCH2.md](docs/CAPABILITIES-P1-BATCH2.md)
+> [docs/CAPABILITIES-P1-BATCH2.md](docs/CAPABILITIES-P1-BATCH2.md)；
+> **整批验收结论**（逐条对标验收标准 + 待真机清单）见
+> [docs/ACCEPTANCE-2026-11-12.md](docs/ACCEPTANCE-2026-11-12.md)
 > ——三个开关怎么开、边界在哪、哪些已经验证过、哪些还等着目标机（Docker）验证。
 >
 > **架构决策记录（为什么这么做）**：见 [docs/adr/](docs/adr/)
