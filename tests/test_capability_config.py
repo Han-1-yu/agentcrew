@@ -116,7 +116,9 @@ def test_export_import_roundtrip_keeps_capability_fields(tmp_path):
         "sandbox_backend: docker\n"
         "sandbox_memory_mb: 768\n"
         "search_provider: tavily\n"
-        "search_max_results: 7\n",
+        "search_max_results: 7\n"
+        "docs_rag_enabled: true\n"
+        "docs_rag_limit: 6\n",
         encoding="utf-8",
     )
     code, out, err = _run_cli(
@@ -127,6 +129,8 @@ def test_export_import_roundtrip_keeps_capability_fields(tmp_path):
     assert doc["sandbox_memory_mb"] == 768
     assert doc["search_provider"] == "tavily"
     assert doc["search_max_results"] == 7
+    assert doc["docs_rag_enabled"] is True
+    assert doc["docs_rag_limit"] == 6
 
     exported = tmp_path / "exported.yaml"
     exported.write_text(out, encoding="utf-8")
@@ -139,6 +143,8 @@ def test_export_import_roundtrip_keeps_capability_fields(tmp_path):
     merged = yaml.safe_load(target.read_text(encoding="utf-8"))
     assert merged["sandbox_backend"] == "docker"
     assert merged["search_provider"] == "tavily"
+    assert merged["docs_rag_enabled"] is True
+    assert merged["docs_rag_limit"] == 6
 
 
 def test_default_export_does_not_emit_capability_fields(tmp_path):
@@ -156,8 +162,21 @@ def test_default_export_does_not_emit_capability_fields(tmp_path):
 
 def test_api_options_allow_search_but_not_sandbox_backend():
     assert validate_run_options({"search_provider": "brave"}) is None
+    assert validate_run_options({"docs_rag_enabled": True}) is None
     assert validate_run_options({"search_max_results": 3}) is None
     assert validate_run_options({"search_max_results": 99}) is not None
     # 隔离等级不允许被单个 run 降级
     error = validate_run_options({"sandbox_backend": "local"})
     assert error is not None and "不支持的键" in error
+
+
+def test_api_options_allow_docs_rag_with_bounds():
+    """C5：文档 RAG 是「上下文多带几段手册」，可以按 run 覆盖——但参数有界。"""
+    assert validate_run_options({"docs_rag_enabled": True}) is None
+    assert validate_run_options({"docs_rag_limit": 0}) is None
+    assert validate_run_options({"docs_rag_limit": 50}) is None
+    assert validate_run_options({"docs_rag_limit": 99}) is not None
+    assert validate_run_options({"docs_rag_limit": -1}) is not None
+    assert validate_run_options({"docs_rag_vector_weight": 1.0}) is None
+    assert validate_run_options({"docs_rag_vector_weight": 1.5}) is not None
+    assert validate_run_options({"docs_rag_enabled": "yes"}) is not None

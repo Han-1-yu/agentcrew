@@ -2509,6 +2509,9 @@ def _cmd_config_export(args: argparse.Namespace) -> int:
         ("search_provider", ""),
         ("search_max_results", 5),
         ("search_timeout_seconds", 15.0),
+        ("docs_rag_enabled", False),
+        ("docs_rag_limit", 4),
+        ("docs_rag_vector_weight", 0.5),
     ):
         value = snap.get(key)
         if value not in (None, default):
@@ -2637,6 +2640,8 @@ def _cmd_config_import(args: argparse.Namespace) -> int:
         "sandbox_memory_mb", "sandbox_cpus", "sandbox_allow_network",
         "search_provider", "search_max_results",      # R51 C1 联网搜索
         "search_timeout_seconds",
+        "docs_rag_enabled", "docs_rag_limit",         # R54 C5 文档 RAG
+        "docs_rag_vector_weight",
     ):
         if key in data:
             existing[key] = data[key]

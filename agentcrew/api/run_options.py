@@ -58,12 +58,15 @@ ALLOWED_RUN_OPTIONS: frozenset[str] = frozenset({
     # 允许按 run 覆盖等于允许任意 runs:write key 把隔离从 docker 降回 local，
     # 与服务端安全承诺冲突（同 webhook_url 的理由）。
     "search_provider", "search_max_results",
+    # C5：文档 RAG 开关与参数可按 run 覆盖——它是「上下文里多带几段手册」，
+    # 不影响任何安全边界（与 sandbox_backend 的「刻意排除」相反）。
+    "docs_rag_enabled", "docs_rag_limit", "docs_rag_vector_weight",
 })
 
 _BOOL_KEYS = frozenset({
     "mock", "tools_enabled", "entity_memory_enabled",
     "peer_dialogue_enabled", "peer_consult_capture_enabled",
-    "supervisor_review_enabled",
+    "supervisor_review_enabled", "docs_rag_enabled",
 })
 
 #: 允许为 ``null``（= 显式清空）的键；其余键给 ``null`` 视为非法输入。
@@ -156,6 +159,16 @@ def validate_run_options(options: Mapping[str, Any]) -> str | None:
                 return "options.search_max_results 必须是整数"
             if not 1 <= value <= 20:
                 return "options.search_max_results 必须落在 1~20 之间"
+        elif key == "docs_rag_limit":
+            if isinstance(value, bool) or not isinstance(value, int):
+                return "options.docs_rag_limit 必须是整数"
+            if not 0 <= value <= 50:
+                return "options.docs_rag_limit 必须落在 0~50 之间（0 = 不注入）"
+        elif key == "docs_rag_vector_weight":
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return "options.docs_rag_vector_weight 必须是数字"
+            if not 0.0 <= float(value) <= 1.0:
+                return "options.docs_rag_vector_weight 必须落在 0.0~1.0 之间"
         elif key == "default_model":
             if not isinstance(value, str) or not value.strip():
                 return "options.default_model 必须是非空字符串"
