@@ -1766,6 +1766,11 @@ ruff 全绿；mypy 138 文件零错误。`openapi.yaml` / `THREAT_MODEL v1.2`（
 **新增测试 14 例**，全量 **3218 passed / 0 failed / 2 skipped**（164 文件 / 41 批次）。
 ruff 全绿；mypy 138 文件零错误。openapi `CreateRunRequest.images` 已登记。
 
+**追加（2026-11-13）：Studio 结果区「输入图片」预览**——Electron 主进程新增
+`images:list` / `images:read` IPC（文件名白名单 `<NN>.<ext>` 防路径穿越，不走 HTTP），
+结果区有图才显示缩略图、点击放大（一次性遮罩）。Studio 架构检查 73 模块合规、
+`test:unit` 18 passed。C4 的产品体验闭环至此补齐。
+
 **明确不做**：不代抓 URL 图片；不做截图工具闭环（属浏览器工具组）；图片不计入
 context token 预算（预算管文本）。
 

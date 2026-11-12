@@ -54,6 +54,21 @@ function runDuration(run, stats) {
   return fmtDur(Math.max(0, end - start));
 }
 
+/* C4：图片放大查看——自建一次性遮罩，Esc / 点击关闭。 */
+function openImageOverlay(r) {
+  const mask = h('div', {
+    style: 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;'
+           + 'display:flex;align-items:center;justify-content:center',
+    onclick: () => mask.remove(),
+  });
+  mask.appendChild(h('img', {
+    src: `data:${r.mime};base64,${r.dataBase64}`,
+    alt: r.name,
+    style: 'max-width:92vw;max-height:92vh;border-radius:8px',
+  }));
+  document.body.appendChild(mask);
+}
+
 function renderOverview() {
   const run = S.dash && S.dash.run;
   const stats = (run && run.stats) || {};
@@ -69,6 +84,34 @@ function renderOverview() {
     h('span', { class: 'dot', style: `background:${run.status === 'completed' ? 'var(--success)' : (run.status === 'failed' ? 'var(--error)' : 'var(--accent)')}` }),
     h('span', { class: 'result-status' }, rm.label),
     h('span', { class: 'result-goal', title: run.project_goal }, run.project_goal || '')));
+
+  // C4：随 run 输入图片（<runDir>/context/images/）——有图才显示，无图整段隐藏。
+  // 异步填充：读列表 → 每张转 data URI 缩略图；任何一步失败都静默跳过
+  // （无图 run 是常态，预览是增强不是必需品）。
+  if (run.dir && typeof window.studio.listRunImages === 'function') {
+    const imagesSec = h('div', { class: 'result-sec-title', style: 'display:none' }, '输入图片');
+    const imagesWrap = h('div', { class: 'result-images', style: 'display:none' });
+    body.appendChild(imagesSec);
+    body.appendChild(imagesWrap);
+    window.studio.listRunImages(run.dir).then((imgs) => {
+      if (!imgs || !imgs.length) return;
+      imagesSec.style.display = '';
+      imagesWrap.style.display = '';
+      for (const img of imgs) {
+        window.studio.readRunImage(run.dir, img.name).then((r) => {
+          imagesWrap.appendChild(h('img', {
+            src: `data:${r.mime};base64,${r.dataBase64}`,
+            title: `${img.name} · ${fmtBytes(r.sizeBytes)}`,
+            alt: `输入图片 ${img.name}`,
+            style: 'max-width:180px;max-height:120px;margin:4px;'
+                   + 'border:1px solid var(--border);border-radius:6px;'
+                   + 'cursor:zoom-in;object-fit:cover',
+            onclick: () => openImageOverlay(r),
+          }));
+        }).catch(() => { /* 单张读取失败只跳过 */ });
+      }
+    }).catch(() => { /* 列表读取失败整段隐藏 */ });
+  }
 
   // 统计网格
   const cell = (v, k) => h('div', { class: 'result-cell' },

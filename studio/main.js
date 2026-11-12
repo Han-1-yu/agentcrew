@@ -657,6 +657,43 @@ function readArtifact(runDir, relPath) {
   return { binary: false, content: buf.toString('utf8'), sizeBytes: st.size, truncated, path: relPath };
 }
 
+// C4：随 run 输入图片（<runDir>/context/images/）的预览读取。
+// 文件名白名单 <NN>.<ext>，杜绝路径穿越；平台只写这个目录，名字形状固定。
+const IMAGE_MIME_BY_EXT = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp', '.gif': 'image/gif',
+};
+
+function listRunImages(runDir) {
+  const imgDir = path.resolve(runDir, 'context', 'images');
+  const out = [];
+  let ents = [];
+  try { ents = fs.readdirSync(imgDir, { withFileTypes: true }); } catch { return out; }
+  for (const ent of ents) {
+    if (!ent.isFile()) continue;
+    const mime = IMAGE_MIME_BY_EXT[path.extname(ent.name).toLowerCase()];
+    if (!mime) continue;
+    let sizeBytes = 0;
+    try { sizeBytes = fs.statSync(path.join(imgDir, ent.name)).size; } catch { continue; }
+    out.push({ name: ent.name, mime, sizeBytes });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function readRunImage(runDir, name) {
+  const imgDir = path.resolve(runDir, 'context', 'images');
+  if (!/^\d{2}\.(png|jpe?g|webp|gif)$/i.test(String(name))) {
+    throw new Error('非法的图片文件名');
+  }
+  const full = path.resolve(imgDir, String(name));
+  if (full !== imgDir && !full.startsWith(imgDir + path.sep)) {
+    throw new Error('非法的图片路径');
+  }
+  const mime = IMAGE_MIME_BY_EXT[path.extname(String(name)).toLowerCase()];
+  const buf = fs.readFileSync(full);
+  return { name: String(name), mime, sizeBytes: buf.length, dataBase64: buf.toString('base64') };
+}
+
 // 流式正文回溯：读 streams/ 下所有 <task_id>.md，返回 { taskId: 正文 }。
 // 正文是模型输出、属不可信文本，渲染端须用 textContent/pre 消费（已保证）。
 function loadStreams(runDir) {
@@ -880,6 +917,8 @@ function registerIpc() {
 
   ipcMain.handle('artifacts:list', (_e, dir) => listArtifacts(String(dir)));
   ipcMain.handle('artifact:read', (_e, dir, relPath) => readArtifact(String(dir), String(relPath)));
+  ipcMain.handle('images:list', (_e, dir) => listRunImages(String(dir)));
+  ipcMain.handle('images:read', (_e, dir, name) => readRunImage(String(dir), String(name)));
   ipcMain.handle('streams:load', (_e, dir) => loadStreams(String(dir)));
 
   ipcMain.handle('artifacts:export', async (_e, dir) => {

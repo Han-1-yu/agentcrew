@@ -50,6 +50,9 @@ contextBridge.exposeInMainWorld('studio', {
   readArtifact: (dir, relPath) => invoke('artifact:read', dir, relPath),
   exportArtifacts: (dir) => invoke('artifacts:export', dir),
   loadStreams: (dir) => invoke('streams:load', dir),
+  // C4：随 run 输入图片（context/images/）
+  listRunImages: (dir) => invoke('images:list', dir),
+  readRunImage: (dir, name) => invoke('images:read', dir, name),
   // 系统
   revealFile: (fullPath) => invoke('shell:showItemInFolder', { fullPath }),
   openPath: (fullPath) => invoke('shell:openPath', { fullPath }),

@@ -140,6 +140,10 @@ curl -X POST http://127.0.0.1:8765/webhooks/trigger \
   类目标无声地变成盲写，这件事必须能从审计里读出来。
 - **留证**：图片写入 `<run_dir>/context/images/NN.<ext>` 并记
   `images_attached(count/total_bytes/files)`，随 run 保留、可 diff。
+- **Studio 预览（2026-11-13 追加）**：结果区「输入图片」——有图才显示，无图整段
+  隐藏；缩略图点击放大（一次性遮罩）。实现走 Electron 主进程 IPC
+  （`images:list` / `images:read`，文件名白名单 `<NN>.<ext>` 防穿越），不走
+  HTTP——图片是本机输入证据，不进 API 面。
 - **明确不做**：不代抓 URL 图片；不做「截图→再截图对比」的工具闭环（需要
   截图能力，属浏览器工具组的事）；图片不计入 context token 预算（预算管文本）。
 
