@@ -18,7 +18,7 @@
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
 | Studio | `npm run check` **73** 模块 / 42 分片通过、`test:unit` 18/18（e2e / selftest / probe 等脚本保持不变，需 Electron 环境才跑） |
-| Git | `master` 领先 `origin/master` **2 个提交**（`e4add0f` 差距报告整改 191 文件、`3919a83` 清理临时日志）；**工作区干净，未推送** |
+| Git | 已与 `origin/master` 同步（R51 三个提交已推送：`258a8f0` 能力主体 / `62996a2` 文档 / `2a25718` CI 修复）；**CI 首次全绿**（run 43215021310，六 job 全 success） |
 | 角色 | 8 个内置岗位角色 + 执行体（Agent Profile）可多绑 |
 
 ```bash
@@ -1893,11 +1893,11 @@ Studio 架构检查 73 模块 / 42 分片通过、`test:unit` 18 passed。
 | --- | --- | --- |
 | ~~时间戳全量迁 UTC（D-14）~~ | ✅ **已完成**（2026-11-12） | 落盘全量 aware UTC；守规基线 = 0；见 `docs/TIME-MIGRATION-PLAN.md` |
 | 「写盘注入 OSError」一致性用例（D-16 剩余） | 🟡 其余四类边界已覆盖 | 若重构封版路径，同步补该注入点 |
-| 覆盖率门槛 50% | 已配 `fail_under`，本机 Win 测不准 | 看首次 CI 的 `--cov-fail-under` 结果 |
+| ~~覆盖率门槛 50%~~ | ✅ 已生效 | CI Linux 单进程 job 在 `--cov-fail-under 50` 下通过（run 43215021310） |
 | Docker 三件套 | 已交付，本机无 docker | 在 CI/目标机 `docker compose build`，验非 root 对 `output/` 写权限 |
 | C2 docker 执行后端 | ✅ 已交付（`sandbox_backend=docker`），参数逐项有测试，**容器未真跑** | 目标机跑一次 `run_tests` + 三条逃逸用例（出网 / 读宿主 / 资源耗尽），结果补进 THREAT_MODEL |
 | C3 执行校验 | ✅ 已交付（默认关，`gate_config.exec_verify`） | 真实模型端到端一次「生成函数+测试 → 首跑失败 → 自修正 → 通过」，确认 ledger 里 `g1_exec_check` 与返工闭环可见 |
-| CI 首次实跑 | 已补 studio job + 覆盖率 + 回滚手册 | 看 GitHub Actions 四版本矩阵 + 新 job 结果 |
+| ~~CI 首次实跑~~ | ✅ **全绿** | run 43215021310：四版本矩阵 + Windows(uv) + Studio job 全部 success；首跑（43213290659）暴露的 5 条 mypy 与 Studio 缺 lock 已由 `2a25718` 修复 |
 | ~~`web_search` 工具~~ | ✅ **R51 已交付** | 四提供方（tavily/brave/duckduckgo/mock）+ SSRF 过滤 + 默认关 + 离线可测，见 §3.64 |
 | 真实评测报告（C11） | 数据集与脚本已就绪（23 条 + `--live` + 夜间脚本） | 有密钥的机器上 `python scripts/nightly_eval.py --max-cost 1.50`，把 `bench/eval-*-live-*.json` 的 pass^k / 成本 / 失败归因回填本文 |
 | 向量检索 / RAG | 未做（BM25 + 二元组已覆盖经验库） | 大项，需先定 embedding 通道与存储 |
