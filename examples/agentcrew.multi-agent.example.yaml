@@ -31,3 +31,17 @@ roles:
     aggregation:
       mode: primary_with_review
       quorum: 1
+      # 复核出问题时把意见回灌主笔修订的轮数（0=只出意见，默认）。
+      # 设 1 就够：主笔改一轮仍有问题，通常说明验收标准没写清。
+      review_rounds: 1
+
+  # ── R49：分工依赖（可选）──────────────────────────────────────────────
+  # split_by_path 默认**并行**：各 section 各写各的，谁也看不到谁。
+  # 需要"测试按后端写出的接口签名来写"这类先后关系时，声明 intra_deps：
+  #   aggregation:
+  #     mode: split_by_path
+  #     quorum: 2
+  #     intra_deps:
+  #       qa_engineer: [backend_dev]      # qa 在 backend 之后执行
+  # 依赖方执行时，上下文里会多一条 UpstreamDigest（对方摘要 + 产物路径），
+  # 文件本就在盘上，可直接读取。依赖项**失败不阻塞**下游，由 quorum 判定成败。

@@ -13,15 +13,10 @@ import { toast } from '../../ui/toast.js';
 
 import { openNewRunModal } from '../new-run/index.js';
 
-//: 与 new-run 弹窗的「自动执行」共用同一个键，两处状态永远一致
-const AUTO_KEY = 'agentcrew:nrAuto';
+//: 执行模式（Agent/Plan/Ask）与 new-run 弹窗共用，见 lib/mode.js
+import { MODES, currentMode, cycleMode } from '../../lib/mode.js';
 
-function autoEnabled(){
-  const v = localStorage.getItem(AUTO_KEY);
-  return v == null ? true : v === '1';
-}
-
-/** 把当前运行/默认模型同步到命令框（每秒由 boot 的定时器调用一次）。 */
+/** 把当前运行/默认模型/执行模式同步到命令框（每秒由 boot 的定时器调用一次）。 */
 function syncComposer(){
   const run = S.dash && S.dash.run;
   const proj = $('#cmp-proj');
@@ -29,15 +24,15 @@ function syncComposer(){
     const text = (run && run.project_goal) ? simplifyGoal(run.project_goal) : '未选择运行';
     if (proj.textContent !== text) proj.textContent = text;
   }
-  const on = autoEnabled();
+  const m = MODES[currentMode()];
   const mode = $('#cmp-mode');
-  if (mode) mode.textContent = on ? '自动执行' : '逐步确认';
+  if (mode) mode.textContent = m.mode;
   const label = $('#cmp-access-label');
-  if (label) label.textContent = on ? 'Full access' : '待确认';
+  if (label) label.textContent = m.access;
   const tag = $('#cmp-access');
   if (tag) {
-    tag.classList.toggle('off', !on);
-    tag.title = on ? '新建运行默认自动执行（点击改为逐步确认）' : '新建运行默认逐步确认（点击改为自动执行）';
+    tag.classList.toggle('off', currentMode() !== 'agent');
+    tag.title = `执行模式：${m.mode}（点击切换 自动执行 → 计划审查 → 只读规划）`;
   }
   const model = $('#cmp-model-name');
   if (model) {
@@ -92,7 +87,7 @@ function initComposer(){
   const access = $('#cmp-access');
   if (access) {
     access.addEventListener('click', () => {
-      localStorage.setItem(AUTO_KEY, autoEnabled() ? '0' : '1');
+      cycleMode();
       syncComposer();
     });
   }

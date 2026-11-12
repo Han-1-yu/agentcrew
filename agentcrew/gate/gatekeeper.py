@@ -39,7 +39,6 @@ G2 驳回 M），重复一条就是报告里的错数。状态跃迁的 ``reason
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
@@ -60,6 +59,7 @@ from agentcrew.runtime.checkpoint import RunRecord
 from agentcrew.runtime.ledger import Ledger
 from agentcrew.task.task import ReviewRecord, Task, TaskStatus
 from agentcrew.task.task_board import TaskBoard
+from agentcrew.utils.clock import utc_now
 
 #: 开启计划卡点的 gate 模式（spec §10.3 卡点一）。
 _PLAN_GATES: frozenset[str] = frozenset({"plan", "both"})
@@ -236,7 +236,7 @@ class Gatekeeper:
             static = ReviewRecord(
                 task_id=task_id, round=round_no, layer="static",
                 verdict="approve", score=None, issues=[], fix_hints=[],
-                reviewer="static:disabled", created_at=datetime.now())
+                reviewer="static:disabled", created_at=utc_now())
         self._board.record_review(task_id, static)
         self._emit(static)          # G2 的 gate_result 由 Reviewer 自己发
         records = [static]
@@ -482,12 +482,18 @@ class Gatekeeper:
     def _to_rework(self, task_id: str, fix_hints: list[str]) -> TaskStatus:
         """``REVIEW → REWORK``，并强制配对额度自增与返工决策记录。
 
-        顺序不可换：``record_rework_decision`` 要求 ``rework_count >= 1``，在
-        自增之前调用会把本轮的返工意见静默丢掉。
+        A-18：``bump_rework`` 先于 ``transition``。此前 ``transition`` 经
+        ``on_change`` 立即把板落盘（此刻 ``rework_count`` 还是旧值），
+        ``bump_rework`` 走 ``_replace`` 不触发持久化——进程恰在两者之间被杀，
+        resume 读到 ``status=REWORK`` 但 ``rework_count`` 少 1，白送一次返工
+        额度。自增在前保证落盘快照里的计数已经是新值。
+
+        ``record_rework_decision`` 要求 ``rework_count >= 1``，因此在自增之后
+        调用（本轮返工意见不会被丢）。
         """
+        bumped = self._board.bump_rework(task_id)
         self._board.transition(
             task_id, TaskStatus.REWORK, reason=_reason(TaskStatus.REWORK))
-        bumped = self._board.bump_rework(task_id)
         if self._context_bus is not None:
             self._context_bus.record_rework_decision(bumped, fix_hints)
         return TaskStatus.REWORK

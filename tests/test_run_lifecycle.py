@@ -69,7 +69,9 @@ def test_write_read_clear_heartbeat(tmp_path):
 
     assert read_heartbeat(run_dir) is None
     write_heartbeat(run_dir, now=NOW)
-    assert read_heartbeat(run_dir) == NOW
+    # A-7：read_heartbeat 恒返回 aware datetime（naive 旧数据按本机时区补齐），
+    # 与 naive 的 NOW 直接相等比较会失败，须归一后再比。
+    assert read_heartbeat(run_dir) == NOW.astimezone()
     clear_heartbeat(run_dir)
     assert read_heartbeat(run_dir) is None
     clear_heartbeat(run_dir)  # 幂等

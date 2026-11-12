@@ -163,12 +163,48 @@ class TestStatsEndpoint:
         assert data["llm"] == {
             "calls": 2, "prompt_tokens": 300, "completion_tokens": 110,
             "total_tokens": 410, "cost_usd": pytest.approx(0.03),
+            # 这两个事件没有 profile 字段（历史/schema 外写入），归入 unknown
+            # 而不是丢弃——否则 by_profile 之和会小于总量。
+            "by_profile": {
+                "unknown": {
+                    "calls": 2, "prompt_tokens": 300, "completion_tokens": 110,
+                    "total_tokens": 410, "cost_usd": pytest.approx(0.03),
+                },
+            },
         }
         assert data["tasks"]["started"] == 3
         assert data["tasks"]["finished"] == 2
         assert data["tasks"]["success_rate"] == pytest.approx(0.6667)
         assert data["tasks"]["avg_duration_ms"] == pytest.approx(200.0)
         assert data["tools"] == {"calls": 2, "success": 1, "failed": 1}
+
+    async def test_stats_attributes_llm_usage_to_agent_profile(
+        self, server: ApiServer, tmp_path: Path
+    ):
+        """多执行体角色：每个 agent profile 的调用数与成本必须各算各的。"""
+        store = _seed_run(tmp_path)
+        _write_ledger(store.run_dir, "R-1", [
+            ("llm_call", {"profile": "backend_solid", "prompt_tokens": 100,
+                          "completion_tokens": 50, "estimated_cost_usd": 0.01}),
+            ("llm_call", {"profile": "backend_fast", "prompt_tokens": 10,
+                          "completion_tokens": 5, "estimated_cost_usd": 0.0001}),
+            ("llm_call", {"profile": "backend_fast", "prompt_tokens": 10,
+                          "completion_tokens": 5, "estimated_cost_usd": 0.0001}),
+        ])
+        port = server._server.sockets[0].getsockname()[1]
+        status, data = await _request(port, "GET", "/runs/R-1/stats")
+        assert status == 200
+        by_profile = data["llm"]["by_profile"]
+        assert set(by_profile) == {"backend_solid", "backend_fast"}
+        assert by_profile["backend_solid"]["calls"] == 1
+        assert by_profile["backend_solid"]["cost_usd"] == pytest.approx(0.01)
+        assert by_profile["backend_fast"]["calls"] == 2
+        assert by_profile["backend_fast"]["total_tokens"] == 30
+        assert by_profile["backend_fast"]["cost_usd"] == pytest.approx(0.0002)
+        # 分项之和必须等于总量，账要平。
+        assert sum(b["calls"] for b in by_profile.values()) == data["llm"]["calls"]
+        assert (sum(b["cost_usd"] for b in by_profile.values())
+                == pytest.approx(data["llm"]["cost_usd"]))
 
     async def test_stats_empty_ledger_zeroed(
         self, server: ApiServer, tmp_path: Path
@@ -186,4 +222,51 @@ class TestStatsEndpoint:
     async def test_stats_unknown_run_returns_404(self, server: ApiServer):
         port = server._server.sockets[0].getsockname()[1]
         status, _ = await _request(port, "GET", "/runs/nope/stats")
+        assert status == 404
+
+
+class TestAgentsEndpoint:
+    """``GET /runs/{id}/agents``：读**解析后**的执行体计划，而非配置声称。"""
+
+    async def test_returns_last_resolved_plan(
+        self, server: ApiServer, tmp_path: Path
+    ):
+        store = _seed_run(tmp_path)
+        _write_ledger(store.run_dir, "R-1", [
+            ("run_plan_resolved", {"agents": [
+                {"role": "backend_dev", "profile": "old", "alias": "a:1",
+                 "duty": "primary", "tools": ["*"], "path_scope": [], "weight": 1.0},
+            ]}),
+            ("run_plan_resolved", {"agents": [
+                {"role": "backend_dev", "profile": "backend_solid",
+                 "alias": "anthropic:claude-sonnet-5", "duty": "primary",
+                 "tools": ["*"], "path_scope": ["backend/"], "weight": 1.0},
+                {"role": "backend_dev", "profile": "backend_fast",
+                 "alias": "deepseek:deepseek-chat", "duty": "review",
+                 "tools": ["read_file"], "path_scope": [], "weight": 1.0},
+            ]}),
+        ])
+        port = server._server.sockets[0].getsockname()[1]
+        status, data = await _request(port, "GET", "/runs/R-1/agents")
+        assert status == 200
+        assert data["source"] == "run_plan_resolved"
+        profiles = {a["profile"]: a for a in data["agents"]}
+        assert set(profiles) == {"backend_solid", "backend_fast"}
+        assert profiles["backend_solid"]["alias"] == "anthropic:claude-sonnet-5"
+        assert profiles["backend_fast"]["duty"] == "review"
+
+    async def test_legacy_run_without_plan_is_explicitly_empty(
+        self, server: ApiServer, tmp_path: Path
+    ):
+        store = _seed_run(tmp_path)
+        _write_ledger(store.run_dir, "R-1", [("run_started", {"goal": "g"})])
+        port = server._server.sockets[0].getsockname()[1]
+        status, data = await _request(port, "GET", "/runs/R-1/agents")
+        assert status == 200
+        assert data["agents"] == []
+        assert data["source"] == "none", "没有记录就说没有，不猜配置"
+
+    async def test_unknown_run_returns_404(self, server: ApiServer):
+        port = server._server.sockets[0].getsockname()[1]
+        status, _ = await _request(port, "GET", "/runs/nope/agents")
         assert status == 404

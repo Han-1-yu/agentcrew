@@ -33,6 +33,7 @@ import ipaddress
 import json
 import math
 import os
+import signal
 import sys
 from collections.abc import Callable, Coroutine, Sequence
 from datetime import datetime
@@ -196,7 +197,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(
         dest="command",
         metavar="{run,resume,status,approvals,approve,roles,agents,switch,"
-                "clean,cancel,delete,serve,doctor,diff}")
+                "clean,cancel,delete,serve,doctor,diff,schedule}")
 
     run = sub.add_parser("run", help="执行一次完整 run（规划 → 执行 → 交付）")
     run.add_argument("--goal", metavar="TEXT", help="项目目标（与 --demo 二选一）")
@@ -298,6 +299,8 @@ def build_parser() -> argparse.ArgumentParser:
             "--output-dir", metavar="DIR", help="output 目录（定位 _flows/）")
     p_agents = sub.add_parser("agents", help="列出执行体档案与角色绑定（--json 供 Studio 读取）")
     p_agents.add_argument("--json", action="store_true", help="输出机器可读 JSON")
+    p_agents.add_argument("--yaml", action="store_true",
+                          help="导出可复用的 agentcrew.yaml 片段（agents.profiles + roles 绑定）")
     p_switch = sub.add_parser("switch", help="给一个 run 写入执行体切换（下次 resume 生效）")
     p_switch.add_argument("run_id")
     p_switch.add_argument("role")
@@ -305,6 +308,27 @@ def build_parser() -> argparse.ArgumentParser:
     p_switch.add_argument("--output-dir", default=None)
     p_switch.add_argument("--task", default="", metavar="TASK_ID",
                           help="只给这一个任务换（写 task_overrides.json）")
+
+    p_schedule = sub.add_parser(
+        "schedule", help="定时任务（Automations）：一次性 / 周期日程的增删查与到期触发")
+    schedule_sub = p_schedule.add_subparsers(dest="schedule_action", required=True)
+    p_sched_add = schedule_sub.add_parser("add", help="新建日程")
+    p_sched_add.add_argument("--goal", required=True, metavar="TEXT", help="到期要跑的目标")
+    p_sched_add.add_argument("--at", metavar="ISO8601", help="一次性：触发时间（如 2026-12-01T09:00:00）")
+    p_sched_add.add_argument("--daily", metavar="HH:MM", help="周期：每天触发时间（如 09:00）")
+    p_sched_add.add_argument("--weekdays", default="MO,TU,WE,TH,FR", metavar="MO,WE",
+                             help="周期：命中星期（逗号分隔 MO..SU，默认工作日）")
+    p_sched_add.add_argument("--mode", default="agent", choices=("agent", "plan", "ask"),
+                             help="执行模式：agent=自动执行 / plan=计划审查 / ask=只读规划")
+    p_sched_add.add_argument("--mock", action="store_true", help="用 mock provider 跑")
+    p_sched_list = schedule_sub.add_parser("list", help="列出日程")
+    p_sched_list.add_argument("--json", action="store_true", help="输出 JSON")
+    p_sched_rm = schedule_sub.add_parser("remove", help="删除日程")
+    p_sched_rm.add_argument("schedule_id", help="日程 id（见 list）")
+    p_sched_tick = schedule_sub.add_parser("tick", help="到期检查 + 触发（幂等，可高频调用）")
+    p_sched_tick.add_argument("--json", action="store_true", help="输出本轮触发 JSON")
+    for _sched_parser in (p_sched_add, p_sched_list, p_sched_rm, p_sched_tick):
+        _sched_parser.add_argument("--output-dir", metavar="DIR", help="output 目录（定位 _schedules/）")
 
     samples = sub.add_parser(
         "samples", help="列出预设 Crew 样例（串行 / 层级 / 混合并发）")
@@ -323,6 +347,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_eval.add_argument(
         "--output-dir", default=None, metavar="DIR",
         help="把每次 run 的目录留在这里便于排查（默认用临时目录并清理）")
+    p_eval.add_argument(
+        "--variant", action="append", default=None, metavar="NAME=FILE",
+        help="R45：配置变体（可重复）。给了就进入 A/B 矩阵模式：同一批 case 分别用"
+             "各变体跑一遍，第一个变体作基线。FILE 是 Settings 字段的 YAML/JSON"
+             "（只写要覆盖的字段，如 agent_profiles / role_agents）")
+    p_eval.add_argument(
+        "--matrix-out", default=None, metavar="PATH",
+        help="R45：把矩阵结果写成 JSON（默认不落盘，只在终端打印）")
 
     clean_cmd = sub.add_parser(
         "clean", help="保留最近 N 个 run，删除更旧的（默认 N=5）")
@@ -415,6 +447,9 @@ def _add_run_flags(parser: argparse.ArgumentParser) -> None:
                         help="强制 mock provider（覆盖所有角色绑定，无需 API Key）")
     parser.add_argument("--auto", action="store_true",
                         help="等价于 --gate none（全自动，跳过人工闸门）")
+    parser.add_argument("--plan-only", action="store_true",
+                        help="Ask 模式：只生成计划并落盘（不派发执行），可用 resume 续跑；"
+                             "与 --auto / --gate 互斥")
     parser.add_argument("--debug-step", action="store_true",
                         help="R20：单步断点——每个任务派发前挂起为 step 审批单，"
                              "用 approve --decision step|run|abort 逐个放行")
@@ -774,6 +809,11 @@ def _drive(
         _print_resume_hint(crew, prefix="运行被 Ctrl-C 中断，断点已保存")
         return EXIT_CODES["cancelled"]
     hook.stop()
+    if record.status is RunStatus.PLANNED:
+        console.print(
+            Text(f"计划已生成（未执行）：任务已落盘。可用 resume {record.run_id} 续跑执行。"),
+            soft_wrap=True)
+        return _run_exit_code(crew, record)
     console.print(Text(crew.delivery_summary(record)), soft_wrap=True)
     return _run_exit_code(crew, record)
 
@@ -790,6 +830,8 @@ def _run_exit_code(crew: Crew, record: RunRecord) -> int:
     if crew.stalled:
         return EXIT_CODES["stalled"]
     if record.status is RunStatus.COMPLETED:
+        return EXIT_CODES["ok"]
+    if record.status is RunStatus.PLANNED:
         return EXIT_CODES["ok"]
     if record.status in (RunStatus.CANCELLED, RunStatus.INTERRUPTED):
         return EXIT_CODES["cancelled"]
@@ -1201,6 +1243,96 @@ def _cmd_flow(args: argparse.Namespace) -> int:
     return EXIT_CODES["ok"]
 
 
+def _cmd_schedule(args: argparse.Namespace) -> int:
+    """定时任务（Automations）：一次性 / 周期日程的增删查与到期触发。
+
+    对齐 WorkBuddy 的 Automations：``add`` 注册日程，``tick`` 由宿主（Studio
+    主进程定时器 / 系统 cron）幂等调用、到期后起 ``run`` 子进程。不引入常驻
+    daemon —— 谁负责「到点叫 tick」由部署方决定，CLI 本身零后台。
+    """
+    from agentcrew.cli.schedule import (
+        add_schedule,
+        load_schedules,
+        remove_schedule,
+        tick,
+    )
+
+    try:
+        settings = (
+            Settings.load(output_dir=Path(args.output_dir))
+            if getattr(args, "output_dir", None) else Settings.load()
+        )
+    except (OSError, ValueError) as exc:
+        return _fail(f"配置错误：{exc}")
+
+    action = args.schedule_action
+    console = Console()
+
+    if action == "add":
+        kind = "recurring" if args.daily else "once"
+        if kind == "once" and not args.at:
+            return _fail("一次性日程需要 --at（ISO8601）")
+        if kind == "recurring" and not args.daily:
+            return _fail("周期日程需要 --daily HH:MM")
+        weekdays = [w.strip().upper() for w in args.weekdays.split(",") if w.strip()]
+        try:
+            sched = add_schedule(
+                settings.output_dir,
+                goal=args.goal,
+                mock=args.mock,
+                mode=args.mode,
+                kind=kind,
+                at=args.at if kind == "once" else None,
+                weekdays=weekdays if kind == "recurring" else [],
+                time=args.daily if kind == "recurring" else None,
+            )
+        except ValueError as exc:
+            return _fail(str(exc))
+        _out(console, f"已注册日程 {sched.id}（{sched.kind}/{sched.mode}），"
+                      f"下次触发 {sched.next_run}")
+        _out(console, f"  goal: {sched.goal}")
+        return EXIT_CODES["ok"]
+
+    if action == "list":
+        schedules = load_schedules(settings.output_dir)
+        if args.json:
+            print(json.dumps(
+                {"schedules": [s.model_dump(mode="json") for s in schedules]},
+                ensure_ascii=False, indent=2))
+            return EXIT_CODES["ok"]
+        if not schedules:
+            _out(console, f"没有日程：{settings.output_dir / '_schedules'}")
+            _out(console, "示例：python main.py schedule add --goal '写周报' "
+                          "--daily 09:00 --mode ask")
+            return EXIT_CODES["ok"]
+        for s in schedules:
+            state = "启用" if s.enabled else "已触发/停用"
+            when = s.next_run or "—"
+            _out(console, f"[{s.id}] {state} · {s.kind}/{s.mode} · 下次 {when}")
+            _out(console, f"  {s.goal}")
+        return EXIT_CODES["ok"]
+
+    if action == "remove":
+        ok = remove_schedule(settings.output_dir, args.schedule_id)
+        if not ok:
+            return _fail(f"找不到日程：{args.schedule_id}")
+        _out(console, f"已删除日程 {args.schedule_id}")
+        return EXIT_CODES["ok"]
+
+    # tick
+    fired = tick(settings.output_dir)
+    if args.json:
+        print(json.dumps({"fired": fired}, ensure_ascii=False, indent=2))
+        return EXIT_CODES["ok"]
+    if not fired:
+        _out(console, "没有到期日程。")
+    else:
+        _out(console, f"本轮触发 {len(fired)} 个日程：")
+        for item in fired:
+            _out(console, f"  [{item['id']}] {item['kind']}/{item['mode']} — {item['goal']}")
+    return EXIT_CODES["ok"]
+
+
 def _cmd_recall(args: argparse.Namespace) -> int:
     """R27：检索历史经验，打印排序结果——手工核对 BM25 / 混合打分的入口。
 
@@ -1380,6 +1512,25 @@ def _cmd_agents(args: argparse.Namespace) -> int:
         print(_json.dumps(payload, ensure_ascii=False))
         return EXIT_CODES["ok"]
 
+    # 导出：生成可直接粘贴进 agentcrew.yaml 的 agents/roles 片段（复用 yaml 依赖）
+    if getattr(args, "yaml", False):
+        import yaml as _yaml
+        export = {
+            "agents": {
+                "profiles": {
+                    key: {k: v for k, v in p.model_dump(mode="json").items() if k != "key" and v not in (None, "", [])}
+                    for key, p in settings.agent_profiles.items()
+                }
+            }
+        }
+        if settings.role_agents:
+            export["roles"] = {
+                role: {k: v for k, v in ra.model_dump(mode="json", exclude_none=True).items() if k != "aggregation" or v is not None}
+                for role, ra in settings.role_agents.items()
+            }
+        print(_yaml.safe_dump(export, allow_unicode=True, sort_keys=False))
+        return EXIT_CODES["ok"]
+
     console = Console()
     profiles = payload["profiles"]
     _out(console, f"执行体档案 {len(profiles)} 个：" +
@@ -1410,6 +1561,9 @@ def _cmd_eval(args: argparse.Namespace) -> int:
         return _fail(f"数据集不合法：{exc}")
     repeat = max(1, int(getattr(args, "repeat", 1) or 1))
     output_dir = getattr(args, "output_dir", None)
+    variants_raw = getattr(args, "variant", None)
+    if variants_raw:
+        return _eval_matrix(args, cases, repeat, output_dir, variants_raw)
     try:
         report = asyncio.run(run_dataset(
             cases, repeat=repeat,
@@ -1440,6 +1594,69 @@ def _cmd_eval(args: argparse.Namespace) -> int:
         _out(console, f"pass@1 = {report.pass_at_1:.2%} · "
                       f"pass^{repeat} = {report.pass_pow_k:.2%}")
     return EXIT_CODES["ok"] if report.pass_pow_k >= 1.0 else EXIT_CODES["failed"]
+
+
+def _eval_matrix(
+    args: argparse.Namespace, cases: list, repeat: int,
+    output_dir: str | None, variants_raw: list[str],
+) -> int:
+    """``eval --variant``：同一批 case × 多套配置，给出可对比的数字。
+
+    退出码与单配置一致：**基线**变体的 pass^k 全过才算 0。其余变体只作对照，
+    不参与判定——否则「换便宜档掉了一个点」会让整条命令失败，人就学会忽略它。
+    """
+    from agentcrew.evals import load_variant_file, run_matrix
+
+    variants: list[tuple[str, dict]] = []
+    for item in variants_raw:
+        name, sep, path = str(item).partition("=")
+        if not sep or not name.strip() or not path.strip():
+            return _fail(f"--variant 需要 NAME=FILE 形式：{item!r}")
+        try:
+            variants.append((name.strip(), load_variant_file(path.strip())))
+        except ValueError as exc:
+            return _fail(f"变体不合法：{exc}")
+    try:
+        matrix = asyncio.run(run_matrix(
+            variants, cases, repeat=repeat,
+            output_dir=Path(output_dir) if output_dir else None))
+    except ValueError as exc:
+        return _fail(f"矩阵评测无法开始：{exc}")
+    except Exception as exc:  # noqa: BLE001 —— 跑不起来属环境/配置问题
+        return _fail(f"矩阵评测执行失败：{type(exc).__name__}: {exc}")
+
+    data = matrix.to_dict()
+    out_path = getattr(args, "matrix_out", None)
+    if out_path:
+        target = Path(out_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    if args.json:
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+    else:
+        console = Console()
+        _out(console, f"配置矩阵 · {len(cases)} 条 case × {len(variants)} 个变体 · "
+                      f"每条跑 {repeat} 次")
+        for item in data["variants"]:
+            metrics, delta = item["metrics"], item["delta_vs_baseline"]
+            tail = ""
+            if delta:
+                tail = (
+                    f"   Δpass^k {delta['pass_pow_k']:+.2f}"
+                    f" · Δcalls {delta['llm_calls']:+.0f}"
+                    f" · Δcost ${delta['cost_usd']:+.4f}"
+                    f" · Δ修订 {delta['revise_rounds']:+.0f}")
+            _out(console, f"  {item['name']:<14} pass^k={metrics['pass_pow_k']:.2%}"
+                          f"  calls={metrics['llm_calls']}"
+                          f"  cost=${metrics['cost_usd']:.4f}"
+                          f"  修订={metrics['revise_rounds']}{tail}")
+        if out_path:
+            _out(console, f"\n矩阵已写入 {out_path}")
+    baseline = matrix.baseline
+    return (EXIT_CODES["ok"]
+            if baseline is not None and baseline.report.pass_pow_k >= 1.0
+            else EXIT_CODES["failed"])
 
 
 def _cmd_samples(args: argparse.Namespace) -> int:
@@ -1718,9 +1935,28 @@ def _cmd_serve(args: argparse.Namespace) -> int:
             print(
                 f"  限流：每 IP {settings.api_rate_limit_max} 次 / "
                 f"{settings.api_rate_limit_window}s")
-        print("Ctrl-C 停止。")
+        print("Ctrl-C / SIGTERM 停止。")
+        # D-1：优雅停机。此前只捕获 KeyboardInterrupt（SIGINT），而 systemd /
+        # `docker stop` 发的是 SIGTERM——Python 默认直接终止进程，`server.stop()`
+        # 不执行：在途 run 不收尾、ledger 未 flush、SSE 连接硬断。
+        # Windows 的 Proactor 事件循环不支持 add_signal_handler，回退到
+        # signal.signal（主线程可用）；两者都失败时保留 KeyboardInterrupt 兜底。
+        stop_event = asyncio.Event()
+        loop = asyncio.get_running_loop()
+
+        def _request_stop(*_args: object) -> None:
+            loop.call_soon_threadsafe(stop_event.set)
+
+        for _sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                loop.add_signal_handler(_sig, stop_event.set)
+            except (NotImplementedError, RuntimeError, ValueError):
+                try:
+                    signal.signal(_sig, _request_stop)
+                except (ValueError, OSError):
+                    pass  # 非主线程等场景：只保留 KeyboardInterrupt 兜底
         try:
-            await asyncio.Event().wait()  # 永远等待
+            await stop_event.wait()
         except KeyboardInterrupt:
             pass
         finally:
@@ -2215,6 +2451,7 @@ _HANDLERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "providers": _cmd_providers,
     "models": _cmd_models,
     "config": _cmd_config,
+    "schedule": _cmd_schedule,
 }
 
 
@@ -2256,6 +2493,8 @@ def _settings_from(args: argparse.Namespace) -> Settings:
     overrides: dict[str, Any] = {}
     if getattr(args, "mock", False):
         overrides["mock"] = True
+    if getattr(args, "plan_only", False):
+        overrides["plan_only"] = True
     if getattr(args, "debug_step", False):
         overrides["debug_step"] = True   # R20：store_true 的 False 缺省不进 overrides
     gate = _effective_gate(

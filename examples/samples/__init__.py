@@ -109,6 +109,14 @@ SAMPLES: dict[str, SampleSpec] = {
         "附设计说明与使用文档。",
         ("T-001", "T-002", "T-003", "T-004"),
     ),
+    "revision": _spec(
+        "revision",
+        "logstat 日志统计工具（首轮复核不通过）",
+        "serial",
+        "开发一个命令行日志统计工具 logstat：读取访问日志，输出状态码分布与耗时分位，"
+        "附设计说明与使用文档。",
+        ("T-001", "T-002", "T-003", "T-004"),
+    ),
     "hierarchy": _spec(
         "hierarchy",
         "内部知识库检索服务（层级管理）",

@@ -248,6 +248,12 @@ class ContextBus:
             # brief 保留完整，summary 的可用额度 = 单条摘要上限 - brief 占用。
             brief_tokens = estimate_tokens(dep.brief)
             room = max(0, _DIGEST_MAX_TOKENS - brief_tokens - 1)
+            if room <= 0:
+                # A-22：brief 极长把额度压到 0 时，此前仍会发起一次
+                # ``max_tokens=0`` 的 LLM 摘要请求——白花一次调用、还把
+                # 「…（内容已截断）」这类无意义文本写进缓存。直接缓存空串跳过。
+                self._summary_cache[dep.id] = ""
+                continue
             if estimate_tokens(summary) <= room:
                 continue  # 本来就装得下，不需要压缩
             compressed = await self._summarizer.summarize(summary, room)
@@ -339,14 +345,18 @@ class ContextBus:
     def _file_tree_lines(self) -> list[str]:
         """文件树快照；超 ``tree_max_entries`` 时折叠为末尾一行 ``"... (N more)"``。
 
-        ``utils.files.tree`` 的 ``+1`` 惯例只能判断「还有更多」；折叠行要给出**真实**
-        条数，因此超阈值时再完整列举一次来计数。
+        A-12 起 ``commit`` 立即写 ``MANIFEST.json``。若沿用 ``tree(max_entries=301)``
+        的 ``+1`` 惯例，``MANIFEST.json``（大写 M）会按字典序排在最前、挤占一个
+        截断名额，导致排除后实际只有 ``tree_max_entries`` 条、折叠不触发。这里
+        全量列举、排除元数据后再切片折叠——文件树规模有限，全量列举开销可忽略。
         """
-        paths = tree(self._store.root, max_entries=self._tree_max_entries + 1)
+        paths = [
+            path for path in tree(self._store.root, max_entries=_UNBOUNDED_ENTRIES)
+            if path != "MANIFEST.json"
+        ]
         if len(paths) <= self._tree_max_entries:
             return paths
-        total = len(tree(self._store.root, max_entries=_UNBOUNDED_ENTRIES))
-        hidden = total - self._tree_max_entries
+        hidden = len(paths) - self._tree_max_entries
         return [*paths[: self._tree_max_entries], f"... ({hidden} more)"]
 
     def _excerpt_candidates(self, task: Task) -> list[ArtifactRecord]:

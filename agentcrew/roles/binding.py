@@ -100,6 +100,27 @@ class Aggregation(BaseModel):
         "primary_with_review")
     quorum: int = 1
     judge: str | None = None
+    review_rounds: int = Field(default=0, ge=0, le=3)
+    """复核出问题时，把意见回灌主笔**修订**的轮数（仅 ``primary_with_review``）。
+
+    ``0``（默认）= 只出意见、不修订，与引入该字段之前行为一致。设为 1..3 时，
+    复核者报告了问题（未命中「未发现问题」）就把意见作为 ``fix_hints`` 重跑主笔，
+    再复核一轮；最多回灌 ``review_rounds`` 次，避免「主笔-复核」互相不认账地
+    无限往返。上限 3 是刻意的：再多说明这条任务的验收标准本身没写清。
+    """
+
+    intra_deps: dict[str, list[str]] = Field(default_factory=dict)
+    """R49：``split_by_path`` 内部的分工依赖（profile → 它要先看谁的产物）。
+
+    默认空 = 各 section **并行**（既有行为）。非空时改为**按拓扑顺序**执行：依赖方
+    能看到被依赖方已落盘的产物（以 ``UpstreamDigest`` 注入上下文，文件在盘上可直接读）。
+
+    为什么需要它：并行成员之间没有"先后"，像"测试要按后端写出的接口签名写"这种
+    分工根本无法表达——只能让两边各猜一份。这是共享工作区的前置条件，也是当初
+    方案被低估的地方（见 ``docs/IMPROVEMENT-PLAN-2026-11-09.md`` §10.2）。
+
+    只在 ``mode == "split_by_path"`` 时有意义；其它模式声明了会被拒绝。
+    """
 
 
 class RoleAgents(BaseModel):
@@ -191,6 +212,52 @@ def validate_bindings(
         if len(primaries) < 2:
             raise BindingError(f"角色 {role_key} 的 split_by_path 至少要两个 primary/section")
         _check_path_scopes(role_key, primaries, profiles)
+    if aggregation.intra_deps:
+        if aggregation.mode != "split_by_path":
+            raise BindingError(
+                f"角色 {role_key} 声明了 intra_deps，但汇总模式是 "
+                f"{aggregation.mode} —— 分工依赖只在 split_by_path 下成立")
+        _check_intra_deps(role_key, aggregation.intra_deps, primaries)
+
+
+def _check_intra_deps(
+    role_key: str, deps: dict[str, list[str]], primaries: list[BoundAgent]
+) -> None:
+    """``intra_deps`` 必须指向本角色的 section，且不能成环。
+
+    成环的后果不是"跑得慢"，而是**永远跑不起来**：拓扑排序无解，任务会卡在派发前。
+    在配置期拒绝比在运行期兜底诚实得多。
+    """
+    sections = {a.ref for a in primaries}
+    for profile, needs in deps.items():
+        if profile not in sections:
+            raise BindingError(
+                f"角色 {role_key} 的 intra_deps 指向了非 section 的执行体：{profile}")
+        for need in needs:
+            if need == profile:
+                raise BindingError(f"角色 {role_key} 的 {profile} 不能依赖自己")
+            if need not in sections:
+                raise BindingError(
+                    f"角色 {role_key} 的 {profile} 依赖了非 section 的执行体：{need}")
+
+    # 三色 DFS 找环（白色=未访问，灰色=在栈上，黑色=已完成）。
+    visiting: set[str] = set()
+    done: set[str] = set()
+
+    def walk(node: str, path: list[str]) -> None:
+        if node in done:
+            return
+        if node in visiting:
+            cycle = " → ".join([*path[path.index(node):], node])
+            raise BindingError(f"角色 {role_key} 的 intra_deps 成环：{cycle}")
+        visiting.add(node)
+        for need in deps.get(node, ()):
+            walk(need, [*path, node])
+        visiting.discard(node)
+        done.add(node)
+
+    for node in deps:
+        walk(node, [])
 
 
 def _check_path_scopes(

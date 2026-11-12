@@ -1,30 +1,30 @@
 /* ---- 计划审查页 ---- */
 /* 计划审查页面 */
-.plan-goal { font-size: 12px; color: var(--text-sub); margin-top: 2px; max-width: 500px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.plan-readonly-banner { background: var(--warn-bg-soft); border: 1px solid var(--warn-border); color: var(--warn-text);
-  padding: 8px 14px; border-radius: 6px; font-size: 12px; margin-bottom: 14px; }
+.plan-goal { font-size: var(--fs-sm); color: var(--text-sub); margin-top: 2px; max-width: 500px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-readonly-banner { background: var(--warn-bg-soft); border: 0.5px solid var(--warn-border); color: var(--warn-text);
+  padding: 8px 14px; border-radius: var(--r-xs); font-size: var(--fs-sm); margin-bottom: 14px; }
 .plan-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px;
-  background: var(--ink-08); border: 1px solid var(--border-weak); border-radius: 8px; overflow: hidden; margin-bottom: 16px; }
+  background: var(--ink-08); border: 0.5px solid var(--border-weak); border-radius: var(--r-sm); overflow: hidden; margin-bottom: 16px; }
 .plan-stat { background: var(--bg-panel); padding: 12px 16px; text-align: center; }
-.plan-stat-val { font-size: 18px; font-weight: 600; color: var(--text); }
-.plan-stat-label { font-size: 11px; color: var(--text-ter); margin-top: 2px; }
+.plan-stat-val { font-size: 18px; font-weight: 500; color: var(--text); }
+.plan-stat-label { font-size: var(--fs-xs); color: var(--text-ter); margin-top: 2px; }
 .plan-task-list { display: flex; flex-direction: column; gap: 10px; }
-.plan-task-row { background: var(--bg-panel); border: 1px solid var(--ink-10); border-radius: 8px; padding: 12px 14px; }
+.plan-task-row { background: var(--bg-panel); border: 0.5px solid var(--ink-10); border-radius: var(--r-sm); padding: 12px 14px; }
 .plan-task-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
-.plan-task-id { font-family: "SF Mono", Menlo, monospace; font-size: 12px; font-weight: 600; color: var(--accent); }
-.plan-task-role { font-size: 11px; }
+.plan-task-id { font-family: var(--font-mono); font-size: var(--fs-sm); font-weight: 500; color: var(--accent); }
+.plan-task-role { font-size: var(--fs-xs); }
 .plan-task-body { display: flex; flex-direction: column; gap: 8px; }
 .plan-field { display: flex; flex-direction: column; gap: 3px; flex: 1; }
-.plan-field label { font-size: 10px; color: var(--text-ter); font-weight: 500; }
+.plan-field label { font-size: var(--fs-xs); color: var(--text-ter); font-weight: 500; }
 .plan-field-row { display: flex; gap: 10px; }
 .plan-input, .plan-select, .plan-textarea {
-  padding: 5px 8px; border: 1px solid var(--ink-15); border-radius: 5px;
-  font-size: 12px; font-family: inherit; background: var(--bg-panel); color: var(--text);
+  padding: 5px 8px; border: 0.5px solid var(--ink-15); border-radius: var(--r-xs);
+  font-size: var(--fs-sm); font-family: inherit; background: var(--bg-panel); color: var(--text);
   transition: border-color .12s;
 }
 .plan-input:focus, .plan-select:focus, .plan-textarea:focus { outline: none; border-color: var(--accent); }
 .plan-input:disabled, .plan-select:disabled, .plan-textarea:disabled {
-  background: var(--ink-03); color: var(--text-sub); cursor: default; }
+  background: var(--bg-subtle); color: var(--text-sub); cursor: default; }
 .plan-textarea { resize: vertical; min-height: 36px; }
 @media (max-width: 768px) {
   .plan-stats { grid-template-columns: repeat(2, 1fr); }

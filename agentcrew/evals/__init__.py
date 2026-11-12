@@ -36,9 +36,14 @@ from agentcrew.evals.case import (
 from agentcrew.evals.checks import evaluate_checks
 from agentcrew.evals.runner import (
     EvalReport,
+    MatrixReport,
+    VariantResult,
+    apply_overrides,
     compute_pass_pow_k,
+    load_variant_file,
     run_case,
     run_dataset,
+    run_matrix,
 )
 
 __all__ = [
@@ -48,9 +53,14 @@ __all__ = [
     "DatasetError",
     "EvalReport",
     "EvalCase",
+    "MatrixReport",
+    "VariantResult",
+    "apply_overrides",
     "compute_pass_pow_k",
     "evaluate_checks",
     "load_dataset",
+    "load_variant_file",
     "run_case",
     "run_dataset",
+    "run_matrix",
 ]

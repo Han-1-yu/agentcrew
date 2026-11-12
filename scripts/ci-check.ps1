@@ -19,7 +19,7 @@ if (-not (Test-Path $venvPython)) {
 Write-Host "==> 安装依赖 ..." -ForegroundColor Cyan
 & $venvPython -m pip install -r requirements.txt --quiet
 # 与 .github/workflows/ci.yml 钉同一版本：不钉的话"本地绿、CI 红"最难查。
-& $venvPython -m pip install "ruff==0.17.3" "mypy==2.4.1" --quiet
+& $venvPython -m pip install "ruff==0.17.3" "mypy==2.4.1" "pytest-cov>=7.0.0" --quiet
 
 $failed = @()
 
@@ -39,7 +39,21 @@ $env:AGENTCREW_MOCK = "true"
 & $venvPython -m pytest -q
 if ($LASTEXITCODE -ne 0) { $failed += "pytest" }
 
-# 6. 汇总
+# 6. Studio 前端（对应 ci.yml 的 studio job；无 node_modules 时先提示）
+Write-Host "`n==> studio: npm run check / test:unit" -ForegroundColor Cyan
+$studioDir = Join-Path $root "studio"
+if ((Test-Path (Join-Path $studioDir "node_modules")) -and (Get-Command npm -ErrorAction SilentlyContinue)) {
+    Push-Location $studioDir
+    npm run check --silent
+    if ($LASTEXITCODE -ne 0) { $failed += "studio:check" }
+    npm run test:unit --silent
+    if ($LASTEXITCODE -ne 0) { $failed += "studio:unit" }
+    Pop-Location
+} else {
+    Write-Host "  跳过：studio/node_modules 不存在或未安装 npm（先 cd studio; npm ci）" -ForegroundColor Yellow
+}
+
+# 7. 汇总
 Write-Host "`n========================================" -ForegroundColor Cyan
 if ($failed.Count -eq 0) {
     Write-Host "ALL CHECKS PASSED" -ForegroundColor Green

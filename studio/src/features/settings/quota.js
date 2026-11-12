@@ -27,7 +27,19 @@ function openQuotaModal() {
     const monthlyCalls = h('input', { class: 'quota-num', type: 'number', min: '0', value: monthly.max_calls || '', placeholder: '次数' });
     const monthlyTokens = h('input', { class: 'quota-num', type: 'number', min: '0', value: monthly.max_tokens || '', placeholder: 'Token' });
     const monthlyCost = h('input', { class: 'quota-num', type: 'number', min: '0', step: '0.01', value: monthly.max_cost_usd || '', placeholder: '$' });
-    const delBtn = h('button', { class: 'btn btn-sm btn-danger', type: 'button', onclick: () => { rowEl.remove(); } }, '删除');
+    // C-5：先把行数据建好，删除按钮才能把它从 rows 里摘掉——只 remove()
+    // DOM 的话，保存循环仍会遍历到这一行、把「已删除」的配额写回去。
+    const rowData = {
+      aliasInput,
+      daily:   { calls: dailyCalls, tokens: dailyTokens, cost: dailyCost },
+      weekly:  { calls: weeklyCalls, tokens: weeklyTokens, cost: weeklyCost },
+      monthly: { calls: monthlyCalls, tokens: monthlyTokens, cost: monthlyCost },
+    };
+    const delBtn = h('button', { class: 'btn btn-sm btn-danger', type: 'button', onclick: () => {
+      const idx = rows.indexOf(rowData);
+      if (idx >= 0) rows.splice(idx, 1);
+      rowEl.remove();
+    } }, '删除');
     const rowEl = h('div', { class: 'quota-row' },
       h('div', { class: 'quota-row-head' },
         aliasInput, delBtn),
@@ -41,12 +53,7 @@ function openQuotaModal() {
         h('div', { class: 'quota-col' },
           h('div', { class: 'quota-col-title' }, '月'),
           monthlyCalls, monthlyTokens, monthlyCost)));
-    rows.push({
-      aliasInput,
-      daily:   { calls: dailyCalls, tokens: dailyTokens, cost: dailyCost },
-      weekly:  { calls: weeklyCalls, tokens: weeklyTokens, cost: weeklyCost },
-      monthly: { calls: monthlyCalls, tokens: monthlyTokens, cost: monthlyCost },
-    });
+    rows.push(rowData);
     return rowEl;
   };
 

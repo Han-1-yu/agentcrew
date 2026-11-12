@@ -18,8 +18,8 @@
 .stream-output {
   max-height: 260px; overflow-y: auto;
   padding: var(--sp-2) 12px;
-  border: 1px solid var(--border-weak); border-radius: var(--r-md, 8px);
-  background: var(--bg-inset);
+  border: 0.5px solid var(--border); border-radius: var(--r-md);
+  background: var(--bg-subtle);
   font-family: var(--font-mono); font-size: var(--fs-xs);
   line-height: 1.65; color: var(--text);
   white-space: pre-wrap; word-break: break-word;
@@ -28,7 +28,7 @@
 .stream-task-head {
   margin: 10px 0 4px;
   padding-top: 8px;
-  border-top: 1px solid var(--border-weak);
+  border-top: 0.5px solid var(--border-weak);
   color: var(--text-ter); font-family: var(--font-ui); font-size: var(--fs-xs);
 }
 .stream-task-head:first-child { margin-top: 0; padding-top: 0; border-top: 0; }

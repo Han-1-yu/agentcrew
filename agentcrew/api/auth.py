@@ -22,6 +22,7 @@
 
 from __future__ import annotations
 
+import secrets
 from datetime import datetime, timedelta
 
 
@@ -69,7 +70,19 @@ class APIKeyAuth:
         if not self.enabled:
             return True
         presented = self._extract_key(request_headers)
-        return presented is not None and presented in self._keys
+        if presented is None:
+            return False
+        # B-6：恒定时间比较。此前是 `presented in self._keys`——Python 的
+        # `in` 在命中即返回，正确前缀越长的 key 越快通过，理论上可被时序测量
+        # 逐字节猜出。这里对所有 key 都完整比较一遍、**不短路**。
+        # 用 bytes 比较：``compare_digest`` 对 str 只支持 ASCII，中文 key 会抛
+        # TypeError；编码后比较对任意 Unicode 都成立。
+        presented_bytes = presented.encode("utf-8")
+        matched = False
+        for key in self._keys:
+            if secrets.compare_digest(presented_bytes, key.encode("utf-8")):
+                matched = True
+        return matched
 
     @staticmethod
     def _extract_key(headers: dict[str, str]) -> str | None:

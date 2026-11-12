@@ -2,17 +2,17 @@
 /* 任务图全屏页（分层列表） */
 .dag-full-wrap { padding: 16px 20px; overflow-y: auto; height: calc(100vh - 100px); }
 .dag-layer { margin-bottom: 16px; }
-.dag-layer-head { font-size: 11px; font-weight: 600; color: var(--text-ter); text-transform: uppercase;
+.dag-layer-head { font-size: var(--fs-xs); font-weight: 500; color: var(--text-ter);
   letter-spacing: .5px; margin-bottom: 6px; padding-left: 4px; }
 .dag-layer-tasks { display: flex; flex-direction: column; gap: 2px; }
 .dag-task-row { display: flex; align-items: center; gap: 12px; padding: 8px 12px;
-  background: var(--bg-panel); border: 1px solid var(--ink-06); border-radius: 6px;
+  background: var(--bg-panel); border: 0.5px solid var(--ink-06); border-radius: var(--r-xs);
   cursor: pointer; transition: all .12s; }
 .dag-task-row:hover { border-color: var(--accent-border); background: var(--accent-bg-faint); }
-.dag-task-id { font-size: 11px; font-family: "SF Mono", Menlo, monospace; color: var(--text-sub); flex: 0 0 55px; }
-.dag-task-title { font-size: 13px; color: var(--text); font-weight: 500; flex: 1; white-space: nowrap;
+.dag-task-id { font-size: var(--fs-xs); font-family: var(--font-mono); color: var(--text-sub); flex: 0 0 55px; }
+.dag-task-title { font-size: var(--fs-body); color: var(--text); font-weight: 500; flex: 1; white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis; }
-.dag-task-role { font-size: 11px; flex: 0 0 80px; font-weight: 500; }
-.dag-task-deps { font-size: 10px; color: var(--text-ter); flex: 0 0 120px; font-family: "SF Mono", Menlo, monospace;
+.dag-task-role { font-size: var(--fs-xs); flex: 0 0 80px; font-weight: 500; }
+.dag-task-deps { font-size: var(--fs-xs); color: var(--text-ter); flex: 0 0 120px; font-family: var(--font-mono);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.dag-task-status { font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 500; flex: 0 0 auto; }
+.dag-task-status { font-size: var(--fs-xs); padding: 2px 8px; border-radius: var(--r-sm); font-weight: 500; flex: 0 0 auto; }

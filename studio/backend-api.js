@@ -6,6 +6,10 @@
 // R36 起后端认证默认强制开启（fail-closed），Key 用 Electron safeStorage 加密后
 // 落在 userData，既不进 settings.json、也不回显给渲染进程。
 //
+// 注意范围：这里只管**后端 API Key**。**供应商 Key**（ARK_API_KEY 等）不走
+// safeStorage——它是 `main.js` 的 provider:saveKey，明文写入项目根 `.env` 以便
+// CLI 与 Studio 共用（C-21：两类凭据的存储方式不同，别混着理解）。
+//
 // SSE 也走这里：原生 EventSource 无法设置 Authorization 头，而后端只认 header
 // （rbac.extract_key 不读 query）。net.fetch 能带 header 且响应体可流式读取，
 // 解析出的命名事件帧通过 webContents 推给渲染进程。
@@ -53,12 +57,13 @@ function createBackendApi({ ipcMain, userDataPath, getSettings, getWin }) {
 
   /** 单次 REST 调用。返回结构恒定为 { ok, status, data?, error? }。 */
   async function request(pathname, options = {}) {
-    // baseUrl 仅供设置页「测试连接」使用：用户改了地址还没点保存时也能探测，
-    // 不落盘、不改当前设置；与 provider:test 允许自定义地址的口径一致。
-    const b = String(options.baseUrl || base()).trim().replace(/\/+$/, '');
+    // P0-8：baseUrl 只认 settings.apiBaseUrl（主进程落盘的那份），渲染端传入的
+    // options.baseUrl 一律忽略——此前它完全可控，等于把 safeStorage 解密后的
+    // Bearer Key 发往任意主机。用户「改了地址还没保存」的探测需求走独立的
+    // api:probe（不带任何凭据）。
+    const b = base();
     if (!b) return { ok: false, status: 0, error: '未配置后端 API 地址' };
-    // 渲染端可传任意 path / baseUrl：限定同源相对路径与 http(s)，
-    // 避免主进程被当成任意 URL 的代理。
+    // 渲染端可传任意 path：限定同源相对路径，避免主进程被当成任意 URL 的代理。
     const p = String(pathname || '');
     if (!p.startsWith('/') || p.includes('://')) {
       return { ok: false, status: 0, error: '非法请求路径' };
@@ -66,15 +71,23 @@ function createBackendApi({ ipcMain, userDataPath, getSettings, getWin }) {
     if (!/^https?:\/\//i.test(b)) {
       return { ok: false, status: 0, error: '后端地址仅支持 http/https' };
     }
+    // 渲染端自定义 headers 不允许覆盖 Authorization：凭据只属于主进程。
+    const extra = options.headers || {};
+    const safeHeaders = {};
+    for (const [k, v] of Object.entries(extra)) {
+      if (String(k).toLowerCase() !== 'authorization') safeHeaders[k] = v;
+    }
     const ctrl = new AbortController();
     const timer = setTimeout(() => { try { ctrl.abort(); } catch {} }, Number(options.timeoutMs) || 8000);
     try {
       const res = await net.fetch(b + p, {
         method: String(options.method || 'GET').toUpperCase(),
-        headers: Object.assign({}, authHeaders(), options.headers || {}),
+        headers: Object.assign({}, authHeaders(), safeHeaders),
         body: options.body,
         signal: ctrl.signal,
-        redirect: 'follow',
+        // P0-8：后端 serve 不会重定向；follow 会让「保存的地址被劫持后 302 到
+        // 任意主机」也带上 Key。重定向按错误处理。
+        redirect: 'error',
       });
       const text = await res.text();
       let data = null;
@@ -87,6 +100,32 @@ function createBackendApi({ ipcMain, userDataPath, getSettings, getWin }) {
     } catch (e) {
       const msg = String((e && e.message) || e);
       return { ok: false, status: 0, error: /abort/i.test(msg) ? '连接超时' : msg };
+    } finally { clearTimeout(timer); }
+  }
+
+  /** 无凭据连通性探测（设置页「测试连接」专用）。
+   *
+   * 接受一个尚未保存的候选地址，但不注入 authHeaders——probe 的结论是
+   * 「地址是否可达 / 是否需要认证」，凭据永远不会发给未保存的地址。
+   */
+  async function probe(baseUrlRaw) {
+    const b = String(baseUrlRaw || '').trim().replace(/\/+$/, '');
+    if (!/^https?:\/\//i.test(b)) {
+      return { reachable: false, status: 0, error: '后端地址仅支持 http/https' };
+    }
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => { try { ctrl.abort(); } catch {} }, 8000);
+    try {
+      const res = await net.fetch(b + '/health', {
+        method: 'GET',
+        signal: ctrl.signal,
+        redirect: 'error',
+      });
+      // 任何 HTTP 状态（含 401/403）都说明「地址可达」；401 = 可达且需认证。
+      return { reachable: true, status: res.status, error: res.ok ? null : `HTTP ${res.status}` };
+    } catch (e) {
+      const msg = String((e && e.message) || e);
+      return { reachable: false, status: 0, error: /abort/i.test(msg) ? '连接超时' : msg };
     } finally { clearTimeout(timer); }
   }
 
@@ -133,7 +172,7 @@ function createBackendApi({ ipcMain, userDataPath, getSettings, getWin }) {
         method: 'GET',
         headers: Object.assign({}, authHeaders(), { Accept: 'text/event-stream' }),
         signal: ctrl.signal,
-        redirect: 'follow',
+        redirect: 'error',
       });
     } catch (e) {
       if (streamCtl && streamCtl.ctrl === ctrl) streamCtl = null;
@@ -197,6 +236,8 @@ function createBackendApi({ ipcMain, userDataPath, getSettings, getWin }) {
   ipcMain.handle('api:keyClear', () => { clearKey(); return { ok: true, configured: false }; });
   ipcMain.handle('api:request', (_e, opts) =>
     request(opts && opts.path, (opts && opts.options) || {}));
+  // P0-8：测试连接专用——接受候选地址，但绝不携带凭据。
+  ipcMain.handle('api:probe', (_e, opts) => probe(opts && opts.baseUrl));
   ipcMain.handle('api:stream:start', (_e, opts) => startStream(opts && opts.runId));
   ipcMain.handle('api:stream:stop', () => { stopStream(); return { ok: true }; });
 

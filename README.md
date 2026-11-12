@@ -356,6 +356,7 @@ Task 新增 `parent_id` 字段，支持父子层级的任务树。父任务自�
 | 端点 | 方法 | 用途 |
 |---|---|---|
 | `/health` | GET | 健康检查 |
+| `/metrics` | GET | Prometheus 指标（存活、版本、启动时间、内存 run 数与状态分布、按状态码请求数；文本格式，不扫盘） |
 | `/runs` | GET | 列出全部 run（盘上记录 + 运行中实时状态，按创建时间倒序） |
 | `/runs` | POST | 创建并后台启动 run（body: `{"goal": "...", "options": {...}}`，202 返回 run_id） |
 | `/runs/{id}/cancel` | POST | 软取消运行中的 run（202；在跑任务收尾后以 cancelled 收尾，退出码 130） |
@@ -373,17 +374,21 @@ P1-5 起 `POST /runs` 经 `crew_factory` 装配 Crew、挂上 `on_event` 后用
 响应并登记进内存注册表，任务结束自动摘除。取消为软取消：不再派发新任务，
 等在跑任务收尾后以 `cancelled` 封版。
 
-#### 可选：API Key 认证与速率限制（E-3）
+#### API Key 认证与速率限制（E-3；P0 起**默认开启**、fail-closed）
 
-默认**关闭**：不传 `auth` / `rate_limiter` 时，所有端点匿名可访问，行为与改造前
-完全一致。开启方式（`serve` 子命令按配置自动装配）：
+认证**默认开启**（`api_auth_enabled` 默认 `True`）：`serve` 未配置任何密钥时
+**拒绝启动**（退出码 3，回环地址除外——本地开发允许无密钥启动并给出显式警告）。
+显式写 `api_auth_enabled: false` 是一次有意识的决定，且仅允许绑定回环地址。
+配置方式（`serve` 子命令按配置自动装配）：
 
 ```bash
 # 方式一：环境变量（推荐，key 不落盘）
-export AGENTCREW_API_AUTH_ENABLED=true
-export AGENTCREW_API_KEYS="key-alpha,key-beta"
+export AGENTCREW_API_KEYS="key-alpha,key-beta"     # 认证已默认开启，只需配 key
 export AGENTCREW_API_RATE_LIMIT_ENABLED=true
-export AGENTCREW_API_RATE_LIMIT_MAX=100     # 每 IP 每分钟 100 次
+export AGENTCREW_API_RATE_LIMIT_MAX=100            # 每 IP 每分钟 100 次
+# 可选：反向代理场景下声明可信代理网段，才会解析 X-Forwarded-For
+# （默认完全不信任 XFF——直连时客户端无法伪造 IP 绕过限流）
+export AGENTCREW_TRUSTED_PROXIES="10.0.0.0/8,192.168.1.5"
 python main.py serve
 
 # 方式二：--api-key 快速开单个 key
@@ -392,8 +397,10 @@ python main.py serve --api-key dev-key-123
 
 - **认证**：请求须带 `Authorization: Bearer <key>` 或 `X-API-Key: <key>`；缺失或
   无效返回 `401 Unauthorized`（带 `WWW-Authenticate` 头）。
-- **限流**：按客户端 IP 的滑动窗口计数（取 `X-Forwarded-For` 首地址，否则取
-  socket peer）；超限返回 `429 Too Many Requests`（带 `Retry-After` 头）。
+- **限流**：按客户端 IP 的滑动窗口计数；默认只用 socket peer 地址，仅当 peer
+  落在 `AGENTCREW_TRUSTED_PROXIES` 网段内时才解析 `X-Forwarded-For`（取最右侧
+  不可信跳，伪造的中间跳不能冒充真实客户端）；超限返回
+  `429 Too Many Requests`（带 `Retry-After` 头）。
 - **诚实留痕**：认证失败记 `api_auth_failed`、限流记 `api_rate_limited` 事件
   （含 `client_ip` / `path`，限流事件含 `remaining`）。Key 值只参与布尔比对，
   **绝不**写进日志或审计记录。
@@ -2483,16 +2490,23 @@ V1 的功能边界如下，请在使用前明确知悉。这些限制不是「�
    预置回复，用于离线演示编排流程与支撑 hermetic 测试，**不代表模型能力**；
    真实生成能力需要 `--goal` + 真实 API Key 验证。
 
-V2 新增能力的已知边界：
+V2 新增能力的已知边界（**注**：以下 6–8 条为 V1/V2 时期的历史快照，部分表述
+已被后续版本取代，以括号内更新为准；当前生效值见 `docs/OPERATIONS.md` 与
+`docs/THREAT_MODEL.md`）：
 
 6. **HTTP API 为内部控制面设计**。手写 HTTP/1.1 解析，仅支持 GET/POST/PUT/DELETE；
-   E-3 起提供**可选**的 API Key 认证与 IP 速率限制（默认关闭，见上「API Key 认证与
-   速率限制」），但仍无请求体大小上限（64KB 硬编码），开启认证前不建议直接暴露公网。
-7. **MCP 客户端仅支持 stdio 传输**。未实现 SSE/HTTP 传输、resources/prompts 能力、
-   progress 通知；连接真实 MCP 服务器前建议先用 `list_tools()` 验证兼容性。
-8. **Web UI 无人工闸门交互**。P2-10 起 Dashboard 已支持取消 / 删除 / 切换模型 /
-   查看 ledger 与统计，但 G3 人工卡点（plan / delivery 确认）仍需 CLI；无产物预览、
-   无任务详情面板。
+   API Key 认证与 IP 速率限制自 P0 起**默认开启**（fail-closed：未配密钥时
+   `serve` 拒绝启动，回环地址除外），请求体上限 4 MiB（超出返回 413）；
+   限流默认只认 socket peer，`X-Forwarded-For` 仅在配置了可信代理网段
+   （`AGENTCREW_TRUSTED_PROXIES`）时才被解析。仍不建议在无 TLS 反代的情况下
+   直接暴露公网。
+7. **MCP 客户端以 stdio 传输为主**（`streamable HTTP` 传输已随后续版本加入；
+   `resources` / `prompts` 能力与 progress 通知仍未实现）。连接真实 MCP 服务器前
+   建议先用 `list_tools()` 验证兼容性。
+8. **Web UI 的人工闸门交互以 CLI/HTTP 为准**。看板已支持取消 / 删除 / 切换模型 /
+   查看 ledger 与统计，产物预览与任务详情面板由 Studio 桌面端提供（见
+   `studio/README.md`）；G3 人工卡点（plan / delivery 确认）走 CLI 的
+   `approve` / HTTP 的审批端点。
 
 ---
 
@@ -3019,4 +3033,19 @@ python scripts/test.py --coverage --cov-fail-under 55
 
 CI 仍然用 `pytest -q`（Linux 单进程稳定，且要的就是一次跑完）。跑器的目的只是让
 **本机**也能给出一个可信结论，而不是拿「分 5 批手工加总」凑数。
+
+## R43 前端交互对齐 WorkBuddy（对话流 / 结果区 / 任务列表）
+
+调研 WorkBuddy 四区域布局（顶栏 / 侧边栏任务列表 / 对话区 / 右侧结果区）后，把三处核心交互差异落到 Studio，并加一处后端联动：
+
+- **Ledger observer（后端）**：`runtime/ledger.py::Ledger` 加可选 `observer` 回调，`emit` 落盘后同步推「事件名 + 脱敏 data」；`crew/crew.py` 把明细事件注入 `run_id` 推 SSE（`_LEDGER_SSE_EXCLUDED` 排除已走 `_dispatch_event`/`_notify` 的事件与高频 `agent_stream_chunk`）。明细事件不再靠 500ms 快照轮询。
+- **对话式执行流**：Studio 新增「对话」页（侧边栏首位、数字键 1），把 ledger 事件聚合成消息流（用户目标 / PM 规划 / Agent 任务气泡 + 折叠的工具调用·评审·产物 + SSE 流式正文）。
+- **右侧结果区**：顶栏「结果」按钮打开「概览 + 产物」双 tab 面板。
+- **侧边栏任务列表**：搜索 + 状态筛选 chips（5 组）+ 按角色分组。
+
+详述见 `studio/README.md`（V6-FE）与 `PROJECT-STATE.md` §3.56；方案细则与遗漏见 `docs/WorkBuddy前端交互-实施方案细则.md`。
+
+**验证**：后端 `scripts/test.py` 2887 passed / 0 failed；前端 `npm run check` 69 JS / 42 CSS、`e2e` 32/32、`selftest` 16/16、`npm run visual` 20 张一致。
+
+> R35–R42 的变更详见 `PROJECT-STATE.md` §3.40–3.55（本 README 的变更日志自 R34 后由 PROJECT-STATE 承接）。
 

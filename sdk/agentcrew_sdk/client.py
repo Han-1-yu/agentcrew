@@ -37,6 +37,10 @@ from .errors import (
 )
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8765"
+#: SSE 读取超时的下限（秒）。服务端每 30s 发一个 ``: ping`` 注释行做 keep-alive，
+#: 客户端的 socket 超时若与心跳间隔同为 30s，空闲期就会在心跳到达前刚好断开
+#: （B-20）。取 75s = 心跳的 2.5 倍，留出调度抖动与网络延迟余量。
+SSE_MIN_TIMEOUT_SECONDS = 75.0
 #: run 的终态；``awaiting_approval`` 是非终态挂起，不在此列。
 TERMINAL_STATUSES = frozenset(
     {"completed", "failed", "cancelled", "interrupted"})
@@ -132,6 +136,24 @@ class AgentCrewClient:
     def __exit__(self, *exc_info: object) -> None:
         self.close()
 
+    def _request_timeout(
+        self, timeout: float | None, *, stream: bool = False
+    ) -> float | None:
+        """把调用级 ``timeout`` 归一成 socket 超时（B-20）。
+
+        - ``None`` → 用 client 默认值；流式接口再叠加 :data:`SSE_MIN_TIMEOUT_SECONDS`
+          下限（服务端每 30s 发心跳，socket 超时若同为 30s，空闲期会在心跳到达前
+          刚好断开）；
+        - ``<= 0`` → ``None``，即**不设超时**。此前 ``timeout or self.timeout``
+          会把显式 ``0`` 静默替换成默认值，调用方没有办法表达「不要超时」。
+        """
+        if timeout is not None and timeout <= 0:
+            return None
+        base = self.timeout if timeout is None else timeout
+        if stream:
+            return max(SSE_MIN_TIMEOUT_SECONDS, base * 2)
+        return base
+
     def close(self) -> None:
         """标记不再使用。urllib 没有连接池，这里没有需要释放的句柄。"""
         self._closed = True
@@ -186,7 +208,7 @@ class AgentCrewClient:
         )
         try:
             with urllib.request.urlopen(
-                request, timeout=timeout or self.timeout
+                request, timeout=self._request_timeout(timeout)
             ) as response:
                 return (getattr(response, "status", 200), response.read(),
                         dict(response.headers.items()))
@@ -374,7 +396,7 @@ class AgentCrewClient:
         )
         try:
             response = urllib.request.urlopen(
-                request, timeout=timeout or self.timeout)
+                request, timeout=self._request_timeout(timeout, stream=True))
         except urllib.error.HTTPError as exc:
             raw = exc.read()
             headers = dict(exc.headers.items()) if exc.headers else {}

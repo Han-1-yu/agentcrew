@@ -1,0 +1,39 @@
+/* 定时任务页（Automations）：日程列表 + 新建表单，复用扁平卡片与表单 token。 */
+
+.schedules-wrap { display: flex; flex-direction: column; gap: var(--sp-3); padding: var(--sp-4) var(--sp-5) var(--sp-8); }
+.schedules-wrap .dash-block { max-width: 640px; }
+.schedules-list { display: flex; flex-direction: column; gap: var(--sp-2); max-width: 640px; }
+
+.schedule-card {
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg-panel); border: 0.5px solid var(--border); border-radius: var(--r-md);
+}
+.schedule-head { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: 6px; }
+.schedule-state {
+  font-size: var(--fs-xs); font-weight: 500; padding: 1px 8px; border-radius: var(--r-pill);
+}
+.schedule-state.on { background: var(--success-bg); color: var(--success-text); }
+.schedule-state.off { background: var(--bg-subtle); color: var(--text-ter); }
+.schedule-meta { flex: 1; font-size: var(--fs-xs); color: var(--text-ter); }
+.schedule-goal { font-size: var(--fs-body); color: var(--text); font-weight: 500; word-break: break-word; }
+.schedule-when { margin-top: 3px; font-size: var(--fs-xs); color: var(--text-ter); font-family: var(--font-mono); }
+
+.schedule-kind { display: inline-flex; gap: 2px; padding: 2px; background: var(--bg-subtle); border: 0.5px solid var(--border); border-radius: var(--r-pill); }
+.schedule-kind-btn {
+  appearance: none; border: 0.5px solid transparent; background: transparent; cursor: pointer;
+  padding: 3px 10px; border-radius: var(--r-pill);
+  font-family: inherit; font-size: var(--fs-sm); color: var(--text-sub);
+}
+.schedule-kind-btn.active { background: var(--bg-panel); border-color: var(--border); color: var(--text); font-weight: 500; }
+
+.schedule-form { display: flex; flex-direction: column; gap: 10px; margin-top: var(--sp-3); }
+.schedule-row { display: flex; flex-direction: column; gap: 4px; }
+.schedule-recur { display: flex; flex-direction: column; gap: 8px; }
+.schedule-recur .nr-input { max-width: 160px; }
+.schedule-weekdays { display: flex; gap: 4px; flex-wrap: wrap; }
+.schedule-wd {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 3px 8px; border: 0.5px solid var(--border); border-radius: var(--r-sm);
+  font-size: var(--fs-xs); color: var(--text-sub); cursor: pointer; background: var(--bg-panel);
+}
+.schedule-wd:has(input:checked) { background: var(--accent-bg); border-color: var(--accent-border-soft); color: var(--accent-text); }

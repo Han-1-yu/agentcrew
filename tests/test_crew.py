@@ -270,6 +270,24 @@ async def test_run_produces_completed_record(env):
     assert crew.catalog.has("backend_dev")
 
 
+async def test_plan_only_generates_plan_without_execution(env):
+    """Ask 模式（--plan-only）：计划落盘、不执行，resume 后可续跑成完整 run。"""
+    plan_settings = env["settings"].model_copy(update={"plan_only": True})
+    rec = await Crew(plan_settings).run("做一个 Todo 应用")
+    assert rec.status is RunStatus.PLANNED
+    # 计划已落盘：tasks.json 有任务，但没有任何产物（未执行）
+    run_dir = _run_dir(plan_settings, rec.run_id)
+    assert (run_dir / "tasks.json").is_file()
+    board = json.loads((run_dir / "tasks.json").read_text(encoding="utf-8"))
+    assert len(board["tasks"]) == 3
+    assert not (run_dir / "artifacts" / "DELIVERY.md").exists()
+    # 续跑：不重供 --plan-only，直接进入执行并交付
+    resumed = Crew.resume_from(Settings.load(), rec.run_id)
+    rec2 = await resumed.resume()
+    assert rec2.status is RunStatus.COMPLETED
+    assert rec2.stats.succeeded == 3
+
+
 async def test_run_creates_artifacts_and_manifest(env):
     rec = await Crew(env["settings"]).run("做一个 Todo 应用")
     art = _artifacts(env["settings"], rec.run_id)

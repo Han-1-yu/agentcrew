@@ -107,7 +107,14 @@ function renderApprovalsSection(container) {
       '连接后端 API 并选择 run 后，可在此处理人工审批单。'));
     return box;
   }
-  load(box, rid).catch(() => {});
+  // C-10：不能静默吞掉——读取失败时界面会一直停在「正在读取…」，
+  // 用户既不知道有没有审批单，也不知道是网络/后端问题。
+  load(box, rid).catch((e) => {
+    box.innerHTML = '';
+    box.appendChild(emptyState(
+      '审批单读取失败',
+      String((e && e.message) || e || '未知错误')));
+  });
   return box;
 }
 

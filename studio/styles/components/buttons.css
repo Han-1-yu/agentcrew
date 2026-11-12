@@ -1,43 +1,42 @@
-/* 按钮体系：32 常规 / 36 主操作 / 26 小操作 + 圆形图标按钮。
-   原则：一律毛玻璃面（半透明底 + 1px 白描边 + 顶部高光），主操作是全页唯一的实心强调色。 */
+/* 按钮体系 —— WorkBuddy 扁平风格：
+   默认 ghost（白底 + 0.5px 边框），主操作是全页唯一的实心强调色（purple-600），
+   hover 只加深边框与浅灰底，无渐变、无投影、无缩放。 */
 
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   height: 32px; padding: 0 13px;
-  border: 1px solid var(--glass-border); border-radius: var(--r-sm);
-  background: var(--glass-bg-quiet); color: var(--text);
+  border: 0.5px solid var(--border); border-radius: var(--r-sm);
+  background: var(--bg-panel); color: var(--text);
   font-size: var(--fs-sm); font-weight: 500; white-space: nowrap;
-  box-shadow: var(--glass-highlight);
   transition: background var(--dur-1) ease, border-color var(--dur-1) ease, color var(--dur-1) ease;
 }
 .btn svg { width: 14px; height: 14px; }
-.btn:hover { background: var(--ink-08); border-color: var(--glass-border-strong); }
-.btn:active { background: var(--ink-12); }
+.btn:hover { background: var(--bg-subtle); border-color: var(--border-input); }
+.btn:active { background: var(--ink-08); }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .btn-primary {
   height: 36px; padding: 0 16px;
-  border-color: var(--accent-border-med);
-  background: linear-gradient(180deg, var(--accent), var(--accent-hover));
+  border-color: var(--accent);
+  background: var(--accent);
   color: var(--on-solid);
-  font-size: var(--fs-body); font-weight: 600;
-  box-shadow: 0 8px 20px -10px var(--accent), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  font-size: var(--fs-body); font-weight: 500;
 }
-.btn-primary:hover { filter: brightness(1.06); border-color: var(--accent-border-strong); }
-.btn-primary:active { filter: brightness(0.96); }
+.btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn-primary:active { background: var(--accent-hover); }
 
 .btn-danger { background: transparent; color: var(--error-text); border-color: var(--error-border); }
 .btn-danger:hover { background: var(--error-bg); border-color: var(--error-border-strong); }
 
-.btn-sm { height: 26px; padding: 0 9px; font-size: var(--fs-xs); border-radius: var(--r-xs); }
+.btn-sm { height: 26px; padding: 0 9px; font-size: var(--fs-xs); border-radius: var(--r-sm); }
 .btn-sm svg { width: 12px; height: 12px; }
 
-/* 图标按钮：正圆，hover 才出现玻璃面 */
+/* 图标按钮：透明底，hover 才出现浅灰底 */
 .btn-icon {
   width: 30px; height: 30px; padding: 0; position: relative;
-  border-radius: 50%;
+  border-radius: var(--r-sm);
   border-color: transparent; background: transparent;
-  color: var(--text-sub); box-shadow: none;
+  color: var(--text-sub);
 }
 .btn-icon svg { width: 16px; height: 16px; }
-.btn-icon:hover { background: var(--ink-06); color: var(--text); border-color: transparent; }
+.btn-icon:hover { background: var(--bg-subtle); color: var(--text); border-color: var(--border); }

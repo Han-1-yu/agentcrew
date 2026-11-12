@@ -37,7 +37,6 @@ import json
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlsplit
@@ -81,6 +80,7 @@ from agentcrew.runtime.checkpoint import (
     CheckpointStore,
     RunRecord,
     RunStatus,
+    is_stale_running,
     repair_statuses,
 )
 from agentcrew.runtime.ledger import Ledger
@@ -124,6 +124,7 @@ from agentcrew.tools import (
 )
 from agentcrew.tools.guard import build_tool_guard
 from agentcrew.tools.registry import ToolRegistry
+from agentcrew.utils.clock import elapsed_since, seconds_between, utc_now
 from agentcrew.utils.files import atomic_write_text
 
 _logger = logging.getLogger(__name__)
@@ -185,6 +186,50 @@ def _alias_for(spec: RoleSpec, settings: Settings) -> str:
 
 _OVERRIDE_FILE = "binding_overrides.json"
 _TASK_OVERRIDE_FILE = "task_overrides.json"
+
+#: Ledger observer 转发到实时通道（SSE）时应跳过的事件名。这些事件在
+#: ``ledger.emit`` 之外已经通过 ``_dispatch_event`` / ``scheduler._notify`` 推过
+#: 一次，若 observer 再推会在 SSE 重复；``agent_stream_chunk`` 是逐块高频事件，
+#: 正文已由 ``agent_stream_delta`` 单独推送，不该再进 SSE 通道。
+_LEDGER_SSE_EXCLUDED: frozenset[str] = frozenset({
+    "run_started",
+    "run_paused",
+    "approval_requested",
+    "run_finished",
+    "run_stalled",
+    "agent_stream_chunk",
+})
+
+#: 流式正文落盘目录名（``output/<run>/streams/``）与单文件触发重写的字节阈值 /
+#: 保留字符数。正文是模型输出、体积不可控，落盘只为「刷新后回溯」这一件展示用途，
+#: 不是审计事实（审计走 ledger 的 ``agent_stream_chunk.delta_length``）；超阈值时
+#: 读文本、按字符截断保留尾部（用户回看最关心最新内容），不会切坏多字节字符。
+_STREAM_DIR = "streams"
+_STREAM_MAX_BYTES = 400_000
+_STREAM_KEEP_CHARS = 50_000
+
+
+def _append_stream(streams_dir: Path, task_id: str, delta: str) -> None:
+    """把一帧流式正文追加到 ``streams_dir/<sanitized_task_id>.md``。
+
+    - 追加写、无 fsync：正文是瞬态展示辅助，逐帧 fsync 会拖慢流式，崩溃丢最后一小段可接受。
+    - ``task_id`` 消毒：只保留 ``[A-Za-z0-9._-]``，其余替换为 ``_``，防路径越界。
+    - 写失败（磁盘满/权限）只降级不抛：正文回溯是锦上添花，不能让流式 run 因此崩掉。
+    """
+    if not delta:
+        return
+    safe = "".join(ch if (ch.isalnum() or ch in "._-") else "_" for ch in task_id) or "task"
+    path = streams_dir / f"{safe}.md"
+    try:
+        streams_dir.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as file:
+            file.write(delta)
+        if path.stat().st_size > _STREAM_MAX_BYTES:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            if len(text) > _STREAM_KEEP_CHARS:
+                path.write_text(text[-_STREAM_KEEP_CHARS:], encoding="utf-8")
+    except OSError:
+        pass
 
 
 def _load_overrides(run_dir: Path, filename: str) -> dict[str, dict]:
@@ -580,12 +625,26 @@ class Crew:
             )
         if record.status is RunStatus.RUNNING:
             heartbeat = read_heartbeat(checkpoint.run_dir)
-            if (heartbeat is not None
-                    and datetime.now() - heartbeat < LIVENESS_STALE_AFTER):
+            # A-7：心跳现在是 aware UTC，naive 的 datetime.now() 直接相减会抛
+            # TypeError。统一走 elapsed_since：返回 None 表示时钟倒挂超容忍，
+            # 此时无法证明进程已死 → 与 A-6 同方向 fail-closed（拒绝 resume）。
+            idle = elapsed_since(heartbeat)
+            if heartbeat is not None and (idle is None or idle <= LIVENESS_STALE_AFTER):
                 raise ValueError(
                     f"run {run_id!r} 正在另一进程运行（心跳新鲜）；"
                     "若是强杀留下的孤儿，等心跳过期 15 分钟后 resume，"
                     "或由 CLI 启动 reconcile 收敛为 interrupted"
+                )
+            # A-6：心跳缺失时**fail-closed**。此前 ``heartbeat is None``
+            # （心跳文件被清 / 写失败）直接放行——但活跃进程的心跳写失败恰恰
+            # 是最危险的窗口：放行 = 两个进程同时写同一 run 的 checkpoint。
+            # 只有超出 24h 僵尸判据（``is_stale_running``）才认定为死 run 放行；
+            # run 更新时间尚新则拒绝，宁可让人显式 reconcile 也不冒双写风险。
+            if heartbeat is None and not is_stale_running(checkpoint.run_dir):
+                raise ValueError(
+                    f"run {run_id!r} 状态为 RUNNING 但无心跳且最近仍在更新，"
+                    "可能是另一进程心跳写失败；为避免双写，请确认没有别的进程在"
+                    "跑它，或由 CLI 启动 reconcile 收敛为 interrupted 后再 resume"
                 )
         board = checkpoint.load_board()
         repair_statuses(board)
@@ -611,14 +670,22 @@ class Crew:
     async def run(self, goal: str) -> RunRecord:
         """跑完整流程（规划 → 执行 → 交付），返回落盘的 :class:`RunRecord`。"""
         self._begin()
+        lock: ResumeLock | None = None
         try:
             checkpoint = CheckpointStore.create(
                 self._settings.output_dir,
                 project_goal=goal,
                 config_snapshot=self._settings.config_snapshot(),
             )
+            # A-6：``run`` 与 ``resume`` 一样占进程锁——此前只有 resume 占锁，
+            # 而 run 首跑阶段的 checkpoint 写入窗口同样不能与另一个进程的
+            # resume 交错（acquire 失败时 release 是幂等空操作）。
+            lock = ResumeLock(checkpoint.run_dir)
+            lock.acquire()
             return await self._start(checkpoint, goal=goal, resume_board=None)
         finally:
+            if lock is not None:
+                lock.release()
             # R17：先停心跳，异常路径也一定走到（进程强杀则文件留作孤儿证据）。
             self._stop_heartbeat()
             # R13：先关 MCP 连接——异常路径不走 ``_finalize``，不在这里关就会
@@ -685,6 +752,7 @@ class Crew:
             checkpoint.run_dir / "ledger.jsonl",
             run_id=record.run_id,
             secrets=self._settings.secret_values(),
+            observer=self._make_ledger_observer(record.run_id),
         )
         store = self._injected_store
         if store is None:
@@ -738,8 +806,8 @@ class Crew:
                 tool_guard=build_tool_guard(self._settings.tool_guards),
                 # P3-3：流式开关从配置一路下发（默认 False，与改造前逐字一致）。
                 stream=self._settings.stream,
-                # P3-3 → UI：流式增量正文出口（SSE-only，不落 ledger、不触发 Webhook）。
-                stream_sink=self._make_stream_sink(record.run_id)),
+                # P3-3 → UI：流式增量正文出口（SSE 实时 + streams/ 落盘回溯，不落 ledger、不触发 Webhook）。
+                stream_sink=self._make_stream_sink(record.run_id, checkpoint.run_dir / _STREAM_DIR)),
             base_stats=record.stats.model_copy(deep=True),
             journal=SuperStepJournal(checkpoint.run_dir, ledger),
             tracer=tracer,
@@ -807,7 +875,7 @@ class Crew:
                 self._board = resume_board
                 return self._finalize(run, RunStatus.CANCELLED)
             record.status = RunStatus.RUNNING
-            record.updated_at = datetime.now()
+            record.updated_at = utc_now()
             checkpoint.save_record(record)
             # 规划开始前已收到取消（API 软取消在 run 落盘后到达）：直接以 CANCELLED
             # 收尾，不烧一轮规划 token。
@@ -815,6 +883,17 @@ class Crew:
                 return self._finalize(run, RunStatus.CANCELLED)
             if resume_board is None:
                 board = await self._plan_phase(run)
+                # Ask 模式（--plan-only）：计划已生成并落盘（_plan_gate 里
+                # save_tasks），到此收口为 PLANNED、不进入执行。计划仍可通过
+                # resume 续跑成完整 run——这是「先看计划、再决定是否执行」。
+                if self._settings.plan_only:
+                    self._board = board
+                    run.ledger.emit(
+                        "run_planned",
+                        run_id=record.run_id,
+                        task_count=len(board.all()),
+                    )
+                    return self._finalize(run, RunStatus.PLANNED)
             else:
                 # 规划期被强杀的 run 可能没有 tasks.json（或空板）。空板
                 # is_terminal() 恒为 True、stats 全 0，若不拦住，_final_status
@@ -1282,7 +1361,7 @@ class Crew:
             if board.get(task_id).status is TaskStatus.SUCCEEDED
         ]
         if succeeded:
-            now = datetime.now()
+            now = utc_now()
             tasks = [
                 task
                 if task.id not in succeeded
@@ -1359,12 +1438,21 @@ class Crew:
         """
         board: TaskBoard | None = None
 
+        def _persist() -> None:
+            """A-19：非跃迁写入（评审记录/返工计数/执行结果）的落盘出口。
+
+            只写 tasks.json，不重写 MANIFEST——清单与产物相关，计数变化不改变它，
+            每次派发都重建清单会把写放大到不可接受。
+            """
+            if board is not None:
+                run.checkpoint.save_tasks(board)
+
         def _on_change(_task: Task, _change: StatusChange) -> None:
             if board is not None:
                 run.checkpoint.save_tasks(board)
                 run.store.write_manifest()
 
-        board = TaskBoard(tasks, on_change=_on_change)
+        board = TaskBoard(tasks, on_change=_on_change, on_persist=_persist)
         return board
 
     def _build_gatekeeper(
@@ -1449,16 +1537,22 @@ class Crew:
         if self._webhook is not None:
             self._webhook.emit(name, payload)
 
-    def _make_stream_sink(self, run_id: str) -> Callable[[str, str, str], None]:
-        """造一个流式增量正文的出口（P3-3 → UI）。
+    def _make_stream_sink(
+        self, run_id: str, streams_dir: Path
+    ) -> Callable[[str, str, str], None]:
+        """造一个流式增量正文的出口（P3-3 → UI + 回溯落盘）。
 
-        只走 ``on_event``（SSE / 看板 / ``curl -N``）：正文是**瞬态**的，ledger 里
-        只留 ``agent_stream_chunk`` 的 ``delta_length``（审计不膨胀）；Webhook 是
-        事件通知不是正文流，几千个块不该打爆接收端——所以这里**刻意跳过**
+        双通道：``on_event``（SSE / 看板 / ``curl -N``）推瞬态正文；同时把正文
+        追加落盘到 ``streams_dir/<task_id>.md``，供刷新后回溯。ledger 里只留
+        ``agent_stream_chunk`` 的 ``delta_length``（审计不膨胀）；Webhook 是事件
+        通知不是正文流，几千个块不该打爆接收端——所以这里**刻意跳过**
         :meth:`_dispatch_event`（它会把 Webhook 一起带上）。
         """
         def sink(task_id: str, role: str, delta: str) -> None:
-            if self._on_event is not None and delta:
+            if not delta:
+                return
+            _append_stream(streams_dir, task_id, delta)
+            if self._on_event is not None:
                 self._on_event("agent_stream_delta", {
                     "run_id": run_id,
                     "task_id": task_id,
@@ -1466,6 +1560,28 @@ class Crew:
                     "delta": delta,
                 })
         return sink
+
+    def _make_ledger_observer(self, run_id: str) -> Callable[[str, dict[str, Any]], None]:
+        """造一个 ledger 明细事件的实时出口（P3-3 对话流）。
+
+        ``Ledger.emit`` 落盘后回调这里：把明细事件（``task_started`` /
+        ``task_finished`` / ``task_notes`` / ``tool_call`` / ``gate_result`` /
+        ``artifact_written`` / ``llm_call`` / ``plan_created`` …）转发给
+        ``on_event``（SSE），并补上 ``run_id`` 供 EventBus 按 run 分桶。这样
+        「只看这一个 run」的订阅者不用轮询文件也能实时拿到执行明细。
+
+        刻意只走 ``self._on_event``（SSE / 看板），**不走** ``_dispatch_event``：
+        后者会把 Webhook 一起带上，明细事件量级远大于 run 级通知，会打爆接收端。
+        已走 ``_dispatch_event`` / ``_notify`` 的事件（见 ``_LEDGER_SSE_EXCLUDED``）
+        跳过，避免重复推送；``run_id`` 已在 data 里时保持原值。
+        """
+        def observer(event: str, data: dict[str, Any]) -> None:
+            if self._on_event is None or event in _LEDGER_SSE_EXCLUDED:
+                return
+            payload = dict(data)
+            payload.setdefault("run_id", run_id)
+            self._on_event(event, payload)
+        return observer
 
     def _build_webhook(
         self, ledger: Ledger, *, spool_dir: Path | None = None
@@ -1677,7 +1793,7 @@ class Crew:
         stats.agent_costs = merged
         stats.started_at = run.base_stats.started_at or run.record.created_at
         stats.finished_at = (
-            datetime.now() if finished else run.record.stats.finished_at)
+            utc_now() if finished else run.record.stats.finished_at)
         run.record.stats = stats
 
     def _persist_record(self, run: _Run) -> None:
@@ -1689,7 +1805,7 @@ class Crew:
         每次落盘的都是一份完整自洽的账；硬杀最多丢一个完成事件的开销。
         """
         self._sync_stats(run, finished=False)
-        run.record.updated_at = datetime.now()
+        run.record.updated_at = utc_now()
         run.checkpoint.save_record(run.record)
 
     def _final_status(self, board: TaskBoard) -> RunStatus:
@@ -1719,6 +1835,8 @@ class Crew:
         if self._stalled:
             return EXIT_CODES["stalled"]
         if status is RunStatus.COMPLETED:
+            return EXIT_CODES["ok"]
+        if status is RunStatus.PLANNED:
             return EXIT_CODES["ok"]
         if status in (RunStatus.CANCELLED, RunStatus.INTERRUPTED):
             return EXIT_CODES["cancelled"]
@@ -2024,7 +2142,7 @@ class Crew:
         self._sync_stats(run, finished=False)
         record = run.record
         record.status = RunStatus.AWAITING_APPROVAL
-        record.updated_at = datetime.now()
+        record.updated_at = utc_now()
         run.checkpoint.save_record(record)
         if self._board is not None:
             run.checkpoint.save_tasks(self._board)
@@ -2069,11 +2187,19 @@ class Crew:
         self._sync_stats(run)
         record = run.record
         record.status = status
-        record.updated_at = datetime.now()
-        run.checkpoint.save_record(record)
-        if self._board is not None:
-            run.checkpoint.save_tasks(self._board)
-            run.store.write_manifest()
+        record.updated_at = utc_now()
+        try:
+            # A-4：run.json **最后**写——它是 resume 的入口与终态标记。tasks.json
+            # 与 MANIFEST 先写，run.json 写上终态时其余文件必然已就绪；任何一步
+            # 失败都回滚 ``_finalized`` 让兜底分支重试，避免「run.json 已
+            # COMPLETED 而 tasks.json 仍是旧快照」的自相矛盾快照。
+            if self._board is not None:
+                run.checkpoint.save_tasks(self._board)
+                run.store.write_manifest()
+            run.checkpoint.save_record(record)
+        except BaseException:
+            self._finalized = False
+            raise
         started = record.stats.started_at or record.created_at
         code = self._exit_code(status) if exit_code is None else exit_code
         self._close_run_span(status)
@@ -2082,7 +2208,7 @@ class Crew:
             goal=record.project_goal,
             status=status.value,
             exit_code=code,
-            duration_ms=int((datetime.now() - started).total_seconds() * 1000),
+            duration_ms=int(seconds_between(started) * 1000),
         )
         # P1-5：同一事件同步推给 ``on_event`` 观察者（API SSE / 终端看板），
         # 与 ledger 里的字段同形 —— 实时流不用等落盘就能看到 run 结局。
@@ -2185,7 +2311,7 @@ def _consult_experience(
         key_decisions=[],
         success=True,
         run_id=run_id,
-        created_at=datetime.now(),
+        created_at=utc_now(),
     )
 
 
@@ -2226,7 +2352,7 @@ def _extract_experiences(
             key_decisions=decisions_by_task.get(task.id, []),
             success=True,
             run_id=run_id,
-            created_at=datetime.now(),
+            created_at=utc_now(),
         )
         extracted.append((task.id, exp))
     return extracted
@@ -2285,7 +2411,7 @@ def _record_human_rework(board: TaskBoard, task_ids: Sequence[str]) -> None:
     ``fix_hints`` 同时是返工任务下次执行时看到的解释（``Scheduler._fix_hints``
     取最近一轮驳回的提示）。``record_review`` 不触发 ``on_change``，调用方负责补落盘。
     """
-    now = datetime.now()
+    now = utc_now()
     for task_id in task_ids:
         task = board.get(task_id)
         board.record_review(

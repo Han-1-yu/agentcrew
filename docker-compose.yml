@@ -1,0 +1,51 @@
+# AgentCrew 服务编排（D-15）
+#
+# 用法：
+#   1) cp .env.example .env 并填入 AGENTCREW_API_KEYS 与 provider key（必填）
+#   2) docker compose up -d --build
+#   3) curl -H "Authorization: Bearer <key>" http://127.0.0.1:8765/health
+#
+# 说明：
+#   - serve 绑 0.0.0.0 时认证 fail-closed：没配 AGENTCREW_API_KEYS 会拒绝启动，
+#     请先按 .env.example 第 4 节配置；
+#   - output/ 以卷挂载，容器重建不丢 run 记录与产物；
+#   - 如需反向代理（Nginx/Traefik），把 AGENTCREW_TRUSTED_PROXIES 设为代理网段，
+#     否则限流与审计拿不到真实客户端 IP。
+
+services:
+  agentcrew:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: agentcrew:1.0.0
+    container_name: agentcrew
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # 容器内固定写到挂载点；覆盖 .env 里的相对路径
+      AGENTCREW_OUTPUT_DIR: /app/output
+      # 生产建议必配（.env 里留空时这里给出显式提醒：留空 = 不限制）
+      # AGENTCREW_MAX_COST_USD: "20"
+    ports:
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - ./output:/app/output
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import socket; socket.create_connection(('127.0.0.1', 8765), 3).close()"]
+      interval: 30s
+      timeout: 3s
+      start_period: 20s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          # 多 Agent 并发会吃 CPU/内存；按机器规格调整
+          cpus: "2.0"
+          memory: 2g

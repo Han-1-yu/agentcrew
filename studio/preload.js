@@ -4,12 +4,33 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 const invoke = (channel, ...args) => ipcRenderer.invoke(channel, ...args);
 
+// C-22：主进程 → 渲染端的推送频道白名单。
+// 与 main.js 的 send(...) 调用点、backend-api.js 的 send(...) 一一对应；
+// 新增推送频道时必须同步加到这里，否则渲染端收不到（静默失败）。
+const ALLOWED_EVENTS = new Set([
+  'theme:changed',
+  'proc:error',
+  'proc:log',
+  'proc:exit',
+  'proc:run-dir',
+  'watch:ledger',
+  'watch:snapshot',
+  'sse:frame',
+  'sse:closed',
+]);
+
 contextBridge.exposeInMainWorld('studio', {
   // 设置与探测
   getSettings: () => invoke('settings:get'),
   setSettings: (next) => invoke('settings:set', next),
   detectPython: (candidate) => invoke('python:detect', candidate),
   agentsConfig: () => invoke('agents:config'),
+  agentsExport: () => invoke('agents:export'),
+  // 定时任务（Automations）
+  scheduleList: () => invoke('schedule:list'),
+  scheduleAdd: (p) => invoke('schedule:add', p),
+  scheduleRemove: (p) => invoke('schedule:remove', p),
+  scheduleTick: () => invoke('schedule:tick'),
   // 运行列表 / 快照 / 事件
   listRuns: () => invoke('runs:list'),
   loadRun: (dir) => invoke('run:load', dir),
@@ -28,6 +49,7 @@ contextBridge.exposeInMainWorld('studio', {
   listArtifacts: (dir) => invoke('artifacts:list', dir),
   readArtifact: (dir, relPath) => invoke('artifact:read', dir, relPath),
   exportArtifacts: (dir) => invoke('artifacts:export', dir),
+  loadStreams: (dir) => invoke('streams:load', dir),
   // 系统
   revealFile: (fullPath) => invoke('shell:showItemInFolder', { fullPath }),
   openPath: (fullPath) => invoke('shell:openPath', { fullPath }),
@@ -47,6 +69,8 @@ contextBridge.exposeInMainWorld('studio', {
   providerTestEndpoints: (opts) => invoke('provider:testEndpoints', opts),
   // 后端 API 代理（主进程绕开 CORS；Key 只存主进程 safeStorage，不回传）
   apiRequest: (path, options) => invoke('api:request', { path, options }),
+  // 无凭据连通性探测（测试连接专用，绝不携带 API Key）
+  apiProbe: (baseUrl) => invoke('api:probe', { baseUrl }),
   apiStreamStart: (runId) => invoke('api:stream:start', { runId }),
   apiStreamStop: () => invoke('api:stream:stop'),
   apiKeyStatus: () => invoke('api:keyStatus'),
@@ -55,7 +79,11 @@ contextBridge.exposeInMainWorld('studio', {
   // F4：最近目标
   recentGoals: () => invoke('goals:recent'),
   // 主进程推送
+  // C-22：频道白名单。此前 on(channel) 接受任意字符串，渲染端一旦被注入
+  // 就能监听主进程内部任意频道（信息面扩大）。白名单与 main.js / backend-api.js
+  // 的 send() 调用点一一对应，新增推送频道必须同步加到这里。
   on: (channel, cb) => {
+    if (!ALLOWED_EVENTS.has(channel) || typeof cb !== 'function') return () => {};
     const wrapped = (_e, payload) => { try { cb(payload); } catch (err) { console.error('回调异常', channel, err); } };
     ipcRenderer.on(channel, wrapped);
     return () => ipcRenderer.removeListener(channel, wrapped);

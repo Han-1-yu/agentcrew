@@ -88,6 +88,9 @@ async def test_unexpected_exception_finalizes_run(settings, monkeypatch):
 async def test_resume_empty_board_fails_loud(settings):
     """规划期被强杀的 run 没有任务面板：resume 必须报错并封版 FAILED。"""
     run_dir = _make_run(settings.output_dir, "R-empty")
+    # A-6 起 RUNNING 无心跳且最近更新会被 resume_from 拒（防双写）；这里把
+    # updated_at 拨到 25 小时前，走「僵尸 run 放行」路径聚焦空面板检查。
+    _set_updated(run_dir, datetime.now() - STALE_RUNNING_AFTER - timedelta(hours=1))
     (run_dir / "tasks.json").write_text(
         json.dumps({"tasks": []}), encoding="utf-8")
 

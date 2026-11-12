@@ -1,9 +1,11 @@
 """R22：resume 状态白名单（六层审计遗留——R17 只补了进程锁那一半）。
 
-拒绝只有两种（``Crew.resume_from``）：completed（终局成功，续跑没有意义）与
+拒绝有三种（``Crew.resume_from``）：completed（终局成功，续跑没有意义）；
 running 且心跳文件新鲜（R17+ 活进程每 30s 写心跳，「正被另一进程跑着」的明确
-信号，再 resume 会双写坏 checkpoint）。其余全部放行——**failed 也是恢复路径**
-（未处理异常兜底会把崩溃当场封成 FAILED），无心跳的老 run 保留既有直接恢复行为。
+信号，再 resume 会双写坏 checkpoint）；running 无心跳但 updated_at 尚新
+（A-6，很可能是心跳写失败的活跃进程，fail-closed 拒绝）。其余全部放行——
+**failed 也是恢复路径**（未处理异常兜底会把崩溃当场封成 FAILED），无心跳且
+超 24h 的僵尸 run 保留既有直接恢复行为。
 
 终局拒绝走 ``ValueError``：CLI ``resume`` 捕获后打印可读提示（退出码 3），
 API ``/runs/{id}/resume`` 转 4xx——与「无法读取 run」同一条错误通道。
@@ -83,13 +85,13 @@ async def test_resume_refuses_running_with_fresh_heartbeat(tmp_path):
         Crew.resume_from(settings, "R-whitelist")
 
 
-async def test_resume_allows_running_without_heartbeat(tmp_path):
-    """无心跳文件的 RUNNING（R17 之前 / 心跳写失败）：无法区分死活，保留既有
-    直接恢复行为——repair_statuses 兜底，不把硬杀恢复路径堵死。"""
+async def test_resume_refuses_running_without_heartbeat_when_recent(tmp_path):
+    """A-6：RUNNING 无心跳但 updated_at 尚新——很可能是活跃进程心跳写失败，
+    fail-closed 拒绝（放行 = 两进程同写 checkpoint）。"""
     _make_run(tmp_path, status=RunStatus.RUNNING)   # updated_at = 现在，无心跳
     settings = Settings.load(output_dir=tmp_path)
-    crew = Crew.resume_from(settings, "R-whitelist")
-    assert crew is not None
+    with pytest.raises(ValueError, match="无心跳"):
+        Crew.resume_from(settings, "R-whitelist")
 
 
 async def test_resume_allows_running_with_stale_updated_at(tmp_path):

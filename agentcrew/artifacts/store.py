@@ -7,12 +7,14 @@
 """
 
 import json
+import logging
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
 from agentcrew.artifacts.spec import ArtifactRecord, ArtifactSpec, Manifest
 from agentcrew.contracts import EventSink, TaskLike
+from agentcrew.utils.clock import utc_now
 from agentcrew.utils.files import (
     UnsafePathError,
     atomic_write_text,
@@ -23,6 +25,8 @@ from agentcrew.utils.files import (
     sha256_bytes,
     tree,
 )
+
+_logger = logging.getLogger(__name__)
 
 
 class ArtifactConflictError(RuntimeError):
@@ -179,13 +183,23 @@ class ArtifactStore:
             produced_by_task=task.id,
             produced_by_role=task.role,
             produced_by_agent=agent,
-            written_at=datetime.now(),
+            # D-14：产物写入时间统一 aware UTC（MANIFEST 会落盘这个字段）。
+            written_at=utc_now(),
         )
         if index is None:
             self._records.append(record)
         else:
             # 返工重写：原地更新，不追加重复条目（spec §9.2）
             self._records[index] = record
+        # A-12：文件已原子落盘，立即同步清单。此前清单只在状态跃迁 / 封版时
+        # 写，两次跃迁之间硬杀会留下「盘上有文件、MANIFEST 无记录」——resume
+        # 的 load_manifest 重建不出这条记录，跨任务同路径冲突检测、G1 契约外
+        # 产物检查、返工 discard 全部失明。写清单失败不阻断 commit（文件本身
+        # 已安全落盘，清单滞后可由 load_manifest 的 _file_present 过滤兜底）。
+        try:
+            self.write_manifest()
+        except OSError as exc:
+            _logger.warning("产物清单同步失败（文件已落盘）：%s", exc)
         if self._ledger is not None:
             self._ledger.emit(
                 "artifact_written",
@@ -252,7 +266,8 @@ class ArtifactStore:
         """
         kept: list[ArtifactRecord] = []
         removed = 0
-        for record in self._records:
+        original = self._records
+        for record in original:
             if record.produced_by_task != task_id:
                 kept.append(record)
                 continue
@@ -262,7 +277,15 @@ class ArtifactStore:
             removed += 1
         self._records = kept
         if removed:
-            self.write_manifest()
+            try:
+                self.write_manifest()
+            except OSError as exc:
+                # A-11：清单重写失败时**回滚内存记录**——此前 kept 已生效、盘上
+                # 清单仍是旧值，「内存与盘分歧」会残留到下一次 write_manifest。
+                # 回滚等于这次丢弃未发生，由下一次返工派发再试。
+                self._records = original
+                _logger.warning(
+                    "产物清单重写失败，已回滚丢弃操作：%s", exc)
         return removed
 
     def _delete_file(self, rel: str) -> bool:
@@ -339,5 +362,9 @@ class ArtifactStore:
             return False
 
     def file_tree(self) -> list[str]:
-        """``root`` 下全部文件的 POSIX 相对路径（截断惯例见 ``files.tree``）。"""
-        return tree(self._root)
+        """``root`` 下全部**产物**文件的 POSIX 相对路径（截断惯例见 ``files.tree``）。
+
+        ``MANIFEST.json`` 是清单元数据而非产物，恒被排除——上下文包的「产物
+        文件树」（``ContextBus``）与折叠计数都只该反映模型交付物。
+        """
+        return [path for path in tree(self._root) if path != "MANIFEST.json"]

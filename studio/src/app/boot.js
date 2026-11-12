@@ -8,6 +8,8 @@ import { anyOverlayOpen, closeModal } from '../ui/modal.js';
 import { toast } from '../ui/toast.js';
 
 import { renderDashboard } from '../features/dashboard/index.js';
+import { refreshConversation } from '../features/conversation/index.js';
+import { openResultPanel } from '../features/result/index.js';
 import { closeDetailPanel } from '../features/detail/panel.js';
 import { initComposer, syncComposer } from '../features/composer/index.js';
 import { openNewRunModal } from '../features/new-run/index.js';
@@ -45,6 +47,7 @@ async function bootSequence(){
   const sbMore = $('#sb-more');
   if (sbMore) sbMore.addEventListener('click',()=>switchNav('tasks'));
   initComposer();
+  $('#btn-result').addEventListener('click', () => openResultPanel('overview'));
   $('#btn-refresh').addEventListener('click', async () => {
     if (S.realMode && S.watchDir) {
       try { await loadRealRun(S.watchDir); renderDashboard(); toast('info', '已刷新', '数据已重新加载'); }
@@ -72,7 +75,7 @@ async function bootSequence(){
     // 数字键 1-9：切换导航（弹窗/详情打开时屏蔽，避免在遮罩层背后切页）
     if(!e.metaKey&&!e.ctrlKey&&!e.altKey&&/^[1-9]$/.test(e.key)){
       if(anyOverlayOpen()) return;
-      const pages=['dashboard','tasks','dag','agents','gates','artifacts','events','providers','settings'];
+      const pages=['conversation','dashboard','tasks','dag','agents','profiles','gates','artifacts','events'];
       const idx=parseInt(e.key)-1;
       if(pages[idx]){ switchNav(pages[idx]); }
     }
@@ -109,7 +112,9 @@ async function bootSequence(){
   // 实时通道只发「该刷新了」的信号，装配层决定重绘范围：看板可见时全量重绘，
   // 否则只刷顶栏（其它页也看得到运行数字）；切回看板时补一次全量重绘。
   window.addEventListener('studio:refresh', () => {
-    if (S.nav === 'dashboard') renderDashboard(); else renderChrome();
+    if (S.nav === 'dashboard') renderDashboard();
+    else if (S.nav === 'conversation') refreshConversation();
+    else renderChrome();
   });
   window.addEventListener('studio:dashboard-show', () => renderDashboard());
 
@@ -136,7 +141,11 @@ async function bootSequence(){
       const ok = await loadRealRun(target);
       if (ok) S.realMode = true;
     }
-  } catch {}
+  } catch (e) {
+    // C-10：静默降级会让用户以为看的是真实数据（实际是演示夹具）。
+    // 启动阶段不弹 toast 打扰，但必须留痕可查。
+    console.warn('[boot] 加载真实运行失败，已降级为演示数据：', e);
+  }
   if(!S.realMode) initMockData();
 
   // 恢复 DAG 缩放/平移状态

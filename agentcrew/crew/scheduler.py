@@ -51,6 +51,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from collections.abc import Callable
 from typing import Any
@@ -66,7 +67,7 @@ from agentcrew.context.context_bus import ContextBus
 from agentcrew.contracts import AgentBudgetExceeded
 from agentcrew.gate.gatekeeper import GateDecision, Gatekeeper
 from agentcrew.models.complexity import ComplexityCalibrator, get_calibrator
-from agentcrew.models.factory import BudgetExhaustedError
+from agentcrew.models.factory import BudgetExhaustedError, ModelFactoryError
 from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.runtime.checkpoint import CheckpointStore
 from agentcrew.runtime.ledger import Ledger
@@ -207,6 +208,11 @@ class Scheduler:
         #: P0-3：预算耗尽标志。worker 中捕获 BudgetExhaustedError 时置位，
         #: 主循环检测后停止派发、等在跑 worker 收尾，再重抛该异常给 Crew。
         self._budget_exhausted: BudgetExhaustedError | None = None
+        #: A-21：配置错误标志（缺 Key / 非法别名 / ContextBudgetError）。与预算
+        #: 耗尽同一条「置位 → 停派发 → 收尾重抛」路径，但目标是退出码 3 的
+        #: **快速失败**——此前它们落在 ``except Exception`` 里被当作可重试的
+        #: 暂态故障，同一配置错误白烧 3 次重试后才 FAILED。
+        self._config_error: ModelFactoryError | None = None
         #: P2-1：动态子任务 id 序号（``T-DYN-001`` …），保证 run 内唯一。
         self._subtask_seq = 0
         #: R8：最近一次建子任务被拒的**人类可读原因**（成功时清空）。
@@ -225,6 +231,28 @@ class Scheduler:
         self._stall_timeout_seconds = stall_timeout_seconds
         self._last_progress_at = time.monotonic()
         self._stalled = False
+        #: A-8：单次门禁（G1+G2）的总时长上限。此前 ``Gatekeeper.evaluate``
+        #: 没有任何超时包装，而停滞检测只看主循环跃迁——评审 LLM 卡住时会被
+        #: 误判停滞、硬取消 worker、整场以退出码 4 收尾。默认 600s，可由
+        #: ``gate_config.gate_timeout_seconds`` 覆盖；非正/非法值回落默认。
+        self._gate_timeout_seconds = self._resolve_gate_timeout(settings)
+
+    @staticmethod
+    def _resolve_gate_timeout(settings: Settings | None) -> float:
+        """A-8：解析门禁总超时（``gate_config.gate_timeout_seconds``，默认 600s）。
+
+        非法 / 非正值回落默认——超时是保护性上限，不能因为一个笔误变成 0
+        （那会让每次评审都立即超时）。
+        """
+        raw: Any = 600.0
+        if settings is not None:
+            cfg = getattr(settings, "gate_config", None) or {}
+            raw = cfg.get("gate_timeout_seconds", 600.0)
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return 600.0
+        return value if value > 0 else 600.0
 
     # ---- 只读视图 ----
 
@@ -320,6 +348,9 @@ class Scheduler:
                     # P0-3：预算耗尽 —— 停止派发新任务，等在跑 worker 自然收尾。
                     if self._budget_exhausted is not None:
                         break
+                    # A-21：配置错误 —— 与预算耗尽同义：停派发、等收尾、重抛。
+                    if self._config_error is not None:
+                        break
                     continue
                 # 无就绪、无在跑，却仍未终结：停滞（死锁或全部阻塞），报告后退出。
                 self._deadlock_report = self._board.explain_stall()
@@ -333,6 +364,18 @@ class Scheduler:
             # P0-3：worker 收尾完毕后重抛预算耗尽异常，由 Crew 捕获并优雅收尾。
             if self._budget_exhausted is not None:
                 raise self._budget_exhausted
+            # A-21：配置错误同理重抛，由 Crew 以退出码 3 快速失败。
+            if self._config_error is not None:
+                raise self._config_error
+        except asyncio.CancelledError:
+            # A-20：Ctrl-C / 取消——硬取消在跑 worker 并等它们回流后重抛。
+            # 此前取消只置 _running=False，worker 仍是独立 task 继续跑：Crew
+            # 的封版写盘（run.json / tasks.json / MANIFEST）会与 worker 的
+            # commit / emit / on_change 交错，孤儿 worker 直到 asyncio.run
+            # 的 _cancel_all_tasks 才被取消。排空后封版看到的才是最终一致状态。
+            self.cancel(hard=True)
+            await self._drain_workers()
+            raise
         finally:
             self._running = False
 
@@ -362,9 +405,8 @@ class Scheduler:
             async with self._task_slot:
                 outcome = await self._execute_one(task)
             if outcome.error is None:
-                decision = await self._gatekeeper.evaluate(
-                    self._board.get(task.id), round_no=self._round_no(task)
-                )
+                # A-8：门禁走「带心跳 + 超时」的包装，避免长评审被停滞检测误杀。
+                decision = await self._evaluate_with_heartbeat(task)
                 outcome = outcome.model_copy(update={"decision": decision})
         except asyncio.CancelledError:
             self._completion_queue.put_nowait(
@@ -376,6 +418,13 @@ class Scheduler:
             # 回流（该任务的状态由 _handle_error 正常处理）。主循环检测到标志后
             # 等在跑 worker 收尾再重抛此异常给 Crew。
             self._budget_exhausted = exc
+            outcome = _error_outcome(task.id, exc)
+        except ModelFactoryError as exc:
+            # A-21：配置错误（缺 Key / 非法别名 / ContextBudgetError）不是重试
+            # 能修好的暂态故障——此前落在 except Exception 里白烧 3 次重试后
+            # 才 FAILED。置位标志、主循环停派发并在收尾后重抛，由 Crew 以
+            # 退出码 3（config）快速失败。
+            self._config_error = exc
             outcome = _error_outcome(task.id, exc)
         except Exception as exc:
             # 非预期异常（provider 网络/鉴权、门禁崩溃…）也收敛成结局回流：
@@ -411,8 +460,8 @@ class Scheduler:
         """
         try:
             task = self._board.get(task_id)
-            decision = await self._gatekeeper.evaluate(
-                task, round_no=self._round_no(task))
+            # A-8：复评同样走「心跳 + 超时」包装（resume 后重跑门禁也常有长评审）。
+            decision = await self._evaluate_with_heartbeat(task)
             outcome = WorkerOutcome(task_id=task_id, decision=decision)
         except asyncio.CancelledError:
             self._completion_queue.put_nowait(
@@ -426,6 +475,37 @@ class Scheduler:
         except Exception as exc:
             outcome = _error_outcome(task_id, exc)
         self._completion_queue.put_nowait(outcome)
+
+    async def _evaluate_with_heartbeat(self, task: Task) -> GateDecision:
+        """A-8：跑门禁，期间定期刷新进度心跳，总时长受 ``gate_timeout_seconds`` 限制。
+
+        两件事都必须做：
+
+        1. **心跳**：``_wait_for_outcome`` 用 ``_last_progress_at`` 判停滞，而门禁
+           只在**结束时**才产生状态跃迁——长评审（尤其 G2 连续烧 LLM）期间既不
+           完成也不跃迁，不刷新就会让主循环误判停滞（``_trigger_stall`` 硬取消
+           worker、整场以退出码 4 收尾）。
+        2. **超时**：评审 LLM 卡死时不能无限等。超时抛 ``TimeoutError``，由
+           ``_worker`` / ``_regate_worker`` 的 ``except Exception`` 收敛成错误结局，
+           走正常重试/失败通道。
+        """
+        async def _heartbeat() -> None:
+            interval = max(1.0, self._stall_timeout_seconds / 3)
+            while True:
+                await asyncio.sleep(interval)
+                self._touch_progress()
+
+        hb = asyncio.create_task(_heartbeat())
+        try:
+            return await asyncio.wait_for(
+                self._gatekeeper.evaluate(
+                    self._board.get(task.id), round_no=self._round_no(task)),
+                timeout=self._gate_timeout_seconds,
+            )
+        finally:
+            hb.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await hb
 
     async def _execute_one(self, task: Task) -> WorkerOutcome:
         """在任务槽位内执行一个任务；成功即写结果并转 ``REVIEW``。

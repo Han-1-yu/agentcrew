@@ -16,6 +16,7 @@ R16 之前 ``openapi.yaml`` 一直缺 ``/providers`` 族与执行体切换端点
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -178,3 +179,146 @@ async def test_method_mismatch_is_not_a_route_match(server):
         "GET", "/runs/R-contract-probe/cancel", port=server[1])
     # cancel 只有 POST；GET 走到兜底（哨兵）或 405 都算「没把 GET 当路由」
     assert _is_sentinel(status, text) or status == 405
+
+
+# ── D-9：认证 / 限流 / 响应形状回归 ────────────────────────────────────────
+#
+# 此前这一组只有一个「不是哨兵」的断言：只要路由没落 404 就算通过。结果是
+# 认证中间件不再拦截、限流阈值失效、响应字段改名这类回归全都能无声通过——
+# 契约正文与实现漂移了一轮也没人发现。
+
+
+@pytest.fixture
+async def authed_server():
+    """开启 API Key 认证的实例（用于验证「每条路由都要 key」）。"""
+    from agentcrew.api.auth import APIKeyAuth
+
+    srv = ApiServer(port=0, auth=APIKeyAuth(["contract-key"]))
+    await srv.start()
+    port = srv._server.sockets[0].getsockname()[1]
+    try:
+        yield srv, port
+    finally:
+        await srv.stop()
+
+
+async def _request_with_headers(
+    method: str, path: str, *, port: int, headers: dict[str, str],
+    body: bytes | None = None, headers_only: bool = False,
+) -> tuple[int, str]:
+    """与 :func:`_request` 相同，但允许附加请求头。"""
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    payload = body or b""
+    extra = "".join(f"{k}: {v}\r\n" for k, v in headers.items())
+    writer.write(
+        f"{method} {path} HTTP/1.1\r\nHost: localhost\r\n{extra}"
+        f"Content-Length: {len(payload)}\r\nConnection: close\r\n\r\n".encode()
+        + payload
+    )
+    await writer.drain()
+    raw = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=5)
+    status = int(raw.split(b"\r\n", 1)[0].decode().split()[1])
+    if headers_only:
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except (ConnectionError, asyncio.CancelledError):
+            pass
+        return status, ""
+    text = (await reader.read(65536)).decode("utf-8", errors="replace")
+    writer.close()
+    try:
+        await writer.wait_closed()
+    except (ConnectionError, asyncio.CancelledError):
+        pass
+    return status, text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method,template",
+    sorted(API_ROUTES),
+    ids=[f"{m}_{t.replace('/', '_')}" for m, t in sorted(API_ROUTES)],
+)
+async def test_every_route_requires_api_key(authed_server, method, template):
+    """D-9：认证默认开启时，**每一条**路由无 key 都必须 401。
+
+    这条断言的价值在于「穷举」：漏登记一条就等于开了一个匿名入口。
+    """
+    srv, port = authed_server
+    path = _probe_path(template)
+    sse = template.endswith("/events") and method == "GET"
+    status, text = await _request_with_headers(
+        method, path, port=port, headers={},
+        body=b"" if method in ("POST", "PUT", "DELETE") else None,
+        headers_only=sse,
+    )
+    if sse:
+        for _ in range(5):
+            srv.bus.publish("__probe_unblock__", {"run_id": "R-contract-probe"})
+    assert status == 401, f"{method} {path} 未要求认证（得到 {status}）"
+
+
+@pytest.mark.asyncio
+async def test_correct_key_is_accepted(authed_server):
+    """带对 key 不会被认证层拦下（501/404/400 都行，非 401 即可）。"""
+    srv, port = authed_server
+    status, _ = await _request_with_headers(
+        "GET", "/health", port=port,
+        headers={"Authorization": "Bearer contract-key"})
+    assert status == 200
+
+
+@pytest.mark.asyncio
+async def test_wrong_key_rejected_with_json_body(authed_server):
+    """401 的响应体必须是统一错误形状 ``{"error": ...}``。"""
+    srv, port = authed_server
+    status, text = await _request_with_headers(
+        "GET", "/health", port=port,
+        headers={"Authorization": "Bearer wrong-key"})
+    assert status == 401
+    assert '"error"' in text
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_returns_429():
+    """D-9：限流阈值生效时返回 429（此前无任何断言守着）。"""
+    from agentcrew.api.auth import RateLimiter
+
+    srv = ApiServer(port=0, rate_limiter=RateLimiter(max_requests=1,
+                                                     window_seconds=60))
+    await srv.start()
+    port = srv._server.sockets[0].getsockname()[1]
+    try:
+        first, _ = await _request("GET", "/health", port=port)
+        second, text = await _request("GET", "/health", port=port)
+        assert first == 200
+        assert second == 429
+        assert '"error"' in text
+    finally:
+        await srv.stop()
+
+
+@pytest.mark.asyncio
+async def test_oversized_body_returns_413(server):
+    """D-9：超过 body 上限必须是 413，而不是把请求读爆内存。"""
+    srv, port = server
+    huge = b"x" * (17 * 1024 * 1024)   # 默认上限 16 MiB
+    try:
+        status, text = await _request(
+            "POST", "/runs", port=port, body=huge)
+        assert status in (413, 400), text[:200]
+    except (ConnectionError, asyncio.IncompleteReadError):
+        # 服务端在读 body 中途直接断开也是合法拒绝方式
+        pass
+
+
+@pytest.mark.asyncio
+async def test_runs_list_shape(server):
+    """D-9：``GET /runs`` 的响应形状（前端与 SDK 都依赖这两个键）。"""
+    srv, port = server
+    status, text = await _request("GET", "/runs", port=port)
+    assert status == 200
+    payload = json.loads(text)
+    assert "runs" in payload
+    assert isinstance(payload["runs"], list)

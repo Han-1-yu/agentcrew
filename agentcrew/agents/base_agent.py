@@ -94,6 +94,7 @@ from agentcrew.task.conditions import parse_outcome
 from agentcrew.task.task import Task, TaskResult
 from agentcrew.tools import Tool, ToolRegistry
 from agentcrew.tools.schema import function_spec, schema_hint, validate_tool_args
+from agentcrew.utils.clock import seconds_between, utc_now
 from agentcrew.utils.files import UnsafePathError
 from agentcrew.utils.trace import TraceContext, reset_trace, set_trace
 
@@ -579,11 +580,16 @@ class BaseAgent(ABC):
 
         2026-11 可观测性改造：进入即设置 :class:`TraceContext`（contextvar，
         按协程隔离），使执行期所有 ``llm_call`` 记账能带上 ``task_id`` /
-        ``attempt``——同一角色并发多任务时 token / 成本 / 延迟可精确归因。
-        ``finally`` 恢复上下文，业务逻辑原样移入 :meth:`_execute_traced`。
+        ``attempt`` / ``profile``——同一角色并发多任务、或多执行体并存时，
+        token / 成本 / 延迟可精确归因。``finally`` 恢复上下文，业务逻辑原样
+        移入 :meth:`_execute_traced`。
         """
         token = set_trace(TraceContext(
-            task_id=task.id, role=self.spec.key, attempt=task.attempts))
+            task_id=task.id, role=self.spec.key, attempt=task.attempts,
+            # 未绑定执行体的角色（单 agent 老路径）在 RunPlan 里就叫 ``default``，
+            # 这里沿用同一命名。否则这些调用会落进 ``unknown``，看起来像"归因失败"，
+            # 实际只是配置里没有 profile。
+            profile=self.agent_key or "default"))
         try:
             return await self._execute_traced(task, pack, fix_hints=fix_hints)
         finally:
@@ -597,7 +603,8 @@ class BaseAgent(ABC):
         fix_hints: Sequence[str] = (),
     ) -> TaskResult:
         """:meth:`execute` 的原始执行体（追踪上下文已就位）。"""
-        started_at = datetime.now()
+        # D-14：落盘时间统一 aware UTC（RunStats / TaskResult 都读它）。
+        started_at = utc_now()
         self._ledger.emit(
             "task_started",
             task_id=task.id,
@@ -629,7 +636,7 @@ class BaseAgent(ABC):
         )
         records = self._commit(parsed, task)
 
-        finished_at = datetime.now()
+        finished_at = utc_now()
         provisional = TaskResult(
             task_id=task.id,
             role=self.spec.key,
@@ -641,7 +648,7 @@ class BaseAgent(ABC):
             outcome=parse_outcome(final_text),
             started_at=started_at,
             finished_at=finished_at,
-            duration_ms=int((finished_at - started_at).total_seconds() * 1000),
+            duration_ms=int(seconds_between(started_at, finished_at) * 1000),
         )
         result = provisional.model_copy(
             update={"summary": self.summarize(provisional)}
@@ -1323,7 +1330,7 @@ class BaseAgent(ABC):
                     except Exception as exc:  # 工具内部异常统一兜底回灌
                         result_text = f"错误：工具 {call.name!r} 执行失败：{exc}"
                         success = False
-            duration_ms = int((datetime.now() - started).total_seconds() * 1000)
+            duration_ms = int(seconds_between(started) * 1000)
             self._ledger.emit(
                 "tool_call",
                 task_id=task.id,
@@ -1548,7 +1555,13 @@ class BaseAgent(ABC):
             ArtifactTooLargeError,
             UndeclaredArtifactError,
             UnsafePathError,
+            OSError,
         ) as exc:
+            # A-17：``store.commit`` 内部的 ``mkdir`` / ``atomic_write_text`` /
+            # ``ledger.emit`` 会抛 ``OSError`` / ``PermissionError``（磁盘满、
+            # Windows 文件被占用）。此前它不在捕获元组里，裸异常冒泡到调度器被
+            # 收敛成执行失败，且前几个产物已落盘、后面的没有——半写状态。纳入
+            # 后统一走 ``_fail``，下次派发时由调度器的返工清理兜底。
             self._fail(task, f"产物流盘失败：{exc}", cause=exc)
         return records
 

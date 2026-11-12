@@ -27,11 +27,11 @@
   .agents-grid { grid-template-columns: 1fr; }
   #dashboard-view { padding: 12px; }
   .art-layout { flex-direction: column; }
-  .art-tree { width: 100%; max-height: 200px; border-right: none; border-bottom: 1px solid var(--border); }
+  .art-tree { width: 100%; max-height: 200px; border-right: none; border-bottom: 0.5px solid var(--border); }
   .gate-cards { grid-template-columns: 1fr; }
   .run-stats { grid-template-columns: repeat(3, 1fr); }
   .run-actions { flex-wrap: wrap; }
-  .section-head h3 { font-size: 14px; }
+  .section-head h3 { font-size: var(--fs-h2); }
 }
 /* 390px 手机：基础适配 */
 @media (max-width: 480px) {
@@ -41,12 +41,12 @@
   #detail-panel { width: 100vw; }
   .run-stats { grid-template-columns: repeat(2, 1fr); gap: 8px; }
   .stat-cell { padding: 8px 10px; }
-  .stat-val { font-size: 15px; }
-  .stat-label { font-size: 10px; }
+  .stat-val { font-size: var(--fs-h1); }
+  .stat-label { font-size: var(--fs-xs); }
   .run-status-bar { flex-direction: column; align-items: flex-start; gap: 10px; }
   .run-meta { flex-wrap: wrap; gap: 6px 14px; }
   .events-list { max-height: 300px; }
-  .event-item { padding: 6px 8px; font-size: 11px; }
+  .event-item { padding: 6px 8px; font-size: var(--fs-xs); }
   .page-head h2 { font-size: 17px; }
   .dag-task-row { flex-wrap: wrap; gap: 4px; }
   .dag-task-title { flex: 1 1 100%; }

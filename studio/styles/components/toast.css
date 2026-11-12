@@ -1,14 +1,17 @@
-/* 右下角轻提示。 */
+/* 右下角轻提示 —— 语义色 50 底 + 600 字，白卡 0.5px 边框，无投影。 */
 
 /* ===== Toast ===== */
 #toasts { position: fixed; bottom: 16px; right: 16px; z-index: 100; display: flex; flex-direction: column; gap: 6px; }
 .toast {
-  background: var(--toast-bg); color: var(--on-solid); border-radius: 6px; padding: 8px 12px;
-  min-width: 200px; max-width: 320px; box-shadow: 0 4px 16px var(--shadow);
-  font-size: 12px;
+  background: var(--toast-bg); color: var(--text);
+  border: 0.5px solid var(--border); border-radius: var(--r-sm);
+  padding: 8px 12px;
+  min-width: 200px; max-width: 320px;
+  font-size: var(--fs-sm);
 }
-.toast-title { font-weight: 600; }
-.toast-msg { font-size: 11px; opacity: 0.8; margin-top: 2px; }
-.toast.success { background: var(--toast-success-bg); }
-.toast.error { background: var(--toast-error-bg); }
-.toast.warning { background: var(--toast-warning-bg); }
+.toast-title { font-weight: 500; }
+.toast-msg { font-size: var(--fs-xs); color: var(--text-sub); margin-top: 2px; }
+.toast.success { background: var(--toast-success-bg); color: var(--success-text); border-color: var(--success-bg-chip); }
+.toast.error { background: var(--toast-error-bg); color: var(--error-text); border-color: var(--error-border-soft); }
+.toast.warning { background: var(--toast-warning-bg); color: var(--warn-text); border-color: var(--warn-border-soft); }
+.toast.info { background: var(--accent-bg); color: var(--accent-text); border-color: var(--accent-border-soft); }

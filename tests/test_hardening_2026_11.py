@@ -223,8 +223,26 @@ class TestTraceAccounting:
         assert data["task_id"] == "T-9"
         assert data["attempt"] == 2
 
+    def test_llm_call_carries_profile_when_trace_set(self, tmp_path):
+        """多执行体：``llm_call`` 必须带 profile，否则成本无法按执行体归因。"""
+        from agentcrew.models.providers.base import CompletionResult
+
+        factory = self._factory(tmp_path)
+        token = set_trace(TraceContext(
+            task_id="T-9", role="dev", attempt=1, profile="backend_fast"))
+        try:
+            factory._account(
+                CompletionResult(
+                    provider="mock", model="m", text="",
+                    prompt_tokens=10, completion_tokens=5, latency_ms=7),
+                purpose="execute", role="dev")
+        finally:
+            reset_trace(token)
+        _, data = factory._ledger.events[-1]
+        assert data["profile"] == "backend_fast"
+
     def test_llm_call_unchanged_without_trace(self, tmp_path):
-        """追踪未设置时事件无 task_id/attempt 字段（形状与改造前一致）。"""
+        """追踪未设置时事件无 task_id/attempt/profile 字段（形状与改造前一致）。"""
         from agentcrew.models.providers.base import CompletionResult
 
         factory = self._factory(tmp_path)
@@ -236,6 +254,7 @@ class TestTraceAccounting:
         _, data = factory._ledger.events[-1]
         assert "task_id" not in data
         assert "attempt" not in data
+        assert "profile" not in data
 
 
 # ── 4. WorkerOutcome.error_type ──────────────────────────────────────────

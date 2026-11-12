@@ -9,7 +9,7 @@
 .prov-card {
   display: flex; align-items: flex-start; gap: var(--sp-3);
   padding: var(--sp-3) var(--sp-4);
-  border: 1px solid var(--border); border-radius: var(--r-md);
+  border: 0.5px solid var(--border); border-radius: var(--r-md);
   background: var(--bg-panel);
   transition: border-color var(--dur-1) ease, background var(--dur-1) ease;
 }
@@ -18,27 +18,27 @@
   flex: 0 0 32px; width: 32px; height: 32px;
   display: flex; align-items: center; justify-content: center;
   border-radius: var(--r-sm);
-  border: 1px solid var(--accent-border-soft);
+  border: 0.5px solid var(--accent-border-soft);
   background: var(--accent-bg-soft);
-  font-family: var(--font-display); font-size: 14px; font-weight: 600;
+  font-family: var(--font-display); font-size: var(--fs-h2); font-weight: 500;
   color: var(--accent-text);
 }
 .prov-main { flex: 1 1 auto; min-width: 0; }
 .prov-title-row { display: flex; align-items: center; gap: var(--sp-2); }
-.prov-name { font-size: var(--fs-h2); font-weight: 600; color: var(--text); letter-spacing: -0.01em; }
+.prov-name { font-size: var(--fs-h2); font-weight: 500; color: var(--text); letter-spacing: -0.01em; }
 .prov-badge {
-  font-size: 10px; font-weight: 500;
+  font-size: var(--fs-xs); font-weight: 500;
   padding: 1px 6px; border-radius: var(--r-xs);
-  border: 1px solid transparent;
+  border: 0.5px solid transparent;
 }
-.prov-badge.builtin { background: var(--ink-06); color: var(--text-ter); border-color: var(--border-weak); }
+.prov-badge.builtin { background: var(--bg-subtle); color: var(--text-ter); border-color: var(--border-weak); }
 .prov-badge.custom { background: var(--accent-bg-soft); color: var(--accent-text); border-color: var(--accent-border-soft); }
 .prov-dot {
   width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-left: 4px;
 }
 .prov-dot.ok { background: var(--success); }
 .prov-dot.off { background: var(--ink-30); }
-.prov-dot.none { background: transparent; border: 1px solid var(--border-input); }
+.prov-dot.none { background: transparent; border: 0.5px solid var(--border-input); }
 .prov-url {
   font-family: var(--font-mono); font-size: var(--fs-xs);
   color: var(--text-ter); margin-top: 2px; word-break: break-all;
@@ -47,10 +47,10 @@
   display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap;
   margin-top: 5px; font-size: var(--fs-xs); color: var(--text-ter);
 }
-.prov-env { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-sub); }
+.prov-env { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-sub); }
 .prov-env.none { color: var(--text-ter); }
 .prov-model-count { color: var(--text-ter); }
-.prov-test-result { margin-top: 6px; font-size: 11px; min-height: 14px; }
+.prov-test-result { margin-top: 6px; font-size: var(--fs-xs); min-height: 14px; }
 .prov-test-ok { color: var(--success-text); font-weight: 500; }
 .prov-test-mid { color: var(--warn-text); font-weight: 500; }
 .prov-test-slow { color: var(--error-text); font-weight: 500; }
@@ -58,74 +58,74 @@
 .prov-models { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
 .prov-models.hidden { display: none; }
 .prov-model-tag {
-  font-size: 10px; padding: 3px 8px; border-radius: 4px; cursor: pointer;
-  background: var(--ink-08); color: var(--text-sub); border: 1px solid transparent;
+  font-size: var(--fs-xs); padding: 3px 8px; border-radius: var(--r-xs); cursor: pointer;
+  background: var(--bg-subtle); color: var(--text-sub); border: 0.5px solid transparent;
   transition: background .12s ease, color .12s ease;
 }
 .prov-model-tag:hover { background: var(--accent-bg-strong); color: var(--accent-text); }
 .prov-model-tag.active { background: var(--accent-bg-strong); color: var(--accent-text); border-color: var(--accent-border-soft); }
-.prov-models-empty { font-size: 11px; color: var(--text-ter); }
+.prov-models-empty { font-size: var(--fs-xs); color: var(--text-ter); }
 .prov-actions {
   display: flex; align-items: center; gap: var(--sp-1);
   flex: 0 0 auto; align-self: flex-start;
   margin-left: auto; padding-left: var(--sp-2);
 }
 .prov-actions .btn { background: transparent; border-color: transparent; color: var(--text-sub); }
-.prov-actions .btn:hover { background: var(--ink-06); border-color: var(--border-weak); color: var(--text); }
+.prov-actions .btn:hover { background: var(--bg-subtle); border-color: var(--border-weak); color: var(--text); }
 .provider-test-btn.is-disabled { opacity: 0.4; cursor: not-allowed; }
 .prov-toggle-models { /* btn-sm 已提供基础样式 */ }
 
 .prov-empty { text-align: center; padding: 40px 20px; color: var(--text-sub); }
-.prov-empty h3 { font-size: 15px; color: var(--text); margin: 10px 0 6px; }
-.prov-empty p { font-size: 12px; margin-bottom: 14px; }
+.prov-empty h3 { font-size: var(--fs-h1); color: var(--text); margin: 10px 0 6px; }
+.prov-empty p { font-size: var(--fs-sm); margin-bottom: 14px; }
 
 /* 「从预设添加」弹窗 */
 /* #modal 固定 420px 宽，而供应商表单需要更宽：含 .ap-modal 时自动加宽（:has 由 Chromium 105+ 支持） */
 #modal:has(.ap-modal) { width: 560px; max-width: 94vw; }
 .ap-modal { width: 100%; }
-.ap-hint { font-size: 12px; color: var(--text-sub); margin-bottom: 12px; line-height: 1.6; }
+.ap-hint { font-size: var(--fs-sm); color: var(--text-sub); margin-bottom: 12px; line-height: 1.6; }
 .ap-field-row { margin-bottom: 10px; }
-.ap-field-row label { display: block; font-size: 12px; font-weight: 600; color: var(--text-sub); margin-bottom: 4px; }
+.ap-field-row label { display: block; font-size: var(--fs-sm); font-weight: 500; color: var(--text-sub); margin-bottom: 4px; }
 .ap-field {
-  width: 100%; padding: 6px 8px; border: 1px solid var(--border-input);
-  border-radius: 6px; font-size: 12px; font-family: inherit;
+  width: 100%; padding: 6px 8px; border: 0.5px solid var(--border-input);
+  border-radius: var(--r-xs); font-size: var(--fs-sm); font-family: inherit;
   background: var(--bg-panel); color: var(--text);
 }
 .ap-field:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-focus); }
 .ap-yaml {
   width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px; padding: 8px; border: 1px solid var(--border-input);
-  border-radius: 6px; background: var(--bg-inset); color: var(--text);
+  font-size: var(--fs-xs); padding: 8px; border: 0.5px solid var(--border-input);
+  border-radius: var(--r-xs); background: var(--bg-inset); color: var(--text);
   resize: vertical; box-sizing: border-box;
 }
-.ap-warn { font-size: 11px; color: var(--warn-text); margin-top: 4px; line-height: 1.5; }
+.ap-warn { font-size: var(--fs-xs); color: var(--warn-text); margin-top: 4px; line-height: 1.5; }
 .ap-key-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .ap-key-row .ap-field { flex: 1; min-width: 0; }
 .ap-key-save { white-space: nowrap; }
-.ap-key-status { font-size: 11px; color: var(--text-sub); white-space: nowrap; }
-.ap-key-status.ok { color: var(--success-text); font-weight: 600; }
-.ap-key-hint { display: block; font-size: 11px; color: var(--text-sub); margin-top: 3px; line-height: 1.5; }
+.ap-key-status { font-size: var(--fs-xs); color: var(--text-sub); white-space: nowrap; }
+.ap-key-status.ok { color: var(--success-text); font-weight: 500; }
+.ap-key-hint { display: block; font-size: var(--fs-xs); color: var(--text-sub); margin-top: 3px; line-height: 1.5; }
 
 /* ===== 供应商页：搜索 / 分类工具条 ===== */
 .prov-toolbar {
   display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
   margin-bottom: var(--sp-3); padding: var(--sp-2) var(--sp-3);
-  border: 1px solid var(--border-weak); border-radius: var(--r-md);
+  border: 0.5px solid var(--border-weak); border-radius: var(--r-md);
   background: var(--bg-subtle);
 }
 .prov-search {
   flex: 0 1 260px; height: 28px; padding: 0 10px;
-  border: 1px solid var(--border-input); border-radius: 6px;
-  font-size: 12px; font-family: inherit; background: var(--bg-panel); color: var(--text);
+  border: 0.5px solid var(--border-input); border-radius: var(--r-xs);
+  font-size: var(--fs-sm); font-family: inherit; background: var(--bg-panel); color: var(--text);
 }
 .prov-search:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-focus); }
 .prov-cat-bar { display: flex; gap: 6px; flex-wrap: wrap; }
 .prov-cat-btn {
   height: 28px; padding: 0 11px; border-radius: var(--r-pill);
   font-size: var(--fs-xs); cursor: pointer;
-  border: 1px solid var(--border-input); background: var(--bg-panel); color: var(--text-sub);
+  border: 0.5px solid var(--border-input); background: var(--bg-panel); color: var(--text-sub);
   transition: background .12s ease, color .12s ease, border-color .12s ease;
 }
 .prov-cat-btn:hover { border-color: var(--accent-border); color: var(--accent-text); }
 .prov-cat-btn.active { background: var(--accent-bg-strong); color: var(--accent-text); border-color: var(--accent-border-soft); }
-.prov-count { font-size: 11px; color: var(--text-ter); margin-left: auto; }
+.prov-count { font-size: var(--fs-xs); color: var(--text-ter); margin-left: auto; }

@@ -1,0 +1,123 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# AgentCrew 主配置样例（YAML）
+#
+# 用法：复制为仓库根的 agentcrew.yaml（或用 AGENTCREW_CONFIG 指向它）。
+#
+# 与 .env 的分工：
+#   - 本文件放**结构性配置**：并发、门禁规则、模型绑定、MCP、工具权限、Webhook。
+#   - .env 放**密钥与部署差异**：API Key、认证密钥、output_dir 等。
+#   优先级：代码默认 → .env → 本文件 → 真实环境变量 AGENTCREW_*（最高）。
+#
+# 注意：只有下方出现的键会被读取。写错键名会被静默忽略（主配置宽松策略），
+# 因此新增配置前先对照 `agentcrew/config.py` 的 _YAML_SCALAR_KEYS。
+# ─────────────────────────────────────────────────────────────────────────────
+
+config_version: 1
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 1. 运行时
+# ══════════════════════════════════════════════════════════════════════════════
+max_concurrency: 4              # 同时在跑的 Agent 数；受 provider 限流约束
+context_budget_tokens: 24000    # 单个任务上下文包的 token 预算
+stream: true                    # 流式输出（终端看板 / SSE 更细粒度）
+tools_enabled: true             # 允许 Agent 使用工具（读写文件 / 检索）
+code_exec_enabled: false        # 允许执行代码；生产不需要就关掉
+untrusted_inputs: false         # 输入来自外部文档时置 true（只给只读工具）
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 2. 门禁（G1 静态校验 / G2 LLM 评审 / G3 人工卡点）
+# ══════════════════════════════════════════════════════════════════════════════
+gate: both                      # both | plan | delivery | none
+
+gate_config:
+  g1_enabled: true              # 静态校验（语法/契约/占位符/体积）
+  g2_enabled: true              # LLM 评审
+  g3_enabled: true              # 人工审批卡点
+  max_review_attempts: 3        # 全局返工/评审轮次上限（与任务 max_reworks 取小）
+  g2_reviewers: 1               # 并行评审人数
+  gate_timeout_seconds: 600     # 单次门禁总时长上限；超时收敛为错误而非卡死
+
+  # 评分旁路：LLM 判 reject 但分数够高时放行（仅 G2 生效）
+  # review_score_threshold: 75
+
+  # 收敛检测：同一批 issue 连续出现 N 轮则提前判失败，不再烧返工额度
+  # convergence_threshold: 2
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 3. 模型绑定
+# ══════════════════════════════════════════════════════════════════════════════
+models:
+  # 默认模型：<provider>:<model>
+  default: openai:gpt-4o-mini
+
+  # 按角色覆盖（不写 = 继承 default）
+  role_bindings:
+    project_manager: openai:gpt-4o-mini
+    architect: anthropic:claude-sonnet-5
+    backend_dev: deepseek:deepseek-chat
+    # qa_engineer: openai:gpt-4o-mini
+
+  # 覆盖内置 provider 的 base_url / 模型能力（可选）
+  providers:
+    # ollama:
+    #   base_url: http://localhost:11434/v1
+    #   context_window: 8192
+
+  # 自定义 provider（OpenAI 兼容端点）
+  # custom_providers:
+  #   my_gateway:
+  #     base_url: https://llm.internal/v1
+  #     api_key_env: MY_GATEWAY_KEY
+  #     kind: openai_compat
+  #     context_window: 32000
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 4. 工具权限（可选；不写 = 全部角色可用全部已启用工具）
+# ══════════════════════════════════════════════════════════════════════════════
+# tool_permissions:
+#   # 结构：角色 → 允许的工具名列表；未列出的角色不受限
+#   technical_writer:
+#     - read_file
+#     - grep
+#   qa_engineer:
+#     - read_file
+#     - grep
+#     - run_python
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 5. MCP 服务器（可选）
+# ══════════════════════════════════════════════════════════════════════════════
+# mcp_servers:
+#   filesystem:
+#     transport: stdio
+#     command: ["npx", "-y", "@modelcontextprotocol/server-filesystem", "./output"]
+#   internal_search:
+#     transport: sse
+#     url: http://127.0.0.1:9000/sse
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 6. 人工审批（可选）
+# ══════════════════════════════════════════════════════════════════════════════
+# approval_mode: both           # plan | delivery | both | none（空=跟随 gate）
+# approval_timeout_seconds: 0   # 0=永不超时；>0 到期自动判 expired
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 7. Webhook 通知（可选）
+# ══════════════════════════════════════════════════════════════════════════════
+# 目标只来自服务端配置（POST /runs 的 options 不接受 webhook_url，防 SSRF）。
+# webhook_url: https://hooks.example.com/agentcrew
+# webhook_secret: ""            # 用于 HMAC 签名校验
+# webhook_events: [run_finished, run_stalled]
+# webhook_timeout_seconds: 10   # 上限 30
+# webhook_max_retries: 3        # 上限 5
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 8. 只能走环境变量 / .env 的配置（YAML 不读，写了会被忽略）
+# ══════════════════════════════════════════════════════════════════════════════
+# 以下项请写在 .env 或真实环境变量里：
+#   AGENTCREW_OUTPUT_DIR / AGENTCREW_LOG_LEVEL / AGENTCREW_DEFAULT_MODEL
+#   AGENTCREW_MAX_COST_USD / AGENTCREW_MAX_LLM_CALLS
+#   AGENTCREW_API_AUTH_ENABLED / AGENTCREW_API_KEYS
+#   AGENTCREW_API_RATE_LIMIT_* / AGENTCREW_TRUSTED_PROXIES
+#   AGENTCREW_LLM_REQUEST_TIMEOUT_SECONDS / AGENTCREW_REDACT_*
+#   AGENTCREW_OTEL_* / OPENAI_API_KEY 等各 provider 密钥

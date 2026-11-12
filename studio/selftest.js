@@ -48,8 +48,8 @@ function run(win) {
     check('1. 应用启动且渲染进程就绪', booted);
     await sleep(1800); // 等 python 探测 + run 列表首轮刷新
 
-    // ── 2. 9 页导航遍历 ──
-    const pages = ['dashboard','tasks','dag','agents','gates','artifacts','events','providers','settings'];
+    // ── 2. 12 页导航遍历 ──
+    const pages = ['conversation','dashboard','tasks','dag','agents','profiles','gates','artifacts','events','providers','schedules','settings'];
     const navResults = {};
     for (const page of pages) {
       await js(`document.querySelector('.nav-item[data-nav="${page}"]')?.click()`);
@@ -57,7 +57,7 @@ function run(win) {
       navResults[page] = await js(`document.querySelector('.nav-item[data-nav="${page}"]')?.classList.contains('active')`);
     }
     const allNavOk = pages.every(p => navResults[p]);
-    check('2. 9 页导航全部可切换且 active 正确', allNavOk, JSON.stringify(navResults));
+    check('2. 12 页导航全部可切换且 active 正确', allNavOk, JSON.stringify(navResults));
     // 导航按钮含可见文字（防空白按钮回归）
     const navTextOk = await js(`[...document.querySelectorAll('.nav-item')].every(b => b.textContent.trim().length > 0)`);
     check('2b. 侧边栏每个导航按钮含可见文字', navTextOk);

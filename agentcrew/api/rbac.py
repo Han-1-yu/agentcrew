@@ -27,7 +27,7 @@ import re
 import secrets
 from collections.abc import Iterable
 from contextvars import ContextVar
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -218,6 +218,19 @@ class KeyStore:
             raise ValueError(f"未知作用域：{', '.join(sorted(unknown))}")
         if role == "custom" and not list(scopes):
             raise ValueError("custom 角色必须显式给 --scope")
+        # B-17：expires_at 落库前归一化为 naive UTC——带时区的 ISO 串此前会被
+        # 原样存下，verify 里与 naive ``now`` 比较抛 TypeError、全站 500。
+        normalized_expiry: str | None = None
+        if expires_at:
+            try:
+                expiry = datetime.fromisoformat(expires_at)
+                if expiry.tzinfo is not None:
+                    expiry = expiry.astimezone(
+                        timezone.utc).replace(tzinfo=None)
+                normalized_expiry = expiry.isoformat(sep="T")
+            except (ValueError, TypeError) as exc:
+                raise ValueError(
+                    f"expires_at 不是合法时间：{expires_at!r}") from exc
         plaintext = _KEY_PREFIX + secrets.token_urlsafe(24)
         salt = secrets.token_hex(16)
         record = KeyRecord(
@@ -225,7 +238,7 @@ class KeyStore:
             name=name, role=role, scopes=sorted(set(scopes)),
             run_ids=[str(item) for item in run_ids],
             key_hash=_hash_key(plaintext, salt), salt=salt,
-            created_at=_now(), expires_at=expires_at, note=note)
+            created_at=_now(), expires_at=normalized_expiry, note=note)
         records = self.load()
         if any(item.name == name for item in records):
             raise ValueError(f"密钥名已存在：{name!r}")
@@ -261,9 +274,16 @@ class KeyStore:
                 continue
             if record.expires_at:
                 try:
-                    if datetime.fromisoformat(record.expires_at) < now:
+                    expiry = datetime.fromisoformat(record.expires_at)
+                    # B-17：带时区的 ISO 串与 naive ``now`` 比较会抛 TypeError——
+                    # 此前只 except ValueError，一条带 ``+08:00`` 的记录会让
+                    # 全站所有请求 500。这里归一化为 naive UTC 再比。
+                    if expiry.tzinfo is not None:
+                        expiry = expiry.astimezone(
+                            timezone.utc).replace(tzinfo=None)
+                    if expiry < now:
                         continue
-                except ValueError:
+                except (ValueError, TypeError):
                     continue   # 时间是坏值 → 保守地不认这条
             if not secrets.compare_digest(
                     _hash_key(presented, record.salt), record.key_hash):
@@ -361,6 +381,9 @@ _ROUTE_SCOPES: tuple[tuple[str, str, str], ...] = (
     ("POST", r"^/runs/[^/]+/resume$", SCOPE_RUNS_WRITE),
     ("POST", r"^/runs/[^/]+/events$", SCOPE_RUNS_WRITE),
     ("POST", r"^/runs/[^/]+/agents$", SCOPE_RUNS_ADMIN),
+    # B-21：GET 版此前漏登记 → required_scope 返回 None → Principal.allows(None)
+    # 恒 True，读执行体绑定矩阵绕过了 RBAC。与 POST 同属 run 级只读信息。
+    ("GET", r"^/runs/[^/]+/agents$", SCOPE_RUNS_READ),
     ("PUT", r"^/runs/[^/]+/model$", SCOPE_RUNS_ADMIN),
     ("POST", r"^/runs/[^/]+/tasks/[^/]+/agent$", SCOPE_RUNS_ADMIN),
     ("DELETE", r"^/runs/[^/]+$", SCOPE_RUNS_ADMIN),

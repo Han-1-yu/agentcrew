@@ -1,37 +1,33 @@
-/* 通用区块（dash-block）、块头、页面头、状态点。
-   区块 = 一张毛玻璃卡片：半透明面 + 1px 白描边 + 顶部高光 + 大圆角，不再用实色底 + 硬边框。 */
+/* 通用区块 —— WorkBuddy 扁平卡片：白底 + 0.5px 边框 + 12px 圆角 + 1rem 内边距，
+   无玻璃、无高光、无投影。块头用细分隔线。 */
 
-/* ---- 看板区块 ---- */
 .dash-block {
-  background: var(--glass-bg);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--r-xl);
-  padding: var(--sp-5) var(--sp-6);
-  box-shadow: var(--glass-highlight), var(--shadow-2);
-  -webkit-backdrop-filter: blur(var(--blur-card)) saturate(var(--glass-saturate));
-  backdrop-filter: blur(var(--blur-card)) saturate(var(--glass-saturate));
+  background: var(--bg-panel);
+  border: 0.5px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 1rem 1.25rem;
 }
 .block-head {
   display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4);
   flex-wrap: wrap;
   padding-bottom: var(--sp-3); margin-bottom: var(--sp-4);
-  border-bottom: 1px solid var(--border-weak);
+  border-bottom: 0.5px solid var(--border-weak);
 }
 .block-title {
   font-family: var(--font-display);
-  font-size: var(--fs-h2); font-weight: 600;
-  letter-spacing: 0.01em; color: var(--text);
+  font-size: var(--fs-h2); font-weight: 500;
+  letter-spacing: var(--ls-tight); color: var(--text);
 }
 
 /* ---- 页面头（非看板页） ---- */
 .page-head {
   display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
   padding: var(--sp-4) var(--sp-5) var(--sp-3);
-  border-bottom: 1px solid var(--border-weak);
+  border-bottom: 0.5px solid var(--border-weak);
 }
 .page-head h2 {
   margin: 0; font-family: var(--font-display);
-  font-size: var(--fs-h1); font-weight: 600; letter-spacing: var(--ls-tight);
+  font-size: var(--fs-h1); font-weight: 500; letter-spacing: var(--ls-tight);
 }
 .ph-empty { padding: var(--sp-10) var(--sp-5); text-align: center; font-size: var(--fs-body); color: var(--text-ter); }
 

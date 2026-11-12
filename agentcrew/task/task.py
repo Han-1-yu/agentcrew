@@ -110,7 +110,13 @@ class Task(BaseModel):
     """
     priority: int = Field(default=5, ge=1, le=9)  # 数字小者优先
     brief: str = ""  # PM 写给下游的一句话摘要（供上下文压缩）
-    timeout_seconds: int = 300  # P1-4：单次执行超时（秒），超时走 attempts 重试通道
+    timeout_seconds: int = Field(default=300, ge=1, le=3600)
+    """P1-4：单次执行超时（秒），超时走 attempts 重试通道。
+
+    ``ge=1`` / ``le=3600``：值来自 PM 的结构化输出，0 或负数会让
+    ``asyncio.wait_for`` 立即超时、每次执行都烧一次 attempt；极大值则彻底
+    丧失超时保护。构造期即拒绝，比在调度器里静默 clamp 更诚实。
+    """
     when_outcomes: list[str] = Field(default_factory=list)
     """R4 条件边：只有上游 ``TaskResult.outcome`` 命中这里任一标签时本任务才执行。
 

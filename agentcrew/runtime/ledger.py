@@ -31,10 +31,11 @@
 
 from __future__ import annotations
 
+import itertools
 import json
 import logging
 import os
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -42,6 +43,8 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from agentcrew.utils.logger import redact
+
+from ..utils.clock import utc_now
 
 _logger = logging.getLogger(__name__)
 
@@ -113,12 +116,26 @@ class Ledger:
     """
 
     def __init__(
-        self, path: Path, *, run_id: str, secrets: Sequence[str] = ()
+        self,
+        path: Path,
+        *,
+        run_id: str,
+        secrets: Sequence[str] = (),
+        observer: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> None:
-        """``secrets`` 冻结为元组，之后调用方的列表变更不影响本实例。"""
+        """``secrets`` 冻结为元组，之后调用方的列表变更不影响本实例。
+
+        ``observer`` 是可选的写入后回调（默认 ``None`` = 零开销）：每次 ``emit``
+        成功落盘后，以 ``(原始事件名, 已脱敏 data)`` 调它一次。用途是把明细事件
+        转发到实时通道（SSE），让「只看这一个 run」的订阅者不用轮询文件也能拿到
+        ``task_started`` / ``tool_call`` / ``gate_result`` 等明细。回调收到的是
+        **从写入行重建的 data**——``default`` 兜底对 ``set``/``bytes`` 的脱敏也
+        已生效，不会把密钥原值漏给观察者。
+        """
         self._path = Path(path)
         self._run_id = run_id
         self._secrets: tuple[str, ...] = tuple(secrets)
+        self._observer = observer
         self._closed = False
 
     def emit(self, event: str, **data: Any) -> LedgerEvent:
@@ -133,7 +150,7 @@ class Ledger:
         if self._closed:
             raise RuntimeError("Ledger 已关闭")
         record = LedgerEvent(
-            ts=datetime.now(),
+            ts=utc_now(),
             run_id=redact(self._run_id, self._secrets),
             event=redact(event, self._secrets),
             data=_redact_value(data, self._secrets),
@@ -151,7 +168,18 @@ class Ledger:
             os.fsync(file.fileno())
         # 直接返回上面的 record 不够：它里面的 set/bytes/自定义对象仍是原值，
         # 只有序列化器兜底才把它们脱敏。重建自写入行，返回值与文件不可能漂移。
-        return LedgerEvent.model_validate_json(line)
+        written = LedgerEvent.model_validate_json(line)
+        # 观察者拿到的也是重建后的脱敏 data：与返回值同源，密钥绝不会漏给
+        # 实时通道。回调失败（下游断连/序列化失败）不能破坏审计落盘——文件已写；
+        # A-23：也不能上抛：``_account`` 里 llm_call 的 emit 位于预算消耗之后、
+        # 硬上限检查之前，observer 异常会绕过整段预算判定。这里只记 warning。
+        if self._observer is not None:
+            try:
+                self._observer(event, written.data)
+            except Exception:  # noqa: BLE001 —— 观察者是辅助通道，任何异常都不该打断主流程
+                logging.getLogger(__name__).warning(
+                    "ledger observer 回调失败（事件已落盘）：%s", event)
+        return written
 
     def events(self, event: str | None = None) -> Iterator[LedgerEvent]:
         """逐行产出事件；``event`` 非 None 时只产出同名事件。
@@ -282,12 +310,16 @@ class LedgerReader:
 
         ``offset`` 为负按 0 计；``limit`` 小于 1 时按 1 计。匹配事件的总数请用
         :meth:`count_events`，避免调用方先取全量再 ``len()``。
+
+        B-8：用 ``itertools.islice`` 流式跳过 ``offset``、只物化 ``limit`` 条——
+        此前 ``list(events())`` 把整份 ledger 全量载入内存再切片，长 run 的
+        ``ledger.jsonl`` 达数十万行时单次分页的内存峰值 ≈ 整个审计文件。
         """
         offset = max(0, offset)
         limit = max(1, limit)
-        all_events = list(self._ledger(run_id).events(event))
-        page = all_events[offset:offset + limit]
-        return [_event_to_dict(item) for item in page]
+        window = itertools.islice(
+            self._ledger(run_id).events(event), offset, offset + limit)
+        return [_event_to_dict(item) for item in window]
 
     def count_events(self, run_id: str, *, event: str | None = None) -> int:
         """与过滤条件匹配的事件总数（分页接口的 ``total``）。"""
@@ -300,6 +332,11 @@ class LedgerReader:
           无需改这里）。
         - ``llm``：从 ``llm_call`` 事件聚合调用数 / prompt / completion / 总
           token / 估算成本（USD）。
+        - ``llm.by_profile``：按执行体（``AgentProfile.key``）再切一刀的同一组
+          指标。多执行体角色下「便宜档」「强推理档」各自烧了多少，只能从这里
+          看出来；未绑定执行体的角色归入 ``default``（与 ``RunPlan`` 同名），
+          没有 ``profile`` 字段的历史事件与非执行类调用归入 ``unknown``。
+          两者都不丢弃——丢弃会让分项之和小于总量，看起来像账不平。
         - ``tasks``：``task_finished / task_started`` 即任务成功率（没有
           ``task_started`` 时为 ``None``，不拿 0/0 装作 100%）；平均任务时长取
           ``task_finished.duration_ms`` 的均值（没有时为 ``None``）。
@@ -310,6 +347,7 @@ class LedgerReader:
         prompt_tokens = 0.0
         completion_tokens = 0.0
         cost_usd = 0.0
+        by_profile: dict[str, dict[str, float]] = {}
         started = 0
         finished = 0
         durations: list[float] = []
@@ -320,9 +358,20 @@ class LedgerReader:
             data = item.data
             if item.event == "llm_call":
                 llm_calls += 1
-                prompt_tokens += _as_number(data.get("prompt_tokens"))
-                completion_tokens += _as_number(data.get("completion_tokens"))
-                cost_usd += _as_number(data.get("estimated_cost_usd"))
+                p_tok = _as_number(data.get("prompt_tokens"))
+                c_tok = _as_number(data.get("completion_tokens"))
+                cost = _as_number(data.get("estimated_cost_usd"))
+                prompt_tokens += p_tok
+                completion_tokens += c_tok
+                cost_usd += cost
+                bucket = by_profile.setdefault(
+                    str(data.get("profile") or "unknown"),
+                    {"calls": 0.0, "prompt_tokens": 0.0,
+                     "completion_tokens": 0.0, "cost_usd": 0.0})
+                bucket["calls"] += 1
+                bucket["prompt_tokens"] += p_tok
+                bucket["completion_tokens"] += c_tok
+                bucket["cost_usd"] += cost
             elif item.event == "task_started":
                 started += 1
             elif item.event == "task_finished":
@@ -342,6 +391,17 @@ class LedgerReader:
                 "completion_tokens": int(completion_tokens),
                 "total_tokens": int(prompt_tokens + completion_tokens),
                 "cost_usd": round(cost_usd, 6),
+                "by_profile": {
+                    name: {
+                        "calls": int(bucket["calls"]),
+                        "prompt_tokens": int(bucket["prompt_tokens"]),
+                        "completion_tokens": int(bucket["completion_tokens"]),
+                        "total_tokens": int(
+                            bucket["prompt_tokens"] + bucket["completion_tokens"]),
+                        "cost_usd": round(bucket["cost_usd"], 6),
+                    }
+                    for name, bucket in sorted(by_profile.items())
+                },
             },
             "tasks": {
                 "started": started,

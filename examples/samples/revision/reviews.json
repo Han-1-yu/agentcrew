@@ -1,0 +1,125 @@
+{
+  "T-001": {
+    "judgements": [
+      {
+        "criterion_index": 0,
+        "satisfied": true,
+        "evidence": "PRD 第 2 节以表格列出三类目标用户与各自场景"
+      },
+      {
+        "criterion_index": 1,
+        "satisfied": true,
+        "evidence": "第 3 节逐列说明 total / skipped / status / p50 / p95 / window 的含义"
+      },
+      {
+        "criterion_index": 2,
+        "satisfied": true,
+        "evidence": "第 5 节 AC-01 至 AC-05 均写明输入、行为与预期结果"
+      }
+    ],
+    "suggestions": [],
+    "score": 0.93
+  },
+  "T-002": {
+    "judgements": [
+      {
+        "criterion_index": 0,
+        "satisfied": true,
+        "evidence": "第 1 节给出 cli → core → parser/aggregate → model 的单向依赖图并说明各层职责"
+      },
+      {
+        "criterion_index": 1,
+        "satisfied": true,
+        "evidence": "第 2 节写明按窗口上界截断聚合，并解释为何不用边界对齐"
+      },
+      {
+        "criterion_index": 2,
+        "satisfied": true,
+        "evidence": "第 3 节给出三条不抛异常的理由与 skipped 计数策略"
+      }
+    ],
+    "suggestions": [],
+    "score": 0.94
+  },
+  "T-003": {
+    "judgements": [
+      {
+        "criterion_index": 0,
+        "satisfied": true,
+        "evidence": "core.py 的 analyze 接受行列表并返回统计字典"
+      },
+      {
+        "criterion_index": 1,
+        "satisfied": true,
+        "evidence": "parse_line 对任何格式不符的行返回 None，analyze 计入 skipped 并继续"
+      },
+      {
+        "criterion_index": 2,
+        "satisfied": true,
+        "evidence": "返回字典含 status 分布与 percentile 计算的 p50 / p95"
+      }
+    ],
+    "suggestions": [],
+    "score": 0.91
+  },
+  "T-004": {
+    "judgements": [
+      {
+        "criterion_index": 0,
+        "satisfied": true,
+        "evidence": "README 含「安装」与「用法」两节，命令可直接复制执行"
+      },
+      {
+        "criterion_index": 1,
+        "satisfied": true,
+        "evidence": "输出示例的字段与 analyze 返回键逐项一致"
+      },
+      {
+        "criterion_index": 2,
+        "satisfied": true,
+        "evidence": "「skipped 是什么」一节说明成因与排查方式"
+      }
+    ],
+    "suggestions": [],
+    "score": 0.92
+  },
+  "T-FINAL": {
+    "judgements": [
+      {
+        "criterion_index": 0,
+        "satisfied": true,
+        "evidence": "DELIVERY.md 列出四个任务的产物清单与遗留问题"
+      },
+      {
+        "criterion_index": 1,
+        "satisfied": true,
+        "evidence": "「运行方式」一节给出一条可直接执行的命令"
+      }
+    ],
+    "suggestions": [],
+    "score": 0.92
+  },
+  "T-003@1": {
+    "judgements": [
+      {
+        "criterion_index": 0,
+        "satisfied": false,
+        "evidence": "core.py 里没有统计函数入口，只有参数解析"
+      },
+      {
+        "criterion_index": 1,
+        "satisfied": true,
+        "evidence": "parse_line 对任何格式不符的行返回 None，analyze 计入 skipped 并继续"
+      },
+      {
+        "criterion_index": 2,
+        "satisfied": true,
+        "evidence": "返回字典含 status 分布与 percentile 计算的 p50 / p95"
+      }
+    ],
+    "suggestions": [
+      "顺手补一个 --json 输出"
+    ],
+    "score": 0.42
+  }
+}

@@ -10,6 +10,7 @@
     "selftest": "electron . --selftest",
     "e2e": "electron . --e2e",
     "check": "node tools/check-architecture.js",
+    "test:unit": "node --test tests/*.test.mjs",
     "verify:api": "electron tools/verify-api-bridge.js",
     "verify:transitions": "electron tools/verify-transitions.js",
     "visual": "electron tools/visual-check.js",

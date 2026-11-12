@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
@@ -33,6 +34,8 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field
 
 from agentcrew.utils.files import read_text
+
+from ..utils.clock import utc_now
 
 _logger = logging.getLogger(__name__)
 
@@ -115,7 +118,13 @@ def _validate_decision(checkpoint: str, decision: Any) -> dict[str, Any]:
             isinstance(item, str) and item for item in ids
         ):
             raise ApprovalError("rework 必须带非空的 task_ids 字符串数组")
-    return dict(decision)
+    # B-22：只保留契约字段。此前 ``return dict(decision)`` 把调用方塞进来的
+    # 任意键原样落盘并在 ``GET /approvals`` 回显——未定义字段会污染审计记录，
+    # 也能借道给前端/日志注入任意内容。下游只消费 ``action`` 与 ``task_ids``。
+    clean: dict[str, Any] = {"action": action}
+    if action == "rework":
+        clean["task_ids"] = list(decision["task_ids"])
+    return clean
 
 
 class ApprovalStore:
@@ -123,6 +132,12 @@ class ApprovalStore:
 
     def __init__(self, run_dir: Path) -> None:
         self._path = Path(run_dir) / APPROVAL_FILE
+        # B-18：裁决是「读 pending → 追加 decide」的两步操作，中间必须串行。
+        # asyncio 单线程下这两步之间没有 await 看似安全，但 CLI 线程、
+        # serve 的线程池、测试里的并发调用都会走到同一个 store 实例：两个裁决
+        # 都能通过 ``status == "pending"`` 检查，归并时后写覆盖先写，
+        # 「一张单只能被裁决一次」只在串行下成立。
+        self._lock = threading.Lock()
 
     @property
     def path(self) -> Path:
@@ -150,7 +165,8 @@ class ApprovalStore:
         R30：``timeout_seconds > 0`` 时写入 ``expires_at``——由
         :meth:`expire_overdue` 在 status / serve 启动时判定过期。
         """
-        now = datetime.now()
+        # D-14：created_at / expires_at 统一 aware UTC，与 decided_at 同口径。
+        now = utc_now()
         expires_at = (
             now + timedelta(seconds=int(timeout_seconds))
             if int(timeout_seconds or 0) > 0 else None
@@ -170,35 +186,52 @@ class ApprovalStore:
         self, request_id: str, decision: dict[str, Any], *, decided_by: str = ""
     ) -> ApprovalRequest:
         """对一张 ``pending`` 审批单写入裁决（幂等：已决 / 已消费一律拒绝）。"""
-        request = self.get(request_id)
-        if request is None:
-            raise ApprovalError(f"审批单不存在：{request_id}")
-        # R30：过期排在通用状态检查之前——「已过期」要给出可操作提示，
-        # 而不是一句「已 expired」把人晾在那儿。
-        if request.status == "expired" or self.is_expired(request):
-            raise ApprovalError(
-                f"审批单 {request_id} 已过期（{request.expires_at}），"
-                "请先重新触发该卡点或调大 approval_timeout_seconds"
+        # B-18：整个「读 → 校验 → 追加 → 复核」序列在同一把锁里完成。
+        with self._lock:
+            request = self.get(request_id)
+            if request is None:
+                raise ApprovalError(f"审批单不存在：{request_id}")
+            # R30：过期排在通用状态检查之前——「已过期」要给出可操作提示，
+            # 而不是一句「已 expired」把人晾在那儿。
+            if request.status == "expired" or self.is_expired(request):
+                raise ApprovalError(
+                    f"审批单 {request_id} 已过期（{request.expires_at}），"
+                    "请先重新触发该卡点或调大 approval_timeout_seconds"
+                )
+            if request.status != "pending":
+                raise ApprovalError(
+                    f"审批单 {request_id} 已 {request.status}，不能重复裁决"
+                )
+            payload = _validate_decision(request.checkpoint, decision)
+            decided_at = utc_now()
+            self._append(
+                "decide",
+                id=request_id,
+                decision=payload,
+                decided_by=str(decided_by)[:80],
+                decided_at=decided_at.isoformat(),
             )
-        if request.status != "pending":
-            raise ApprovalError(
-                f"审批单 {request_id} 已 {request.status}，不能重复裁决"
-            )
-        payload = _validate_decision(request.checkpoint, decision)
-        now = datetime.now().isoformat()
-        self._append(
-            "decide",
-            id=request_id,
-            decision=payload,
-            decided_by=str(decided_by)[:80],
-            decided_at=now,
-        )
-        decided = self.get(request_id)
-        assert decided is not None  # 刚写入的行一定能读回
-        return decided
+            decided = self.get(request_id)
+            assert decided is not None  # 刚写入的行一定能读回
+            # B-18：进程锁管不到另一个进程（serve + CLI 同时操作同一 run）。
+            # 落盘后复核「生效的是不是我这一条」：不是就明确报冲突，而不是
+            # 让调用方以为自己的裁决生效了。
+            if decided.decided_at != decided_at:
+                raise ApprovalError(
+                    f"审批单 {request_id} 已被另一个进程抢先裁决"
+                    f"（{decided.decided_by or '未知'}），本次裁决未生效；"
+                    "请重新读取审批单状态"
+                )
+            return decided
 
     def consume(self, request_id: str) -> ApprovalRequest:
         """标记裁决已被引擎消费；后续 resume 不会再重复执行这张单。"""
+        # B-18：与 decide 同一把锁——读状态 + 追加 consume 也是两步操作，
+        # 并发下会重复追加同一条消费记录（虽幂等，但审计里会出现两次）。
+        with self._lock:
+            return self._consume_locked(request_id)
+
+    def _consume_locked(self, request_id: str) -> ApprovalRequest:
         request = self.get(request_id)
         if request is None:
             raise ApprovalError(f"审批单不存在：{request_id}")
@@ -249,7 +282,16 @@ class ApprovalStore:
                     merged[request_id] = ApprovalRequest.model_validate(body)
                     order.append(request_id)
                 elif op == "decide" and request_id in merged:
-                    merged[request_id] = merged[request_id].model_copy(update={
+                    # B-18：并发/重复裁决时**第一条胜出**。此前后写覆盖先写，
+                    # 两个矛盾裁决都被接受且以最后一条为准。这里已 decided 的
+                    # 单忽略后续 decide 行（consume 同理），保证裁决是确定的。
+                    current = merged[request_id]
+                    if current.status == "decided":
+                        _logger.warning(
+                            "审批单 %s 重复裁决，保留第一条（后写 %s 忽略）",
+                            request_id, payload.get("decided_by") or "")
+                        continue
+                    merged[request_id] = current.model_copy(update={
                         "status": "decided",
                         "decision": payload.get("decision") or {},
                         "decided_by": str(payload.get("decided_by") or ""),
@@ -263,7 +305,10 @@ class ApprovalStore:
                         if payload.get("expired_at") else None,
                     })
                 elif op == "consume" and request_id in merged:
-                    merged[request_id] = merged[request_id].model_copy(update={
+                    current = merged[request_id]
+                    if current.status == "consumed":
+                        continue
+                    merged[request_id] = current.model_copy(update={
                         "status": "consumed",
                         "consumed_at": datetime.fromisoformat(payload["consumed_at"])
                         if payload.get("consumed_at") else None,
@@ -284,10 +329,20 @@ class ApprovalStore:
 
     def is_expired(self, request: ApprovalRequest,
                    *, now: datetime | None = None) -> bool:
-        """这张单是否已过等待窗口（``expires_at`` 为空 = 永不超时）。"""
+        """这张单是否已过等待窗口（``expires_at`` 为空 = 永不超时）。
+
+        D-14：``expires_at`` 新写入是 aware UTC，存量是 naive 本地时间——
+        直接比较会 ``TypeError``。两边都归一成 aware 再比，两种数据都能判。
+        """
         if request.expires_at is None or request.status != "pending":
             return False
-        return (now or datetime.now()) >= request.expires_at
+        moment = now or utc_now()
+        if moment.tzinfo is None:
+            moment = moment.astimezone()
+        expiry = request.expires_at
+        if expiry.tzinfo is None:
+            expiry = expiry.astimezone()
+        return moment >= expiry
 
     def expire_overdue(self, *, now: datetime | None = None) -> list[ApprovalRequest]:
         """把**已过期且仍 pending** 的单标记为 ``expired``，返回本次过期的单。
@@ -296,7 +351,7 @@ class ApprovalStore:
         run 仍是 ``interrupted``，只是审批人再裁决会收到「已过期」而不是静默
         接受一张早已失去时效的裁决。
         """
-        moment = now or datetime.now()
+        moment = now or utc_now()
         expired: list[ApprovalRequest] = []
         for request in self.pending():
             if not self.is_expired(request, now=moment):

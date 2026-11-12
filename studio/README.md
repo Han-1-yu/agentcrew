@@ -18,6 +18,8 @@ Electron userData 目录的 `settings.json`，可在「设置」里手动修改�
 
 ## 功能
 
+- **对话式执行流**（第 1 页「对话」）：把 run 的 ledger 事件重建成 WorkBuddy 式消息流——用户目标右对齐气泡、PM 规划系统消息、各 Agent 任务气泡（角色头像 + 状态 chip），内部聚合该任务的说明（超长折叠）/ 工具调用（折叠）/ 门禁评审（折叠）/ 产物卡片，运行中叠加 SSE 的 `agent_stream_delta` 流式正文；「回到最新」浮动按钮、贴近底部才自动跟随。全部模型输出走文本节点 / `pre`，零 `innerHTML` 拼接。
+- **右侧结果区**（顶栏「结果」按钮）：概览 + 产物双 tab 一体化面板。概览 = 运行统计（任务/成功/失败/LLM 调用/Token/成本/已运行/预算）+ 任务状态分布条 + 三层门禁汇总；产物 = MANIFEST 文件清单 + 内联预览 + 零依赖语法高亮。
 - **运行列表**：扫描输出目录（默认 `E:\agentcrew\output`，兼容 `output/<分组>/<run_id>` 两层结构），显示目标、状态、时间与任务统计，可搜索。
 - **启动新运行 / 恢复 / 取消**：调用 `run --goal … --mock --auto --no-live`、`resume <run_id>`、终止进程并补 `cancel` 离线收尾。新建运行弹窗支持 Provider + Model 两级选择（组装 `<provider>:<model>` 别名传 `--model`）、最近使用目标下拉、高级选项折叠（预算 / max-llm-calls / 项目名 / 慢速）。
 - **供应商管理**（第 9 页）：9 个内置 Provider 卡片列表（OpenAI / Anthropic / DeepSeek / 豆包 / 通义 / 文心 / Ollama / Mock / CLI），显示 base_url、密钥环境变量配置状态（只显示名字与已配置/未配置布尔，不接触 Key 值）、建议模型数；一键测试端点连通性（主进程 net.fetch 代理，10s 超时，显示延迟或错误）、展开模型列表并「设为默认」；「从预设添加」弹窗生成 `agentcrew.yaml` 自定义 Provider YAML 片段 + 一键复制。
@@ -27,9 +29,9 @@ Electron userData 目录的 `settings.json`，可在「设置」里手动修改�
 - **任务详情**：描述、验收标准、交付物、逐轮评审记录、状态历史、执行结果。
 - **产物浏览**：`MANIFEST.json` 驱动的文件列表（缺失标红），文本类产物（.py/.md/.json/.yaml/.html/.txt/.css/.js 等）内联预览、复制、打开位置；可打包导出 zip（内置纯 JS STORE 打包器）。
 - **图表**：各角色 LLM 调用次数与成本条形图、门禁通过/驳回比例。
-- **明暗主题**：顶栏一键循环 浅色 → 深色 → 跟随系统，持久化到 settings.json；深色模式下降饱和提亮度，状态徽章与次要文字对比度达标；system 模式监听 nativeTheme 变化自动跟随。
+- **明暗主题**：默认浅色（WorkBuddy 扁平风格），顶栏一键循环 浅色 → 深色 → 跟随系统，持久化到 settings.json；深色模式是同一套扁平语言的深底版本，状态徽章与次要文字对比度达标；system 模式监听 nativeTheme 变化自动跟随。
 - **设置页分组**：四组卡片——运行环境（Python 命令 + 即时探测版本 / 仓库根目录 / 输出目录）、模型与预算（默认模型选择器 / 预算上限）、连接（后端 API 地址 + 即时测试连通性）、外观（主题三选一 segmented control）。
-- **键盘快捷键**：`Esc` 关闭弹窗/面板，`Ctrl/⌘+N` 新建运行，数字键 `1-9` 切换 9 个页面。
+- **键盘快捷键**：`Esc` 关闭弹窗/面板，`Ctrl/⌘+N` 新建运行，数字键 `1-9` 切换侧边栏前 9 个页面（1=对话、2=运行总览 … 8=产物、9=事件日志）。
 - **健壮性**：CLI 失败 / 文件缺失 / JSON 解析失败均有可读提示，不白屏；关窗时有运行则弹出确认，确认后终止子进程，不留僵尸。
 
 ## V3 增强（对应后端 V3 改进）
@@ -49,6 +51,26 @@ Electron userData 目录的 `settings.json`，可在「设置」里手动修改�
 - **新建运行弹窗体验升级**：目标必填行内校验（描红+提示，不 toast 轰炸）；Demo 勾选置灰目标输入；最近使用目标下拉（持久化最近 5 条）；高级选项折叠区（预算/max-llm-calls/项目名/慢速）。
 - **设置页分组重构**：四组卡片（运行环境/模型与预算/连接/外观），Python 探测与连接测试即时操作，主题 segmented control 即时生效。
 - **结构修复**：补全 DAG 导航按钮（原残缺导致空白可点击项）；删除重复 fmtBytes/ROLE_ORDER；清理已被真实页面取代的 PLACEHOLDERS。
+
+## V5-FE 前端设计语言重构（对齐 WorkBuddy）
+
+- **设计语言**：从「Aurora Glass」深色玻璃拟态改为 WorkBuddy 浅色扁平 —— 暖灰页底（`#F1EFE8`）+ 纯白卡片 + 0.5px 细边框 + 12px 圆角，无渐变 / 无模糊 / 无光晕 / 无投影；强调色改为品牌紫 `#534AB7`，语义色走 c-blue / c-green / c-amber / c-red 色板（50 底 + 600 字）。
+- **排版**：正文 13px/400/1.6，标题 15/14px，全局只用 400 与 500 两档字重；标签 sentence case（去掉全部 uppercase）；动效只留 transform / opacity 且 ≤200ms。
+- **默认主题**：`boot-theme.js` / `main.js` / `shell.js` 的回退值由 `dark` 改为 `light`；三态切换与持久化逻辑不变，深色主题同步改为扁平深底（`#2C2C2A` 页底 / `#444441` 卡片）。
+- **交互统一**：hover 只加深边框 + 浅灰底（无位移缩放），焦点环 2px 紫色，导航 active = 紫浅底 + 左侧 2px 紫条；命令输入框对齐 WorkBuddy 对话框形态（居中限宽白卡 + 实心紫发送键）。
+- **改动范围**：仅渲染层 —— `styles/` 全部分片、`index.html`（删极光层与标签文案）、主题默认值；`main.js` 除默认主题外、`preload.js` / `backend-api.js` / `src/` 全部 JS 业务逻辑零改动。
+- **回归**：`npm run check` 通过（64 JS / 38 CSS 分片）、`npm run e2e` 28/28、`npm run selftest` 16/16，`npm run visual:update` 重建 18 张视觉基线。
+- 方案与组件清单见 `docs/前端重构方案-WorkBuddy风格.md`；旧版设计说明 `studio/docs/refactor-aurora-glass.md` 仅作历史留档。
+
+## V6-FE 交互对齐 WorkBuddy（对话流 / 结果区 / 任务列表）
+
+- **对话式执行流**：新增「对话」页（侧边栏首位，数字键 1）。`src/features/conversation/index.js` 的 `buildMessages()` 把 `S.dash.events` 按 `task_id` 聚合为消息流（user / system / agent 三类）；`realtime.js` 把 SSE `agent_stream_delta` 接入对话流的 `S.convStreams`（运行中实时、刷新不回溯）。样式 `styles/features/conversation.css`。
+- **右侧结果区**：顶栏「结果」按钮打开 `src/features/result/index.js` 的面板（复用 `#detail-panel`），概览 + 产物双 tab。产物 tab 为「同步挂载 + 异步填充」，预览复用 `artifacts/index.js` 的 `highlightCode`。样式 `styles/features/result.css`。
+- **侧边栏任务列表增强**：`shell.js::renderSidebarTasks` 增加搜索框 + 状态筛选 chips（全部/进行中/待处理/完成/失败）+ 按角色分组（前 12 个 + 「还有 N 个」）。
+- **后端联动（Ledger observer）**：`runtime/ledger.py` 的 `Ledger` 新增 `observer` 回调（`emit` 落盘后同步推「事件名 + 脱敏 data」）；`crew/crew.py` 用 `_make_ledger_observer` 把明细事件注入 `run_id` 后推 SSE，`_LEDGER_SSE_EXCLUDED` 排除已走 `_dispatch_event`/`_notify` 的事件与高频 `agent_stream_chunk`。使 SSE 模式不再靠 500ms 快照轮询拿明细。
+- **细节打磨**：「回到最新」浮动按钮、消息/折叠项进入动效（`transform/opacity ≤200ms`）、长 `task_notes` 折叠、焦点环沿用全局 `:focus-visible`。
+- **回归**：后端 `scripts/test.py` 2887 passed / 0 failed；`npm run check` 69 JS / 42 CSS、`npm run e2e` 32/32、`npm run selftest` 16/16、`npm run visual` 20 张一致。
+- 方案细则见 `docs/WorkBuddy前端交互-实施方案细则.md`（含 13 项遗漏与边界清单）。
 
 ## 自测
 
@@ -100,7 +122,7 @@ studio/
 │       ├── events/       #   事件日志页 + 导出（JSONL / 报告）
 │       ├── artifacts/  plan/  dag-page/  agents-page/  gates-page/  runs/  new-run/
 ├── styles/               # 样式分片，index.css 按层叠顺序 @import
-│   ├── tokens.css        #   设计令牌：颜色/字阶/间距/圆角/阴影/动效（两套主题只改这里）
+│   ├── tokens.css        #   设计令牌（WorkBuddy 扁平语言）：深色取值 + 两主题共用字阶/间距/圆角/动效
 │   ├── base.css          #   重置与全局排版
 │   ├── layout/           #   shell / topbar / sidebar
 │   ├── components/       #   按钮、区块、状态条、成本、DAG、Agent、门禁、事件、详情、模态、Toast、空态
@@ -127,5 +149,7 @@ studio/
 
 - 不修改 `agentcrew/` 与 `main.py` 任何代码；后端升级只要 CLI 与文件格式不变，Studio 无需改动。
 - 零框架、零打包器：唯一 npm 依赖是 `electron`，沿用原生 HTML/CSS/JS + h()/s() DOM 构建。
-- 密钥零接触：Studio 不读取、不显示、不存储 API Key 的值；只显示环境变量名与「已配置/未配置」布尔（主进程读 process.env 后只回传布尔）。
+- 密钥分两类，存储方式**不同**（C-21 前这里的表述把两者混为一谈）：
+  - **供应商 Key**（`ARK_API_KEY` 等）：在设置页填写的值会**明文写入项目根 `.env`** 并注入主进程 `process.env`。这是刻意的——CLI 与 Studio 共用同一份 `.env`，用户填完就能直接在终端跑 `main.py`。**Studio 是本机开发工具，前提是仓库目录本身可信**；不要把 Studio 指向共享盘或他人可写的目录。列表与卡片只显示「已配置/未配置」布尔，不读回明文值。
+  - **后端 API Key**（连远程 `serve` 用）：走 Electron `safeStorage` 加密后存在主进程用户数据目录，不落明文、不回传渲染端。
 - 可选 HTTP API：设置页配置 apiBaseUrl 后启用 SSE 实时推送与供应商列表拉取；端点测试走主进程 net.fetch 代理（绕开渲染进程 CORS）；CSP 的 connect-src 精确放行 `http://localhost:*` 与 `http://127.0.0.1:*`。未配置时完整降级为文件监听 + 演示模式。

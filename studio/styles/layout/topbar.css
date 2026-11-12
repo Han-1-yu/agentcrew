@@ -1,11 +1,13 @@
-/* 顶栏：一行精简指标（运行状态 · Agent 数 · 任务数 · Token/费用/预算）+ 右侧操作图标。
-   不再放品牌与主操作——品牌去了侧边栏顶部，主操作是底部的悬浮命令框。 */
+/* 顶栏 —— WorkBuddy 扁平风格：白底 + 0.5px 下分隔线，
+   一行精简指标（运行状态 · Agent 数 · 任务数 · Token/费用/预算）+ 右侧 ghost 图标按钮。 */
 
 #topbar {
   position: relative; z-index: 20;
   flex: 0 0 56px; height: 56px;
   display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4);
   padding: 0 20px 0 32px;
+  background: var(--bg-panel);
+  border-bottom: 0.5px solid var(--border);
   /* 自绘标题栏时整条顶栏可拖动窗口，子控件单独排除 */
   -webkit-app-region: drag;
   user-select: none;
@@ -23,17 +25,17 @@
   font-size: var(--fs-sm); font-weight: 500; color: var(--text-sub);
 }
 .tb-run-status .dot { width: 5px; height: 5px; }
-.tb-run-status .dot.running { box-shadow: 0 0 0 3px var(--accent-focus); }
-.tb-run-status .dot.done { box-shadow: 0 0 0 3px var(--success-bg); }
+.tb-run-status .dot.running { box-shadow: 0 0 0 2px var(--accent-focus); }
+.tb-run-status .dot.done { box-shadow: 0 0 0 2px var(--success-bg); }
 
 .tb-dsep { width: 2px; height: 2px; border-radius: 50%; background: var(--ink-22); flex: 0 0 auto; }
 .tb-metric { display: inline-flex; align-items: baseline; gap: 4px; }
-.tb-metric b { font-weight: 500; font-size: var(--fs-xs); color: var(--text); }
+.tb-metric b { font-weight: 500; font-size: var(--fs-sm); color: var(--text); }
 .tb-metric-dim { color: var(--text-ter); }
-.tb-metric .tb-metric-dim { font-size: 10px; }
+.tb-metric .tb-metric-dim { font-size: var(--fs-xs); }
 
 .tb-budget { display: inline-flex; align-items: center; gap: 6px; }
-.tb-budget b { font-weight: 500; font-size: var(--fs-xs); color: var(--text); }
+.tb-budget b { font-weight: 500; font-size: var(--fs-sm); color: var(--text); }
 .tb-budget-bar { width: 48px; height: 3px; border-radius: var(--r-pill); background: var(--ink-10); overflow: hidden; }
 .tb-budget-bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width var(--dur-3) var(--ease-out); }
 .tb-budget.warn .tb-budget-bar i { background: var(--warn); }
@@ -41,16 +43,16 @@
 .tb-budget.warn #tb-budget-pct { color: var(--warn-text); }
 .tb-budget.err #tb-budget-pct { color: var(--error-text); }
 
-/* ---------- 连接状态 ---------- */
+/* ---------- 连接状态：50 底 + 600 字的语义 chip ---------- */
 .conn-indicator {
   flex: 0 0 auto;
-  font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
+  font-size: var(--fs-xs); font-weight: 500; letter-spacing: 0;
   padding: 3px 9px; border-radius: var(--r-pill);
-  border: 1px solid transparent;
+  border: 0.5px solid var(--border);
 }
 .conn-indicator.live { background: var(--success-bg); color: var(--success-text); border-color: var(--success-bg-chip); }
 .conn-indicator.watch { background: var(--accent-bg); color: var(--accent-text); border-color: var(--accent-border-soft); }
-.conn-indicator.demo { background: var(--ink-06); color: var(--text-ter); border-color: var(--border-weak); }
+.conn-indicator.demo { background: var(--bg-subtle); color: var(--text-ter); border-color: var(--border); }
 
-/* ---------- 右：图标操作 ---------- */
+/* ---------- 右：ghost 图标操作 ---------- */
 .tb-actions { display: flex; align-items: center; gap: 2px; -webkit-app-region: no-drag; }

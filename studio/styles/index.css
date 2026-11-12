@@ -42,7 +42,11 @@
 @import './features/agent-switch.css';
 @import './features/gates-page.css';
 @import './features/plan.css';
+@import './features/conversation.css';
+@import './features/result.css';
 @import './features/runs.css';
+@import './features/schedules.css';
+@import './features/profiles.css';
 
 /* 收尾 */
 @import './motion.css';

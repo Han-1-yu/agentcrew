@@ -9,15 +9,18 @@
  * 纪律：任一时刻只允许一条实时通道（SSE 或文件 watch）。resetRealtime 会同时
  * 关掉两者，否则断线补过 watch 之后再连上 SSE 就会双通道推同一事件。
  */
-import { $ } from '../lib/dom.js';
+import { parseTs } from '../lib/format.js';
 import { S } from '../lib/store.js';
 
 import { toast } from '../ui/toast.js';
+import { updateConnIndicator } from '../ui/conn-indicator.js';
 
 import { renderEvents } from '../features/dashboard/events.js';
 import { appendStreamDelta, bindStreamPanel, resetStreamPanel } from '../features/dashboard/stream.js';
+import { appendConversationDelta, refreshConversation } from '../features/conversation/index.js';
 
-import { deriveAgents, deriveGates, enrichRun, mapRealTask } from './data.js';
+import { deriveAgents, deriveGates, enrichRun, mapRealTask, currentLoadSeq } from './data.js';
+import { canRetry, sseRetryDelay } from './realtime-retry.js';
 
 /* 事件去重：文件监听会把整份 ledger 再回放一遍，SSE 重连也可能重发，
    直接 push 会让事件页凭空多出一倍条目（审计卡最先暴露这一点）。 */
@@ -59,8 +62,8 @@ function appendEvents(events) {
     S.dash.events.push(e);
     added += 1;
   }
-  if (added && S.dash.events.length > 500) {
-    S.dash.events = S.dash.events.slice(-500);
+  if (added && S.dash.events.length > 2000) {
+    S.dash.events = S.dash.events.slice(-2000);
     S._eventKeys = new Set(S.dash.events.map(eventKey));
   }
   return added;
@@ -79,6 +82,10 @@ let sseLive = false;
 let sseSeq = 0;
 let sseReloadTimer = null;
 let eventsRenderTimer = null;
+// C-18：SSE 断线重连状态。此前只在改设置或切 run 时才重连，网络抖动/后端重启
+// 后实时面板会一直静止，只能手动切页恢复。策略见 ./realtime-retry.js。
+let sseRetryTimer = null;
+let sseRetryCount = 0;
 
 /* 看板在其它页只是 .hidden，重绘整个 DAG / 事件列表纯属浪费。
    交给 boot 统一决定：在 dashboard 就全量重绘，否则只刷顶栏数字。 */
@@ -92,6 +99,7 @@ function scheduleRenderEvents() {
   eventsRenderTimer = setTimeout(() => {
     eventsRenderTimer = null;
     if (S.nav === 'dashboard') renderEvents();
+    else if (S.nav === 'conversation') refreshConversation();
   }, 120);
 }
 
@@ -107,7 +115,7 @@ function onSseFrame(payload) {
   }
   // 流式正文是瞬态高频数据，只进流式面板，不进事件页 / 不触发快照刷新。
   if (name === STREAM_EVENT) {
-    if (data && typeof data === 'object') appendStreamDelta(data);
+    if (data && typeof data === 'object') { appendStreamDelta(data); appendConversationDelta(data); }
     return;
   }
   const body = data && typeof data === 'object' ? data : { value: data };
@@ -121,12 +129,31 @@ function onSseFrame(payload) {
 function onSseClosed(payload) {
   if (!payload || payload.runId !== sseRunId) return;
   S.sseConnected = false;
+  sseLive = false;
   updateConnIndicator();
-  // 中途断开（401 / 网络断）时补上文件监听，别让实时刷新彻底静止。
-  if (sseLive && payload.reason !== 'stopped' && S.watchDir) {
+  // 主动断开（切 run / 退出 / 改地址）不重连。
+  if (payload.reason === 'stopped') return;
+  // C-18：断线先补文件监听兜住数据，再指数退避尝试恢复 SSE。
+  // 此前这里以 `sseLive` 为前提，而 sseLive 只在收到 'connected' 帧后才置真——
+  // 首帧被代理吞掉时既不补 watch、也不重连，面板彻底静止。
+  if (S.watchDir) {
     try { window.studio.watchRun(S.watchDir, true).catch(() => {}); } catch { /* 忽略 */ }
   }
-  sseLive = false;
+  scheduleReconnect();
+}
+
+/** C-18：指数退避重连（参数见 realtime-retry.js）。 */
+function scheduleReconnect() {
+  if (sseRetryTimer || !S.realMode || !sseRunId) return;
+  if (!canRetry(sseRetryCount)) return;
+  const delay = sseRetryDelay(sseRetryCount);
+  sseRetryCount += 1;
+  sseRetryTimer = setTimeout(async () => {
+    sseRetryTimer = null;
+    const target = sseRunId;                 // 排程时的目标；期间切 run 则作废
+    if (!target || !S.realMode) return;
+    if (!(await connectSSE(target))) scheduleReconnect();
+  }, delay);
 }
 
 /** boot 里注册一次主进程推送与设置变更后的重连事件。 */
@@ -160,7 +187,14 @@ async function connectSSE(runId) {
       }
       return false;
     }
-    return true;   // 真正的连接确认等 'connected' 帧
+    // C-18：HTTP 200 + 可读流即视为连接成功，不再死等后端首帧 'connected'。
+    // 旧版后端或中间代理吞掉首帧时，只依赖帧判断会让 sseLive 永远为 false，
+    // 表现为「已连上却显示文件监听、断线也不补数据」。
+    sseLive = true;
+    S.sseConnected = true;
+    sseRetryCount = 0;
+    updateConnIndicator();
+    return true;
   } catch (e) {
     if (token !== sseSeq) return false;
     sseRunId = null;
@@ -175,6 +209,9 @@ function disconnectSSE() {
   sseRunId = null;
   sseLive = false;
   S.sseConnected = false;
+  // C-18：主动断开必须清掉重连排程，否则切 run 后旧目标会把连接拉回来。
+  sseRetryCount = 0;
+  if (sseRetryTimer) { clearTimeout(sseRetryTimer); sseRetryTimer = null; }
   try { Promise.resolve(window.studio.apiStreamStop()).catch(() => {}); } catch { /* 忽略 */ }
 }
 
@@ -209,8 +246,14 @@ function resetRealtime() {
   updateConnIndicator();
 }
 
+// D-14：时间戳可能是 aware UTC（`+00:00`）或存量 naive 串，混存时字典序会判反
+// （"16:00+00:00" 小于 "23:00" 但实际更晚），统一经 parseTs 比较。
+// C-19：watch 推送的是「读盘那一刻」快照，可能晚于更近的 loadRun 响应，旧的不落地。
 function onWatchSnapshot(payload) {
   if (!payload || payload.dir !== S.watchDir) return;
+  const incomingAt = parseTs(payload.run && payload.run.updated_at);
+  const currentAt = parseTs(S.dash && S.dash.run && S.dash.run.updated_at);
+  if (incomingAt && currentAt && incomingAt < currentAt) return;
   if (payload.run) S.dash.run = Object.assign(enrichRun(payload.run), { dir: S.watchDir });
   if (payload.tasks) {
     S.dash.tasks = payload.tasks.map(mapRealTask);
@@ -237,12 +280,18 @@ function handleRealtimeEvent(evt) {
     // 记下调度那一刻的 run 目录：定时器触发期间用户可能已经切了 run，
     // 不能拿旧的 S.watchDir 去刷新新数据（也不能在离开页面后强刷看板）。
     const scheduledDir = S.watchDir;
+    // C-19：同时记下载入代次。同一 run 的「手动重刷」与这里的防抖快照会并发
+    // 调用 loadRun，只比对目录不足以区分——旧响应晚到就会覆盖新快照（状态
+    // 短暂回退）。代次一致才允许落地。
+    const scheduledSeq = currentLoadSeq();
     sseReloadTimer = setTimeout(async () => {
       sseReloadTimer = null;
-      if (scheduledDir && scheduledDir === S.watchDir && S.dash) {
+      if (scheduledDir && scheduledDir === S.watchDir && S.dash
+          && scheduledSeq === currentLoadSeq()) {
         try {
           const snap = await window.studio.loadRun(scheduledDir);
-          if (snap && snap.run && scheduledDir === S.watchDir) {
+          if (snap && snap.run && scheduledDir === S.watchDir
+              && scheduledSeq === currentLoadSeq()) {
             S.dash.run = Object.assign(enrichRun(snap.run), { dir: scheduledDir });
             if (snap.tasks) {
               S.dash.tasks = snap.tasks.map(mapRealTask);
@@ -254,22 +303,6 @@ function handleRealtimeEvent(evt) {
         } catch {}
       }
     }, 500);
-  }
-}
-
-/* 连接状态指示器 */
-function updateConnIndicator() {
-  const el = $('#conn-indicator');
-  if (!el) return;
-  if (S.sseConnected) {
-    el.textContent = 'SSE 实时';
-    el.className = 'conn-indicator live';
-  } else if (S.realMode && S.watchDir) {
-    el.textContent = '文件监听';
-    el.className = 'conn-indicator watch';
-  } else {
-    el.textContent = '演示模式';
-    el.className = 'conn-indicator demo';
   }
 }
 

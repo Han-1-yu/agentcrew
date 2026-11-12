@@ -35,6 +35,7 @@ from agentcrew.models.providers.base import (
     Message,
     ResponseFormat,
 )
+from agentcrew.utils.clock import seconds_between
 from agentcrew.utils.tokens import estimate_tokens
 
 #: CLI 执行超时（秒）。本地模型推理可能较慢，给足余量。
@@ -93,7 +94,7 @@ class CliProvider(BaseProvider):
             raise TimeoutError(
                 f"CLI 引擎超时（{_CLI_TIMEOUT_SEC}s）：{self.binding.command!r}"
             ) from None
-        latency_ms = int((datetime.now() - started).total_seconds() * 1000)
+        latency_ms = int(seconds_between(started) * 1000)
 
         if proc.returncode != 0:
             stderr = stderr_bytes.decode("utf-8", errors="replace").strip()

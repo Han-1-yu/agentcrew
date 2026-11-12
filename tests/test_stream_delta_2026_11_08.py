@@ -78,12 +78,12 @@ async def test_agent_stream_sink_collects_deltas(tmp_path: Path, monkeypatch):
     assert captured[0][0] == "T-1" and captured[0][1] == "backend_dev"
 
 
-def test_crew_stream_sink_publishes_agent_stream_delta(monkeypatch):
-    """Crew 把增量包成 agent_stream_delta 推给 on_event，含 run_id。"""
+def test_crew_stream_sink_publishes_agent_stream_delta(monkeypatch, tmp_path):
+    """Crew 把增量包成 agent_stream_delta 推给 on_event，含 run_id；同时落盘回溯。"""
     monkeypatch.setenv("AGENTCREW_OUTPUT_DIR", "ignored")
     events: list[tuple[str, dict]] = []
     crew = Crew(Settings.load(), on_event=lambda name, data: events.append((name, data)))
-    sink = crew._make_stream_sink("R-42")
+    sink = crew._make_stream_sink("R-42", tmp_path / "streams")
     sink("T-1", "backend_dev", "hello")
     sink("T-1", "backend_dev", " world")
 
@@ -93,15 +93,30 @@ def test_crew_stream_sink_publishes_agent_stream_delta(monkeypatch):
     assert first["task_id"] == "T-1"
     assert first["role"] == "backend_dev"
     assert first["delta"] == "hello"
+    # 正文落盘供刷新回溯
+    persisted = (tmp_path / "streams" / "T-1.md").read_text(encoding="utf-8")
+    assert persisted == "hello world"
 
 
-def test_crew_stream_sink_is_noop_without_on_event(monkeypatch):
-    """没有 on_event（CLI 直接跑）时 sink 是零开销 no-op，空 delta 也不推。"""
+def test_crew_stream_sink_persists_without_on_event(monkeypatch, tmp_path):
+    """没有 on_event（CLI 直接跑）时正文仍落盘（回溯不依赖 SSE）；空 delta 不落盘。"""
     monkeypatch.setenv("AGENTCREW_OUTPUT_DIR", "ignored")
     crew = Crew(Settings.load())  # 不传 on_event
-    sink = crew._make_stream_sink("R")
-    sink("T-1", "r", "")          # 空正文不该推
-    sink("T-1", "r", "x")         # 有正文但无观察者，静默丢弃
+    sink = crew._make_stream_sink("R", tmp_path / "streams")
+    sink("T-1", "r", "")          # 空正文不该写
+    sink("T-1", "r", "x")         # 有正文 → 落盘
+    assert (tmp_path / "streams" / "T-1.md").read_text(encoding="utf-8") == "x"
+
+
+def test_crew_stream_sink_sanitizes_task_id(monkeypatch, tmp_path):
+    """task_id 里的路径字符要消毒，防越界写盘。"""
+    monkeypatch.setenv("AGENTCREW_OUTPUT_DIR", "ignored")
+    crew = Crew(Settings.load())
+    sink = crew._make_stream_sink("R", tmp_path / "streams")
+    sink("../etc/passwd", "r", "boom")
+    # 落盘文件应叫消毒后的名字，且不越界
+    assert not (tmp_path / "etc").exists()
+    assert (tmp_path / "streams" / ".._etc_passwd.md").read_text(encoding="utf-8") == "boom"
 
 
 def test_dashboard_has_stream_panel_and_handler():
@@ -139,3 +154,37 @@ async def test_stream_deltas_reach_on_event_end_to_end(tmp_path, monkeypatch):
     assert len(joined) > 20, "增量正文不该是空壳"
     assert all(data["run_id"] == record.run_id for data in deltas)
     assert {data["task_id"] for data in deltas}
+
+
+@pytest.mark.asyncio
+async def test_detail_events_reach_on_event_via_ledger_observer(tmp_path, monkeypatch):
+    """端到端：明细事件经 Ledger observer 转发到 on_event，带 run_id 且不重复。
+
+    改造前 ``task_started`` / ``task_finished`` / ``artifact_written`` /
+    ``plan_created`` 等只写 ledger、不进 on_event（SSE 收不到实时明细）。本轮
+    Ledger 增加 observer，把这些明细同步推给 on_event。钉三件事：明细事件到达、
+    每个都带 run_id（EventBus 按 run 分桶）、已走 ``_dispatch_event`` 的
+    ``run_started`` 不重复推（恰好一次）。
+    """
+    monkeypatch.setenv("AGENTCREW_MOCK", "true")
+    monkeypatch.setenv("AGENTCREW_GATE", "none")
+    monkeypatch.setenv("AGENTCREW_OUTPUT_DIR", str(tmp_path / "o"))
+    monkeypatch.setenv("AGENTCREW_CONFIG", str(tmp_path / "absent.yaml"))
+    from agentcrew.models import factory as model_factory
+    monkeypatch.setattr(model_factory, "DEFAULT_FIXTURES_DIR", DEMO_FIXTURES_DIR)
+
+    events: list[tuple[str, dict]] = []
+    settings = Settings.load()
+    record = await Crew(
+        settings, on_event=lambda name, data: events.append((name, data)),
+    ).run(DEMO_GOAL)
+
+    names = [name for name, _ in events]
+    # 明细事件经 observer 到达 on_event
+    for expected in ("task_started", "task_finished", "artifact_written", "plan_created"):
+        assert expected in names, f"{expected} 应经 observer 到达 on_event"
+    # 已走 _dispatch_event 的事件不重复
+    assert names.count("run_started") == 1
+    # 明细事件带 run_id，EventBus 才能按 run 分桶
+    started = [data for name, data in events if name == "task_started"]
+    assert started and all(d.get("run_id") == record.run_id for d in started)

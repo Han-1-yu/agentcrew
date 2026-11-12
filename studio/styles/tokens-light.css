@@ -1,160 +1,174 @@
-/* 浅色主题覆盖层：与 tokens.css 共用同一套变量名，只换值。
-   单独成文件是为了让每个样式分片都留在 300 行以内（架构护栏要求）。
-   选择器必须限定在 :root 上——设置页的主题分段按钮也带 data-theme，不能被误伤。 */
+/* 浅色主题（默认）—— WorkBuddy 扁平设计语言的本体。
+ * 与 tokens.css 共用同一套变量名，只覆盖颜色；字阶 / 间距 / 圆角 / 动效共用 :root。
+ * 选择器必须限定在 :root 上——设置页的主题分段按钮也带 data-theme，不能被误伤。
+ *
+ * 取色规则：c-gray 暖灰中性（50 底 / 600 次文字 / 900 正文），
+ * c-purple 600 强调，c-blue/green/amber/red 的 50 底 + 600/800 字做语义色。
+ */
 
-/* ---------- 浅色主题：同一套语义，换成冷调纸感 + 同色系玻璃 ----------
-   只改变量值：结构、圆角、动效、字体全部共用，保证两主题是同一套设计语言。
-   选择器必须限定在 :root 上——设置页的分段控件按钮也带 data-theme，不能被误伤。 */
 :root[data-theme="light"] {
-  --bg-page: #EDF0F8;
-  --bg-panel: rgba(255, 255, 255, 0.72);
-  --bg-subtle: rgba(255, 255, 255, 0.55);
+  /* ── 背景四层：暖灰页底 + 纯白卡片 ── */
+  --bg-page: #F1EFE8;
+  --bg-panel: #FFFFFF;
+  --bg-subtle: #E8E6DE;
   --bg-float: #FFFFFF;
-  --bg-canvas: rgba(255, 255, 255, 0.45);
-  --bg-inset: rgba(94, 116, 165, 0.07);
+  --bg-canvas: #FFFFFF;
+  --bg-inset: rgba(44, 44, 42, 0.04);
 
-  --aurora-1: rgba(110, 150, 255, 0.34);
-  --aurora-2: rgba(158, 130, 255, 0.26);
-  --aurora-3: rgba(120, 170, 255, 0.22);
-  --aurora-base-from: #EEF2FB;
-  --aurora-base-mid: #EAEEF8;
-  --aurora-base-to: #E4E9F5;
+  /* ── 极光：透明（DOM 层已删） ── */
+  --aurora-1: transparent;
+  --aurora-2: transparent;
+  --aurora-3: transparent;
+  --aurora-base-from: #F1EFE8;
+  --aurora-base-mid: #F1EFE8;
+  --aurora-base-to: #F1EFE8;
 
-  --glass-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(255, 255, 255, 0.62));
-  --glass-bg-strong: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(255, 255, 255, 0.72));
-  --glass-bg-quiet: linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.40));
-  --glass-border: rgba(255, 255, 255, 0.85);
-  --glass-border-strong: rgba(255, 255, 255, 0.95);
-  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.95);
-  --glass-highlight-strong: inset 0 1px 0 #FFFFFF;
+  /* ── 旧玻璃变量：实色白面 + 细边框 + 无高光无模糊 ── */
+  --glass-bg: #FFFFFF;
+  --glass-bg-strong: #FFFFFF;
+  --glass-bg-quiet: #FFFFFF;
+  --glass-border: rgba(44, 44, 42, 0.15);
+  --glass-border-strong: rgba(44, 44, 42, 0.30);
+  --glass-highlight: none;
+  --glass-highlight-strong: none;
 
-  --border: rgba(30, 48, 92, 0.11);
-  --border-weak: rgba(30, 48, 92, 0.07);
-  --border-input: rgba(30, 48, 92, 0.16);
+  /* ── 边框：0.5px 实线 ── */
+  --border: rgba(44, 44, 42, 0.15);
+  --border-weak: rgba(44, 44, 42, 0.08);
+  --border-input: rgba(44, 44, 42, 0.30);
 
-  --text: #101828;
-  --text-sub: #4E5C7A;
-  --text-ter: #7C89A6;
+  /* ── 文字三级（c-gray 900 / 600 / 400） ── */
+  --text: #2C2C2A;
+  --text-sub: #5F5E5A;
+  --text-ter: #888780;
   --on-solid: #FFFFFF;
 
-  --accent: #3D5FD9;
-  --accent-hover: #3350C2;
-  --accent-text: #2F4FC4;
-  --accent-bg-faint: rgba(61, 95, 217, 0.03);
-  --accent-bg-soft: rgba(61, 95, 217, 0.07);
-  --accent-bg: rgba(61, 95, 217, 0.11);
-  --accent-bg-strong: rgba(61, 95, 217, 0.16);
-  --accent-focus: rgba(61, 95, 217, 0.18);
-  --accent-track: rgba(61, 95, 217, 0.26);
-  --accent-border: rgba(61, 95, 217, 0.32);
-  --accent-border-med: rgba(61, 95, 217, 0.42);
-  --accent-border-strong: rgba(61, 95, 217, 0.55);
-  --accent-border-soft: rgba(61, 95, 217, 0.16);
-  --glow-accent: rgba(61, 95, 217, 0.24);
-  --glow-running: rgba(45, 130, 220, 0.26);
+  /* ── 强调色：c-purple 600 ── */
+  --accent: #534AB7;
+  --accent-hover: #3C3489;
+  --accent-text: #534AB7;
+  --accent-bg-faint: rgba(83, 74, 183, 0.04);
+  --accent-bg-soft: rgba(83, 74, 183, 0.07);
+  --accent-bg: #EEEDFE;
+  --accent-bg-strong: #CECBF6;
+  --accent-focus: rgba(83, 74, 183, 0.22);
+  --accent-track: rgba(83, 74, 183, 0.26);
+  --accent-border: rgba(83, 74, 183, 0.32);
+  --accent-border-med: rgba(83, 74, 183, 0.42);
+  --accent-border-strong: rgba(83, 74, 183, 0.60);
+  --accent-border-soft: rgba(83, 74, 183, 0.20);
+  --glow-accent: transparent;
+  --glow-running: transparent;
 
-  --ink-02: rgba(30, 48, 92, 0.02);
-  --ink-03: rgba(30, 48, 92, 0.03);
-  --ink-04: rgba(30, 48, 92, 0.04);
-  --ink-05: rgba(30, 48, 92, 0.05);
-  --ink-06: rgba(30, 48, 92, 0.06);
-  --ink-07: rgba(30, 48, 92, 0.07);
-  --ink-08: rgba(30, 48, 92, 0.08);
-  --ink-10: rgba(30, 48, 92, 0.10);
-  --ink-12: rgba(30, 48, 92, 0.12);
-  --ink-14: rgba(30, 48, 92, 0.14);
-  --ink-15: rgba(30, 48, 92, 0.15);
-  --ink-18: rgba(30, 48, 92, 0.18);
-  --ink-20: rgba(30, 48, 92, 0.20);
-  --ink-22: rgba(30, 48, 92, 0.22);
-  --ink-25: rgba(30, 48, 92, 0.25);
-  --ink-28: rgba(30, 48, 92, 0.28);
-  --ink-30: rgba(30, 48, 92, 0.30);
+  /* ── 中性墨色：暖灰透明档 ── */
+  --ink-02: rgba(44, 44, 42, 0.02);
+  --ink-03: rgba(44, 44, 42, 0.03);
+  --ink-04: rgba(44, 44, 42, 0.04);
+  --ink-05: rgba(44, 44, 42, 0.05);
+  --ink-06: rgba(44, 44, 42, 0.06);
+  --ink-07: rgba(44, 44, 42, 0.07);
+  --ink-08: rgba(44, 44, 42, 0.08);
+  --ink-10: rgba(44, 44, 42, 0.10);
+  --ink-12: rgba(44, 44, 42, 0.12);
+  --ink-14: rgba(44, 44, 42, 0.14);
+  --ink-15: rgba(44, 44, 42, 0.15);
+  --ink-18: rgba(44, 44, 42, 0.18);
+  --ink-20: rgba(44, 44, 42, 0.20);
+  --ink-22: rgba(44, 44, 42, 0.22);
+  --ink-25: rgba(44, 44, 42, 0.25);
+  --ink-28: rgba(44, 44, 42, 0.28);
+  --ink-30: rgba(44, 44, 42, 0.30);
 
-  --success: #1E9A5A;
-  --success-text: #16794A;
-  --success-bg-quiet: rgba(30, 154, 90, 0.06);
-  --success-bg: rgba(30, 154, 90, 0.10);
-  --success-bg-chip: rgba(30, 154, 90, 0.14);
+  /* ── 语义色：50 底 + 600/800 字（c-green / c-amber / c-red） ── */
+  --success: #3B6D11;
+  --success-text: #27500A;
+  --success-bg-quiet: rgba(234, 243, 222, 0.55);
+  --success-bg: #EAF3DE;
+  --success-bg-chip: #C0DD97;
 
-  --warn: #B9871F;
-  --warn-text: #8F6612;
-  --warn-bg-soft: rgba(185, 135, 31, 0.07);
-  --warn-bg: rgba(185, 135, 31, 0.11);
-  --warn-border-soft: rgba(185, 135, 31, 0.16);
-  --warn-border: rgba(185, 135, 31, 0.26);
+  --warn: #854F0B;
+  --warn-text: #633806;
+  --warn-bg-soft: rgba(250, 238, 218, 0.55);
+  --warn-bg: #FAEEDA;
+  --warn-border-soft: rgba(133, 79, 11, 0.18);
+  --warn-border: rgba(133, 79, 11, 0.32);
 
-  --error: #D0453C;
-  --error-text: #AE322A;
-  --error-bg-faint: rgba(208, 69, 60, 0.03);
-  --error-bg-ghost: rgba(208, 69, 60, 0.04);
-  --error-bg-quiet: rgba(208, 69, 60, 0.06);
-  --error-bg: rgba(208, 69, 60, 0.08);
-  --error-bg-soft: rgba(208, 69, 60, 0.10);
-  --error-bg-med: rgba(208, 69, 60, 0.13);
-  --error-bg-chip: rgba(208, 69, 60, 0.16);
-  --error-border-soft: rgba(208, 69, 60, 0.18);
-  --error-border: rgba(208, 69, 60, 0.32);
-  --error-border-strong: rgba(208, 69, 60, 0.52);
+  --error: #A32D2D;
+  --error-text: #791F1F;
+  --error-bg-faint: rgba(252, 235, 235, 0.40);
+  --error-bg-ghost: rgba(252, 235, 235, 0.50);
+  --error-bg-quiet: rgba(252, 235, 235, 0.65);
+  --error-bg: #FCEBEB;
+  --error-bg-soft: #FCEBEB;
+  --error-bg-med: #F7C1C1;
+  --error-bg-chip: #F7C1C1;
+  --error-border-soft: rgba(163, 45, 45, 0.18);
+  --error-border: rgba(163, 45, 45, 0.32);
+  --error-border-strong: rgba(163, 45, 45, 0.52);
 
-  --status-pending: #7C89A6;
-  --status-pending-bg: rgba(30, 48, 92, 0.06);
-  --status-ready: #3D5FD9;
-  --status-ready-bg: rgba(61, 95, 217, 0.09);
-  --status-running: #2D82DC;
-  --status-running-bg: rgba(45, 130, 220, 0.11);
-  --status-review: #B9871F;
-  --status-review-bg: rgba(185, 135, 31, 0.11);
-  --status-rework: #B9871F;
-  --status-rework-bg: rgba(185, 135, 31, 0.15);
-  --status-blocked: #B9871F;
-  --status-blocked-bg: rgba(185, 135, 31, 0.08);
-  --status-succeeded: #1E9A5A;
-  --status-succeeded-bg: rgba(30, 154, 90, 0.10);
-  --status-failed: #D0453C;
-  --status-failed-bg: rgba(208, 69, 60, 0.10);
-  --status-skipped: #7C89A6;
-  --status-skipped-bg: rgba(30, 48, 92, 0.05);
-  --status-cancelled: #7C89A6;
-  --status-cancelled-bg: rgba(30, 48, 92, 0.05);
+  /* ── 10 种任务状态：蓝 / 绿 / 红 / 琥珀 / 灰 ── */
+  --status-pending: #5F5E5A;
+  --status-pending-bg: #F1EFE8;
+  --status-ready: #185FA5;
+  --status-ready-bg: #E6F1FB;
+  --status-running: #185FA5;
+  --status-running-bg: #E6F1FB;
+  --status-review: #854F0B;
+  --status-review-bg: #FAEEDA;
+  --status-rework: #854F0B;
+  --status-rework-bg: #FAEEDA;
+  --status-blocked: #854F0B;
+  --status-blocked-bg: #FAEEDA;
+  --status-succeeded: #3B6D11;
+  --status-succeeded-bg: #EAF3DE;
+  --status-failed: #A32D2D;
+  --status-failed-bg: #FCEBEB;
+  --status-skipped: #5F5E5A;
+  --status-skipped-bg: #F1EFE8;
+  --status-cancelled: #5F5E5A;
+  --status-cancelled-bg: #F1EFE8;
 
-  --purple: #5566A8;
-  --pink: #6E6E9E;
-  --sky: #3C7A9E;
-  --orange: #5A6B90;
-  --indigo: #4A5CA8;
+  /* ── 角色装饰色：ramp 600 级，扁平实色 ── */
+  --purple: #534AB7;
+  --pink: #993556;
+  --sky: #185FA5;
+  --orange: #BA7517;
+  --indigo: #3C3489;
 
-  --dag-node-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.70));
-  --dag-node-fill: rgba(255, 255, 255, 0.80);
-  --avatar-fill: rgba(30, 48, 92, 0.07);
-  --dag-node-border: rgba(30, 48, 92, 0.10);
-  --dag-node-inner: rgba(255, 255, 255, 0.40);
-  --dag-edge: rgba(80, 110, 180, 0.38);
-  --dag-edge-hot: rgba(61, 95, 217, 0.62);
-  --dag-tier-bg: rgba(255, 255, 255, 0.22);
-  --dag-tier-border: rgba(30, 48, 92, 0.06);
+  /* ── 依赖图：白节点 + 0.5px 灰描边 ── */
+  --dag-node-bg: #FFFFFF;
+  --dag-node-fill: #FFFFFF;
+  --avatar-fill: #EEEDFE;
+  --dag-node-border: rgba(44, 44, 42, 0.15);
+  --dag-node-inner: rgba(44, 44, 42, 0.02);
+  --dag-edge: rgba(44, 44, 42, 0.30);
+  --dag-edge-hot: #534AB7;
+  --dag-tier-bg: rgba(44, 44, 42, 0.02);
+  --dag-tier-border: rgba(44, 44, 42, 0.08);
 
-  --log-bg: #101828;
-  --log-text: #D8E2F7;
-  --log-err: #F58E88;
-  --toast-bg: #101828;
-  --toast-success-bg: #10301F;
-  --toast-error-bg: #33181A;
-  --toast-warning-bg: #302715;
+  /* ── 日志 / Toast：浅色语义底 + 深字 ── */
+  --log-bg: #F1EFE8;
+  --log-text: #2C2C2A;
+  --log-err: #A32D2D;
+  --toast-bg: #FFFFFF;
+  --toast-success-bg: #EAF3DE;
+  --toast-error-bg: #FCEBEB;
+  --toast-warning-bg: #FAEEDA;
 
-  --mask: rgba(16, 24, 40, 0.32);
-  --mask-strong: rgba(16, 24, 40, 0.42);
-  --shadow: rgba(30, 48, 92, 0.12);
-  --shadow-modal: rgba(30, 48, 92, 0.18);
-  --shadow-drawer: rgba(30, 48, 92, 0.10);
-  --loading-mask: rgba(237, 240, 248, 0.72);
+  /* ── 遮罩 / 阴影 ── */
+  --mask: rgba(44, 44, 42, 0.28);
+  --mask-strong: rgba(44, 44, 42, 0.38);
+  --shadow: transparent;
+  --shadow-modal: transparent;
+  --shadow-drawer: transparent;
+  --loading-mask: rgba(241, 239, 232, 0.72);
+  --shadow-1: none;
+  --shadow-2: none;
+  --shadow-3: none;
 
-  --shadow-1: 0 1px 3px rgba(30, 48, 92, 0.07);
-  --shadow-2: 0 12px 28px -14px rgba(30, 48, 92, 0.26), 0 1px 3px rgba(30, 48, 92, 0.08);
-  --shadow-3: 0 26px 60px -22px rgba(30, 48, 92, 0.34), 0 2px 8px rgba(30, 48, 92, 0.10);
-
-  --cmp-send-bg: linear-gradient(180deg, #4C6BE6, #3350C2);
+  /* ── 发送键：实心紫，无渐变无投影 ── */
+  --cmp-send-bg: #534AB7;
   --cmp-send-fg: #FFFFFF;
-  --cmp-send-shadow: 0 6px 16px rgba(51, 80, 194, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.28);
-  --scrim: linear-gradient(180deg, rgba(237, 240, 248, 0) 0%, rgba(235, 239, 248, 0.62) 42%, rgba(233, 238, 247, 0.96) 100%);
+  --cmp-send-shadow: none;
+  --scrim: transparent;
 }

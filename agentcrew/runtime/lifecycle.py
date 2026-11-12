@@ -33,6 +33,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from ..utils.clock import elapsed_since, is_clock_skew, parse_stamp, utc_now
 from ..utils.files import atomic_write_text, read_text
 from .checkpoint import CheckpointStore, RunStatus, is_stale_running
 from .ledger import Ledger
@@ -60,10 +61,15 @@ def _heartbeat_path(run_dir: Path) -> Path:
 
 
 def write_heartbeat(run_dir: Path, *, now: datetime | None = None) -> None:
-    """原子写一帧心跳；失败不向上抛（心跳是辅助设施，不能让 run 挂掉）。"""
+    """原子写一帧心跳；失败不向上抛（心跳是辅助设施，不能让 run 挂掉）。
+
+    A-7：时间戳用 UTC（带偏移）。旧版写的是 naive 本地时间，读取端
+    ``read_heartbeat`` + ``clock.parse_stamp`` 会把 naive 按本机时区补齐，
+    因此存量心跳无需迁移。
+    """
     payload = {
         "pid": os.getpid(),
-        "updated_at": (now or datetime.now()).isoformat(),
+        "updated_at": (now or utc_now()).isoformat(),
     }
     try:
         atomic_write_text(
@@ -78,14 +84,11 @@ def read_heartbeat(run_dir: Path) -> datetime | None:
     """读最近一帧心跳时间；文件缺失 / 损坏返回 ``None``（交给旧判据兜底）。"""
     try:
         data = json.loads(read_text(_heartbeat_path(run_dir)))
-        if not isinstance(data, dict):
-            return None
-        raw = data.get("updated_at")
-        if not isinstance(raw, str):
-            return None
-        return datetime.fromisoformat(raw)
     except (OSError, ValueError, TypeError):
         return None
+    if not isinstance(data, dict):
+        return None
+    return parse_stamp(data.get("updated_at"))
 
 
 def clear_heartbeat(run_dir: Path) -> None:
@@ -138,7 +141,7 @@ def is_orphaned_running(run_dir: Path, *, now: datetime | None = None) -> bool:
     * 没有心跳文件（升级前的老 run）→ 回退 ``is_stale_running`` 的 24h 判据，
       保持既有语义不变。
     """
-    moment = now or datetime.now()
+    moment = now or utc_now()
     try:
         data = json.loads(read_text(Path(run_dir) / "run.json"))
     except (OSError, ValueError):
@@ -148,7 +151,12 @@ def is_orphaned_running(run_dir: Path, *, now: datetime | None = None) -> bool:
     heartbeat = read_heartbeat(run_dir)
     if heartbeat is None:
         return is_stale_running(run_dir, now=moment)
-    return moment - heartbeat > LIVENESS_STALE_AFTER
+    # A-7：elapsed 为 None（时钟倒挂超容忍）时**不判孤儿**——宁可留僵尸等人工
+    # 处理，也不能在时钟不可信时改写/删除一个可能仍在跑的 run。
+    idle = elapsed_since(heartbeat, now=moment)
+    if idle is None:
+        return False
+    return idle > LIVENESS_STALE_AFTER
 
 
 def reconcile_stale_runs(
@@ -159,12 +167,21 @@ def reconcile_stale_runs(
     只改 ``run.json`` 的状态与 ``updated_at``，不动产物、不重放检查点、不删目录；
     标记后 ``resume`` 会按既有的 interrupted 路径修复任务状态并续跑。
     """
-    moment = now or datetime.now()
+    moment = now or utc_now()
     output_dir = Path(output_dir)
     results: list[dict[str, Any]] = []
     for run_id in CheckpointStore.list_runs(output_dir):
         run_dir = output_dir / run_id
         if not is_orphaned_running(run_dir, now=moment):
+            # A-7：时钟倒挂会让判定作废（fail-closed）。必须留一条可见记录，
+            # 否则运维只看到 run 永远停在 RUNNING，无从判断原因。
+            heartbeat = read_heartbeat(run_dir)
+            if is_clock_skew(heartbeat, now=moment):
+                results.append({
+                    "run_id": run_id, "ok": False, "reason": "clock_skew",
+                    "hint": "本机时钟回拨超过容忍窗口，已跳过收敛；"
+                            "请校准系统时钟（NTP）后重试",
+                })
             continue
         heartbeat = read_heartbeat(run_dir)
         reason = ("heartbeat_expired" if heartbeat is not None
@@ -215,7 +232,7 @@ class ResumeLock:
         """占锁；已有活锁时抛 :class:`ResumeLockError`。"""
         if self._held:
             raise ResumeLockError("锁已由本实例持有")
-        moment = now or datetime.now()
+        moment = now or utc_now()
         for _ in range(2):
             try:
                 handle = os.open(
@@ -262,15 +279,23 @@ class ResumeLock:
     def _lock_is_stale(self, *, now: datetime) -> bool:
         """锁能否被接管：新鲜心跳一律不接管，其余看锁的年龄 / 可读性。"""
         heartbeat = read_heartbeat(self._run_dir)
-        if heartbeat is not None and now - heartbeat <= LIVENESS_STALE_AFTER:
+        # A-7：elapsed 为 None 表示时钟倒挂超容忍 → 不接管（fail-closed）。
+        # 回拨期间接管锁等于两个进程同写 checkpoint，代价远高于多等一轮。
+        idle = elapsed_since(heartbeat, now=now)
+        if idle is not None and idle <= LIVENESS_STALE_AFTER:
             return False
         try:
             data = json.loads(read_text(self._path))
-            created = datetime.fromisoformat(data["created_at"])
+            created = parse_stamp(data["created_at"])
         except (OSError, ValueError, TypeError, KeyError):
             # 锁文件坏了：没有新鲜心跳就没有活进程的证据，允许自愈接管。
-            return heartbeat is None or now - heartbeat > LIVENESS_STALE_AFTER
-        return now - created > LOCK_STALE_AFTER
+            return heartbeat is None or idle is None or idle > LIVENESS_STALE_AFTER
+        if created is None:
+            return False
+        age = elapsed_since(created, now=now)
+        if age is None:
+            return False
+        return age > LOCK_STALE_AFTER
 
     def release(self) -> None:
         """只删自己持有的锁；owner 不匹配时绝不替别人解锁。幂等。"""

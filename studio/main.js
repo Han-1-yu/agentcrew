@@ -6,7 +6,7 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, Menu, nativeTheme, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { spawn, spawnSync } = require('child_process');
+const { spawn } = require('child_process');
 const { buildZipFromDir } = require('./zip');
 const { createBackendApi } = require('./backend-api');
 
@@ -56,7 +56,7 @@ function defaultSettings() {
     repoRoot: DEFAULT_REPO_ROOT,
     outputDir: path.join(DEFAULT_REPO_ROOT, 'output'),
     pythonCmd: '',
-    theme: 'dark',
+    theme: 'light',
     defaultMock: false,  // 默认真实模式：mock 产物是固定夹具，与目标无关
     defaultAuto: true,
     apiBaseUrl: '',  // P3：后端 API 地址，设置后用 SSE 替代文件 watch
@@ -86,11 +86,22 @@ function loadSettings() {
 }
 
 function saveSettings(next) {
-  settings = Object.assign({}, settings, next);
+  // C-22：字段白名单。此前 Object.assign({}, settings, next) 接受渲染端传来的
+  // 任意键——虽然 repoRoot/outputDir 本就是可配项，但多出来的键会被原样落盘，
+  // 一旦渲染端被注入即可往设置文件里塞任意字段（如伪造 apiBaseUrl 把请求
+  // 引到外部）。只收 defaultSettings() 声明过的键。
+  const allowed = new Set(Object.keys(defaultSettings()));
+  const patch = {};
+  if (next && typeof next === 'object') {
+    for (const [k, v] of Object.entries(next)) {
+      if (allowed.has(k)) patch[k] = v;
+    }
+  }
+  settings = Object.assign({}, settings, patch);
   fs.mkdirSync(path.dirname(settingsPath()), { recursive: true });
   fs.writeFileSync(settingsPath(), JSON.stringify(settings, null, 2), 'utf8');
   // 仅当本次变更涉及主题时才推送 theme:changed（recentGoals/默认模型/预算等无关变更不必打扰渲染端）
-  if (next && Object.prototype.hasOwnProperty.call(next, 'theme')) pushThemeChanged();
+  if (Object.prototype.hasOwnProperty.call(patch, 'theme')) pushThemeChanged();
   return settings;
 }
 
@@ -100,13 +111,13 @@ function resolveEffectiveTheme(mode) {
   if (mode === 'dark') return 'dark';
   // system：跟随操作系统
   try { return nativeTheme.shouldUseDarkColors ? 'dark' : 'light'; }
-  catch { return 'dark'; }
+  catch { return 'light'; }
 }
 
 // 向渲染进程推送当前主题态（仅在窗口存在时）
 function pushThemeChanged() {
   if (!win || win.isDestroyed()) return;
-  const mode = (settings && settings.theme) || 'dark';
+  const mode = (settings && settings.theme) || 'light';
   win.webContents.send('theme:changed', { mode, effective: resolveEffectiveTheme(mode) });
 }
 
@@ -182,6 +193,74 @@ function pythonSpawnSpec(extraArgs) {
   return { cmd: parts[0], args: [...parts.slice(1), 'main.py', ...extraArgs] };
 }
 
+/**
+ * C-20：异步跑一次 CLI 子进程，替代 ``spawnSync``。
+ *
+ * 同步版会阻塞主进程事件循环——删除一个产物多的 run、或 schedule 列表遇到慢盘，
+ * 整个窗口（含 SSE 推送、文件监听回调）最长冻结 15 秒。改成 spawn + Promise 后
+ * 主进程始终可响应，IPC handler 直接返回 Promise（``ipcMain.handle`` 原生支持）。
+ *
+ * 返回结构统一为 ``{ status, stdout, stderr }``：``status=-1`` 表示启动失败或超时。
+ */
+function runCli(args, { timeoutMs = 15000 } = {}) {
+  return new Promise((resolve) => {
+    let spec;
+    try {
+      spec = pythonSpawnSpec(args);
+    } catch (e) {
+      resolve({ status: -1, stdout: '', stderr: String((e && e.message) || e) });
+      return;
+    }
+    const child = spawn(spec.cmd, spec.args, { cwd: settings.repoRoot, windowsHide: true });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const finish = (status, extra) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ status, stdout, stderr: stderr + (extra || '') });
+    };
+    const timer = setTimeout(() => {
+      try { child.kill(); } catch { /* 已退出 */ }
+      finish(-1, `\n超时（${timeoutMs}ms）`);
+    }, timeoutMs);
+    child.stdout?.on('data', (buf) => { stdout += buf.toString('utf-8'); });
+    child.stderr?.on('data', (buf) => { stderr += buf.toString('utf-8'); });
+    child.on('error', (e) => finish(-1, String((e && e.message) || e)));
+    child.on('close', (code) => finish(code === null ? -1 : code));
+  });
+}
+
+// 跑 `main.py schedule ...` 并返回 stdout（只校验退出码，不解析 JSON）。
+async function runSchedule(extraArgs, outputDir) {
+  const args = ['schedule', ...extraArgs, '--output-dir', outputDir || settings.outputDir];
+  const result = await runCli(args);
+  if (result.status !== 0) {
+    throw new Error((result.stderr || result.stdout || '').trim() || `退出码 ${result.status}`);
+  }
+  return result.stdout || '';
+}
+
+// 跑 `main.py schedule ... --json`，从 stdout 里截取 JSON 对象（容错缩进多行输出）。
+async function runScheduleJson(extraArgs, outputDir) {
+  const out = await runSchedule(extraArgs, outputDir);
+  const start = out.indexOf('{');
+  const end = out.lastIndexOf('}');
+  if (start < 0 || end <= start) throw new Error('无 JSON 输出');
+  return JSON.parse(out.slice(start, end + 1));
+}
+
+// 定时任务到期检查：每分钟 tick 一次，到期日程由后端起 run 子进程。
+function startScheduleTicker() {
+  if (scheduleTicker) return;
+  scheduleTicker = setInterval(() => {
+    // C-20：异步化后必须接住 rejection，否则变成 unhandledRejection。
+    runSchedule(['tick', '--json']).catch(() => { /* 到点触发失败不致命，下轮再试 */ });
+  }, 60 * 1000);
+  scheduleTicker.unref && scheduleTicker.unref();
+}
+
 // ---------- run 扫描与读取 ----------
 
 function readJsonTolerant(file) {
@@ -215,7 +294,17 @@ function scanRuns(outputDir) {
       if (isRunDir(dir2)) runs.push(summarizeRun(dir2, ent.name));
     }
   }
-  runs.sort((a, b) => (b.createdAt || b.mtime || '') .localeCompare(a.createdAt || a.mtime || ''));
+  // C-1：混用 ISO 字符串与 mtime 数字调 localeCompare 会抛 TypeError
+  // （Number.prototype 没有 localeCompare），导致 runs:list 整体 reject、
+  // 列表/下拉/启动轮询全废。统一转数值比较，缺失 createdAt 时用 mtime。
+  const sortKey = (item) => {
+    if (item.createdAt) {
+      const ts = Date.parse(item.createdAt);
+      if (!Number.isNaN(ts)) return ts;
+    }
+    return Number(item.mtime) || 0;
+  };
+  runs.sort((a, b) => sortKey(b) - sortKey(a));
   return runs;
 }
 
@@ -232,7 +321,10 @@ function summarizeRun(runDir, group) {
   if (r.ok && r.data && typeof r.data === 'object') {
     item.goal = r.data.project_goal || '';
     item.status = r.data.status || 'unknown';
-    item.createdAt = r.data.created_at || '';
+    // C-1：created_at 缺失时用 run.json 的 mtime 补一个 ISO 串，避免
+    // 排序/展示拿到空值（旧 run 或手改过的 run.json 常见）。
+    item.createdAt = r.data.created_at
+      || (item.mtime ? new Date(item.mtime).toISOString() : '');
     item.updatedAt = r.data.updated_at || '';
     item.stats = r.data.stats || null;
   } else {
@@ -299,6 +391,7 @@ function ledgerHistory(ledgerPath, maxLines) {
 const procs = new Map(); // key -> { key, kind, proc, runDir, runId, outputDir, startedAt, killed }
 globalThis.__procs = procs; // selftest 检查存活进程用
 let procSeq = 0;
+let scheduleTicker = null;
 
 function send(channel, payload) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
@@ -451,21 +544,15 @@ function offlineCancel(runDir, attempt) {
   } catch { /* 收尾失败不致命，UI 仍会刷新 */ }
 }
 
-function deleteRunSync(runDir) {
-  // P0-4：调用 CLI delete --force（非交互环境），同步等待完成
-  try {
-    const spec = pythonSpawnSpec(['delete', path.basename(runDir), '--force',
-      '--output-dir', path.dirname(runDir)]);
-    const result = spawnSync(spec.cmd, spec.args, {
-      cwd: settings.repoRoot, windowsHide: true, encoding: 'utf-8', timeout: 15000,
-    });
-    if (result.status !== 0) {
-      throw new Error((result.stderr || result.stdout || '').trim() || `退出码 ${result.status}`);
-    }
-    return { ok: true };
-  } catch (e) {
-    throw new Error(String(e && e.message || e));
+async function deleteRun(runDir) {
+  // P0-4：调用 CLI delete --force（非交互环境）；C-20 起改为异步，删除大 run
+  // 时不再冻结主进程（产物目录可能有上千文件，同步等待会卡住整个窗口）。
+  const result = await runCli(['delete', path.basename(runDir), '--force',
+    '--output-dir', path.dirname(runDir)]);
+  if (result.status !== 0) {
+    throw new Error((result.stderr || result.stdout || '').trim() || `退出码 ${result.status}`);
   }
+  return { ok: true };
 }
 
 // ---------- run 目录监视（ledger 增量 + run/tasks 快照 mtime 变化） ----------
@@ -570,6 +657,23 @@ function readArtifact(runDir, relPath) {
   return { binary: false, content: buf.toString('utf8'), sizeBytes: st.size, truncated, path: relPath };
 }
 
+// 流式正文回溯：读 streams/ 下所有 <task_id>.md，返回 { taskId: 正文 }。
+// 正文是模型输出、属不可信文本，渲染端须用 textContent/pre 消费（已保证）。
+function loadStreams(runDir) {
+  const streamsDir = path.join(runDir, 'streams');
+  const streams = {};
+  let ents = [];
+  try { ents = fs.readdirSync(streamsDir); } catch { return streams; }
+  for (const name of ents) {
+    if (!name.endsWith('.md')) continue;
+    const taskId = name.slice(0, -3);
+    try {
+      streams[taskId] = fs.readFileSync(path.join(streamsDir, name), 'utf8');
+    } catch { /* 单文件读失败只跳过，不影响其它 */ }
+  }
+  return streams;
+}
+
 // ---------- 供应商模型列表拉取（借鉴 cc-switch model-fetch） ----------
 
 // 为 base_url 生成 /models 候选地址并按序尝试：
@@ -642,6 +746,41 @@ function registerIpc() {
     }
   });
 
+  // 导出执行体档案 YAML 片段（可粘贴进 agentcrew.yaml 复用）
+  ipcMain.handle('agents:export', async () => {
+    // C-20：异步执行，避免解析大型 YAML 时冻结主进程（最长 15s）。
+    const result = await runCli(['agents', '--yaml']);
+    if (result.status !== 0) {
+      return { ok: false, error: (result.stderr || result.stdout || '').trim() || `退出码 ${result.status}` };
+    }
+    return { ok: true, yaml: result.stdout };
+  });
+
+  // ── 定时任务（Automations）──
+  ipcMain.handle('schedule:list', async () => {
+    try { return { ok: true, data: await runScheduleJson(['list', '--json']) }; }
+    catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+  });
+  ipcMain.handle('schedule:add', async (_e, arg) => {
+    const p = objArg(arg);
+    const a = ['add', '--goal', String(p.goal || '')];
+    if (p.mock) a.push('--mock');
+    if (p.mode) a.push('--mode', String(p.mode));
+    if (p.daily) { a.push('--daily', String(p.daily)); if (p.weekdays) a.push('--weekdays', String(p.weekdays)); }
+    else if (p.at) a.push('--at', String(p.at));
+    try { await runSchedule(a, p.outputDir || null); return { ok: true }; }
+    catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+  });
+  ipcMain.handle('schedule:remove', async (_e, arg) => {
+    const p = objArg(arg);
+    try { await runSchedule(['remove', String(p.id || '')], p.outputDir || null); return { ok: true }; }
+    catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+  });
+  ipcMain.handle('schedule:tick', async () => {
+    try { return { ok: true, data: await runScheduleJson(['tick', '--json']) }; }
+    catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+  });
+
   ipcMain.handle('settings:get', () => {
     const repoOk = fs.existsSync(path.join(settings.repoRoot, 'main.py'));
     const outOk = fs.existsSync(settings.outputDir);
@@ -675,7 +814,12 @@ function registerIpc() {
     if (p.demo) args.push('--demo');
     else args.push('--goal', String(p.goal || ''));
     if (p.mock) args.push('--mock');
-    if (p.auto) args.push('--auto');
+    // 执行模式（对齐 WorkBuddy 的 Agent / Plan / Ask）：agent=自动执行、plan=计划审查
+    // （挂起审批，批准后执行）、ask=只读规划（只生成计划，可 resume 续跑）。
+    const mode = p.mode || (p.auto === false ? 'plan' : 'agent');
+    if (mode === 'ask') args.push('--plan-only');
+    else if (mode === 'plan') args.push('--gate', 'plan', '--approval-mode', 'deferred');
+    else args.push('--auto');
     // B1：模型选择 —— 弹窗显式选择优先，否则回落设置页默认模型（形如 openai:gpt-4o）。
     // CLI 参数名为 --default-model（main.py _add_run_flags）；传 --model 会被 argparse 拒绝（退出码 2）
     // Mock 模式下不调用真实模型，--default-model 不参与 CLI 参数
@@ -725,7 +869,8 @@ function registerIpc() {
 
   ipcMain.handle('run:cancel', (_e, p) => ({ killed: killProc(String(objArg(p).key)) }));
   ipcMain.handle('run:cancelOffline', (_e, p) => { offlineCancel(String(objArg(p).runDir)); return { ok: true }; });
-  ipcMain.handle('run:delete', (_e, p) => deleteRunSync(String(objArg(p).runDir)));
+  // C-20：删除大 run（产物上千文件）不再阻塞主进程。
+  ipcMain.handle('run:delete', async (_e, p) => deleteRun(String(objArg(p).runDir)));
   ipcMain.handle('procs:list', () => [...procs.values()]
     .filter((r) => r.proc && r.proc.exitCode === null)
     .map((r) => ({ key: r.key, kind: r.kind, runDir: r.runDir, runId: r.runId })));
@@ -735,6 +880,7 @@ function registerIpc() {
 
   ipcMain.handle('artifacts:list', (_e, dir) => listArtifacts(String(dir)));
   ipcMain.handle('artifact:read', (_e, dir, relPath) => readArtifact(String(dir), String(relPath)));
+  ipcMain.handle('streams:load', (_e, dir) => loadStreams(String(dir)));
 
   ipcMain.handle('artifacts:export', async (_e, dir) => {
     const runDir = String(dir);
@@ -753,7 +899,19 @@ function registerIpc() {
   });
 
   ipcMain.handle('shell:showItemInFolder', (_e, p) => { shell.showItemInFolder(String(objArg(p).fullPath)); return { ok: true }; });
-  ipcMain.handle('shell:openPath', (_e, p) => shell.openPath(String(objArg(p).fullPath)));
+  ipcMain.handle('shell:openPath', (_e, p) => {
+    // C-22：只允许打开 outputDir 之下的路径。此前渲染端传任意 fullPath
+    // 都会交给 shell.openPath（等于用一个渲染端可控的参数触发系统级打开，
+    // 可指向任意本地文件/目录）。
+    const target = String(objArg(p).fullPath || '');
+    const root = path.resolve(settings.outputDir || '');
+    const resolved = path.resolve(target);
+    const rel = path.relative(root, resolved);
+    if (!target || rel.startsWith('..') || path.isAbsolute(rel)) {
+      throw new Error('只允许打开输出目录内的文件');
+    }
+    return shell.openPath(resolved);
+  });
   // 在系统浏览器中打开外部 URL（如获取 API Key 的官方页面）；仅放行 http/https，避免任意协议
   ipcMain.handle('shell:openExternal', async (_e, p) => {
     const url = String(objArg(p).url || '');
@@ -848,6 +1006,11 @@ function registerIpc() {
   // 同时注入主进程 process.env —— keyStatus / 在线拉取立即生效，CLI 子进程继承。
   // .env 已被 .gitignore 忽略；Key 值只落盘本机，绝不回传渲染进程。
   ipcMain.handle('provider:saveKey', (_e, opts) => {
+    // C-21：这里**明文**写入项目根 `.env`，是有意为之——Studio 是本机开发工具，
+    // `.env` 与 CLI 共用同一份，加密后 CLI 就读不到了。README「设计边界」已如实
+    // 声明这个边界。在不改变存储方式的前提下能做的两条防线：
+    //   1) 严格校验环境变量名（防写入任意键 / 注入别的配置项）；
+    //   2) 文件权限收到 0600（Linux/macOS 下同机其他用户不可读；Windows 由 ACL 决定）。
     const o = objArg(opts);
     const envName = String(o.env_name || o.envName || '').trim();
     const value = String(o.value == null ? '' : o.value).trim();
@@ -867,16 +1030,30 @@ function registerIpc() {
       lines.push(`${envName}=${value}`);
     }
     try { fs.mkdirSync(settings.repoRoot, { recursive: true }); } catch { /* 已存在 */ }
-    fs.writeFileSync(envPath, lines.join('\n') + '\n', 'utf8');
+    fs.writeFileSync(envPath, lines.join('\n') + '\n', { encoding: 'utf8', mode: 0o600 });
+    // mode 只在创建时生效；已存在的 .env 显式收紧权限（Windows 上无实际效果，不报错）。
+    try { fs.chmodSync(envPath, 0o600); } catch { /* 平台不支持或不归本进程管 */ }
     process.env[envName] = value;
     return { ok: true, env_name: envName, replaced, path: envPath };
   });
 
   // 用 Electron net.fetch 测试 provider 连通性（主进程天然绕开渲染进程 CORS）
+  // C-17：渲染端传入的地址只认 http(s)（此前无 scheme 校验，file:// 等会被
+  // net.fetch 直接请求）。内网地址刻意放行：本地 ollama / 局域网网关是合法
+  // 场景，凭据发给用户自己配置的 provider 也是该功能本意。
+  const providerUrlError = (url) => {
+    const s = String(url == null ? '' : url).trim();
+    if (!s) return '缺少端点地址';
+    if (!/^https?:\/\//i.test(s)) return '端点地址仅支持 http/https';
+    return null;
+  };
+
   ipcMain.handle('provider:test', async (_e, opts) => {
     const o = objArg(opts);
     const base_url = o.base_url == null ? null : String(o.base_url);
     if (!base_url) return { ok: false, latency_ms: 0, status: 0, error: '该 provider 无 HTTP 端点（mock/cli）' };
+    const urlErr = providerUrlError(base_url);
+    if (urlErr) return { ok: false, latency_ms: 0, status: 0, error: urlErr };
     const models_path = o.models_path ? String(o.models_path) : '/models';
     const url = base_url.replace(/\/+$/, '') + (models_path.startsWith('/') ? models_path : '/' + models_path);
     const ac = new AbortController();
@@ -901,6 +1078,8 @@ function registerIpc() {
     const o = objArg(opts);
     const baseUrl = o.base_url == null ? '' : String(o.base_url).trim();
     if (!baseUrl) return { ok: false, models: [], error: '该 provider 无 HTTP 端点（mock/cli）' };
+    const urlErr = providerUrlError(baseUrl);
+    if (urlErr) return { ok: false, models: [], error: urlErr };
     const family = String(o.family || 'openai_compat');
     const apiKey = o.api_key_env ? (process.env[String(o.api_key_env)] || '').trim() : '';
 
@@ -937,24 +1116,39 @@ function registerIpc() {
   });
 
   // 批量端点测速（借鉴 cc-switch EndpointSpeedTest），返回每个 URL 的延迟与状态
+  // C-17：数量上限 + 分批并发 + 逐个 scheme 校验——此前渲染端可一次发起
+  // 无上限的并发请求，且 file:// 等非法 scheme 不经检查直接进 net.fetch。
   ipcMain.handle('provider:testEndpoints', async (_e, opts) => {
     const o = objArg(opts);
-    const urls = Array.isArray(o.urls) ? o.urls.map(u => String(u)).filter(Boolean) : [];
-    if (!urls.length) return { ok: false, results: [], error: '无候选端点' };
-    const results = await Promise.all(urls.map(async (url) => {
-      const ac = new AbortController();
-      const timer = setTimeout(() => { try { ac.abort(); } catch {} }, 8000);
-      const t0 = Date.now();
-      try {
-        const res = await net.fetch(url, { method: 'GET', signal: ac.signal, redirect: 'follow' });
-        return { url, ok: res.ok, latency_ms: Date.now() - t0, status: res.status, error: res.ok ? null : `HTTP ${res.status}` };
-      } catch (e) {
-        const msg = String(e && e.message || e);
-        return { url, ok: false, latency_ms: Date.now() - t0, status: 0, error: /abort/i.test(msg) ? '超时' : msg };
-      } finally {
-        clearTimeout(timer);
-      }
-    }));
+    const MAX_ENDPOINTS = 20;
+    const BATCH = 5;
+    const rawUrls = Array.isArray(o.urls) ? o.urls.map(u => String(u)).filter(Boolean) : [];
+    if (!rawUrls.length) return { ok: false, results: [], error: '无候选端点' };
+    if (rawUrls.length > MAX_ENDPOINTS) {
+      return { ok: false, results: [], error: `候选端点过多（最多 ${MAX_ENDPOINTS} 个）` };
+    }
+    const bad = rawUrls.find(u => providerUrlError(u));
+    if (bad) return { ok: false, results: [], error: `${providerUrlError(bad)}：${bad}` };
+    const urls = rawUrls;
+    const results = [];
+    for (let i = 0; i < urls.length; i += BATCH) {
+      const batch = urls.slice(i, i + BATCH);
+      const batchResults = await Promise.all(batch.map(async (url) => {
+        const ac = new AbortController();
+        const timer = setTimeout(() => { try { ac.abort(); } catch {} }, 8000);
+        const t0 = Date.now();
+        try {
+          const res = await net.fetch(url, { method: 'GET', signal: ac.signal, redirect: 'follow' });
+          return { url, ok: res.ok, latency_ms: Date.now() - t0, status: res.status, error: res.ok ? null : `HTTP ${res.status}` };
+        } catch (e) {
+          const msg = String(e && e.message || e);
+          return { url, ok: false, latency_ms: Date.now() - t0, status: 0, error: /abort/i.test(msg) ? '超时' : msg };
+        } finally {
+          clearTimeout(timer);
+        }
+      }));
+      results.push(...batchResults);
+    }
     return { ok: true, results };
   });
 
@@ -976,8 +1170,34 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      // C-22：显式开启沙箱（渲染进程跑在 OS 级沙箱内）。preload 只用
+      // contextBridge + ipcRenderer，不依赖 Node 原生能力，可安全开启。
+      sandbox: true,
+      webSecurity: true,
       backgroundThrottling: false, // 实时监控面板：后台/遮挡时也要持续刷新与推送
     },
+  });
+  // C-22：窗口打开守卫。渲染端任何 target="_blank" / window.open（例如把
+  // 任务说明里的外链当按钮点）此前会在 Electron 里新开一个无 preload 的窗口
+  // 直接渲染外部站点；站内 iframe 也没有导航限制。
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    // 只允许 http(s) 交给系统浏览器，其余（file:、javascript:、data:）一律拒绝。
+    try {
+      const u = new URL(url);
+      if (u.protocol === 'http:' || u.protocol === 'https:') void shell.openExternal(url);
+    } catch { /* 非法 URL：静默拒绝 */ }
+    return { action: 'deny' };
+  });
+  win.webContents.on('will-navigate', (event, url) => {
+    // 只允许留在应用自身页面（file:// 下的 index.html）；跨源导航一律拦下。
+    const target = String(url || '');
+    if (!target.startsWith('file://')) {
+      event.preventDefault();
+      try {
+        const u = new URL(target);
+        if (u.protocol === 'http:' || u.protocol === 'https:') void shell.openExternal(target);
+      } catch { /* 忽略 */ }
+    }
   });
   win.removeMenu();
   Menu.setApplicationMenu(Menu.buildFromTemplate([
@@ -1046,6 +1266,8 @@ if (!gotLock) {
     loadSettings();
     registerIpc();
     createWindow();
+    // 定时任务：每分钟到期检查（非 selftest/e2e 探针环境，避免测试抖动）
+    if (!IS_SELFTEST && !IS_E2E) startScheduleTicker();
     // system 模式：监听操作系统明暗主题变化，变化时推送给渲染进程
     nativeTheme.on('updated', () => {
       if (settings && settings.theme === 'system') pushThemeChanged();

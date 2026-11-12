@@ -163,7 +163,7 @@ def _check_python(content: str) -> str | None:
     except RecursionError:
         return _TOO_DEEP
     except Exception as exc:  # noqa: BLE001 —— 见 parse_check 的兜底说明
-        return f"YAML 解析失败：{type(exc).__name__}：{exc}"
+        return f"Python 解析失败：{type(exc).__name__}：{exc}"
     return None
 
 

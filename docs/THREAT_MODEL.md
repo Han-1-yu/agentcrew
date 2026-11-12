@@ -225,6 +225,7 @@ B5  配置（agentcrew.yaml / .env）──▶ CLI 命令模板、MCP server 命
 | **T-43** | 崩在「工具执行到一半」时无人知晓 | `superstep.json` 标 `dispatch` + `tool_call_started`/`tool_call` 配对 → `superstep_recovered` 事件 | **不做结果重放**：副作用不可回滚，如实标注后重跑（设计选择） |
 | **T-44** | 审计被悄悄篡改 | ledger 追加写 + 逐行 flush；读取容忍断尾行 | ⚠️ **无签名、无 WORM、无远端副本**——有本机写权限的人可以改（见 G-13） |
 | **T-45** | 多个 `serve` 共享同一 `output_dir` | 文档明确禁止；`Ledger.emit` 无跨进程锁 | ⚠️ 无运行时检测，只靠文档约束（见 G-14） |
+| **T-47** | Ledger observer 回调抛异常会中断 `emit` 调用方 | observer 默认 `None`（向后兼容）；内置 `_make_ledger_observer` 与内置 `on_event`（`ApiServer.on_event` / `_BoardHook.__call__`）均不抛异常 | ⚠️ 库层自定义 `on_event` 若抛异常，会从 `emit` 向上抛——文件已落盘、审计不受损，但调用方须遵守「observer 不得抛异常」契约（见 `ledger.py` docstring）；observer 只转发明细、不触发 Webhook（刻意，防打爆接收端） |
 
 ---
 

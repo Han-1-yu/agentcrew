@@ -195,7 +195,16 @@ class MockProvider(BaseProvider):
         path = self._require_fixtures_dir(_REVIEW) / "reviews.json"
         if path.is_file():
             data = json.loads(path.read_text(encoding="utf-8"))
-            entry = data.get(replay.task_id) if replay.task_id is not None else None
+            entry = None
+            if replay.task_id is not None:
+                # 按**复核轮次**取夹具：``"T-003@2"`` 表示该任务的第 2 次复核。
+                # 没有这一层，"第 1 轮不满足、修订后第 2 轮满足"的收敛路径在离线
+                # 回放里根本无法表达——所有轮次都会拿到同一份裁决，要么永远通过，
+                # 要么改到轮数用尽也不收敛。
+                # 只在夹具显式提供带轮次的键时生效，老夹具行为逐字不变。
+                entry = data.get(f"{replay.task_id}@{replay.attempt}")
+                if entry is None:
+                    entry = data.get(replay.task_id)
             if entry is None:
                 entry = data.get("_default")
             if entry is not None:

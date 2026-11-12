@@ -9,7 +9,7 @@
 .agent-full-card {
   display: flex; flex-direction: column; overflow: hidden;
   background: var(--bg-panel);
-  border: 1px solid var(--border); border-radius: var(--r-md);
+  border: 0.5px solid var(--border); border-radius: var(--r-md);
   transition: border-color var(--dur-1) ease;
 }
 .agent-full-card:hover { border-color: var(--border-input); }
@@ -17,21 +17,21 @@
 .agent-full-head {
   display: flex; align-items: center; gap: var(--sp-2);
   padding: 10px var(--sp-4);
-  border-bottom: 1px solid var(--border-weak);
+  border-bottom: 0.5px solid var(--border-weak);
 }
 .agent-full-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
 .agent-full-name {
-  flex: 1; font-size: var(--fs-body); font-weight: 600;
+  flex: 1; font-size: var(--fs-body); font-weight: 500;
   color: var(--text); letter-spacing: -0.01em;
 }
 .agent-full-status {
-  font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
+  font-size: var(--fs-xs); font-weight: 500; letter-spacing: 0.02em;
   padding: 2px 8px; border-radius: var(--r-pill);
-  background: var(--ink-06); color: var(--text-sub);
+  background: var(--bg-subtle); color: var(--text-sub);
 }
 .agent-full-status.status-executing { background: var(--status-running-bg); color: var(--status-running); }
 .agent-full-status.status-reviewing { background: var(--warn-bg); color: var(--warn-text); }
-.agent-full-status.status-queued    { background: var(--ink-06); color: var(--text-sub); }
+.agent-full-status.status-queued    { background: var(--bg-subtle); color: var(--text-sub); }
 .agent-full-status.status-done      { background: var(--success-bg); color: var(--success-text); }
 
 .agent-full-body { padding: var(--sp-3) var(--sp-4); flex: 1; }
@@ -52,30 +52,29 @@
   margin: var(--sp-3) 0;
   padding: var(--sp-3);
   background: var(--bg-subtle);
-  border: 1px solid var(--border-weak); border-radius: var(--r-sm);
+  border: 0.5px solid var(--border-weak); border-radius: var(--r-sm);
 }
 .af-stat { text-align: left; }
 .af-stat-val {
-  font-family: var(--font-mono); font-size: 14px; font-weight: 600;
+  font-family: var(--font-mono); font-size: var(--fs-h2); font-weight: 500;
   color: var(--text); line-height: 1.2;
 }
-.af-stat-label { margin-top: 2px; font-size: 10px; color: var(--text-ter); }
+.af-stat-label { margin-top: 2px; font-size: var(--fs-xs); color: var(--text-ter); }
 
-.agent-full-tasks { margin-top: var(--sp-2); padding-top: var(--sp-2); border-top: 1px solid var(--border-weak); }
+.agent-full-tasks { margin-top: var(--sp-2); padding-top: var(--sp-2); border-top: 0.5px solid var(--border-weak); }
 .agent-full-tasks-title {
   margin-bottom: var(--sp-1);
-  font-size: 10px; font-weight: 600; letter-spacing: var(--ls-wide);
-  text-transform: uppercase; color: var(--text-ter);
+  font-size: var(--fs-xs); font-weight: 500; letter-spacing: var(--ls-wide); color: var(--text-ter);
 }
 .agent-full-task-item {
   display: flex; align-items: center; gap: var(--sp-2);
   padding: 3px var(--sp-1); border-radius: var(--r-xs);
   cursor: pointer; transition: background var(--dur-1) ease;
 }
-.agent-full-task-item:hover { background: var(--ink-04); }
+.agent-full-task-item:hover { background: var(--bg-subtle); }
 .agent-full-task-id {
   flex: 0 0 52px;
-  font-family: var(--font-mono); font-size: 10px; color: var(--text-ter);
+  font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-ter);
 }
 .agent-full-task-title {
   flex: 1; font-size: var(--fs-sm); color: var(--text);

@@ -28,11 +28,17 @@ class TraceContext:
 
     ``attempt`` 取自 ``task.attempts``，与 ``task_started`` / ``task_finished``
     事件同源同义，便于把一次 LLM 调用精确对齐到某一次执行尝试。
+
+    ``profile`` 是**执行体**（``AgentProfile.key``）标识。角色可以绑多个执行体、
+    各自走不同模型，此时 ``role`` 只能回答「哪个岗位在花钱」，``profile`` 才能
+    回答「哪个模型档在花钱」——两者缺一不可，否则多执行体的成本无法归因。
+    单执行体角色下它在语义上等于 ``default``，事件里仍只在有值时出现。
     """
 
     task_id: str | None = None
     role: str | None = None
     attempt: int | None = None
+    profile: str | None = None
 
 
 _trace_var: contextvars.ContextVar[TraceContext | None] = (

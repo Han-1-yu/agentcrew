@@ -228,17 +228,45 @@ class TestServerRateLimit:
             await server.stop()
 
     @pytest.mark.asyncio
-    async def test_limit_checks_x_forwarded_for_ip(self):
-        """``X-Forwarded-For`` 优先作为客户端 IP（反代场景）。"""
+    async def test_limit_ignores_xff_without_trusted_proxy(self):
+        """P0-4：无可信代理时 XFF 被忽略——换 XFF 不能换限流分桶。"""
         limiter = RateLimiter(max_requests=1, window_seconds=30)
         server = ApiServer(port=0, rate_limiter=limiter)
         await server.start()
         try:
             port = server._server.sockets[0].getsockname()[1]
+            # 每次换一个伪造的 XFF：若仍按 XFF 分桶，两次都会命中各自的
+            # 第一个配额（200/200）；修复后按 peer 分桶，第二次必须 429。
             s1, _ = await _raw(
                 port, "GET", "/health", {"X-Forwarded-For": "203.0.113.7"})
             s2, _ = await _raw(
-                port, "GET", "/health", {"X-Forwarded-For": "203.0.113.7"})
+                port, "GET", "/health", {"X-Forwarded-For": "198.51.100.9"})
+            assert s1 == 200
+            assert s2 == 429
+            event = server.security_events[-1]["data"]
+            # client_ip 是真实 peer（回环），不是伪造的 XFF 值
+            assert event["client_ip"] not in ("203.0.113.7", "198.51.100.9")
+        finally:
+            await server.stop()
+
+    @pytest.mark.asyncio
+    async def test_limit_uses_xff_when_peer_is_trusted(self):
+        """P0-4：peer 在可信代理网段内时 XFF 生效，且取最右侧不可信跳。"""
+        from agentcrew.config import Settings
+
+        settings = Settings.load().model_copy(
+            update={"trusted_proxies": ["127.0.0.1", "10.0.0.0/8"]})
+        limiter = RateLimiter(max_requests=1, window_seconds=30)
+        server = ApiServer(port=0, rate_limiter=limiter, settings=settings)
+        await server.start()
+        try:
+            port = server._server.sockets[0].getsockname()[1]
+            # 203.0.113.7（不可信客户端）→ 10.0.0.9（可信代理追加自己）：
+            # 从右往左第一个不可信地址是 203.0.113.7。
+            s1, _ = await _raw(port, "GET", "/health", {
+                "X-Forwarded-For": "203.0.113.7, 10.0.0.9"})
+            s2, _ = await _raw(port, "GET", "/health", {
+                "X-Forwarded-For": "203.0.113.7, 10.0.0.9"})
             assert s1 == 200
             assert s2 == 429
             event = server.security_events[-1]["data"]

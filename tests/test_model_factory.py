@@ -623,11 +623,11 @@ def test_key_resolution_is_passed_to_provider(settings, monkeypatch):
     monkeypatch.delenv("OLLAMA_BASE_URL", raising=False)
     built: list[tuple[str, str | None, str]] = []
 
-    def fake_openai(binding, *, api_key, on_retry):
+    def fake_openai(binding, *, api_key, on_retry, request_timeout_seconds=None):
         built.append(("openai_compat", api_key, binding.model))
         return binding
 
-    def fake_anthropic(binding, *, api_key, on_retry):
+    def fake_anthropic(binding, *, api_key, on_retry, request_timeout_seconds=None):
         built.append(("anthropic", api_key, binding.model))
         return binding
 
@@ -649,7 +649,7 @@ def test_ollama_placeholder_used_even_with_base_url_set(settings, monkeypatch):
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
     built: list[str | None] = []
 
-    def fake_openai(binding, *, api_key, on_retry):
+    def fake_openai(binding, *, api_key, on_retry, request_timeout_seconds=None):
         built.append(api_key)
         return binding
 
@@ -693,7 +693,7 @@ class _Always429Client:
 def _patch_openai_provider(monkeypatch, client: _Always429Client) -> None:
     """让 factory 构造的 openai_compat Provider 使用注入的假客户端。"""
 
-    def build(binding, *, api_key, on_retry):
+    def build(binding, *, api_key, on_retry, request_timeout_seconds=None):
         return OpenAICompatProvider(binding, api_key=api_key, client=client,
                                     on_retry=on_retry)
 
@@ -913,27 +913,31 @@ async def test_failover_complete_structured_switches_backup(settings, tmp_path, 
 
 
 async def test_budget_exhausted_on_max_llm_calls(settings, tmp_path):
-    """max_llm_calls=1：第一次调用成功，第二次调用抛 BudgetExhaustedError。"""
+    """max_llm_calls=1：第一次调用成功，第二次在**入口**即被拒（P0-6）。
+
+    旧行为（已修复）：第二次调用照样发出、完成并记账，之后才在 ``_account``
+    抛错——触发上限的那次调用的钱已经花掉，并发下还会集体越线。
+    """
     lg = Ledger(tmp_path / "l.jsonl", run_id="R")
     s = settings.model_copy(update={"max_llm_calls": 1})
     f = ModelFactory(s, ledger=lg)
     p = f.get("mock:m")
     set_purpose(p, "execute", role="r", task_id="T-1", attempt=1)
 
-    # 第一次调用：llm_calls 达到上限 1，但不抛（检查在记账之后，= 上限即超限）
+    # 第一次调用：发起前 llm_calls=0 < 1，放行；记账后 llm_calls=1。
     await f.call("mock:m", [{"role": "user", "content": "x"}],
                  temperature=0, max_tokens=10, purpose="execute", role="r")
     assert f.llm_calls == 1
 
-    # 第二次调用：记账后 llm_calls=2 >= 1，抛 BudgetExhaustedError
+    # 第二次调用：入口事前检查 1 >= 1 即拒——不再发出、不再记账。
     set_purpose(p, "execute", role="r", task_id="T-2", attempt=1)
     with pytest.raises(BudgetExhaustedError) as ei:
         await f.call("mock:m", [{"role": "user", "content": "x"}],
                      temperature=0, max_tokens=10, purpose="execute", role="r")
     assert ei.value.kind == "llm_calls"
     assert ei.value.limit == 1.0
-    # 触发超限的那次调用仍被记账（ledger 事件先于异常发出）
-    assert f.llm_calls == 2
+    # 被拒的调用没有真正发出（P0-6：超限的那次不再花 token）
+    assert f.llm_calls == 1
 
 
 async def test_budget_exhausted_on_max_cost_usd(settings, tmp_path):

@@ -43,8 +43,12 @@ ALLOWED_RUN_OPTIONS: frozenset[str] = frozenset({
     "supervisor_scope", "supervisor_role", "supervisor_chain",
     # R10：主管驳回后换人做。
     "role_fallback", "max_supervisor_reassignments",
-    # R12：出站 Webhook（密钥不经 HTTP 接口传，只认配置文件/环境变量）。
-    "webhook_url", "webhook_events", "webhook_timeout_seconds",
+    # R12：出站 Webhook 的**行为参数**（密钥与 URL 均不经 HTTP 接口传，只认配置
+    # 文件/环境变量）。``webhook_url`` 刻意不在白名单里：接收端地址属于服务端
+    # 配置——webhook 的内网目标豁免（见 ``config._validate_webhook_target_url``）
+    # 前提是「运维显式配置」，开放给任意 ``runs:write`` key 等于把这个前提变成
+    # SSRF（且 ``urlopen`` 不跟随重定向，见 ``webhook._post``）。
+    "webhook_events", "webhook_timeout_seconds",
     "webhook_max_retries",
     # R28：流程直通——flow 是内联流程对象，flow_name 指向流程库里的名字。
     "flow", "flow_name",
@@ -61,8 +65,13 @@ _NULLABLE_KEYS = frozenset({"default_model", "max_cost_usd", "max_llm_calls"})
 
 _NON_NEGATIVE_INT_KEYS = frozenset({
     "max_delegation_depth", "max_dynamic_tasks", "max_subtask_corrections",
-    "max_supervisor_reassignments", "webhook_max_retries", "max_peer_messages",
+    "max_supervisor_reassignments", "max_peer_messages",
 })
+
+#: B-7：每个 run 一个投递线程，``close()`` 只 ``join(5s)`` 后放手——上界防止
+#: options 把后台线程与连接数放大成资源攻击面。
+_MAX_WEBHOOK_RETRIES = 5
+_MAX_WEBHOOK_TIMEOUT_SECONDS = 30.0
 
 
 def validate_run_options(options: Mapping[str, Any]) -> str | None:
@@ -114,13 +123,13 @@ def validate_run_options(options: Mapping[str, Any]) -> str | None:
         elif key == "approval_mode":
             if value not in ("interactive", "deferred"):
                 return "options.approval_mode 必须是 interactive 或 deferred"
-        elif key == "webhook_url":
-            if not isinstance(value, str) or not value.strip():
-                return "options.webhook_url 必须是非空字符串"
-            if not value.startswith(("http://", "https://")):
-                return "options.webhook_url 必须是 http/https 地址"
-            if "@" in value.split("//", 1)[-1].split("/", 1)[0]:
-                return "options.webhook_url 不能带用户名密码"
+        elif key == "webhook_max_retries":
+            if isinstance(value, bool) or not isinstance(value, int):
+                return "options.webhook_max_retries 必须是整数"
+            if value < 0:
+                return "options.webhook_max_retries 必须 >= 0"
+            if value > _MAX_WEBHOOK_RETRIES:
+                return f"options.webhook_max_retries 必须 <= {_MAX_WEBHOOK_RETRIES}"
         elif key == "webhook_events":
             if isinstance(value, str) or not isinstance(value, list):
                 return "options.webhook_events 必须是事件名数组"
@@ -143,6 +152,9 @@ def validate_run_options(options: Mapping[str, Any]) -> str | None:
                 return "options.webhook_timeout_seconds 必须是数字"
             if value <= 0:
                 return "options.webhook_timeout_seconds 必须 > 0"
+            if value > _MAX_WEBHOOK_TIMEOUT_SECONDS:
+                return (f"options.webhook_timeout_seconds 必须 "
+                        f"<= {_MAX_WEBHOOK_TIMEOUT_SECONDS:g}")
         elif key == "max_cost_usd":
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 return "options.max_cost_usd 必须是数值"

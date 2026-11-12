@@ -20,6 +20,7 @@ from pathlib import Path
 from agentcrew.runtime.checkpoint import RunRecord
 from agentcrew.task.task import RunStats, Task, TaskStatus
 from agentcrew.task.task_board import TaskBoard
+from agentcrew.utils.clock import seconds_between
 
 __all__ = [
     "delivery_summary",
@@ -120,11 +121,15 @@ def review_line(tasks: Sequence[Task]) -> str:
 
 
 def elapsed_line(record: RunRecord) -> str:
-    """耗时：起止都取 ``record.stats``，缺失时回落到记录的创建/更新时间。"""
+    """耗时：起止都取 ``record.stats``，缺失时回落到记录的创建/更新时间。
+
+    D-14：走 ``clock.seconds_between``——新旧时间戳（aware UTC 与 naive 本地）
+    混存时直接相减会 ``TypeError``，这里统一补齐再算，时钟倒挂退化为 0。
+    """
     stats: RunStats = record.stats
     start = stats.started_at or record.created_at
     end = stats.finished_at or record.updated_at
-    return format_duration((end - start).total_seconds())
+    return format_duration(seconds_between(start, end))
 
 
 def failure_line(task: Task) -> str:

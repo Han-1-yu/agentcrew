@@ -25,7 +25,11 @@ function renderRunStatusBar() {
   const run=S.dash.run; const meta=RUN_META[run.status]||RUN_META.idle;
   host.className = ''; host.classList.add('status-'+(run.status||'idle'));
   const stats=run.stats||{};
-  const elapsed=run.status==='running'&&stats.started_at ? (Date.now()-parseTs(stats.started_at).getTime()) : null;
+  // C-13：parseTs 对非法/缺失时间返回 null，直接 .getTime() 会抛 TypeError、
+  // 让整个 renderDashboard 中断（看板空白）。先判空再算。
+  const startedAt = stats.started_at ? parseTs(stats.started_at) : null;
+  const elapsed = (run.status==='running' && startedAt)
+    ? (Date.now() - startedAt.getTime()) : null;
   const cost=stats.estimated_cost_usd||0;
   const actions=[];
   const isReal = !!S.realMode;
@@ -46,7 +50,7 @@ function renderRunStatusBar() {
         }
       })},
       iconX(),'取消'));
-  } else if (run.status==='paused' || run.status==='cancelled' || run.status==='failed'){
+  } else if (run.status==='paused' || run.status==='cancelled' || run.status==='failed' || run.status==='planned' || run.status==='interrupted'){
     actions.push(h('button',{class:'btn btn-primary',onclick:async ()=>{
       if (isReal && run.dir) {
         try {

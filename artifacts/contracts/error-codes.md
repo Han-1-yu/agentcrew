@@ -11,26 +11,31 @@
 
 | 状态码 | 含义 | 触发端点 |
 |--------|------|----------|
-| 200 OK | 请求成功，返回 JSON 或 HTML | GET /runs, GET /runs/{id}/status, GET /runs/{id}/ledger, GET /runs/{id}/stats, GET /runs/{id}/model, DELETE /runs/{id}, GET /, GET /health |
-| 202 Accepted | 操作已接受，后台异步执行 | POST /runs, POST /runs/{id}/cancel, POST /runs/{id}/resume, PUT /runs/{id}/model, POST /runs/{id}/events |
+| 200 OK | 请求成功，返回 JSON 或 HTML | GET /runs, GET /runs/{id}/status, GET /runs/{id}/ledger, GET /runs/{id}/stats, GET /runs/{id}/model, GET /runs/{id}/agents, GET /runs/{id}/approvals, GET /runs/{id}/artifacts, GET /keys, GET /tools, GET /flows, GET /providers, GET /metrics（text/plain）, DELETE /runs/{id}, DELETE /keys/{id}, DELETE /flows/{name}, GET /, GET /health |
+| 201 Created | 资源已创建 | POST /keys（新建密钥）、POST /flows（保存流程） |
+| 202 Accepted | 操作已接受，后台异步执行 | POST /runs, POST /runs/{id}/cancel, POST /runs/{id}/resume, PUT /runs/{id}/model, POST /runs/{id}/events, POST /runs/{id}/approvals, POST /runs/{id}/agents |
 
-> 注意：代码中 **不存在** 201 Created 和 204 No Content。POST 一律返回 202，DELETE 返回 200（body 含 `freed_bytes`）。
+> DELETE 返回 200（body 含 `freed_bytes`），不使用 204 No Content。
 
 ### 1.2 客户端错误（4xx）
 
 | 状态码 | 触发条件 |
 |--------|----------|
-| **400 Bad Request** | 请求体非 JSON / 非对象；`goal` 为空字符串；`options` 非对象；DELETE 未带 `?confirm=1`；PUT /model 时 `alias` 为空或 `role` 非字符串；ledger/stats 路径参数越界或非法 run_id（ValueError）；模型切换参数非法 |
-| **404 Not Found** | run_id 不存在（status/ledger/stats/delete/resume/model 端点）；cancel 时 run 不在运行中；未匹配路径兜底 |
+| **400 Bad Request** | 请求体非 JSON / 非对象；`goal` 为空字符串；`options` 非对象或含未知键；DELETE 未带 `?confirm=1`；PUT /model 时 `alias` 为空或 `role` 非字符串；ledger/stats 路径参数越界或非法 run_id（ValueError）；模型切换参数非法；`_event` 事件名不合白名单 |
+| **401 Unauthorized** | 认证启用（默认）且请求缺少或携带无效 API Key；响应带 `WWW-Authenticate: Bearer` 头。`/health` 同样受保护 |
+| **403 Forbidden** | 身份有效但作用域不足（`required_scope` 校验失败）；响应体点名所需作用域 |
+| **404 Not Found** | run_id 不存在（status/ledger/stats/delete/resume/model 端点）；非 admin 访问他人 run（刻意用 404 而非 403，避免枚举）；cancel 时 run 不在运行中；未匹配路径兜底 |
 | **405 Method Not Allowed** | 使用了未实现的 HTTP 方法（手写 server 仅支持 GET / POST / PUT / DELETE） |
-| **409 Conflict** | cancel：驱动对象无 cancel 方法；resume：run 已在运行中；GET /model：run 未装配 ModelFactory；PUT /model：run 不在运行中；DELETE：run 正在运行中拒绝删除 |
+| **409 Conflict** | cancel：驱动对象无 cancel 方法；resume：run 已在运行中，或另一进程持有 ResumeLock；审批单已裁决/已过期；GET /model：run 未装配 ModelFactory；PUT /model：run 不在运行中；DELETE：run 正在运行中拒绝删除 |
+| **413 Payload Too Large** | 请求体超过 4 MiB（`http.MAX_BODY_BYTES`） |
+| **429 Too Many Requests** | 速率限制超限；响应带 `Retry-After` 头。默认只按 socket peer 计数，XFF 仅在配置可信代理时解析 |
 
 ### 1.3 服务端错误（5xx）
 
 | 状态码 | 触发条件 |
 |--------|----------|
-| **500 Internal Server Error** | server 未配置 output_dir；create/resume 启动时 crew 在首个事件前抛出异常；DELETE 时 OSError / ValueError |
-| **503 Service Unavailable** | create：未配置 crew_factory 或 settings；resume：未配置 settings |
+| **500 Internal Server Error** | 未预料的内部异常（响应体只含固定文案与异常类型名，详情经脱敏后只进服务端日志）；DELETE 时 OSError；create/resume 启动时 crew 在首个事件前抛出异常 |
+| **503 Service Unavailable** | 未配置 `output_dir`（各 run 级端点统一）；未配置 crew_factory / settings |
 | **504 Gateway Timeout** | create：30 秒内未收到 `run_started` 事件 |
 
 ### 1.4 错误响应体格式
@@ -175,9 +180,12 @@
 
 | 维度 | 约定 | 实际代码偏差 |
 |------|------|-------------|
-| 时间 | ISO 8601 UTC | **实际为 naive 本地时间**，无时区后缀；run.json/tasks.json 用 `T` 分隔，ledger.jsonl 的 `ts` 用空格分隔 |
+| 时间 | ISO 8601 UTC | **D-14 起统一 aware UTC**（带时区标记：`run.json` 经 pydantic 序列化为 `Z`，ledger/心跳用 `isoformat` 为 `+00:00`）：run.json / tasks.json / 评审 / 审批 / ledger `ts` / 心跳 / 锁。存量 run 仍是 naive 本地时间（无后缀），读取端按本机时区补齐。run.json 用 `T` 分隔，ledger 的 `ts` 用空格分隔 |
 | 金额 | USD decimal | `cost_usd` 为 float，6 位小数 |
 | 耗时 | 毫秒 | 代码中 `duration_ms` 为整数毫秒 |
 | Token | 整数 | `prompt_tokens` / `completion_tokens` / `total_tokens` 均为整数 |
 
-> 前端在解析时间字段时必须兼容两种分隔符（`T` 和空格），且不能假定时区存在。建议统一用 `new Date(field + 'Z')` 前先检测格式。
+> 前端解析时间字段要兼容三种形态：带偏移的 ISO（`2026-11-12T08:00:00+00:00`）、
+> naive ISO（`2026-11-12T16:00:00`，按本地时区理解）、ledger 的空格分隔。
+> **不要用字符串比较排序时间**——混存时字典序与实际时刻不一致（见 `studio/src/app/realtime.js`
+> 的 `parseTs` 用法）。

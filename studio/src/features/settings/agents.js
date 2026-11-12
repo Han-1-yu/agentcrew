@@ -220,7 +220,10 @@ function buildGroup() {
     state.roles = cfg.roles || [];
     for (const role of state.roles) {
       state.assign[role.role] = {};
-      for (const a of role.agents) state.assign[role.role][a.ref] = a.duty;
+      // C-10：role.agents 可能缺失（旧配置/解析异常），此前直接 for...of
+      // 抛 TypeError，又被 load().catch(()=>{}) 静默吞掉，界面永久停在
+      // 「正在读取…」。兜底空数组。
+      for (const a of (role.agents || [])) state.assign[role.role][a.ref] = a.duty;
       if (role.aggregation) state.modes[role.role] = { ...role.aggregation };
     }
     body.innerHTML = '';
@@ -232,7 +235,14 @@ function buildGroup() {
     h('div', { class: 'ag-desc' },
       '一个角色可绑定多个执行体：primary 写产物，review 只出意见，judge 在 N 选 1 时择优。'),
     actions, body);
-  load().catch(() => {});
+  // C-10：不能静默吞掉——否则渲染异常时用户只看到空白/「正在读取…」，
+  // 无从判断是配置问题还是前端 bug。
+  load().catch((e) => {
+    body.innerHTML = '';
+    body.appendChild(h('div', { class: 'ag-error' },
+      `读取失败：${(e && e.message) || e}`,
+      h('div', { class: 'ag-hint-sub' }, '这是前端异常，请刷新页面重试；若反复出现请反馈控制台报错')));
+  });
   return section;
 }
 

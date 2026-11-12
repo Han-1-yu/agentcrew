@@ -27,6 +27,16 @@ from urllib.parse import urlparse
 
 _logger = logging.getLogger(__name__)
 
+#: B-10：stdio 单行 JSON-RPC 消息的字节上限。``StreamReader.readline()`` 的行
+#: 缓冲默认受 64 KiB ``limit`` 约束、超限抛 ``ValueError``——此前该异常未被捕获，
+#: 冒泡到 ``MCPClient._read_loop`` 让读循环静默死亡，此后所有 RPC 只能等 30s 超时。
+#: 这里给一个显式上限并把它收敛成「丢弃该行」。
+_MAX_STDIO_LINE_BYTES = 8 * 1024 * 1024
+
+#: B-11：``_iter_lines`` 在凑齐换行前允许累积的字节上限。SSE 的
+#: ``MAX_RESPONSE_BYTES`` 只在 yield 之后累加，单行未凑齐时缓冲可以无限增长。
+_MAX_SSE_LINE_BYTES = 8 * 1024 * 1024
+
 
 class MCPTransportError(RuntimeError):
     """传输层错误（连接断开 / IO 失败 / 协议帧损坏）的统一类型。"""
@@ -99,15 +109,28 @@ class StdioTransport(MCPTransport):
             line = await self._proc.stdout.readline()
         except (ConnectionError, asyncio.CancelledError):
             return None
+        except (ValueError, asyncio.LimitOverrunError) as exc:
+            # B-10：单行超过 StreamReader 的 limit 时 readline 抛 ValueError。
+            # 不能让它冒泡（读循环会死，之后所有 RPC 只能等 30s 超时）。
+            _logger.warning("MCP 服务器输出超长行（已丢弃）：%s",
+                            type(exc).__name__)
+            return None
         if not line:
             return None
         line = line.strip()
         if not line:
             return None
+        if len(line) > _MAX_STDIO_LINE_BYTES:
+            _logger.warning("MCP 服务器输出超长行（%d 字节，已丢弃）", len(line))
+            return None
         try:
             return json.loads(line.decode("utf-8"))
         except json.JSONDecodeError:
             _logger.warning("MCP 服务器输出非 JSON: %s", line[:200])
+            return None
+        except UnicodeDecodeError:
+            # B-10：非法 UTF-8 此前让 _read_loop 崩溃（只捕获了 JSONDecodeError）。
+            _logger.warning("MCP 服务器输出非 UTF-8 字节（已丢弃）")
             return None
 
     async def close(self) -> None:
@@ -288,10 +311,18 @@ async def _iter_payload(
 
 
 async def _iter_lines(pieces: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
-    """把字节片段拼回「完整行」（跨片段行会被缓冲到凑齐为止）。"""
+    """把字节片段拼回「完整行」（跨片段行会被缓冲到凑齐为止）。
+
+    B-11：缓冲上限 ``_MAX_SSE_LINE_BYTES``。上游的响应体上限只在 yield 之后
+    累加，服务端持续发不含换行的字节时这里的 ``buffer`` 会无限增长——必须在
+    拼接前拦住。
+    """
     buffer = b""
     async for piece in pieces:
         buffer += piece
+        if len(buffer) > _MAX_SSE_LINE_BYTES:
+            raise MCPTransportError(
+                f"SSE 单行超过 {_MAX_SSE_LINE_BYTES} 字节上限（疑似恶意/失控输出）")
         while True:
             index = buffer.find(b"\n")
             if index < 0:
@@ -408,6 +439,18 @@ class SSETransport(MCPTransport):
         if not status_line:
             writer.close()
             raise MCPTransportError("SSE 服务器无响应")
+        # B-12：此前不判状态码就当作连接成功——4xx/5xx 会让 initialize 干等
+        # 30s 超时，错误信息误导。这里当场收敛成传输错误。
+        try:
+            parts = status_line.decode("ascii", "replace").split(" ", 2)
+            status_code = int(parts[1])
+        except (IndexError, ValueError):
+            writer.close()
+            raise MCPTransportError(
+                f"SSE 服务器状态行无法解析: {status_line[:120]!r}") from None
+        if status_code >= 400:
+            writer.close()
+            raise MCPTransportError(f"SSE 端点返回 HTTP {status_code}")
         while True:
             line = await reader.readline()
             if line in (b"\r\n", b"\n", b""):
@@ -423,8 +466,24 @@ class SSETransport(MCPTransport):
             raise MCPTransportError(f"POST {url} 返回 HTTP {status}")
 
     def _resolve_endpoint(self, target: str) -> str:
-        """endpoint 事件可能给绝对 URL 或相对路径；相对路径拼到本服务来源。"""
+        """endpoint 事件可能给绝对 URL 或相对路径；相对路径拼到本服务来源。
+
+        B-13：绝对 URL 必须与本服务**同源**（scheme/host/port 一致）。否则恶意
+        （或被劫持的）SSE 服务端首帧就能把后续所有 JSON-RPC POST（含
+        ``Authorization`` 凭据头）重定向到任意地址——凭据外泄 + 出站 SSRF。
+        """
         if "://" in target:
+            base = urlparse(self._url)
+            candidate = urlparse(target)
+            base_port = base.port or (443 if base.scheme == "https" else 80)
+            cand_port = candidate.port or (
+                443 if candidate.scheme == "https" else 80)
+            if (candidate.scheme.lower() != base.scheme.lower()
+                    or (candidate.hostname or "").lower()
+                    != (base.hostname or "").lower()
+                    or cand_port != base_port):
+                raise MCPTransportError(
+                    f"SSE endpoint 跨源被拒绝：{target!r}（期望同源 {self._url!r}）")
             return target
         base = urlparse(self._url)
         origin = f"{base.scheme}://{base.hostname or ''}"

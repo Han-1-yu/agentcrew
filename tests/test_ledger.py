@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from agentcrew.runtime.ledger import Ledger, LedgerEvent
+from agentcrew.utils.clock import utc_now
 
 
 @pytest.fixture
@@ -72,9 +73,10 @@ def test_each_line_flushed_immediately(ledger, tmp_path):
 
 
 def test_emit_returns_ledger_event_with_metadata(ledger):
-    before = datetime.now()
+    # D-14：事件 ts 已是 aware UTC，边界值必须同口径，否则相减直接 TypeError。
+    before = utc_now()
     ev = ledger.emit("run_started", goal="g")
-    after = datetime.now()
+    after = utc_now()
     assert isinstance(ev, LedgerEvent)
     assert ev.run_id == "R-1"
     assert ev.event == "run_started"
@@ -306,3 +308,45 @@ def test_emit_fsyncs_each_line(ledger, monkeypatch):
 def test_ledger_event_forbids_extra_fields():
     with pytest.raises(ValidationError):
         LedgerEvent(ts=datetime.now(), run_id="R-1", event="x", data={}, extra=1)
+
+
+# ---- observer（写入后回调）：明细事件转发实时通道 ----
+
+def test_observer_receives_event_and_redacted_data(tmp_path):
+    seen: list[tuple[str, dict]] = []
+    lg = Ledger(
+        tmp_path / "l.jsonl", run_id="R-1", secrets=["supersecret"],
+        observer=lambda name, data: seen.append((name, data)),
+    )
+    lg.emit("task_started", task_id="T-1", api_key="supersecret")
+    assert seen == [("task_started", {"task_id": "T-1", "api_key": "***"})]
+
+
+def test_observer_is_called_after_file_write(tmp_path):
+    """观察者触发时该行已落盘：下游可立刻读到同一事件。"""
+    order: list[str] = []
+    def observer(name, data):
+        raw = (tmp_path / "l.jsonl").read_text(encoding="utf-8")
+        order.append("written" if "task_started" in raw else "missing")
+    lg = Ledger(tmp_path / "l.jsonl", run_id="R-1", observer=observer)
+    lg.emit("task_started", task_id="T-1")
+    assert order == ["written"]
+
+
+def test_observer_gets_redacted_data_for_non_serializable_values(tmp_path):
+    seen: list[dict] = []
+    lg = Ledger(
+        tmp_path / "l.jsonl", run_id="R-1", secrets=["supersecret"],
+        observer=lambda name, data: seen.append(data),
+    )
+    lg.emit("x", as_set={"supersecret"}, as_bytes=b"supersecret")
+    assert "supersecret" not in repr(seen[0])
+    assert seen[0]["as_set"] == "{'***'}"
+
+
+def test_observer_defaults_to_none_and_emits_normally(tmp_path):
+    """observer 缺省时 emit 行为与之前逐字一致（向后兼容）。"""
+    lg = Ledger(tmp_path / "l.jsonl", run_id="R-1")
+    ev = lg.emit("task_started", task_id="T-1")
+    assert ev.event == "task_started"
+    assert list(lg.events()) == [ev]

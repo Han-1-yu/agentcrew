@@ -93,19 +93,23 @@ function buildConnectionGroup(cfg) {
     connStatus.className = 'set-inline-status pending';
     connStatus.textContent = '正在连接…';
     try {
-      // 走主进程代理：绕开 CORS，并自动带上已保存的 API Key。
-      const r = await window.studio.apiRequest('/providers', {
-        baseUrl: base, method: 'GET', timeoutMs: 8000,
-      });
-      if (r && r.ok) {
+      // P0-8：探测走 api:probe——不带 API Key（凭据只发给已保存的地址）。
+      // 结论分两层：reachable = 地址可达；401 = 可达且需认证（保存地址与
+      // Key 后，正常请求会自动带上认证头）。
+      const r = await window.studio.apiProbe(base);
+      if (r && r.reachable && r.status === 200) {
         connStatus.className = 'set-inline-status ok';
-        connStatus.textContent = '连接正常 · 认证通过';
-      } else {
-        const detail = (r && r.error) || (r && r.status ? 'HTTP ' + r.status : '未知错误');
+        connStatus.textContent = '连接正常';
+      } else if (r && r.reachable && (r.status === 401 || r.status === 403)) {
+        connStatus.className = 'set-inline-status ok';
+        connStatus.textContent = `地址可达（HTTP ${r.status}，需认证）：保存地址与 API Key 后请求将自动携带认证头`;
+      } else if (r && r.reachable) {
         connStatus.className = 'set-inline-status err';
-        connStatus.textContent = r && r.status === 401
-          ? `连接失败：401 — 请先在上方保存 API Key（${detail}）`
-          : `连接失败：${detail}`;
+        connStatus.textContent = `地址可达，但返回异常状态：HTTP ${r.status}`;
+      } else {
+        const detail = (r && r.error) || '未知错误';
+        connStatus.className = 'set-inline-status err';
+        connStatus.textContent = `连接失败：${detail}`;
       }
     } catch (e) {
       connStatus.className = 'set-inline-status err';

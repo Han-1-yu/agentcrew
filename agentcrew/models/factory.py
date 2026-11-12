@@ -311,6 +311,9 @@ def _trace_fields() -> dict[str, Any]:
     设置；追踪未设置（评审直连、测试直连工厂、旧用法）时返回空 dict，事件形状
     与改造前逐字段一致。**刻意不含 ``role``**：调用方显式传了 ``role``，重复
     关键字会在调用点直接 ``TypeError``。
+
+    ``profile`` 同理不由调用方传入，因此可以安全地在这里补进事件——它是多执行体
+    成本归因的唯一入口（``GET /runs/{id}/stats`` 的 ``llm.by_profile`` 就靠它）。
     """
     trace = current_trace()
     if trace is None:
@@ -320,6 +323,8 @@ def _trace_fields() -> dict[str, Any]:
         fields["task_id"] = trace.task_id
     if trace.attempt is not None:
         fields["attempt"] = trace.attempt
+    if trace.profile is not None:
+        fields["profile"] = trace.profile
     return fields
 
 
@@ -392,6 +397,8 @@ class ModelFactory:
         # 让阈值在新 run 重新武装（否则一次 run 警告过后永久沉默）。
         self._budget_warning_emitted = False
         self._budget_downgrade_to: str | None = None
+        #: R44：已上报过"额度不足改走便宜档"的执行体（只为避免刷屏，不参与决策）。
+        self._routing_shift_reported: set[str] = set()
         # V7-P1：多模式路由状态
         # rotate 策略的轮询计数器（pool 标识 → 下一个索引）
         self._rotate_counters: dict[str, int] = {}
@@ -459,6 +466,7 @@ class ModelFactory:
         # P2 增强：预算警告 / 降级状态随计数器一起复位，新 run 重新武装阈值。
         self._budget_warning_emitted = False
         self._budget_downgrade_to = None
+        self._routing_shift_reported.clear()
 
     # ── P1-6：运行时切换模型绑定 ───────────────────────────────────────────
 
@@ -823,9 +831,11 @@ class ModelFactory:
         api_key = self._require_api_key(binding)
         if implementation == "anthropic":
             return AnthropicProvider(
-                binding, api_key=api_key, on_retry=self._on_retry)
+                binding, api_key=api_key, on_retry=self._on_retry,
+                request_timeout_seconds=self._settings.llm_request_timeout_seconds)
         return OpenAICompatProvider(
-            binding, api_key=api_key, on_retry=self._on_retry)
+            binding, api_key=api_key, on_retry=self._on_retry,
+            request_timeout_seconds=self._settings.llm_request_timeout_seconds)
 
     def validate_context_budget(self, bindings: Mapping[str, str]) -> None:
         """校验每个实际绑定的模型能否容下上下文预算（spec §11.2，退出码 3）。
@@ -1572,15 +1582,38 @@ class ModelFactory:
 
         与任务级 ``cost_ceiling_usd`` 的区别：那个每次任务清零，这个只增不减；
         resume 后由 :meth:`seed_agent_cost` 把上一次 run 的花费灌回来。
+
+        P0-6：这里同时做 ``Settings.max_cost_usd`` / ``max_llm_calls`` 的**事前**
+        检查。此前这两个硬上限只在 ``_account``（一次调用完成并记账**之后**）
+        判定——触发上限的那次调用的钱已经花掉；``max_concurrency > 1`` 时 N 个
+        在飞请求会各自完成记账后才各自抛错，硬上限退化成事后报警。
+        ``call`` / ``stream_call`` / ``complete_structured`` 三个入口都先经过
+        本方法，事前检查能把「已花 N-1 次」挡在第 N 次发起之前；并发的最后
+        一批仍可能小幅越线，由 ``_account`` 的事后兜底收敛并把超限事实留在
+        ledger（``budget_exhausted``）。
         """
         state = agent_budget.current()
-        if state is None or state.run_ceiling_usd is None or not state.profile:
-            return
-        spent = self._agent_run_cost.get(state.profile, 0.0)
-        if spent >= state.run_ceiling_usd:
-            raise AgentBudgetExceeded(
-                state.profile, kind="run_cost",
-                limit=state.run_ceiling_usd, used=spent)
+        if state is not None and state.run_ceiling_usd is not None and state.profile:
+            spent = self._agent_run_cost.get(state.profile, 0.0)
+            if spent >= state.run_ceiling_usd:
+                raise AgentBudgetExceeded(
+                    state.profile, kind="run_cost",
+                    limit=state.run_ceiling_usd, used=spent)
+        # 全局硬上限（None = 未配置，整体空转）：已在盘上的花费/次数先于下一次
+        # 调用判定。注意这里用 ``>=`` 而不是 ``_account`` 事后的 ``>``——
+        # 事前语义是「再发起一次必然超限」：max_llm_calls=N 时已完成 N 次，
+        # 第 N+1 次在这里被拒绝，而不是等它完成记账后再抛（N 次成功的调用
+        # 本身仍被允许，与事后检查配合后两者语义一致）。
+        max_cost = self._settings.max_cost_usd
+        if max_cost is not None and self._total_cost_usd >= max_cost:
+            raise BudgetExhaustedError(
+                kind="cost_usd",
+                current=self._total_cost_usd, limit=max_cost)
+        max_calls = self._settings.max_llm_calls
+        if max_calls is not None and self._llm_calls >= max_calls:
+            raise BudgetExhaustedError(
+                kind="llm_calls",
+                current=float(self._llm_calls), limit=float(max_calls))
 
     def seed_agent_cost(self, profile: str, cost_usd: float) -> None:
         """把历史（resume 前的）累计成本灌进本次 run，避免重启即清零。"""
@@ -1765,11 +1798,45 @@ class ModelFactory:
 
         只在 ``_budget_downgrade_to`` 已设置且与请求 alias 不同时替换；调用方
         显式请求便宜模型本身时原样返回，避免无意义的二次切换。
+
+        R44：全局降级未触发时，再看**执行体级**剩余额度（``cost_aware_routing``）。
+        两者都是"返回一个更便宜的别名"，但作用域不同：前者是整场 run 的花费，
+        后者是"这个执行体自己的额度快用完了"。
         """
         target = self._budget_downgrade_to
         if target is not None and target != alias:
             return target
-        return alias
+        return self._maybe_shift_by_headroom(alias)
+
+    def _maybe_shift_by_headroom(self, alias: str) -> str:
+        """R44：执行体剩余额度低于阈值时，本次调用提前改走更便宜的备别名。
+
+        刻意**无状态**（除了"已上报过"的集合）：不设置 ``_budget_downgrade_to``，
+        因为那是整场 run 的开关；执行体额度恢复（例如换了 profile）后应当立即
+        回到原模型，不需要额外复位逻辑。
+        """
+        if not self._settings.cost_aware_routing:
+            return alias
+        state = agent_budget.current()
+        if state is None or state.run_ceiling_usd is None:
+            return alias
+        if not budget.under_headroom(
+                state.spent_usd, state.run_ceiling_usd,
+                self._settings.cost_aware_headroom):
+            return alias
+        cheaper = self._find_cheaper_fallback(alias)
+        if cheaper is None or cheaper == alias:
+            return alias
+        if state.profile not in self._routing_shift_reported:
+            self._routing_shift_reported.add(state.profile)
+            if self._ledger is not None:
+                self._ledger.emit(
+                    "routing_budget_shift", profile=state.profile,
+                    from_model=alias, to_alias=cheaper,
+                    spent_usd=round(state.spent_usd, 6),
+                    ceiling_usd=state.run_ceiling_usd,
+                    headroom=self._settings.cost_aware_headroom)
+        return cheaper
 
     def _find_cheaper_fallback(
         self, current_model: str, binding: ModelBinding | None = None
@@ -1927,18 +1994,28 @@ class ModelFactory:
                 estimated_cost_usd=cost,
                 latency_ms=result.latency_ms,
                 purpose=purpose)
-        # P2 增强：先做软阈值（80% 警告 / 90% 降级），再做 100% 硬上限。
-        # 软阈值不抛异常，只落事件 + 置标志位；硬超限仍按原逻辑抛
-        # BudgetExhaustedError。max_cost_usd 为 None 时这两个方法整体空转。
-        self._maybe_emit_budget_warning()
-        self._maybe_downgrade_to_cheaper(result, binding)
-        # P0-3：预算硬上限检查（ledger 事件已发出，超限调用可追溯）。
+        # P2 增强：预算分三层——软阈值警告（80%）、降级（90%）、硬上限（100%）。
+        # A-23：**先算硬上限，再做另外两层**。``exhaustion_error`` 是纯计算、
+        # 没有副作用；而软阈值要 emit ledger、降级要改 binding，都可能因为
+        # observer 异常（SSE 断连、Webhook 序列化失败）抛出来。此前硬上限排在
+        # 两者之后，异常路径下整段预算校验被跳过——钱已经花了、事件也落了盘，
+        # 却没有任何人拦。现在即使这两层全炸，超限照样抛。
         exhausted = budget.exhaustion_error(
             total_cost_usd=self._total_cost_usd,
             llm_calls=self._llm_calls,
             max_cost_usd=self._settings.max_cost_usd,
             max_llm_calls=self._settings.max_llm_calls,
         )
+        try:
+            self._maybe_emit_budget_warning()
+        except Exception:  # noqa: BLE001 —— 软阈值失败不得掩盖硬上限
+            _logger.warning("预算软阈值事件发送失败（不影响硬上限检查）",
+                            exc_info=True)
+        try:
+            self._maybe_downgrade_to_cheaper(result, binding)
+        except Exception:  # noqa: BLE001
+            _logger.warning("预算降级决策失败（不影响硬上限检查）",
+                            exc_info=True)
         if exhausted is not None:
             raise exhausted
 

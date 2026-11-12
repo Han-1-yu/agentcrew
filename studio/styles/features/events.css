@@ -4,14 +4,14 @@
 .ev-filter-bar {
   display: flex; flex-wrap: wrap; gap: 6px;
   padding: var(--sp-2) var(--sp-5);
-  border-bottom: 1px solid var(--border-weak);
+  border-bottom: 0.5px solid var(--border-weak);
   background: var(--bg-subtle);
 }
 .ev-filter-btn {
   padding: 3px 9px;
-  border: 1px solid var(--border-weak); border-radius: var(--r-pill);
+  border: 0.5px solid var(--border-weak); border-radius: var(--r-pill);
   background: transparent; color: var(--text-ter);
-  font-family: var(--font-mono); font-size: 10.5px;
+  font-family: var(--font-mono); font-size: var(--fs-xs);
   cursor: pointer;
   transition: background var(--dur-1) ease, color var(--dur-1) ease, border-color var(--dur-1) ease;
 }
@@ -22,27 +22,27 @@
 }
 
 .ev-full-list { overflow-y: auto; height: calc(100vh - 160px); padding: 2px 0; }
-.ev-full-item { border-bottom: 1px solid var(--ink-04); }
+.ev-full-item { border-bottom: 0.5px solid var(--ink-04); }
 .ev-full-main {
   display: flex; align-items: center; gap: var(--sp-3);
   padding: 6px var(--sp-5);
   cursor: pointer;
   transition: background var(--dur-1) ease;
 }
-.ev-full-main:hover { background: var(--ink-03); }
+.ev-full-main:hover { background: var(--bg-subtle); }
 .ev-full-ts {
   flex: 0 0 62px;
-  font-family: var(--font-mono); font-size: 10.5px; color: var(--text-ter);
+  font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-ter);
 }
 .ev-full-type {
   flex: 0 0 128px;
-  font-family: var(--font-mono); font-size: 10.5px; font-weight: 600;
+  font-family: var(--font-mono); font-size: var(--fs-xs); font-weight: 500;
   color: var(--text-sub);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .ev-full-task {
   flex: 0 0 56px;
-  font-family: var(--font-mono); font-size: 10.5px; color: var(--text-ter);
+  font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-ter);
 }
 .ev-full-role { flex: 0 0 104px; font-size: var(--fs-xs); color: var(--text-ter);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -55,31 +55,31 @@
   display: none; margin: 0;
   padding: var(--sp-2) var(--sp-5) var(--sp-3) 170px;
   background: var(--bg-subtle);
-  font-family: var(--font-mono); font-size: 10.5px; color: var(--text-sub);
+  font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-sub);
   white-space: pre-wrap; word-break: break-all; line-height: 1.6;
 }
 .ev-full-item.expanded .ev-full-detail { display: block; }
 
 /* ---- 事件分页 ---- */
 .ev-pager { display: flex; align-items: center; justify-content: center; gap: 16px;
-  padding: 16px; border-top: 1px solid var(--border-weak); margin-top: 8px; }
-.ev-pager-info { font-size: 12px; color: var(--text-sub); font-family: "SF Mono", Menlo, monospace; }
+  padding: 16px; border-top: 0.5px solid var(--border-weak); margin-top: 8px; }
+.ev-pager-info { font-size: var(--fs-sm); color: var(--text-sub); font-family: var(--font-mono); }
 
 /* ---- 执行体变更审计卡：运行中被改变的行为，单独摊开 ---- */
 
 .ev-audit {
-  border: 1px solid var(--accent-border-soft); border-radius: var(--r-md);
+  border: 0.5px solid var(--accent-border-soft); border-radius: var(--r-md);
   background: var(--accent-bg-soft);
   padding: var(--sp-3); margin-bottom: var(--sp-3);
 }
 
 .ev-audit-head { display: flex; align-items: baseline; gap: var(--sp-2); margin-bottom: var(--sp-2); }
-.ev-audit-title { font-size: 12px; font-weight: 600; color: var(--accent-text); }
+.ev-audit-title { font-size: var(--fs-sm); font-weight: 500; color: var(--accent-text); }
 .ev-audit-count {
-  font-family: var(--font-mono); font-size: 11px; color: var(--accent-text);
-  border: 1px solid var(--accent-border-soft); border-radius: 999px; padding: 0 7px;
+  font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--accent-text);
+  border: 0.5px solid var(--accent-border-soft); border-radius: 999px; padding: 0 7px;
 }
-.ev-audit-sub { margin-left: auto; font-size: 11px; color: var(--text-ter); }
+.ev-audit-sub { margin-left: auto; font-size: var(--fs-xs); color: var(--text-ter); }
 
 .ev-audit-rows { display: flex; flex-direction: column; gap: 1px; }
 
@@ -88,22 +88,22 @@
   grid-template-columns: 84px 132px 1fr 120px 52px;
   align-items: center; gap: var(--sp-2);
   padding: 4px 6px; border-radius: var(--r-xs);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   transition: background var(--dur-1) ease;
 }
-.ev-audit-row:hover { background: var(--ink-04); }
+.ev-audit-row:hover { background: var(--bg-subtle); }
 
-.ev-audit-ts { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-ter); }
+.ev-audit-ts { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-ter); }
 .ev-audit-role { font-family: var(--font-mono); color: var(--text-sub); }
-.ev-audit-flow { color: var(--accent-text); font-weight: 600; }
+.ev-audit-flow { color: var(--accent-text); font-weight: 500; }
 .ev-audit-row.reset .ev-audit-flow { color: var(--success-text); }
 .ev-audit-reason {
-  color: var(--text-ter); font-size: 11px;
+  color: var(--text-ter); font-size: var(--fs-xs);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .ev-audit-tag {
-  justify-self: end; font-size: 10px; padding: 0 6px;
-  border: 1px solid var(--border-weak); border-radius: 999px; color: var(--text-ter);
+  justify-self: end; font-size: var(--fs-xs); padding: 0 6px;
+  border: 0.5px solid var(--border-weak); border-radius: 999px; color: var(--text-ter);
 }
 
 @media (max-width: 900px) {

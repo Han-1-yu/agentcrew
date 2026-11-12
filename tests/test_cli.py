@@ -335,6 +335,12 @@ def test_completed_run_maps_to_0():
         _StubCrew(), _record(RunStatus.COMPLETED, succeeded=3)) == EXIT_CODES["ok"] == 0
 
 
+def test_planned_run_maps_to_0():
+    """Ask 模式（--plan-only）计划生成成功是正常出口，退出码应为 0。"""
+    assert cli._run_exit_code(
+        _StubCrew(), _record(RunStatus.PLANNED)) == EXIT_CODES["ok"] == 0
+
+
 def test_cancelled_run_with_prior_failures_exits_130():
     """判定顺序必须先看状态：审计记录里 run_finished 写的是 130，进程不能退 1。"""
     record = _record(RunStatus.CANCELLED, failed=2, blocked=1, skipped=1)
@@ -413,7 +419,10 @@ def test_second_ctrl_c_does_not_traceback(monkeypatch, capsys):
 def test_resume_integrity_error_reports_config(tmp_path, monkeypatch, capsys):
     """run 目录与 MANIFEST/配置不一致时：可读消息 + 退出码 3，而不是 traceback。"""
     monkeypatch.setenv("AGENTCREW_OUTPUT_DIR", str(tmp_path / "o"))
-    store = CheckpointStore(_fake_run_dir(tmp_path / "o", "20260101-000000-ffff"))
+    # A-6 后 RUNNING 且无心跳会在 resume_from 就被拒，走到不了 MANIFEST 检查；
+    # 用 INTERRUPTED（放行恢复）让测试聚焦在「MANIFEST 完整性」这条错误通道上。
+    store = CheckpointStore(_fake_run_dir(
+        tmp_path / "o", "20260101-000000-ffff", RunStatus.INTERRUPTED))
     store.save_tasks(TaskBoard([]))
 
     async def boom(self):

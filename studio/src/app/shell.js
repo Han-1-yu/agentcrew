@@ -1,7 +1,7 @@
 /**
  * 应用外壳：顶栏 / 侧栏 chrome、主题切换、全局快捷键、账户菜单。
  */
-import { RUN_META } from '../contracts/enums.js';
+import { RUN_META, STATUS_META, roleMeta } from '../contracts/enums.js';
 
 import { $, h } from '../lib/dom.js';
 import { fmtCost, fmtTokens, simplifyGoal } from '../lib/format.js';
@@ -76,28 +76,89 @@ function renderChrome(){
   updateConnIndicator();
 }
 
-/* ---- 侧栏 Projects 分组：当前运行的缩进任务列表 ---- */
-let lastTaskSig='';
-function renderSidebarTasks(){
-  const list=document.getElementById('sb-tasklist'); if(!list) return;
-  const tasks=(S.dash&&S.dash.tasks)||[];
-  const top=tasks.slice(0,5);
-  // 每秒一次的重渲染：内容没变就直接跳过，避免丢 hover / 选中态
-  const sig=((S.dash&&S.dash.run&&S.dash.run.dir)||'')+'|'+top.map(t=>t.id+'.'+t.title).join('|')+'|'+tasks.length;
-  if(sig===lastTaskSig) return;
-  lastTaskSig=sig;
+/* ---- 侧栏 Projects 分组：当前运行的缩进任务列表（搜索 + 状态筛选 + 角色分组） ---- */
+const TASK_FILTERS = [
+  { key: 'all', label: '全部', statuses: null },
+  { key: 'active', label: '进行中', statuses: ['running', 'review', 'rework'] },
+  { key: 'pending', label: '待处理', statuses: ['pending', 'ready', 'blocked'] },
+  { key: 'done', label: '完成', statuses: ['succeeded', 'skipped'] },
+  { key: 'failed', label: '失败', statuses: ['failed', 'cancelled'] },
+];
+let lastTaskSig = '';
+let taskToolsBound = false;
 
-  list.innerHTML='';
-  if(!top.length){
-    list.appendChild(h('li',{},h('span',{class:'sb-li-text'},'暂无任务')));
+function taskFilterKey() { return S.taskStatusFilter || 'all'; }
+
+/* 搜索框 + 筛选 chips 的事件只在首次绑定（元素常驻，不被重渲染清空）。 */
+function bindTaskTools() {
+  if (taskToolsBound) return;
+  taskToolsBound = true;
+  const box = document.getElementById('sb-task-search');
+  if (box) box.addEventListener('input', (e) => { S.taskSearch = e.target.value; lastTaskSig = ''; renderSidebarTasks(); });
+}
+
+function renderSidebarTasks() {
+  const list = document.getElementById('sb-tasklist');
+  const chips = document.getElementById('sb-task-filters');
+  if (!list) return;
+  bindTaskTools();
+  const tasks = (S.dash && S.dash.tasks) || [];
+  const q = String(S.taskSearch || '').trim().toLowerCase();
+  const fk = taskFilterKey();
+
+  // 状态筛选 chips（只在切换后重绘，避免每秒清掉 hover 态）
+  if (chips && chips.dataset.key !== fk) {
+    chips.dataset.key = fk;
+    chips.innerHTML = '';
+    TASK_FILTERS.forEach((f) => {
+      chips.appendChild(h('button', {
+        class: `sb-task-chip${fk === f.key ? ' on' : ''}`,
+        onclick: () => { S.taskStatusFilter = f.key; lastTaskSig = ''; renderSidebarTasks(); },
+      }, f.label));
+    });
+  }
+
+  const filter = TASK_FILTERS.find((f) => f.key === fk) || TASK_FILTERS[0];
+  let filtered = tasks;
+  if (filter.statuses) filtered = tasks.filter((t) => filter.statuses.includes(t.status));
+  if (q) filtered = filtered.filter((t) => String(t.id || '').toLowerCase().includes(q)
+    || String(t.title || '').toLowerCase().includes(q)
+    || String(t.description || '').toLowerCase().includes(q)
+    || String(t.brief || '').toLowerCase().includes(q));
+
+  // 签名含筛选态与任务，变化才重绘（每秒一次的重渲染：内容没变就跳过，避免丢 hover）
+  const sig = fk + '|' + q + '|' + ((S.dash && S.dash.run && S.dash.run.dir) || '')
+    + '|' + filtered.slice(0, 12).map((t) => t.id + '.' + t.status).join('|') + '|' + filtered.length;
+  if (sig === lastTaskSig) return;
+  lastTaskSig = sig;
+
+  list.innerHTML = '';
+  if (!filtered.length) {
+    list.appendChild(h('li', {}, h('span', { class: 'sb-li-text' }, tasks.length ? '无匹配任务' : '暂无任务')));
     return;
   }
-  top.forEach(t=>{
-    list.appendChild(h('li',{class:'is-click',title:t.title,onclick:()=>openTaskDetail(t.id)},
-      h('span',{class:'sb-li-text'},t.title)));
+
+  // 按角色分组（对齐 WorkBuddy 任务列表的文件夹分组）
+  const top = filtered.slice(0, 12);
+  const byRole = new Map();
+  top.forEach((t) => {
+    if (!byRole.has(t.role)) byRole.set(t.role, []);
+    byRole.get(t.role).push(t);
   });
-  if(tasks.length>top.length){
-    list.appendChild(h('li',{},h('span',{class:'sb-li-text'},`还有 ${tasks.length-top.length} 个任务…`)));
+  for (const [role, ts] of byRole) {
+    const rm = roleMeta(role);
+    list.appendChild(h('li', { class: 'sb-task-group' },
+      h('span', { class: 'sb-li-dot', style: `background:${rm.color}` }),
+      h('span', { class: 'sb-li-text' }, `${rm.full} · ${ts.length}`)));
+    ts.forEach((t) => {
+      const sm = STATUS_META[t.status] || STATUS_META.unknown;
+      list.appendChild(h('li', { class: 'is-click sb-task-item', title: `${t.id} ${t.title}`, onclick: () => openTaskDetail(t.id) },
+        h('span', { class: 'sb-task-dot', style: `background:${sm.color}` }),
+        h('span', { class: 'sb-li-text' }, t.title)));
+    });
+  }
+  if (filtered.length > top.length) {
+    list.appendChild(h('li', {}, h('span', { class: 'sb-li-text' }, `还有 ${filtered.length - top.length} 个任务…`)));
   }
 }
 
@@ -114,10 +175,10 @@ const THEME_LABEL = { light: '浅色', dark: '深色', system: '跟随系统' };
 
 // 把用户选择的 theme 解析为实际生效的 light|dark
 function effectiveTheme() {
-  const mode = (S.settings && S.settings.theme) || 'dark';
+  const mode = (S.settings && S.settings.theme) || 'light';
   if (mode === 'system') {
     try { return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
-    catch { return 'dark'; }
+    catch { return 'light'; }
   }
   return mode;
 }
@@ -132,17 +193,17 @@ function applyTheme() {
   requestAnimationFrame(() => requestAnimationFrame(() => root.classList.remove('theme-switching')));
   // 缓存已解析的实际主题，供 index.html 首帧内联脚本读取，避免启动闪白
   try { localStorage.setItem('agentcrew:theme', eff); } catch {}
-  const mode = (S.settings && S.settings.theme) || 'dark';
+  const mode = (S.settings && S.settings.theme) || 'light';
   const btn = document.getElementById('btn-theme');
   if (btn) {
-    btn.innerHTML = THEME_ICONS[mode] || THEME_ICONS.dark;
+    btn.innerHTML = THEME_ICONS[mode] || THEME_ICONS.light;
     btn.title = `主题：${THEME_LABEL[mode] || mode}（点击切换）`;
   }
 }
 
 // 顶栏按钮循环：light → dark → system → light
 async function cycleTheme() {
-  const cur = (S.settings && S.settings.theme) || 'dark';
+  const cur = (S.settings && S.settings.theme) || 'light';
   const next = THEME_ORDER[(THEME_ORDER.indexOf(cur) + 1) % THEME_ORDER.length];
   S.settings.theme = next;   // 乐观更新 UI
   applyTheme();

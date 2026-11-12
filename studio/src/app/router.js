@@ -8,12 +8,15 @@ import { emptyState } from '../ui/states.js';
 
 import { renderAgentsPage } from '../features/agents-page/index.js';
 import { renderArtifactsPage } from '../features/artifacts/index.js';
+import { renderConversationPage } from '../features/conversation/index.js';
 import { renderDagPage } from '../features/dag-page/index.js';
 import { renderEventsPage } from '../features/events/index.js';
 import { renderGatesPage } from '../features/gates-page/index.js';
 import { renderPlanPage } from '../features/plan/index.js';
 import { renderProvidersPage } from '../features/providers/index.js';
 import { renderSettingsPage } from '../features/settings/index.js';
+import { renderSchedulesPage } from '../features/schedules/index.js';
+import { renderProfilesPage } from '../features/profiles/index.js';
 function switchNav(key){
   S.nav=key;
   // 让上一版页面的异步续体失效：页面 render 里捕获 S.navToken，await 之后
@@ -21,13 +24,24 @@ function switchNav(key){
   S.navToken += 1;
   persistState();
   $$('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.nav===key));
-  // 命令输入框只在运行总览出现：其他页面是表单/列表，悬浮框会挡住内容
+  // 命令输入框在「运行总览」与「对话」出现：其他页面是表单/列表，悬浮框会挡住内容
   const composer=document.getElementById('composer');
-  if(composer) composer.classList.toggle('hidden',key!=='dashboard');
+  if(composer) composer.classList.toggle('hidden', key!=='dashboard' && key!=='conversation');
   // 同时开关底部渐隐带，避免输入框消失后仍压着一层暗角
   const mainCol=document.querySelector('.main-col');
-  if(mainCol) mainCol.classList.toggle('has-composer',key==='dashboard');
+  if(mainCol) mainCol.classList.toggle('has-composer', key==='dashboard' || key==='conversation');
   const dash=$('#dashboard-view'), ph=$('#placeholder-view');
+  // C-8：清空占位区前先释放 flow 图挂的 ResizeObserver。此前直接
+  // innerHTML='' 会把节点丢掉，但观察器仍钉着游离 DOM——每切一次页泄漏一份，
+  // 图多时还会拖慢重绘。DAG 页面自己有清理钩子，这里统一兜住所有页面。
+  const disposeAll = (root) => {
+    if (!root) return;
+    if (typeof root._flowDispose === 'function') { root._flowDispose(); root._flowDispose = null; }
+    root.querySelectorAll?.('*').forEach((el) => {
+      if (typeof el._flowDispose === 'function') { el._flowDispose(); el._flowDispose = null; }
+    });
+  };
+  disposeAll(ph);
   // 无论去哪一页都先清空占位区：dashboard 分支此前只加 .hidden，上一页的
   // 监听器与 DOM 会一直挂到下次切换，行为与其余分支不一致。
   ph.innerHTML='';
@@ -54,6 +68,9 @@ function switchNav(key){
   if(key==='agents'){ renderAgentsPage(ph); return; }
   if(key==='gates'){ renderGatesPage(ph); return; }
   if(key==='providers'){ renderProvidersPage(ph); return; }
+  if(key==='schedules'){ renderSchedulesPage(ph); return; }
+  if(key==='profiles'){ renderProfilesPage(ph); return; }
+  if(key==='conversation'){ renderConversationPage(ph); return; }
   const p={title:key,desc:'该页面开发中。'};
   ph.appendChild(h('div',{class:'ph-icon'},h('svg',{width:30,height:30,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor','stroke-width':1.6,'stroke-linecap':'round','stroke-linejoin':'round'},h('rect',{x:'3',y:'3',width:'18',height:'18',rx:'3'}),h('path',{d:'M8 12h8'}))));
   ph.appendChild(h('h2',{},p.title)); ph.appendChild(h('p',{},p.desc));

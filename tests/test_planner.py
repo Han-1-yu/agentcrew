@@ -486,3 +486,34 @@ def test_english_docs_keyword_is_gone(catalog):
 def test_code_only_criterion_without_docs_passes(catalog):
     t = _task("T-003", ["实现 GET /todos 返回任务列表"], [_py("backend/app.py")])
     validate_plan([t], catalog)
+
+
+def test_referencing_existing_doc_is_not_a_document_demand(catalog):
+    """引用既有文档 ≠ 要求产出文档（真实模型跑批两次被这条误判拦死）。
+
+    实测原文：「结果与设计文档样例一致」「按设计文档策略跳过」「符合设计文档定义」
+    ——这些是**参照另一份产物**，本任务的交付物里没有 markdown 是完全正常的。
+    旧实现只看关键词，于是把整份计划判成不可满足（``exit 2``）。
+    """
+    for criterion in (
+        "状态码分布统计在给定样本日志上结果与设计文档样例一致",
+        "格式非法行按设计文档策略跳过或计数，不导致整体崩溃",
+        "文件不存在时抛出或返回设计文档约定的错误，空输入返回空统计结果",
+        "p95 计算在给定样本上结果符合设计文档定义的算法",
+    ):
+        t = _task("T2", [criterion], [_py("logstat/stats.py")])
+        validate_plan([t], catalog)  # 不抛即通过
+
+
+def test_document_demand_still_detected_alongside_reference(catalog):
+    """同一条里既有"产出"又有"引用"：仍应判为要求文档（不能因为有个"与…一致"就放过）。"""
+    t = _task("T1", ["输出文档需与设计文档一致"], [_py("a.py")])
+    with pytest.raises(PlanValidationError):
+        validate_plan([t], catalog)
+
+
+def test_reference_window_is_narrow(catalog):
+    """引用标记后最多 4 个连接字：「按规范编写使用文档」是产出要求，不是引用。"""
+    t = _task("T1", ["按规范编写使用文档"], [_py("a.py")])
+    with pytest.raises(PlanValidationError):
+        validate_plan([t], catalog)

@@ -1,14 +1,14 @@
 /* ---- 运行对比模态框 ---- */
 /* 运行对比模态框 */
-.rd-cmp { background: none; border: none; cursor: pointer; color: var(--text-ter); padding: 4px; border-radius: 4px; display: flex; align-items: center; justify-content: center; transition: color 0.15s, background 0.15s; }
+.rd-cmp { background: none; border: none; cursor: pointer; color: var(--text-ter); padding: 4px; border-radius: var(--r-xs); display: flex; align-items: center; justify-content: center; transition: color 0.15s, background 0.15s; }
 .rd-cmp:hover { color: var(--accent); background: var(--accent-bg); }
 .cmp-wrap { min-width: 480px; }
 .cmp-headers, .cmp-row { display: grid; grid-template-columns: 100px 1fr 1fr 80px; gap: 0; }
-.cmp-header { padding: 8px 12px; font-size: 11px; font-weight: 600; color: var(--text-ter); text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border); }
+.cmp-header { padding: 8px 12px; font-size: var(--fs-xs); font-weight: 500; color: var(--text-ter); letter-spacing: 0.5px; border-bottom: 0.5px solid var(--border); }
 .cmp-header.cur { color: var(--accent); }
-.cmp-label { padding: 8px 12px; font-size: 12px; color: var(--text-sub); border-bottom: 1px solid var(--ink-06); }
-.cmp-val { padding: 8px 12px; font-size: 12px; color: var(--text); border-bottom: 1px solid var(--ink-06); font-variant-numeric: tabular-nums; }
-.cmp-diff-cell { padding: 8px 12px; font-size: 12px; border-bottom: 1px solid var(--ink-06); text-align: right; font-variant-numeric: tabular-nums; }
+.cmp-label { padding: 8px 12px; font-size: var(--fs-sm); color: var(--text-sub); border-bottom: 0.5px solid var(--ink-06); }
+.cmp-val { padding: 8px 12px; font-size: var(--fs-sm); color: var(--text); border-bottom: 0.5px solid var(--ink-06); font-variant-numeric: tabular-nums; }
+.cmp-diff-cell { padding: 8px 12px; font-size: var(--fs-sm); border-bottom: 0.5px solid var(--ink-06); text-align: right; font-variant-numeric: tabular-nums; }
 .cmp-diff.pos { color: var(--error); }
 .cmp-diff.neg { color: var(--success); }
 .cmp-diff.zero { color: var(--text-ter); }

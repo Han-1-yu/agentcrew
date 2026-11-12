@@ -1,6 +1,6 @@
 # AgentCrew 项目状态
 
-> **最后更新：2026-11-07** · 本文是仓库**唯一状态源**。
+> **最后更新：2026-11-12** · 本文是仓库**唯一状态源**。
 > 历次交接文档、验收/审查/测试报告、一次性工作提示词已在本日汇总并入本文后删除，
 > 原文备份见 `.workbuddy/archive/reports-2026-11-02/`（git 亦可通过历史恢复）。
 
@@ -8,16 +8,16 @@
 
 ## 0. 一句话现状
 
-**引擎与管线健康，无 P0/P1 阻断项。** 全量测试 **2632 passed / 1 skipped / 0 failed**（2633 用例收集，R34 后由 `scripts/test.py` 一次跑出），三个预设样例 100% 通过，真实模型通道可用（`doctor` 6/6 通过）；Studio 架构检查 / e2e 28/28 / selftest 16/16 全绿。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道；R19 给主管审核开了独立、不阻塞的 `suggestions` 建议通道；R20 补上单步/断点调试——每个任务派发前可挂起裁决，第二档功能项全部闭环；R21 给 API 契约装上守卫，openapi.yaml 与代码路由双向锁死、不再漏端点；R22 补上 resume 状态白名单与 MCP 管道显式关闭；R23 产出 2501 用例的模块/场景覆盖矩阵（`docs/TEST-REPORT.md`），验收报告遗留的最后一项小项闭环；R24 补上工具管理页与单工具试跑；R25 把共享 API Key 升级为多用户 RBAC（密钥/角色/作用域/归属/审计）；R26 补上拖拽式可视化编排（画布 + YAML 双向 + 图校验）；R27 给检索加向量通道（混合打分 + 磁盘缓存 + 本地退化）；R28 打通「画布 → run」直通规划；R29 让实体记忆也走向量混合（不加列、不迁移）；R30 给审批单加等待窗口与过期告警；R31 给条件边补否定/兜底写法；R32 把控制台 UI 重构成令牌化 + 明暗主题 + 侧栏布局；R33 把单层主管复核扩成可配的多级链；R34 修好本机测试环境（崩溃隔离跑器，一条命令出可信结论）。
+**引擎与管线健康，无 P0/P1 阻断项。** 全量测试 **3110 passed / 2 skipped / 0 failed**（3112 用例收集，`scripts/test.py` 一次跑出），三个预设样例 100% 通过，真实模型通道可用（`doctor` 6/6 通过）；Studio 架构检查 73 模块 / 42 分片、`test:unit` 18 passed 全绿。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道；R19 给主管审核开了独立、不阻塞的 `suggestions` 建议通道；R20 补上单步/断点调试——每个任务派发前可挂起裁决，第二档功能项全部闭环；R21 给 API 契约装上守卫，openapi.yaml 与代码路由双向锁死、不再漏端点；R22 补上 resume 状态白名单与 MCP 管道显式关闭；R23 产出 2501 用例的模块/场景覆盖矩阵（`docs/TEST-REPORT.md`），验收报告遗留的最后一项小项闭环；R24 补上工具管理页与单工具试跑；R25 把共享 API Key 升级为多用户 RBAC（密钥/角色/作用域/归属/审计）；R26 补上拖拽式可视化编排（画布 + YAML 双向 + 图校验）；R27 给检索加向量通道（混合打分 + 磁盘缓存 + 本地退化）；R28 打通「画布 → run」直通规划；R29 让实体记忆也走向量混合（不加列、不迁移）；R30 给审批单加等待窗口与过期告警；R31 给条件边补否定/兜底写法；R32 把控制台 UI 重构成令牌化 + 明暗主题 + 侧栏布局；R33 把单层主管复核扩成可配的多级链；R34 修好本机测试环境（崩溃隔离跑器，一条命令出可信结论）；R50 按差距报告 69 条完成上线前加固——8 项 P0 全关、时钟容错让"前跳误杀/回拨死锁"不再可能、审批与预算的并发边界收口、`/metrics` 补齐可观测入口、Studio 断线可自愈（明细见 `docs/REMEDIATION-STATUS.md`）。
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | 2633 collected / 2632 passed / 1 skipped / 0 failed（3.12.10 + pytest 9.1.1，`--assert=plain`；R4 +38、R5 +16、R6 +21、R7 +14、R8 +9、R9 +6、R10 +13、R11 +17、R12 +21、R13 +12、R14 +12、R15 +18、R16 +34、R17 +24、R18 +10、R19 +5、R20 +17、R21 +24、R22 +10、R23 +0、R24 +19、R25 +26（含契约守卫 3 条新路由探测，合计 +29）、R26 +25（含契约守卫 5 条新路由探测）、R27 +11、R28 +8、R29 +5、R30 +6、R31 +5、R32 +6、R33 +7、R34 +11，由 `scripts/test.py` 一次跑出（崩溃自动重试）） |
+| 全量测试 | **3112 collected / 3110 passed / 2 skipped / 0 failed**（`python scripts/test.py`，崩溃隔离跑器一次跑出；R50 新增 111 例：时钟容错 17、A-19 计数持久化 7、`/metrics` 5、实时重连 4、批次 7/8 回归 37、契约补强 39、一致性 12、时间守规 3，其余为各批次适配） |
 | 静态检查 | `ruff check .` **全绿**（全仓，14 项历史告警清零）；`mypy agentcrew/` **114 文件零错误**（2.4.1）。CI 等价检查链在本机 3.12 首次跑通 |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
-| Studio | `npm run check` **64** 模块 / 38 分片通过、selftest 16/16、e2e 28/28、probe 24/24、verify:api 8/8、verify:transitions 11/11（11-09 前端缺陷修复后新增后两项） |
+| Studio | `npm run check` **73** 模块 / 42 分片通过、`test:unit` 18/18（e2e / selftest / probe 等脚本保持不变，需 Electron 环境才跑） |
 | Git | `master` 与 `origin/master` 同步（`792503d`；178 个提交于 2026-11-07 推送，含 CI 3.10 修复与三次 API 补推）；**工作区干净** |
 | 角色 | 8 个内置岗位角色 + 执行体（Agent Profile）可多绑 |
 
@@ -1493,11 +1493,223 @@ api_server / crew` **124 例**全过；`ruff` 全绿。
 **验证**：`uv lock --check` 通过；`test_config.py` 32 例（+2）；`ci.yml` YAML 解析通过。
 `ruff` 全绿。`uv` / `uv.lock` 均已纳入，未在 CI 实跑（本地无 GitHub Actions runner）。
 
+### 3.56 R43：前端交互对齐 WorkBuddy（对话流 / 结果区 / 任务列表）（2026-11-09）
+
+调研 WorkBuddy 四区域布局（顶栏 / 侧边栏任务列表 / 对话区 / 右侧结果区）后，把三处核心交互差异落到 Studio，并加一处后端联动：
+
+| 件 | 内容 |
+|---|---|
+| Ledger observer（后端） | `runtime/ledger.py::Ledger` 加可选 `observer` 回调（`emit` 落盘后同步推「事件名 + 脱敏 data」）；`crew/crew.py::_make_ledger_observer` 注入 `run_id` 后推 `on_event`（SSE），`_LEDGER_SSE_EXCLUDED` 排除已走 `_dispatch_event`/`_notify` 的事件与高频 `agent_stream_chunk`。明细事件不再靠 500ms 快照轮询 |
+| 对话式执行流 | Studio 新增「对话」页（侧边栏首位、数字键 1）：`buildMessages()` 把 ledger 事件聚合为消息流（user 目标 / system 规划 / agent 任务气泡 + 折叠的工具调用·评审·产物 + SSE 流式正文） |
+| 右侧结果区 | 顶栏「结果」按钮打开「概览 + 产物」双 tab 面板（复用 `#detail-panel`）：概览 = 统计/任务状态分布/门禁，产物 = 文件清单 + 内联预览 |
+| 侧边栏任务列表 | `shell.js` 增加搜索 + 状态筛选 chips（5 组）+ 按角色分组 |
+| 细节打磨 | 「回到最新」按钮、进入动效（≤200ms）、长文本折叠、全局焦点环 |
+
+**验证**：后端 `scripts/test.py` **2887 passed / 0 failed**（新增 `test_ledger.py` +4、`test_stream_delta_2026_11_08.py` +1）；前端 `npm run check` 69 JS / 42 CSS、`e2e` 32/32、`selftest` 16/16、`npm run visual` 20 张一致。
+
+**方案细则与遗漏**：`docs/WorkBuddy前端交互-实施方案细则.md`（五环节 × 步骤/输入输出/边界/验收 + 13 项遗漏清单，其中「流式正文不回溯」「markdown 不渲染」需单独设计）。
+
+### 3.57 R44：多执行体「可运营性」补全 —— 账算得清 / 复核闭环 / 计划可查（2026-11-09）
+
+对「不同 agent 分别调用不同模型、协同完成一件共同任务」这条主线做定点审查后（报告见
+`docs/AUDIT-2026-11-09.md`），结论是**不重构**：C1–C8 八层能力里只有三处短板，全部
+以「新增字段 + 一个分支 + 一个只读端点」补齐，未改任何既有函数签名与事件形状。
+
+| 件 | 内容 |
+|---|---|
+| 执行体归因（C6） | `TraceContext` 增 `profile`；`BaseAgent.execute` 写入 `agent_key`（未绑定时落 `default`）；`_trace_fields()` 把它补进 `llm_call`；`event_stats()` 增 `llm.by_profile`（无 `profile` 的历史事件与非执行类调用归 `unknown`，**不丢弃**，保证分项和 = 总量）。**修掉一处实测缺陷**：`TeamAgent` 的复核/裁判直连模型、不经 `BaseAgent`，此前既无追踪也不进 `agent_budget`，导致 `run.json` 的 `agent_costs` **漏记复核花费**（实测 15 次调用只认 2 次）。新增 `_call_as()` 同时绑定追踪与预算，两本账合一 |
+| 复核闭环（C4） | `Aggregation.review_rounds`（默认 `0`，上限 3）。`0` 保持旧行为；`1..3` 时复核报出问题就把意见作为 `fix_hints` 重跑主笔再复核，落 `agent_revise` 事件。「未发现问题」与空回复不触发，避免白跑 |
+| 计划可查（C7） | `GET /runs/{run_id}/agents`：取 ledger 最后一条 `run_plan_resolved`，返回 alias / duty / tools / path_scope；无该事件的历史 run 返回 `source: none` + 空数组，**不拿配置猜测冒充运行事实**。契约同步进 `openapi.yaml` |
+
+**为什么这三处是短板**：其余能力（执行体建模、1:N 绑定、四种汇总模式、四级别名解析、
+执行体级预算/并发/RPM、路径域写保护、启动期 fail fast）都已在位；缺的是「便宜档到底省没省」
+（账算不清）、「复核意见有没有改变产出」（不闭环）、「这次到底哪个 agent 用了哪个模型」
+（不可查）。三者都属运营面，不补则多执行体只能"配得出来"、不能"管得起来"。
+
+**验证**：`test_agent_binding.py` 30 passed（+4：修订回灌、默认不回灌、无问题不重跑、轮数上界）；
+`test_ledger_api.py` 13 passed（+4：by_profile 归因、计划读端点 ×3）；`test_hardening_2026_11.py`
+13 passed（+1：`llm_call` 带 profile）；`test_api_contract.py` + `test_api_server.py` 64 passed
+（路由清单 ↔ openapi 双向锁定）。`ruff` 改动文件全绿。
+
+**端到端**（`linear` 样例 + `be_primary`/`be_reviewer` 双执行体 + `review_rounds=1`，mock 通道）：
+任务 5/5 成功，报告出现 `执行体 be_primary 0.00/2次 · be_reviewer 0.00/2次`（修复前只有前者），
+`llm.by_profile` 分项 2+2+4+7 = 15 = `llm.calls`，账平。
+
+**环境注记**：本机全量跑仍偶发进程级段错误（`enum.py` 编译期 SyntaxError、`Segmentation fault`
+退出码 139、`sitecustomize` 注入期崩溃），同一文件连跑三次「过、过、崩」——与代码无关，
+正是 `scripts/test.py` 文档里记录的老问题；`scripts/test.py` 自身的 `__pycache__` 清理会被
+安全策略拦截，故本轮改用「小批直跑 + 崩溃重试」取证。
+
+### 3.58 R45：改善方案 P0+P1 落地 —— 复核治理 / 门禁归因 / 执行体熔断 / 成本感知路由（2026-11-10）
+
+按 `docs/IMPROVEMENT-PLAN-2026-11-09.md` 执行，四项全部**默认关闭**、无数据迁移。
+
+| 件 | 内容 |
+|---|---|
+| 裁决契约统一（P0） | 新增 `gate/verdict.py`：`ReviewVerdict` / `CriterionJudgement` / `derive_review` / `is_malformed`，G2 与角色内复核共用。`gate/reviewer.py` 改为导入（行为不变），测试一行未改 |
+| 复核接治理通道（P0） | `TeamAgent._review_once` 改走 `ModelFactory.complete_structured`（受信号量 + 记账），不再自由文本 + `"未发现问题"` 子串匹配；`_collect_reviews` 只认派生结论；格式错误记 `agent_degraded` 且**不触发返工** |
+| 复核的 mock 回放 | 直连模型时显式 `set_purpose(..., "review", task_id=...)`，`reviews.json` 夹具才真正生效（此前离线跑一直拿不到夹具） |
+| 修订记录不丢 | `review_rounds>0` 时跨轮**累加**意见并标注轮次；此前第二轮会覆盖第一轮，"改了什么"在报告里消失 |
+| 门禁评审归因（P1.3） | `Reviewer` 评审调用挂 `TraceContext(profile="gate:<角色>")`。实测 `unknown` 7→1，`by_profile` 出现 `gate:architect` 等桶 |
+| 执行体级熔断（P1.1） | `agents/team.py::_Circuit`：按"连续失败"计数（成功即清零），达阈值后 `_primary_pool` 剔除该执行体并落 `agent_circuit_open`；全熔断时退回原池子让失败如实发生。开关 `agent_circuit_breaker_enabled`（默认 false）/ `..._threshold`（3） |
+| 成本感知路由（P1.2） | `budget.under_headroom()` 纯函数 + `ModelFactory._maybe_shift_by_headroom()`：执行体剩余额度 < `cost_aware_headroom`（默认 0.3）时本次调用改走更便宜备别名，落 `routing_budget_shift`（每个执行体只报一次）。无状态、不碰全局降级标志。开关 `cost_aware_routing`（默认 false） |
+
+**为什么熔断按"连续"而不是"累计"**：偶尔被长上下文噎住不该被判死，成功一次即恢复；
+provider 级冷却（`models/health.py`）管的是模型不可用，管不了"这个执行体本身有问题"
+（工具权限配错、路径域写不进去、输出协议总不合）。
+
+**验证**：`test_agent_binding.py` 36（+7）、`test_cost_aware_routing.py` 9（新）、
+`test_reviewer+mock+e2e` 58、`test_architecture` 26、`test_crew` 52、`test_api_contract+server` 64、
+`test_model_factory` 52、`test_config+config_io` 38、`test_base_agent+hardening` 98，全绿。
+端到端 5/5 成功，`by_profile` 分项 1+1+4+6+1 = 13 = `llm.calls`。
+
+### 3.59 R46：配置 A/B 矩阵评测 —— `eval --variant`（2026-11-10）
+
+R45 加了几个"省钱/换人"的旋钮，但**没有工具能回答"这套绑定比上一套好还是坏"**。
+本轮补上：同一批 case × 多套配置，逐变体跑一遍并给相对差值。
+
+| 件 | 内容 |
+|---|---|
+| 变体文件 | 与 `agentcrew.yaml` **同形**（`agents.profiles` / `roles` / `models`…），只写要覆盖的段。归一化复用 `config.load_yaml_config`（新抽的公共入口），含 profile key 自动回填——用户不必学第二种格式 |
+| 矩阵执行 | `evals/runner.py::run_matrix`：首个变体作基线，每变体独立子目录（共享目录会让上一次产物污染下一次，对比全失真）；`MatrixReport.to_dict()` 给出 `Δpass^k / Δcalls / Δcost / Δrevise_rounds` |
+| 过程指标 | `CaseOutput` / `CaseResult` 新增 `cost_usd`、`llm_calls`、`revise_rounds`（默认 0，旧调用方零改动） |
+| CLI | `eval --variant NAME=FILE`（可重复）+ `--matrix-out PATH`；退出码只看**基线**的 pass^k，对照变体不参与判定 |
+| 入参防御 | 未知字段当场拒绝（`model_copy` 会静默加属性，本仓踩过"死字段"）；覆盖后走 `model_validate` 全量重建，嵌套约束（`review_rounds ≤ 3`）才真的生效 |
+
+**实测**：`smoke.jsonl`（4 case）× `base` / `rounds1` 两变体 → 两者 pass^k 均 100%、
+calls 62、cost $0.0803、修订 0。相同结果本身是结论：这批 case 复核全部通过，
+`review_rounds=1` 既没多花钱也没多收益——要看到差异需要一批"产物确实缺验收标准"的 case。
+
+**P2.2 共享工作区未做**：方案要求 `split_by_path` 的成员读同任务其它成员的 scratch，
+但该模式是 `asyncio.gather` 并行的，"其它成员已写入"这个前提不成立。要么串行（放弃并行收益），
+要么引入**任务内 DAG**（新特性，不是"扩 ContextBus"）。判断与最小形态记在
+`docs/IMPROVEMENT-PLAN-2026-11-09.md` §10.2，不在此处草率实现。
+
+**验证**：`test_eval_matrix.py` 8 例（变体归一化 / 未知字段 / 嵌套校验 / 差值 / 汇总 / 入参防御）、
+`test_evals_2026_11_08.py` 41 例全过；`eval` 单配置路径未受影响（4/4 通过）。
+
+### 3.60 R47：让"修订回路"在离线评测里可被观测 —— 轮次夹具 + 驳回样例 + 变体严格校验（2026-11-10）
+
+R46 的矩阵工具是对的，但**没有数据能显形**：所有样例的复核都判「通过」，`review_rounds`
+永远不触发，A/B 结论恒为"完全相同"。
+
+| 件 | 内容 |
+|---|---|
+| 轮次夹具 | `MockProvider._review_text` 支持 `"<task_id>@<轮次>"` 键（先查带轮次、再退回 `<task_id>`、最后 `_default`）。没有它，"第 1 轮驳回、修订后通过"在回放里无法表达——要么永远通过，要么改到轮数用尽也不收敛 |
+| 门禁避让 | G2 评审改用 `attempt=0` 取夹具：门禁不分轮次，若沿用默认 1 会误读角色内复核的 `"T-003@1"`，把好产物驳回 |
+| 驳回样例 | 新增 `examples/samples/revision/`（复制 linear，仅加 `"T-003@1"` 首条标准不满足）与 `examples/evals/revision.jsonl`（2 条 case，**不断言"变好了"**——回放里主笔前后同一份产物，钉它等于自欺） |
+| 变体严格校验 | `config.load_yaml_config(strict=True)` + `unknown_yaml_keys()`：无法识别的顶层段当场报错。**这是被真实事故逼出来的**——第一版变体文件我按扁平字段名写了 `agent_profiles` / `role_agents`，归一化静默丢弃，矩阵给出了"两套配置完全相同"的假结论 |
+
+**实测（终于有差异了）**：
+
+```
+配置矩阵 · 2 条 case × 2 个变体
+  base      pass^k=100%  calls=24  cost=$0.0161  修订=0
+  rounds1   pass^k=100%  calls=30  cost=$0.0208  修订=2
+            Δcalls +6 · Δcost $+0.0047 · Δ修订 +2 · Δpass^k 0
+```
+
+结论：**开修订在这批 case 上多花 29% 成本、通过率不变**。正确解读是"这批 case 不值得
+开修订"，而不是"修订没用"——两者要靠真实模型通道区分，mock 只验证管线。
+
+**验证**：`test_eval_matrix` 10 例（+2：扁平字段名 / 段名拼错必须报错）、
+`test_agent_binding` 37 例（+1：真工厂 + mock 回放的收敛端到端）、
+`test_mock_fixtures` + `test_reviewer` + `test_end_to_end_mock` 59 例、
+`test_samples` 31 例、`test_evals` 41 例，全绿。
+
+### 3.61 R48：真实通道验证复核回路 —— 抓到"复核材料被大文件挤掉"的误判（2026-11-10）
+
+用 DeepSeek 真跑两次（7 任务 / 32–37 次调用 / $0.11–0.16），回答"修订到底有没有用"。
+
+**结论**：修订确实改写产物（`artifact_written.sha256` 同一路径前后全变，T-03 五文件、
+T-04 三文件），但也暴露一个 mock 永远测不出来的缺陷。
+
+| 件 | 内容 |
+|---|---|
+| **误判根因** | `_artifact_excerpt` 预算**先到先得**：前面的 cli.py / renderer.py 吃完 1800 token 后，README 连文件名都进不了材料。复核于是判「未提供 README 片段」——而 `README.md` 在 ledger 里有 4 条 `artifact_written`。这类意见**靠修订永远修不掉**：文件不缺，缺的是"给复核看" |
+| 修复 | 预算按文件数**均分**（每份保底 180 token），超出截断并标注；材料同时纳入 `store.by_task()`（本任务实际写过的文件），不再只看契约声明的交付物 |
+| 复核可复盘 | `agent_review` 新增 `detail`（截断 400 字）。此前只有 `issues` 条数，事后只能看到"2 条不满足"、不知道是哪 2 条 |
+
+**对照验证（同一目标、同一配置，PM 拆解随机故任务数 7 vs 8）**：
+
+| | 修复前 | 修复后 |
+|---|---|---|
+| 任务 / 调用 / 成本 | 7 / 32 / $0.11 | 8 / 28 / $0.10 |
+| 角色内复核 | 6 次（4 驳 2 过） | 3 次（1 驳 2 过） |
+| 修订 | 3 次 | 1 次 |
+| **"指控文件不存在"型意见** | **4 条**（全部误判） | **0 条** |
+
+修复后驳回改为承认「产物节选被截断，无法核对 docs/PRD.md」，一轮修订即通过——
+前者不可修复（只能白跑），后者可补材料。
+
+**附带修掉规划期误判**：验收标准里「与**设计文档**样例一致」「按**设计文档**策略处理」
+是**引用**另一份产物，旧检查只看关键词就判定"要求交付文档却没声明"，把正常目标拦成
+`exit 2`（实测两次）。修复：关键词前后加引用标记判定（前后窗口各 4 字），
+同词多次出现时只要有一次不是引用仍判为要求文档。`test_planner` 58 例全绿。
+
+**两个需要产品决定的发现**（记录，不擅自实现）：
+
+1. **复核比门禁严格，但只有门禁改任务状态**：同一次跑里 T-03 复核判 2 条不满足，任务仍 `succeeded`（G2 放行）。若要让复核能拦交付，需要"两票制"，属 `Aggregation` 新模式。
+2. **目标描述与拆解能力有落差**：目标里写了"附单元测试/文档"、PM 拆出的交付物却没有对应文件，规划期一致性校验当场拒绝起跑（`exit 2`）。校验是对的，但用户换个措辞就跑不起来。
+
+**未完成的验证**：想做"修复前后对照"，三次尝试分别被拆解校验（×2）与本机解释器崩溃（`PydanticUseDefault` SchemaError，单独 import 又正常）挡住。因此"误判是否减少"目前只有单测证明（三文件都在材料里）与机理推断，**没有对照数据**——如实记为待验证。
+
+**验证**：`test_agent_binding` 38 例（+1：超大首文件不得挤掉后续文件）；`test_crew` 52 例；ruff 全绿。
+
+### 3.62 R49：分工依赖（`intra_deps`）—— 共享工作区的最小形态（2026-11-10）
+
+方案 P2.2 原文要求"`split_by_path` 的成员能读同任务其它成员已写的 scratch"，但该模式是
+`asyncio.gather` 并行的，"其它成员已写入"不成立。R49 用"**显式声明先后**"替代"共享目录"。
+
+| 件 | 内容 |
+|---|---|
+| 配置 | `Aggregation.intra_deps`：`profile → 它要先看谁的产物`。默认空 = 并行，与之前逐字一致 |
+| 执行 | 非空时该角色走**拓扑序**；依赖方上下文多一条 `UpstreamDigest`（对方摘要 + 产物路径，文件在盘上可直读） |
+| 失败语义 | 依赖项失败**不阻塞**下游，由 `quorum` 判整体成败——否则一个 section 挂了整条链静默停摆 |
+| 配置期校验 | 只能指向本角色 section、不能自依赖、**不能成环**、只允许 `split_by_path`（成环不是慢，是永远跑不起来） |
+| 运行期兜底 | 手工构造绕过校验时仍遇环 → 退回原序继续，绝不死循环 |
+
+**为什么不做 scratch 目录**：真正的需求是"谁先谁后"，共享目录只是手段之一。顺序表达出来后，
+前序产物本就在 `ArtifactStore` 里，再造一层 scratch 只多一个状态源和一类不一致。
+
+**验证**：`test_agent_binding` 42 例（+4：非 split 模式拒绝 / 自依赖·未知·成环 / 拓扑序 +
+上游摘要注入 / 依赖失败不阻塞），`test_crew` + `test_config` + `test_architecture` 110 例全绿；
+`examples/agentcrew.multi-agent.example.yaml` 增注释示例，配置校验仍通过。
+
+### 3.63 R50：差距报告 69 条整改 —— 从"能跑"到"能上线"（2026-11-11 ~ 11-12）
+
+按 `docs/GAP-ANALYSIS-2026-11-10.md` 的 69 条登记，分 8 个批次逐条落地。处置明细见
+**`docs/REMEDIATION-STATUS.md`**（逐条状态 + 批次 + 验证方式）。按主题归纳：
+
+| 主题 | 关键改动 | 为什么重要 |
+| --- | --- | --- |
+| **安全边界**（P0 全 8 项） | Webhook 只走 http/https 且禁重定向/内网；事件名白名单；`X-Forwarded-For` 仅可信代理可取；500 不再回显 `str(exc)`；Studio 主进程只认自己落盘的 `apiBaseUrl`、独立无凭据 `api:probe` | 这 8 项都是「能被直接利用」的口子，不是理论风险 |
+| **崩溃一致性** | 封版顺序与 worker 取消对齐、MANIFEST 事务化、`record_review`/`bump_rework` 立即落盘（`on_persist` 钩子）、checkpoint 原子写 | 硬杀后 resume 看到的盘上状态必须自洽 |
+| **时钟容错**（A-7） | 新增 `runtime/clock.py`：`utc_now` / `parse_stamp` / `elapsed_since`；心跳与 resume 锁改 aware UTC；三处墙钟判定在时钟倒挂时 **fail-closed** | 时钟前跳会把活 run 判成孤儿并改写状态；回拨则孤儿永不收敛。宁可留僵尸也不误杀 |
+| **并发正确性** | 审批 `decide` 读-改-写加锁 + 落盘复核；预算硬上限判定提到两个 emit 之前 | 并发裁决后写覆盖先写；observer 异常会整段跳过预算检查 |
+| **契约与可观测** | `GET /metrics`（Prometheus 文本，不扫盘）；契约测试补 39 条断言（逐路由 401 穷举、429、413、响应形状）；openapi 补 `securitySchemes` 与 401/413/429 | 此前契约测试只断言「不是 404」，认证失效也能无声通过 |
+| **工程化** | `.env.example` 重写（去行内注释——dotenv 会把注释读成值）、`agentcrew.example.yaml`、Docker 三件套（非 root + 健康检查 + 挂卷）、前端 CI job、覆盖率门槛、回滚手册 | 「本地能跑」到「别人能部署」的差距 |
+| **Studio** | 弹窗定时器可取消、测速期间快照防错位、路由切换释放 flow、`escapeHtml` 补引号、CSP 收紧、SSE 断线指数退避重连、刷新代次校验、`spawnSync` 全改异步 | 断线后实时面板会彻底静止；删除大 run 会冻结窗口 15 秒 |
+
+**验证**：全量 **3110 passed / 0 failed / 2 skipped**；`ruff check agentcrew/ tests/ sdk/` 全绿；
+Studio 架构检查 73 模块 / 42 分片通过、`test:unit` 18 passed。
+
+**最初刻意留到后面的一件已完成，另一件有明确归属**：
+
+- **D-14 时间戳全量迁 UTC**：✅ **已在本批完成**（2026-11-12 追加）。10 处落盘点全部改
+  `utils/clock.utc_now()`，9 处时长计算改 `seconds_between()`，`clock` 从 `runtime` 移到
+  `utils`（`models` 层禁止依赖 `runtime`）。迁移顺手抓到两个真实缺陷：`Approvals.is_expired`
+  用 naive now 比 aware `expires_at`（直接 `TypeError`）、Studio 按字符串比较 ISO 串
+  （混存时字典序与时刻不一致，会丢新快照）。守规基线已降为 **0**。
+- **D-16 的「写盘注入 OSError」**：注入点与 `_finalize` 内部原子写耦合过紧，维护成本高于收益；
+  已覆盖心跳被删 / 时钟回拨 / 锁互斥 / 状态矩阵四类更常见的边界。
+
 ---
 ## 4. 历史报告汇总（已并入本文，原文归档）
 
 | 报告 | 时间 | 核心结论 | 现状 |
 | --- | --- | --- | --- |
+| **验收报告 R44–R49** | 2026-11-10 | 六项交付（复核治理 / 熔断 / 成本路由 / 门禁归因 / A/B 矩阵 / 分工依赖）**全部通过**；2933 passed（5 失败归因环境）；真模型 3 次跑批 $0.37，复核误判 4→0 | 见 `docs/ACCEPTANCE-2026-11-10.md`；遗留：前端未验、评测数据单薄、复核不参与任务状态 |
 | **结项验收评审报告** | 2026-10-11 | 综合 **75.3 分**，结论「限期整改后复验」；3 个 P1 阻塞：①缺性能/稳定性/功能测试报告 ②预设样例仅 1/3 ③无拖拽编排画布。一票否决项均未触发；离线 9/9、API 10/10、真实模型 8/8 全通过 | ①②已由 R2 闭环（`bench/` + `linear`/`hierarchy`）；③仍在路线图（P2，8 人日）。遗留风险 R1–R8 见 §7 |
 | **Studio 前端测试与 Bug 修复** | 2026-10-11 | 修复 3 个确定性 Bug：数字快捷键 8/9 与侧边栏顺序互换（P2）、模态打开时数字键仍切底层页（P1）、预算/调用次数/亲和 TTL 接受负值（P2）；修复后 selftest 16/16、e2e 28/28、probe 24/24，无残留进程 | 全部闭环，回归用例在 `studio/` e2e |
 | **HANDOFF**（初版交接） | 2026-10-06 | SDD 会话完成 34 个任务实现/评审，并用真实 DeepSeek 跑 6 次端到端验收，每次暴露一个 mock 无法暴露的缺陷并修掉 | 已被 11-01 交接取代，结论并入本文 |
@@ -1646,6 +1858,19 @@ api_server / crew` **124 例**全过；`ruff` 全绿。
 
 **本轮已闭环**：配额 `reserve` 异常泄漏与 `complete_structured` 无配额（见 §3.6）。
 
+**R50 之后（2026-11-12）真正剩下的**：
+
+| 事项 | 状态 | 下一步 |
+| --- | --- | --- |
+| ~~时间戳全量迁 UTC（D-14）~~ | ✅ **已完成**（2026-11-12） | 落盘全量 aware UTC；守规基线 = 0；见 `docs/TIME-MIGRATION-PLAN.md` |
+| 「写盘注入 OSError」一致性用例（D-16 剩余） | 🟡 其余四类边界已覆盖 | 若重构封版路径，同步补该注入点 |
+| 覆盖率门槛 50% | 已配 `fail_under`，本机 Win 测不准 | 看首次 CI 的 `--cov-fail-under` 结果 |
+| Docker 三件套 | 已交付，本机无 docker | 在 CI/目标机 `docker compose build`，验非 root 对 `output/` 写权限 |
+| CI 首次实跑 | 已补 studio job + 覆盖率 + 回滚手册 | 看 GitHub Actions 四版本矩阵 + 新 job 结果 |
+| `web_search` 工具 | 未做 | 需外部搜索 API 与密钥，独立设计 |
+| 向量检索 / RAG | 未做（BM25 + 二元组已覆盖经验库） | 大项，需先定 embedding 通道与存储 |
+| run 目录静态加密 | 未做 | 依赖部署侧决策（LUKS / 云盘加密） |
+
 **仍未纳入修复**（按 ROI，需各自单独设计）：
 `stream_call` 仍是「只记账不设防」（async generator + failover 循环，预扣/归还配对复杂）；`RunPythonTool` 无文件 / 导入隔离（本轮只补了 timeout 校验）；~~`resume` 缺状态白名单与进程锁~~（均闭环：进程锁 R17，状态白名单 R22 §3.27）；~~过期 run 启动时自动 reconcile 仍缺~~（R17 已闭环，见 §3.22）。
 
@@ -1712,6 +1937,9 @@ api_server / crew` **124 例**全过；`ruff` 全绿。
 | `README.md` | 项目介绍、8 角色说明、V2–V5 与 R3–R34 能力完善、配置与用法全文 |
 | `PROJECT-STATE.md` | 本文，唯一状态源 |
 | `docs/HANDOVER.md` | **接手必读**：当前状态、代码从哪读起、已知的坑、开发者视角排障、剩余工作 |
+| `docs/REMEDIATION-STATUS.md` | **差距报告 69 条的逐条处置表**（状态 / 批次 / 验证方式 / 剩余项），交接与复审入口 |
+| `docs/TIME-MIGRATION-PLAN.md` | D-14 时间戳 UTC 迁移方案（三步 + 验证清单 + 回滚），配套守规 `tests/test_time_migration_guard.py` |
+| `docs/GAP-ANALYSIS-2026-11-10.md` | 六层审计的原始差距登记（**保留原文作为审计痕迹**，处置状态见上一行） |
 | `docs/OPERATIONS.md` | **运维部署/排障手册**：五种运行形态（CLI / serve / Studio / 库 / MCP 客户端）、配置三通道与生产必配、密钥与网络边界、`output_dir` 数据与备份、监控告警、升级、按症状排障、上线前检查清单 |
 | `sdk/README.md` · `sdk/agentcrew_sdk/` · `sdk/examples/` | **R16 官方 Python SDK**：安装与方法表、异常层次、SSE、刻意不做的事与已知限制；客户端源码与两个可运行示例 |
 | `artifacts/contracts/state-enums.md` · `event-types.md` · `openapi.yaml` · `schemas/*.json` | R4 同步后的状态枚举、事件、HTTP 接口与落盘结构契约 |

@@ -24,7 +24,17 @@ from agentcrew.evals.checks import evaluate_checks
 from agentcrew.runtime.checkpoint import CheckpointStore
 from agentcrew.runtime.ledger import Ledger
 
-__all__ = ["EvalReport", "compute_pass_pow_k", "run_case", "run_dataset"]
+__all__ = [
+    "EvalReport",
+    "MatrixReport",
+    "VariantResult",
+    "apply_overrides",
+    "compute_pass_pow_k",
+    "load_variant_file",
+    "run_case",
+    "run_dataset",
+    "run_matrix",
+]
 
 #: 只断言文本产物；超过这个大小的产物不读全文（评测不该把内存吃穿）。
 _MAX_ARTIFACT_BYTES = 512 * 1024
@@ -107,6 +117,7 @@ async def _run_crew(settings: Settings, goal: str, root: Path) -> CaseOutput:
         artifacts=_readartifacts(run_dir / "artifacts"),
         task_status={task.id: task.status.value for task in board.all()},
         event_counts=counts,
+        cost_usd=float(getattr(record.stats, "estimated_cost_usd", 0.0) or 0.0),
     )
 
 
@@ -201,5 +212,143 @@ async def run_dataset(
                 checks=checks,
                 status=output.status,
                 error=output.error,
+                cost_usd=output.cost_usd,
+                llm_calls=output.event_counts.get("llm_call", 0),
+                revise_rounds=output.event_counts.get("agent_revise", 0),
             ))
     return report
+
+
+# ── R45：绑定配置 A/B 矩阵 ────────────────────────────────────────────────
+
+
+def load_variant_file(path: Path | str) -> dict[str, Any]:
+    """读一份「配置变体」文件（YAML 或 JSON，JSON 是 YAML 的子集）。
+
+    变体文件与 ``agentcrew.yaml`` **同形**（``agents.profiles`` / ``roles`` 等），
+    只写要覆盖的那一段——其余字段沿用基线配置。否则每份变体都要抄一遍全量配置，
+    改一处要改 N 份。
+
+    归一化复用 :func:`agentcrew.config.load_yaml_config`，保证变体与主配置走
+    同一套规则（含 profile key 自动回填）；格式错误一律收敛成 ``ValueError``。
+    """
+    from agentcrew.config import load_yaml_config
+
+    file_path = Path(path)
+    if not file_path.is_file():
+        raise ValueError(f"变体文件不存在：{file_path}")
+    # strict：拼错的段名必须当场报错，否则变体静默失效、A/B 结论是假的。
+    return dict(load_yaml_config(file_path, strict=True))
+
+
+def apply_overrides(settings: Settings, overrides: dict[str, Any]) -> Settings:
+    """把变体覆盖到 ``Settings`` 上，并在**起跑前**完整校验一次。
+
+    两道关：
+
+    1. 未知字段直接拒绝——``model_copy(update=...)`` 会静默加属性，跑完才发现
+       配置根本没生效（本项目历史上踩过这类"死字段"）；
+    2. 走 ``model_validate`` 全量重建，让类型/边界（``ge`` / ``le``）与嵌套模型
+       （``AgentProfile`` / ``RoleAgents``）的校验真正执行。
+    """
+    unknown = sorted(key for key in overrides if key not in type(settings).model_fields)
+    if unknown:
+        raise ValueError(
+            f"未知配置项：{', '.join(unknown)}"
+            f"（变体文件应与 agentcrew.yaml 同形：agents / roles / models …）")
+    payload = settings.model_dump(mode="json")
+    payload.update(dict(overrides))
+    return type(settings).model_validate(payload)
+
+
+@dataclass
+class VariantResult:
+    """一个配置变体跑完整数据集的结果。"""
+
+    name: str
+    overrides: dict[str, Any]
+    report: EvalReport
+
+    @property
+    def metrics(self) -> dict[str, Any]:
+        results = self.report.results
+        return {
+            "cases": len(self.report.by_case()),
+            "runs": len(results),
+            "passed": sum(1 for item in results if item.ok),
+            "pass_at_1": round(self.report.pass_at_1, 4),
+            "pass_pow_k": round(self.report.pass_pow_k, 4),
+            "llm_calls": sum(item.llm_calls for item in results),
+            "cost_usd": round(sum(item.cost_usd for item in results), 6),
+            "revise_rounds": sum(item.revise_rounds for item in results),
+        }
+
+
+@dataclass
+class MatrixReport:
+    """多配置对照结果；第一个变体是基线，其余给相对差值。"""
+
+    variants: list[VariantResult] = field(default_factory=list)
+
+    @property
+    def baseline(self) -> VariantResult | None:
+        return self.variants[0] if self.variants else None
+
+    def to_dict(self) -> dict[str, Any]:
+        base = self.baseline
+        base_metrics = base.metrics if base else {}
+        variants: list[dict[str, Any]] = []
+        for item in self.variants:
+            metrics = item.metrics
+            delta = {
+                key: round(float(metrics[key]) - float(base_metrics.get(key, 0)), 6)
+                for key in ("pass_pow_k", "pass_at_1", "llm_calls", "cost_usd",
+                            "revise_rounds")
+            } if base is not None and item is not base else {}
+            variants.append({
+                "name": item.name,
+                "overrides": item.overrides,
+                "metrics": metrics,
+                "delta_vs_baseline": delta,
+                "results": [r.model_dump(mode="json") for r in item.report.results],
+            })
+        return {
+            "baseline": base.name if base else None,
+            "variants": variants,
+        }
+
+
+async def run_matrix(
+    variants: Sequence[tuple[str, dict[str, Any]]],
+    cases: Sequence[EvalCase],
+    *,
+    repeat: int = 1,
+    base_settings: Settings | None = None,
+    output_dir: Path | None = None,
+) -> MatrixReport:
+    """同一批 case × 多套配置，逐变体跑一遍并汇总。
+
+    用途：把「换便宜复核」「开 review_rounds」「按 duty 拆两个 primary」这类**配置
+    决策**变成可比较的数字，而不是凭感觉。第一个变体视为基线。
+
+    每个变体用自己的子目录（``<output_dir>/<name>/``），否则第二次跑会读到第一次的
+    产物，对比全失真。
+    """
+    if not variants:
+        raise ValueError("至少需要一个变体")
+    names = [name for name, _ in variants]
+    if len(set(names)) != len(names):
+        raise ValueError(f"变体名重复：{names}")
+    base = base_settings or Settings.load()
+    matrix = MatrixReport()
+    for name, overrides in variants:
+        settings = apply_overrides(base, overrides)
+        sub = None
+        if output_dir is not None:
+            sub = Path(output_dir) / name
+            sub.mkdir(parents=True, exist_ok=True)
+        report = await run_dataset(
+            cases, repeat=repeat, base_settings=settings, output_dir=sub)
+        matrix.variants.append(
+            VariantResult(name=name, overrides=dict(overrides), report=report))
+    return matrix

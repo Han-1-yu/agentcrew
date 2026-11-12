@@ -47,8 +47,14 @@ class StubAgent:
 
     def __init__(self, store, files, *, scope=None, key=""):
         self.store, self.files, self.scope, self.key = store, files, scope, key
+        #: 每次 execute 收到的 fix_hints —— 用来断言复核意见真的回灌给了主笔。
+        self.hints: list[list[str]] = []
+        #: 每次 execute 收到的上下文包 —— 用来断言分工依赖真的注入了上游摘要。
+        self.packs: list = []
 
     async def execute(self, task, pack, *, fix_hints=()):
+        self.hints.append(list(fix_hints))
+        self.packs.append(pack)
         now = datetime.now()
         records = []
         for spec in task.deliverables:
@@ -190,11 +196,11 @@ def test_store_allows_path_inside_scope(store):
 
 # ── 4. 团队执行 ────────────────────────────────────────────────────────────
 
-def _team(store, binding, members, agents, *, mode):
+def _team(store, binding, members, agents, *, mode, settings=None):
     return TeamAgent(
         BACKEND, binding, members,
         get_agent=lambda p: agents[p],
-        models=None, store=store, ledger=_NullLedger(), settings=Settings(),
+        models=None, store=store, ledger=_NullLedger(), settings=settings or Settings(),
         run_id="R")
 
 
@@ -249,6 +255,15 @@ def test_split_below_quorum_fails(store):
         asyncio.run(_team(store, binding, members, agents, mode="split").execute(task, None))
 
 
+def _outcome(profile, *, approved=True, issues=(), hints=(), suggestions=()):
+    """构造一份复核结论（替身用）。裁决结构由 ``gate.verdict`` 统一，这里只填字段。"""
+    from agentcrew.agents.team import _ReviewOutcome
+
+    return _ReviewOutcome(
+        profile=profile, approved=approved, issues=list(issues),
+        hints=list(hints), suggestions=list(suggestions))
+
+
 def test_review_memo_is_merged_into_notes(store):
     task = _task("backend/app.py")
     members = [_member("be", Duty.PRIMARY), _member("rv", Duty.REVIEW)]
@@ -259,13 +274,16 @@ def test_review_memo_is_merged_into_notes(store):
         aggregation=Aggregation(mode="primary_with_review"))
     team = _team(store, binding, members, agents, mode="review")
 
-    async def fake_review(reviewer, task, result):
-        return "缺少输入校验，请补 422 用例"
+    async def fake_review(reviewer, task, result, round_no=1):
+        return _outcome(reviewer.profile, approved=False,
+                        issues=["缺少输入校验，请补 422 用例"],
+                        hints=["补 422 用例"])
 
     team._review_once = fake_review
     result = asyncio.run(team.execute(task, None))
     assert "缺少输入校验" in result.notes
     assert [r.path for r in result.artifacts] == ["backend/app.py"]
+    assert "已按复核意见修订" not in result.notes, "默认轮数为 0，不该修订"
 
 
 def test_review_failure_is_visible_not_silent(store):
@@ -278,13 +296,281 @@ def test_review_failure_is_visible_not_silent(store):
         aggregation=Aggregation(mode="primary_with_review"))
     team = _team(store, binding, members, agents, mode="review")
 
-    async def boom(reviewer, task, result):
+    async def boom(reviewer, task, result, round_no=1):
         raise RuntimeError("复核模型不可用")
 
     team._review_once = boom
     result = asyncio.run(team.execute(task, None))
     assert "复核不可用" in result.notes
     assert any(name == "agent_degraded" for name, _ in team._ledger.events)
+
+
+def test_review_rounds_feeds_issues_back_to_primary(store):
+    """``review_rounds=1``：复核出问题 → 意见进 fix_hints 重跑主笔 → 再复核。"""
+    task = _task("backend/app.py")
+    members = [_member("be", Duty.PRIMARY), _member("rv", Duty.REVIEW)]
+    primary = StubAgent(store, {"backend/app.py": "app = 1\n"}, key="be")
+    agents = {"be": primary}
+    binding = RoleAgents(
+        agents=[BoundAgent(ref="be", duty=Duty.PRIMARY),
+                BoundAgent(ref="rv", duty=Duty.REVIEW)],
+        aggregation=Aggregation(mode="primary_with_review", review_rounds=1))
+    team = _team(store, binding, members, agents, mode="review")
+
+    outcomes = iter([
+        _outcome("rv", approved=False,
+                 issues=["未满足验收标准：缺少输入校验 —— 没有 422 分支"],
+                 hints=["补 422 用例"]),
+        _outcome("rv", approved=True),
+    ])
+
+    async def fake_review(reviewer, task, result, round_no=1):
+        return next(outcomes)
+
+    team._review_once = fake_review
+    result = asyncio.run(team.execute(task, None))
+
+    assert len(primary.hints) == 2, "复核报问题后主笔必须被重跑一次"
+    assert any("422" in hint for hint in primary.hints[1]), "复核意见要真的进 fix_hints"
+    assert "已按复核意见修订 1 轮" in result.notes
+    assert [name for name, _ in team._ledger.events].count("agent_revise") == 1
+
+
+def test_review_rounds_default_keeps_notes_only(store):
+    """默认 ``review_rounds=0``：只出意见、不重跑主笔（向后兼容）。"""
+    task = _task("backend/app.py")
+    members = [_member("be", Duty.PRIMARY), _member("rv", Duty.REVIEW)]
+    primary = StubAgent(store, {"backend/app.py": "app = 1\n"}, key="be")
+    binding = RoleAgents(
+        agents=[BoundAgent(ref="be", duty=Duty.PRIMARY),
+                BoundAgent(ref="rv", duty=Duty.REVIEW)],
+        aggregation=Aggregation(mode="primary_with_review"))
+    team = _team(store, binding, members, {"be": primary}, mode="review")
+
+    async def fake_review(reviewer, task, result, round_no=1):
+        return _outcome(reviewer.profile, approved=False,
+                        issues=["缺少输入校验，请补 422 用例"],
+                        hints=["补 422 用例"])
+
+    team._review_once = fake_review
+    result = asyncio.run(team.execute(task, None))
+
+    assert len(primary.hints) == 1, "默认不修订，主笔只跑一次"
+    assert "缺少输入校验" in result.notes
+    assert "修订" not in result.notes
+
+
+def test_review_rounds_stops_when_no_issue(store):
+    """复核说「未发现问题」时，即使开了多轮也不该白跑主笔。"""
+    task = _task("backend/app.py")
+    members = [_member("be", Duty.PRIMARY), _member("rv", Duty.REVIEW)]
+    primary = StubAgent(store, {"backend/app.py": "app = 1\n"}, key="be")
+    binding = RoleAgents(
+        agents=[BoundAgent(ref="be", duty=Duty.PRIMARY),
+                BoundAgent(ref="rv", duty=Duty.REVIEW)],
+        aggregation=Aggregation(mode="primary_with_review", review_rounds=2))
+    team = _team(store, binding, members, {"be": primary}, mode="review")
+
+    async def fake_review(reviewer, task, result, round_no=1):
+        return _outcome(reviewer.profile, approved=True)
+
+    team._review_once = fake_review
+    asyncio.run(team.execute(task, None))
+
+    assert len(primary.hints) == 1
+    assert not [n for n, _ in team._ledger.events if n == "agent_revise"]
+
+
+def test_review_uses_structured_criteria_verdict(store):
+    """复核裁决由「逐条判定」派生，评审措辞不参与判定。
+
+    这是与 G2 门禁对齐的关键：过去复核返回自由文本、靠 ``"未发现问题"`` 子串判断，
+    模型换个说法就会触发无意义修订。现在只认 ``ReviewVerdict``，且
+    **标准原文由 ``derive_review`` 按序号回填**，不采信模型复述。
+    """
+    from agentcrew.gate.verdict import ReviewVerdict
+
+    task = _task("backend/app.py")  # 验收标准：["可运行"]
+    members = [_member("be", Duty.PRIMARY), _member("rv", Duty.REVIEW)]
+    primary = StubAgent(store, {"backend/app.py": "app = 1\n"}, key="be")
+    binding = RoleAgents(
+        agents=[BoundAgent(ref="be", duty=Duty.PRIMARY),
+                BoundAgent(ref="rv", duty=Duty.REVIEW)],
+        aggregation=Aggregation(mode="primary_with_review", review_rounds=1))
+    team = _team(store, binding, members, {"be": primary}, mode="review")
+
+    calls = []
+
+    async def fake_structured(member, task, messages, schema, *, temperature, max_tokens, review_round=1):
+        calls.append(schema)
+        assert schema is ReviewVerdict
+        if len(calls) == 1:
+            return ReviewVerdict(judgements=[{
+                "criterion_index": 0, "satisfied": False,
+                "evidence": "没有启动入口"}])
+        return ReviewVerdict(judgements=[{
+            "criterion_index": 0, "satisfied": True,
+            "evidence": "产物里有 main 入口"}])
+
+    team._call_structured = fake_structured
+    result = asyncio.run(team.execute(task, None))
+
+    assert calls and all(c is ReviewVerdict for c in calls)
+    # 标准原文来自任务契约（"可运行"），不是模型写的话
+    assert "未满足验收标准：可运行 —— 没有启动入口" in result.notes
+    # 依据作为修订指令回灌主笔
+    assert any("没有启动入口" in h for h in primary.hints[1])
+    assert "已按复核意见修订 1 轮" in result.notes
+
+
+def test_malformed_review_is_degraded_not_a_rejection(store):
+    """裁决覆盖率不足 = 复核器故障，必须记为降级，**不得**触发返工。
+
+    拿不到可用裁决就当作"有问题"，会让主笔照着空气改——这正是旧版
+    「reject 无 issues」踩过的坑。
+    """
+    from agentcrew.gate.verdict import ReviewVerdict
+
+    task = _task("backend/app.py")  # 1 条标准
+    members = [_member("be", Duty.PRIMARY), _member("rv", Duty.REVIEW)]
+    primary = StubAgent(store, {"backend/app.py": "app = 1\n"}, key="be")
+    binding = RoleAgents(
+        agents=[BoundAgent(ref="be", duty=Duty.PRIMARY),
+                BoundAgent(ref="rv", duty=Duty.REVIEW)],
+        aggregation=Aggregation(mode="primary_with_review", review_rounds=2))
+    team = _team(store, binding, members, {"be": primary}, mode="review")
+
+    async def empty_verdict(member, task, messages, schema, *, temperature, max_tokens, review_round=1):
+        return ReviewVerdict(judgements=[], suggestions=["再打磨一下"])
+
+    team._call_structured = empty_verdict
+    result = asyncio.run(team.execute(task, None))
+
+    assert "复核不可用" in result.notes
+    assert len(primary.hints) == 1, "格式错误不该引发返工"
+    names = [n for n, _ in team._ledger.events]
+    assert "agent_degraded" in names
+    assert "agent_revise" not in names
+
+
+def test_review_suggestions_do_not_trigger_revision(store):
+    """「还能更好」进 suggestions，不构成不满足，不引发修订。"""
+    from agentcrew.gate.verdict import ReviewVerdict
+
+    task = _task("backend/app.py")
+    members = [_member("be", Duty.PRIMARY), _member("rv", Duty.REVIEW)]
+    primary = StubAgent(store, {"backend/app.py": "app = 1\n"}, key="be")
+    binding = RoleAgents(
+        agents=[BoundAgent(ref="be", duty=Duty.PRIMARY),
+                BoundAgent(ref="rv", duty=Duty.REVIEW)],
+        aggregation=Aggregation(mode="primary_with_review", review_rounds=2))
+    team = _team(store, binding, members, {"be": primary}, mode="review")
+
+    async def suggestion_only(member, task, messages, schema, *, temperature, max_tokens, review_round=1):
+        return ReviewVerdict(
+            judgements=[{"criterion_index": 0, "satisfied": True,
+                         "evidence": "有 main 入口"}],
+            suggestions=["可以补一个 --help"])
+
+    team._call_structured = suggestion_only
+    result = asyncio.run(team.execute(task, None))
+
+    assert len(primary.hints) == 1
+    assert "可以补一个 --help" in result.notes
+    assert "修订" not in result.notes
+
+
+def test_circuit_breaker_counts_consecutive_failures_only():
+    """熔断按"连续"失败计：成功一次即清零，不是"曾经失败过就判死"。"""
+    from agentcrew.agents.team import _Circuit
+
+    circuit = _Circuit(threshold=2)
+    assert not circuit.failure("a")
+    assert circuit.ok("a")
+    assert circuit.failure("a") is True, "第 2 次连续失败应熔断"
+    assert not circuit.ok("a")
+    assert circuit.failure("a") is False, "已熔断不重复上报"
+    circuit.success("a")
+    assert circuit.ok("a"), "成功一次即恢复"
+    assert circuit.threshold == 2
+
+
+def test_circuit_breaker_skips_failing_primary(store):
+    """连续失败的执行体被跳过，任务改由同角色另一个 primary 承担。"""
+    settings = Settings(
+        agent_circuit_breaker_enabled=True, agent_circuit_breaker_threshold=2)
+    members = [_member("bad", Duty.PRIMARY), _member("good", Duty.PRIMARY)]
+    # 权重悬殊：熔断前几乎一定选中 bad，便于观察"什么时候不再选它"。
+    members[0] = members[0].model_copy(update={"weight": 1000.0})
+    members[1] = members[1].model_copy(update={"weight": 1.0})
+    calls = {"bad": 0, "good": 0}
+
+    class Boom:
+        async def execute(self, task, pack, *, fix_hints=()):
+            calls["bad"] += 1
+            raise RuntimeError("这个执行体就是不行")
+
+    class Fine(StubAgent):
+        async def execute(self, task, pack, *, fix_hints=()):
+            calls["good"] += 1
+            return await super().execute(task, pack, fix_hints=fix_hints)
+
+    agents = {"bad": Boom(),
+              "good": Fine(store, {"backend/app.py": "app = 1\n"}, key="good")}
+    binding = RoleAgents(
+        agents=[BoundAgent(ref="bad", duty=Duty.PRIMARY),
+                BoundAgent(ref="good", duty=Duty.PRIMARY)],
+        aggregation=Aggregation(mode="primary_with_review", quorum=1, review_rounds=0))
+    team = _team(store, binding, members, agents, mode="single", settings=settings)
+
+    for i in range(2):
+        with pytest.raises(RuntimeError):
+            asyncio.run(team.execute(_task("backend/app.py", task_id=f"T-{i}"), None))
+
+    # 阈值 2 已到：第三次必须换人，且任务应当成功
+    result = asyncio.run(team.execute(_task("backend/app.py", task_id="T-9"), None))
+    assert result.artifacts, "熔断后应由 healthy 的 primary 完成"
+    assert calls["bad"] == 2, "熔断后不得再调用坏执行体"
+    assert calls["good"] == 1
+    assert [n for n, _ in team._ledger.events].count("agent_circuit_open") == 1
+
+
+def test_circuit_breaker_disabled_by_default(store):
+    """默认关闭：失败多少次都照常重试（与引入熔断之前逐字一致）。"""
+    members = [_member("bad", Duty.PRIMARY), _member("good", Duty.PRIMARY)]
+    members[0] = members[0].model_copy(update={"weight": 1000.0})
+    members[1] = members[1].model_copy(update={"weight": 1.0})
+    calls = {"bad": 0}
+
+    class Boom:
+        async def execute(self, task, pack, *, fix_hints=()):
+            calls["bad"] += 1
+            raise RuntimeError("还是不行")
+
+    agents = {"bad": Boom(),
+              "good": StubAgent(store, {"backend/app.py": "app = 1\n"}, key="good")}
+    binding = RoleAgents(
+        agents=[BoundAgent(ref="bad", duty=Duty.PRIMARY),
+                BoundAgent(ref="good", duty=Duty.PRIMARY)],
+        aggregation=Aggregation(mode="primary_with_review", quorum=1))
+    team = _team(store, binding, members, agents, mode="single")
+
+    for i in range(4):
+        with pytest.raises(RuntimeError):
+            asyncio.run(team.execute(_task("backend/app.py", task_id=f"T-{i}"), None))
+
+    assert calls["bad"] == 4, "开关默认关，不该自动跳过"
+    assert not [n for n, _ in team._ledger.events if n == "agent_circuit_open"]
+
+
+def test_review_rounds_is_bounded():
+    """修订轮数上界 3：再多说明验收标准本身没写清。"""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        Aggregation(mode="primary_with_review", review_rounds=4)
+    with pytest.raises(ValidationError):
+        Aggregation(mode="primary_with_review", review_rounds=-1)
 
 
 def test_best_of_promotes_winner_draft(store):
@@ -502,3 +788,203 @@ def test_run_ceiling_carried_to_agent(tmp_path):
         profiles={"a": AgentProfile(key="a", run_cost_ceiling_usd=0.5)},
         binding=RoleAgents(agents=[BoundAgent(ref="a", duty=Duty.PRIMARY)]))
     assert factory.get("backend_dev", "a").run_cost_ceiling_usd == 0.5
+
+
+def test_revision_loop_converges_through_mock_fixtures(store, tmp_path):
+    """端到端（真工厂 + mock 回放）：第 1 轮不满足 → 修订 → 第 2 轮满足。
+
+    这条用例钉的是"修订回路真的能收敛"：不用替身桩住 ``_call_structured``，
+    而是走 ``ModelFactory.complete_structured`` → ``MockProvider`` → ``reviews.json``。
+    夹具用 ``"T-1@1"`` / ``"T-1@2"`` 区分轮次（R47 新增的回放能力）。
+    """
+    import json
+
+    from agentcrew.models.factory import ModelFactory
+
+    fixtures = tmp_path / "fixtures"
+    fixtures.mkdir()
+    (fixtures / "reviews.json").write_text(json.dumps({
+        "T-1@1": {
+            "judgements": [{"criterion_index": 0, "satisfied": False,
+                            "evidence": "没有启动入口"}],
+            "suggestions": ["可以顺手补个 --help"], "score": 0.3,
+        },
+        "T-1@2": {
+            "judgements": [{"criterion_index": 0, "satisfied": True,
+                            "evidence": "已有 main 入口"}],
+            "suggestions": [], "score": 0.9,
+        },
+    }, ensure_ascii=False), encoding="utf-8")
+
+    task = _task("backend/app.py")  # 验收标准：["可运行"]
+    members = [_member("be", Duty.PRIMARY), _member("rv", Duty.REVIEW)]
+    primary = StubAgent(store, {"backend/app.py": "app = 1\n"}, key="be")
+    binding = RoleAgents(
+        agents=[BoundAgent(ref="be", duty=Duty.PRIMARY),
+                BoundAgent(ref="rv", duty=Duty.REVIEW)],
+        aggregation=Aggregation(mode="primary_with_review", review_rounds=2))
+    settings = Settings(default_model="mock:model")
+    ledger = _NullLedger()
+    team = TeamAgent(
+        BACKEND, binding, members,
+        get_agent=lambda p: primary,
+        models=ModelFactory(settings, ledger=ledger, fixtures_dir=fixtures),
+        store=store, ledger=ledger, settings=settings, run_id="R")
+
+    result = asyncio.run(team.execute(task, None))
+
+    assert len(primary.hints) == 2, "第 1 轮不满足 → 主笔应被重跑一次"
+    assert any("没有启动入口" in hint for hint in primary.hints[1])
+    assert "已按复核意见修订 1 轮" in result.notes
+    # 两轮都留在报告里（第 3 轮因已通过而不再发生）
+    assert "第 1 轮" in result.notes and "第 2 轮" in result.notes
+    names = [n for n, _ in ledger.events]
+    assert names.count("agent_revise") == 1, "收敛后不得继续修订"
+    approved = [d.get("approved") for n, d in ledger.events if n == "agent_review"]
+    assert approved == [False, True], "第 1 轮驳回、第 2 轮通过"
+    # 驳回必须留原文：只有条数的话，事后无法复盘"到底哪条不满足"
+    details = [d.get("detail", "") for n, d in ledger.events if n == "agent_review"]
+    assert "未满足验收标准：可运行" in details[0]
+    assert details[1] == "未发现问题"
+
+
+
+
+def test_excerpt_shows_every_file_even_behind_a_huge_one(store):
+    """摘录预算必须均分：大文件吃掉全部额度会让后面的文件"看起来不存在"。
+
+    实测事故：README 已写入（ledger 里 4 条 artifact_written），复核却判
+    "未提供 README"，并且这条意见靠修订永远修不掉——文件一直在，只是没被展示。
+    """
+    task = _task("backend/app.py", "README.md", "tests/test_app.py")
+    members = [_member("be", Duty.PRIMARY), _member("rv", Duty.REVIEW)]
+    binding = RoleAgents(
+        agents=[BoundAgent(ref="be", duty=Duty.PRIMARY),
+                BoundAgent(ref="rv", duty=Duty.REVIEW)],
+        aggregation=Aggregation(mode="primary_with_review"))
+    team = _team(store, binding, members, {"be": StubAgent(store, {}, key="be")},
+                 mode="review")
+
+    huge = "x = 1\n" * 6000          # 远超 1800 token 的总预算
+    result = asyncio.run(StubAgent(
+        store,
+        {"backend/app.py": huge,
+         "README.md": "# 安装\npip install -e .\n",
+         "tests/test_app.py": "def test_ok(): assert True\n"},
+        key="be").execute(task, None))
+
+    excerpt = team._artifact_excerpt(result)
+    for path in ("backend/app.py", "README.md", "tests/test_app.py"):
+        assert path in excerpt, f"{path} 必须出现（哪怕只给文件名与开头）"
+    assert "已截断" in excerpt, "大文件应被截断并标注"
+
+
+# ── R49：分工依赖（intra_deps）─────────────────────────────────────────────
+
+
+def _scope_profiles(*keys: str) -> dict:
+    return {k: AgentProfile(key=k) for k in keys}
+
+
+def test_intra_deps_only_valid_for_split_mode():
+    profiles = _scope_profiles("a", "b")
+    binding = RoleAgents(
+        agents=[BoundAgent(ref="a", duty=Duty.PRIMARY),
+                BoundAgent(ref="b", duty=Duty.REVIEW)],
+        aggregation=Aggregation(mode="primary_with_review",
+                                intra_deps={"a": ["b"]}))
+    with pytest.raises(BindingError, match="只在 split_by_path"):
+        validate_bindings("backend_dev", binding, profiles, ["*"])
+
+
+def test_intra_deps_rejects_self_unknown_and_cycle():
+    profiles = {
+        "a": AgentProfile(key="a", path_scope=["x/"]),
+        "b": AgentProfile(key="b", path_scope=["y/"]),
+    }
+    agents = [BoundAgent(ref="a", duty=Duty.SECTION),
+              BoundAgent(ref="b", duty=Duty.SECTION)]
+
+    def check(deps, match):
+        binding = RoleAgents(
+            agents=agents,
+            aggregation=Aggregation(mode="split_by_path", quorum=2, intra_deps=deps))
+        with pytest.raises(BindingError, match=match):
+            validate_bindings("backend_dev", binding, profiles, ["*"])
+
+    check({"a": ["a"]}, "不能依赖自己")
+    check({"a": ["zzz"]}, "非 section")
+    check({"a": ["b"], "b": ["a"]}, "成环")
+
+
+def test_intra_deps_runs_in_order_and_injects_upstream(store):
+    """依赖方在依赖项之后执行，并在上下文里拿到对方的摘要与产物路径。"""
+    from agentcrew.context.context_bus import ContextPack
+
+    task = _task("backend/app.py", "tests/test_app.py")
+    members = [_member("be", Duty.SECTION, ["backend/"]),
+               _member("qa", Duty.SECTION, ["tests/"])]
+    order: list[str] = []
+
+    class Recorder(StubAgent):
+        async def execute(self, task, pack, *, fix_hints=()):
+            order.append(self.key)
+            return await super().execute(task, pack, fix_hints=fix_hints)
+
+    be = Recorder(store, {"backend/app.py": "app = 1\n"}, scope=["backend/"], key="be")
+    qa = Recorder(store, {"tests/test_app.py": "def test(): pass\n"},
+                  scope=["tests/"], key="qa")
+    binding = RoleAgents(
+        agents=[BoundAgent(ref="be", duty=Duty.SECTION),
+                BoundAgent(ref="qa", duty=Duty.SECTION)],
+        aggregation=Aggregation(mode="split_by_path", quorum=2,
+                                intra_deps={"qa": ["be"]}))
+    team = _team(store, binding, members, {"be": be, "qa": qa}, mode="split")
+    pack = ContextPack(project_goal="做后端", task=task)
+
+    result = asyncio.run(team.execute(task, pack))
+
+    assert order == ["be", "qa"], "依赖方必须后执行"
+    assert {r.path for r in result.artifacts} == {"backend/app.py", "tests/test_app.py"}
+    # be 拿到的是原上下文；qa 多了一份上游摘要
+    assert not be.packs[0].upstream
+    upstream = qa.packs[0].upstream
+    assert len(upstream) == 1
+    assert upstream[0].files == ["backend/app.py"]
+    assert "be" in upstream[0].title
+
+
+def test_intra_deps_failure_does_not_block_dependents(store):
+    """依赖项失败不阻塞下游：仍按序跑完，由 quorum 判定整体成败。
+
+    否则一个 section 失败会让整条链静默停摆，连"哪几份产物缺失"都报不出来。
+    """
+    task = _task("backend/app.py", "tests/test_app.py")
+    members = [_member("be", Duty.SECTION, ["backend/"]),
+               _member("qa", Duty.SECTION, ["tests/"])]
+    order: list[str] = []
+
+    class Boom:
+        async def execute(self, task, pack, *, fix_hints=()):
+            order.append("be")
+            raise RuntimeError("后端挂了")
+
+    class Recorder(StubAgent):
+        async def execute(self, task, pack, *, fix_hints=()):
+            order.append(self.key)
+            return await super().execute(task, pack, fix_hints=fix_hints)
+
+    qa = Recorder(store, {"tests/test_app.py": "def test(): pass\n"},
+                  scope=["tests/"], key="qa")
+    binding = RoleAgents(
+        agents=[BoundAgent(ref="be", duty=Duty.SECTION),
+                BoundAgent(ref="qa", duty=Duty.SECTION)],
+        aggregation=Aggregation(mode="split_by_path", quorum=1,
+                                intra_deps={"qa": ["be"]}))
+    team = _team(store, binding, members, {"be": Boom(), "qa": qa}, mode="split")
+
+    result = asyncio.run(team.execute(task, _task("backend/app.py")))
+
+    assert order == ["be", "qa"], "依赖项失败也要继续跑下游"
+    assert [r.path for r in result.artifacts] == ["tests/test_app.py"]
+

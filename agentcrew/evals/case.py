@@ -95,6 +95,12 @@ class CaseOutput(BaseModel):
     event_counts: dict[str, int] = Field(default_factory=dict)
     """ledger 事件名 → 次数。"""
 
+    cost_usd: float = 0.0
+    """本次 run 的估算成本（mock 通道恒为 0；真实通道才有区分度）。
+
+    矩阵对比要靠它回答"换成便宜档到底省了多少"——没有这个字段，A/B 只剩通过率。
+    """
+
     error: str = ""
     """运行本身失败时的原因（此时 checks 一律判失败）。"""
 
@@ -109,6 +115,12 @@ class CaseResult(BaseModel):
     checks: list[CheckResult] = Field(default_factory=list)
     status: str = ""
     error: str = ""
+
+    # ── 成本/过程指标（R45 矩阵对比用；默认 0 保持旧调用方兼容）─────────────
+    cost_usd: float = 0.0
+    llm_calls: int = 0
+    revise_rounds: int = 0
+    """复核回灌主笔的轮数（``agent_revise`` 事件数）。"""
 
     @property
     def failures(self) -> list[CheckResult]:

@@ -26,6 +26,7 @@ __all__ = [
     "exhaustion_error",
     "input_price_of",
     "threshold_reached",
+    "under_headroom",
 ]
 
 #: 预算软阈值比较的浮点容差（USD）。累计成本是多次加法累加的，
@@ -38,6 +39,21 @@ def threshold_reached(current: float, limit: float | None, threshold: float) -> 
     if limit is None:
         return False
     return current >= limit * threshold - BUDGET_EPSILON
+
+
+def under_headroom(spent: float, ceiling: float | None, headroom: float) -> bool:
+    """剩余额度是否已低于 ``headroom`` 比例（成本感知路由的触发条件）。
+
+    ``ceiling`` 为 None 表示该执行体没有声明 run 级额度——没有"剩余"可言，
+    一律返回 False（不猜、不提前降级）。
+
+    ``headroom=0.3`` 的含义是"剩下不到 30% 了"：此时提前换便宜模型，比等到
+    ``budget_downgrade_threshold``（默认 90% 已花完）才刹车更有意义——后者往往
+    只剩最后几次调用，省不下什么。
+    """
+    if ceiling is None or ceiling <= 0:
+        return False
+    return spent >= ceiling * (1.0 - headroom) - BUDGET_EPSILON
 
 
 def input_price_of(model: str) -> float:

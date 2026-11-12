@@ -11,10 +11,18 @@ info:
     多智能体协作平台的 HTTP + SSE API。
     - 实时推送使用 Server-Sent Events（单向长连接），事件源与 Ledger 同构（on_event 回调）。
     - 错误响应统一为 `{"error": "<人类可读消息>"}`（代码中未实现 code/message/details 三段式）。
-    - 所有时间字段为 ISO 8601 字符串（Python datetime.isoformat()；落盘记录为 naive 本地时间，
-      API 直接透传，不带时区后缀）。
+    - 所有时间字段为 ISO 8601 字符串。**D-14 起统一为 aware UTC**（带时区标记，pydantic 序列化为 `Z`、`isoformat` 为 `+00:00`）：
+      `run.json`、统计、评审、审批、ledger 事件、心跳与锁全部一个口径。存量 run
+      仍是 naive 本地时间，读取端（`utils/clock.parse_stamp`）按本机时区补齐，
+      两种格式混存能正确比较——客户端无需迁移，但**新数据请按 UTC 解析**。
     - 金额字段（cost_usd / estimated_cost_usd）单位为 USD，浮点 decimal。
     - 可选字段在代码中可能缺失或为空字符串，均未列入 required。
+    - **认证默认开启（fail-closed）**：未配置密钥时 `serve` 拒绝启动。除显式
+      关闭认证并绑定回环地址外，所有端点（含 `/health`）都要求
+      `Authorization: Bearer <key>` 或 `X-API-Key: <key>`；缺失/无效 → 401，
+      作用域不足 → 403。
+    - **通用错误码**：请求体超 4 MiB → 413；限流超限 → 429（带 `Retry-After`）。
+      这两条对所有接收 body / 受限流的端点通用，各 operation 未逐一重复声明。
 
 servers:
   - url: http://127.0.0.1:8765
@@ -31,6 +39,13 @@ tags:
     description: 运行时模型绑定的查看与切换
   - name: events
     description: SSE 实时事件流与测试事件注入
+
+# 全局认证（默认启用，fail-closed）。两种头任一即可：
+#   Authorization: Bearer <key>   或   X-API-Key: <key>
+# 缺失/无效 → 401（带 WWW-Authenticate）；作用域不足 → 403。
+security:
+  - bearerAuth: []
+  - apiKeyAuth: []
 
 paths:
 
@@ -55,6 +70,9 @@ paths:
     get:
       tags: [system]
       summary: 健康检查
+      description: >
+        服务存活探针。注意：认证默认开启时 `/health` 同样要求 API Key——
+        标准 HTTP 探针需带认证头，或显式关闭认证（仅限回环绑定）。
       responses:
         '200':
           description: 服务存活
@@ -62,6 +80,43 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
+        '401':
+          description: 缺少或无效 API Key（认证默认开启，探针需带认证头）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /metrics:
+    get:
+      tags: [system]
+      summary: Prometheus 指标（文本格式）
+      description: |
+        OpenMetrics / Prometheus 文本格式（`text/plain; version=0.0.4`）。
+        只暴露进程内可即时算出的量：存活、版本、启动时间、内存中的 run 数与
+        状态分布、按状态码累计的请求数。**不扫盘**（磁盘与产物统计请用
+        `main.py status` 或外部 exporter）。
+
+        与 `/health` 走同一条认证链：默认必须带 `Authorization: Bearer` 或
+        `X-API-Key`，避免运行态信息暴露在匿名端口上。
+      responses:
+        '200':
+          description: Prometheus 文本
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: |
+                # TYPE agentcrew_up gauge
+                agentcrew_up 1
+                # TYPE agentcrew_http_requests_total counter
+                agentcrew_http_requests_total{status="200"} 42
+        '401':
+          description: 缺少或无效 API Key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   ##########################################################################
   # runs
@@ -109,7 +164,30 @@ paths:
               schema:
                 $ref: '#/components/schemas/CreateRunResponse'
         '400':
-          description: 请求体非法（非法 JSON / body 非对象 / goal 为空 / options 非对象）
+          description: 请求体非法（非法 JSON / body 非对象 / goal 为空 / options 非对象或含未知键）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 缺少或无效 API Key（认证默认开启）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: 请求体超过 4 MiB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: 速率限制超限（带 Retry-After）
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: 建议的重试等待秒数
           content:
             application/json:
               schema:
@@ -587,6 +665,47 @@ paths:
                 $ref: '#/components/schemas/Error'
 
   /runs/{run_id}/agents:
+    get:
+      tags: [run-actions]
+      summary: 读本次 run 解析后的执行体编排计划（alias / duty / tools / path_scope）
+      description: |
+        数据来自 ledger 的 `run_plan_resolved` 事件，因此运行中与历史 run 都可读，
+        且回答的是「实际解析成了什么」，不是「配置声称是什么」。
+
+        与 `GET /runs/{run_id}/stats` 的 `llm.by_profile` 配合，可回答
+        「哪个 agent 用了哪个模型、花了多少钱」。
+
+        早于该事件的历史 run 返回空数组并标注 `source: none`，不做配置层面的猜测。
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: 执行体计划（可能为空）
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  run_id: { type: string }
+                  source: { type: string, enum: [run_plan_resolved, none] }
+                  agents:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        role: { type: string }
+                        profile: { type: string }
+                        alias: { type: string }
+                        duty: { type: string, enum: [primary, section, review, judge] }
+                        tools: { type: array, items: { type: string } }
+                        path_scope: { type: array, items: { type: string } }
+                        weight: { type: number }
+        '404':
+          description: run 不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
     post:
       tags: [run-actions]
       summary: R11 热切换某个角色的执行体（运行中的 run）
@@ -1201,6 +1320,19 @@ paths:
   ##########################################################################
 
 components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        `Authorization: Bearer <key>`。key 来自 `AGENTCREW_API_KEYS`
+        （逗号分隔）或 RBAC 密钥库（`POST /keys`）。
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: 与 Bearer 等价的单头写法。
 
   parameters:
     RunId:

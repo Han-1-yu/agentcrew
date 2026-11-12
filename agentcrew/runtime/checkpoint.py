@@ -38,6 +38,8 @@ from agentcrew.utils.files import (
     slugify_run_id,
 )
 
+from ..utils.clock import elapsed_since, parse_stamp, utc_now
+
 #: ``run.json`` 的 schema 版本；读到不同值（含缺失）一律抛 SchemaMismatchError。
 SCHEMA_VERSION = 1
 
@@ -91,6 +93,13 @@ class RunStatus(str, Enum):
     AWAITING_APPROVAL 的 resume 必须回到**产生审批请求的那个卡点**继续。审批
     请求本体落在 ``<run_dir>/approvals.jsonl``，此状态只是一个可被 UI / CLI / API
     识别的路标；删除守卫与清理逻辑把它与 RUNNING 同等保护。
+    """
+    PLANNED = "planned"
+    """只读规划态（Ask 模式，``--plan-only``）：计划已生成并落盘、未派发执行。
+
+    非终态语义上更接近「可续跑」：计划（tasks.json）已在磁盘上，用 ``resume``
+    可直接进入执行阶段。与 AWAITING_APPROVAL 的区别是不挂审批单、不等待外部
+    决策——它是用户主动选择「先只看计划」，随时可手动续跑。
     """
     COMPLETED = "completed"
     FAILED = "failed"
@@ -223,9 +232,11 @@ class CheckpointStore:
         目标目录已有 ``run.json`` 时抛 ``FileExistsError``：同名 run_id 可能对应
         一个**活着**的 run，覆盖会重置它的状态与统计——宁可要求调用方换 id。
         """
-        now = datetime.now()
+        # D-14：``run_id`` 仍用**本地时间**生成——目录名是给人看的，用户期望
+        # 看到「我刚才 15:30 跑的那个」。落盘时间戳则统一 aware UTC。
+        local_now = datetime.now()
         if run_id is None:
-            run_id = slugify_run_id(now)
+            run_id = slugify_run_id(local_now)
         else:
             run_id = _validated_run_id(run_id)
         run_dir = Path(output_dir) / run_id
@@ -242,8 +253,8 @@ class CheckpointStore:
                 run_id=run_dir.name,
                 project_goal=project_goal,
                 status=RunStatus.RUNNING,
-                created_at=now,
-                updated_at=now,
+                created_at=utc_now(),
+                updated_at=utc_now(),
                 config_snapshot=config_snapshot,
             )
         )
@@ -512,11 +523,14 @@ def is_stale_running(run_dir: Path, *, now: datetime | None = None) -> bool:
         data = json.loads(read_text(run_dir / "run.json"))
         if not isinstance(data, dict) or data.get("status") != RunStatus.RUNNING.value:
             return False
-        raw = data.get("updated_at")
-        if not isinstance(raw, str):
+        updated = parse_stamp(data.get("updated_at"))
+        if updated is None:
             return False
-        updated = datetime.fromisoformat(raw)
-        return (now or datetime.now()) - updated > STALE_RUNNING_AFTER
+        # A-7：时钟倒挂超容忍时 elapsed 为 None → 不判僵尸（fail-closed）。
+        idle = elapsed_since(updated, now=now)
+        if idle is None:
+            return False
+        return idle > STALE_RUNNING_AFTER
     except (OSError, ValueError, TypeError):
         return False
 

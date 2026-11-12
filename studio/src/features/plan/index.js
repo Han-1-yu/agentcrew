@@ -110,7 +110,14 @@ function renderPlanPage(container) {
       h('div', { class: 'plan-goal', title: run.project_goal }, simplifyGoal(run.project_goal || '未命名项目'))),
     h('div', { style: 'display:flex;gap:8px;align-items:center' },
       !isReal ? h('button', { class: 'btn', onclick: () => {
-          const nextId = 'T-' + String(tasks.length + 1).padStart(3, '0');
+          // C-14：用「现有 ID 最大值 + 1」而不是 tasks.length + 1——删除过
+          // 任务后 length 会变小，生成出与现存任务重复的 id，导致 DAG 分层、
+          // 详情跳转、按 id 查找全部指向错误任务。
+          const maxSeq = tasks.reduce((max, t) => {
+            const n = parseInt(String(t.id || '').replace(/^T-/, ''), 10);
+            return Number.isFinite(n) ? Math.max(max, n) : max;
+          }, 0);
+          const nextId = 'T-' + String(maxSeq + 1).padStart(3, '0');
           tasks.push({ id: nextId, title: '新任务', description: '', role: 'backend_dev', status: 'pending', priority: 5, timeout_seconds: 300, dependencies: [] });
           S.planDirty = true; renderList(); renderStats();
         } }, '+ 添加任务') : null,

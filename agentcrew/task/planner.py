@@ -76,7 +76,13 @@ class TaskDraft(BaseModel):
     dependencies: list[str] = Field(default_factory=list)
     priority: int = Field(5, ge=1, le=9)
     brief: str = ""
-    timeout_seconds: int = 300  # P1-4：PM 可指定单次执行超时（秒），默认 300
+    timeout_seconds: int = Field(300, ge=1, le=3600)
+    """P1-4：PM 可指定单次执行超时（秒），默认 300。
+
+    边界与 :class:`~agentcrew.task.task.Task` 保持一致（``ge=1``/``le=3600``），
+    且随 ``PlanOutput.model_json_schema()`` 自动进入 PM 的结构化输出约束——
+    0 或负值会让 ``asyncio.wait_for`` 立即超时、每次执行都白烧一次 attempt。
+    """
     when_outcomes: list[str] = Field(default_factory=list)
     """R4 条件边：只有上游 ``<outcome>`` 标签命中这里任一值时本任务才执行。
 
@@ -337,6 +343,34 @@ def _shuoming_is_doc_demand(text: str, idx: int) -> bool:
     return any(verb in window for verb in _DOC_PRODUCTION_VERBS)
 
 
+_DOC_REFERENCE_BEFORE = ("与", "按", "依据", "依照", "参照", "根据", "符合", "对照")
+"""文档关键词**前面**出现这些词 ⇒ 是在引用既有文档（「按设计文档策略」）。"""
+
+_DOC_REFERENCE_AFTER = ("一致", "约定", "对齐", "相同", "相符", "定义", "样例")
+"""文档关键词**后面**紧跟这些词 ⇒ 同样是在引用（「与设计文档一致」）。"""
+
+#: 引用标记 + 最多 4 个连接字，例如「与**设计**文档」「按**设计**文档」。
+_DOC_REFERENCE_BEFORE_RE = re.compile(
+    "(?:" + "|".join(_DOC_REFERENCE_BEFORE) + r")[\u4e00-\u9fa5]{0,4}$")
+
+
+def _is_doc_reference(text: str, idx: int, word: str) -> bool:
+    """关键词这一次出现，是不是在**引用既有文档**而不是要求产出文档？
+
+    真实模型的验收标准里大量出现「与设计文档样例一致」「按设计文档策略处理」
+    ——这些是**参照另一份产物**，不是要求本任务交付文档。把它当需求判定，
+    会让整份计划被拒（实测 ``exit 2``：同一目标两次跑不起来），而实际任务
+    完全没问题。
+
+    判定窗口刻意窄（前面最多 4 个连接字）：宁可漏判成"要求文档"（交给 PM 重拆，
+    可见），也不要错判成"引用"而放过真的缺文档。
+    """
+    before = text[max(0, idx - 12): idx]
+    after = text[idx + len(word): idx + len(word) + 4]
+    return (bool(_DOC_REFERENCE_BEFORE_RE.search(before))
+            or any(after.startswith(marker) for marker in _DOC_REFERENCE_AFTER))
+
+
 def _demands_document(criterion: str) -> str | None:
     """这条验收标准是否在**要求一份文档**？返回命中的关键词，否则 ``None``。
 
@@ -354,7 +388,18 @@ def _demands_document(criterion: str) -> str | None:
         return None
     for word in _DOC_DEMANDING_KEYWORDS:
         if word != "说明":
-            if word in lowered:
+            # 同一个词可能出现多次（"输出文档需与设计文档一致"）：只要有一次
+            # **不是**引用，就说明这条标准确实要求产出文档。
+            positions = []
+            start = 0
+            while True:
+                idx = lowered.find(word, start)
+                if idx == -1:
+                    break
+                positions.append(idx)
+                start = idx + len(word)
+            if positions and not all(
+                    _is_doc_reference(lowered, idx, word) for idx in positions):
                 return word
             continue
         start = 0

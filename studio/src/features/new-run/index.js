@@ -4,10 +4,11 @@
 import { BUILTIN_PROVIDERS, findProvider } from '../../contracts/providers.js';
 
 import { apiFetch } from '../../lib/api.js';
-import { $, h } from '../../lib/dom.js';
+import { $, $$, h } from '../../lib/dom.js';
 import { S } from '../../lib/store.js';
 
 import { readAlias, readNumber } from '../../lib/validate.js';
+import { MODES, MODE_ORDER, currentMode, setMode } from '../../lib/mode.js';
 
 import { closeModal, showModal } from '../../ui/modal.js';
 import { toast } from '../../ui/toast.js';
@@ -17,9 +18,8 @@ function openNewRunModal(opts = {}){
   // 记忆上次的模式选择；首次默认**真实模式**——Mock 产物是固定 Todo 夹具，与目标无关
   const saved = localStorage.getItem('agentcrew:nrMock');
   const mockDefault = saved == null ? !!(S.settings && S.settings.defaultMock) : saved === '1';
-  // 自动执行（命令框里的 Full access 标签写的就是它），默认开
-  const savedAuto = localStorage.getItem('agentcrew:nrAuto');
-  const autoDefault = savedAuto == null ? true : savedAuto === '1';
+  // 执行模式（自动执行 / 计划审查 / 只读规划），读上次选择，默认 agent
+  const modeDefault = currentMode();
   showModal(h('div',{},
     h('h3',{class:'modal-title'},'启动新运行'),
     h('div',{class:'nr-form'},
@@ -50,10 +50,22 @@ function openNewRunModal(opts = {}){
             placeholder:'或手输 provider:model'})),
         h('div',{id:'nr-model-preview',class:'nr-model-preview'})),
 
-      // 模式复选
+      // 执行模式（对齐 WorkBuddy 的 Agent / Plan / Ask）+ 复选
+      h('div',{class:'nr-row'},
+        h('label',{class:'nr-label'},'执行模式'),
+        h('div',{class:'nr-mode',id:'nr-mode'},
+          MODE_ORDER.map(m => h('button',{
+            type:'button',
+            class:'nr-mode-btn' + (m === modeDefault ? ' active' : ''),
+            'data-mode': m,
+            onclick: (e) => {
+              setMode(m);
+              syncNrMode();
+            },
+          }, MODES[m].mode))),
+        h('div',{id:'nr-mode-hint',class:'nr-hint'})),
       h('div',{class:'nr-checks'},
         h('label',{},h('input',{type:'checkbox',id:'nr-mock',checked:mockDefault}),'Mock 模式'),
-        h('label',{},h('input',{type:'checkbox',id:'nr-auto',checked:autoDefault}),'自动执行'),
         h('label',{},h('input',{type:'checkbox',id:'nr-demo'}),'Demo 目标')),
 
       // 高级选项（默认收起）
@@ -110,11 +122,17 @@ function openNewRunModal(opts = {}){
         startBtn.disabled=true; startBtn.textContent='启动中…';
         try {
           localStorage.setItem('agentcrew:nrMock', mockOn ? '1' : '0');
+          // C-6：快照必须在 startRun **之前**取——spawn 返回时 CLI 可能已经建好
+          // run 目录，事后取快照会把新 run 算进 before，轮询 60s 恒找不到。
+          let before = new Set();
+          try {
+            before = new Set(((await window.studio.listRuns())||[]).map(x=>x.dir));
+          } catch { /* 列表读不到：退化为「不判重」，下面仍能找到 fresh */ }
           await window.studio.startRun({
             goal: useDemo ? '' : goal,
             demo: useDemo,
             mock: mockOn,
-            auto: $('#nr-auto').checked,
+            mode: currentMode(),
             project: project || null,
             model: aliasR.value || null,
             maxCost: costR.value,
@@ -125,7 +143,6 @@ function openNewRunModal(opts = {}){
           closeModal();
           toast('success','已启动', mockOn ? 'Mock 运行已提交…' : '真实模型运行已提交，耗时数分钟…');
           // 轮询等 CLI 创建出**新的** run 目录再切换（不能取 runs[0]——可能是别的运行）
-          const before = new Set(((await window.studio.listRuns())||[]).map(x=>x.dir));
           let switched = false;
           for(let i=0;i<120;i++){
             await new Promise(res=>setTimeout(res,500));
@@ -157,6 +174,20 @@ function openNewRunModal(opts = {}){
     $('#nr-goal').classList.remove('input-error');
     const eb=$('#nr-goal-error'); if(eb) eb.textContent='';
   });
+  // 执行模式提示：随选择更新说明文案
+  const MODE_HINTS = {
+    agent: '全自动执行：规划 → 执行 → 三层门禁 → 交付，全程无人工卡点。',
+    plan: '计划审查：规划完成后挂起，经「计划审查」页批准后才开始执行。',
+    ask: '只读规划：只生成计划并落盘、不执行；之后可在运行详情点「恢复」续跑。',
+  };
+  const syncNrMode = () => {
+    const m = currentMode();
+    const hint = $('#nr-mode-hint');
+    if (hint) hint.textContent = MODE_HINTS[m] || '';
+    $$('.nr-mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === m));
+  };
+  syncNrMode();
+
   // Demo 勾选：目标框置灰 + 提示
   const syncDemo = () => {
     const on=$('#nr-demo').checked;

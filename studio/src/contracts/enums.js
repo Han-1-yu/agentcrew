@@ -20,12 +20,17 @@ const STATUS_META = {
 const STATUS_ORDER = ['pending','ready','running','review','rework','blocked','succeeded','failed','skipped','cancelled'];
 
 // RunStatus（实际观测值）：preparing/planning/awaiting_approval/running/paused/failed/completed/cancelled
+// 补齐后端真实存在的 planned（Ask 模式 --plan-only）与 interrupted（Ctrl-C 断点），
+// 以及 idle 兜底——未知状态回退到 idle，避免 RUN_META[status] 为 undefined 导致顶栏崩溃。
 const RUN_META = {
+  idle:             { label: '空闲',         dot: 'idle',    chip: 'idle' },
   preparing:        { label: '准备中',       dot: 'idle',    chip: 'idle' },
   planning:         { label: '规划中',       dot: 'running', chip: 'review' },
+  planned:          { label: '已规划（未执行）', dot: 'done', chip: 'idle' },
   awaiting_approval:{ label: '等待人工确认', dot: 'warning', chip: 'review' },
   running:          { label: '运行中',       dot: 'running', chip: 'running' },
   paused:           { label: '已暂停',       dot: 'paused',  chip: 'paused' },
+  interrupted:      { label: '已中断',       dot: 'paused',  chip: 'paused' },
   failed:           { label: '失败',         dot: 'error',   chip: 'failed' },
   completed:        { label: '已完成',       dot: 'done',    chip: 'done' },
   cancelled:        { label: '已取消',       dot: 'idle',    chip: 'idle' },

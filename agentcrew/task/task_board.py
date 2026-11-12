@@ -64,11 +64,25 @@ class TaskBoard:
         tasks: Sequence[Task],
         *,
         on_change: Callable[[Task, StatusChange], None] | None = None,
+        on_persist: Callable[[], None] | None = None,
     ) -> None:
-        """``tasks`` 的 id 必须唯一（由 Task 9 的 planner 校验）。"""
+        """``tasks`` 的 id 必须唯一（由 Task 9 的 planner 校验）。
+
+        ``on_persist``（A-19）：**非状态跃迁的写入**（评审记录、返工/派发计数、
+        执行结果）也要落盘的出口。``on_change`` 只在状态跃迁时触发，而门禁流程是
+        ``record_review → (G2 长评审) → transition``：中间这段被硬杀，评审记录与
+        返工计数就只活在内存里——返工额度白送、评审轮次重算、收敛历史丢失。
+        未接线时行为与之前逐字一致（纯内存面板）。
+        """
         self._tasks: dict[str, Task] = {task.id: task for task in tasks}
         self._graph = TaskGraph.build(tasks)
         self._on_change = on_change
+        self._on_persist = on_persist
+
+    def _notify_persist(self) -> None:
+        """非跃迁写入后的持久化通知；未接线时是空操作。"""
+        if self._on_persist is not None:
+            self._on_persist()
 
     # ---- 读取 ----
 
@@ -172,12 +186,20 @@ class TaskBoard:
     def bump_attempt(self, task_id: str) -> Task:
         """``attempts += 1``，不改状态（派发时的额度扣除，spec §6.2）。"""
         task = self._tasks[task_id]
-        return self._replace(task, attempts=task.attempts + 1)
+        updated = self._replace(task, attempts=task.attempts + 1)
+        self._notify_persist()
+        return updated
 
     def bump_rework(self, task_id: str) -> Task:
-        """``rework_count += 1``，不改状态；状态跃迁由调用方另行 transition。"""
+        """``rework_count += 1``，不改状态；状态跃迁由调用方另行 transition。
+
+        A-19：自增后立即持久化。此前只改内存、等随后的 transition 一并落盘，
+        而 G2 长评审就夹在两者之间——硬杀后返工额度白送。
+        """
         task = self._tasks[task_id]
-        return self._replace(task, rework_count=task.rework_count + 1)
+        updated = self._replace(task, rework_count=task.rework_count + 1)
+        self._notify_persist()
+        return updated
 
     def reassign(self, task_id: str, role: str) -> Task:
         """R10：换执行角色并自增 ``reassign_count``；**不改状态**。
@@ -187,23 +209,29 @@ class TaskBoard:
         真实存在——这里不做目录查询，``TaskBoard`` 不该知道角色目录长什么样。
         """
         task = self._tasks[task_id]
-        return self._replace(
+        updated = self._replace(
             task, role=role, reassign_count=task.reassign_count + 1)
+        # A-19：换人计数同样属于「非跃迁写入」，硬杀后不能凭空回滚。
+        self._notify_persist()
+        return updated
 
     def record_review(self, task_id: str, record: ReviewRecord) -> None:
         """追加一条评审记录；不改状态。
 
-        与 :meth:`set_result` 一样不触发 ``on_change``（没有 ``StatusChange``）：
-        评审结果由紧随其后的 ``REVIEW → {SUCCEEDED|REWORK|FAILED}`` 跃迁一并
-        带上板，checkpoint 不会丢。
+        与 :meth:`set_result` 一样不触发 ``on_change``（没有 ``StatusChange``），
+        但 A-19 起会触发 ``on_persist``：门禁是
+        ``record_review → G2 长评审 → transition``，中间被硬杀时评审轮次与
+        收敛历史必须已经落盘，否则 resume 后按旧轮次重算。
         """
         task = self._tasks[task_id]
         self._replace(task, reviews=[*task.reviews, record])
+        self._notify_persist()
 
     def set_result(self, task_id: str, result: TaskResult) -> None:
         """写入执行结果；不改状态（状态流转由调用方 transition）。"""
         task = self._tasks[task_id]
         self._replace(task, result=result)
+        self._notify_persist()
 
     def reset_failed(self, task_id: str) -> Task:
         """人工重置 ``FAILED → READY``（spec §6.1 脚注，V1 默认不启用）。

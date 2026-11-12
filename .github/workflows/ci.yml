@@ -39,7 +39,7 @@ jobs:
           pip install -r requirements.txt
           # 工具链钉版本：不钉的话"今天绿、明天红"，红的原因与自己改的代码无关。
           # 升级这两个版本时必须先在本机跑通 ruff check . 与 mypy agentcrew/。
-          pip install "ruff==0.17.3" "mypy==2.4.1"
+          pip install "ruff==0.17.3" "mypy==2.4.1" "pytest-cov>=7.0.0"
 
       - name: ruff
         run: ruff check .
@@ -49,8 +49,11 @@ jobs:
       - name: mypy
         run: mypy agentcrew/
 
-      - name: pytest
-        run: pytest -q
+      # D-10：覆盖率地板线。门槛是「不得倒退」的下限（当前实测约 60%），
+      # 不是目标值；只在 Linux 单进程跑（Windows 裸 pytest 会随机崩溃，
+      # 那里的 job 用 scripts/test.py 且不开覆盖率）。
+      - name: pytest (coverage gate)
+        run: pytest -q --cov=agentcrew --cov-report=term --cov-fail-under=50
         env:
           # 测试使用 mock provider，不需要任何 API key。
           # conftest.py 的 autouse 夹具会中和 .env 对测试的影响。
@@ -85,3 +88,30 @@ jobs:
         run: uv run python scripts/test.py
         env:
           AGENTCREW_MOCK: "true"
+
+  # D-8：Studio（Electron 前端）此前完全没有 CI——架构分层、模块体量、单元测试
+  # 只能靠人记得在本地跑。这里补一个纯 Node job（不启动 Electron：CI 无显示服务）。
+  studio:
+    name: "Studio · Node 20"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: studio
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: studio/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: 架构分层检查（分层/导入/体量/入口）
+        run: npm run check
+
+      - name: 单元测试
+        run: npm run test:unit

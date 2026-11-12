@@ -31,13 +31,13 @@ issue 说「哪里不对」，配对的 ``fix_hint`` 说「去做什么」。检
 """
 
 import ast
-from datetime import datetime
 from pathlib import Path
 
 from agentcrew.artifacts.contract import has_placeholder, parse_check
 from agentcrew.artifacts.spec import ArtifactRecord, ArtifactSpec
 from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.task.task import ReviewRecord, Task
+from agentcrew.utils.clock import utc_now
 
 #: G1 的 ``ReviewRecord.reviewer`` 标识（spec §5.3）。
 STATIC_REVIEWER = "static:contract"
@@ -74,7 +74,7 @@ def run_static(task: Task, store: ArtifactStore, *, round_no: int) -> ReviewReco
         issues=issues,
         fix_hints=[hint for _, hint in findings],
         reviewer=STATIC_REVIEWER,
-        created_at=datetime.now(),
+        created_at=utc_now(),
     )
 
 
@@ -104,7 +104,11 @@ def _undeclared_findings(
 def _content_findings(spec: ArtifactSpec, content: str) -> list[_Finding]:
     """检查 3–6：已落盘产物的内容检查；顺序即 issue 输出顺序。"""
     findings: list[_Finding] = []
-    if len(content.encode("utf-8")) < spec.min_bytes:
+    # A-5：孤立 UTF-16 代理码点（截断的多字节输出里常见）会让 ``encode`` 抛
+    # ``UnicodeEncodeError``，穿透 Gatekeeper 后在 REVIEW 阶段被直接判 FAILED、
+    # 不给返工机会——一次格式异常烧掉整个任务。用 ``errors="replace"`` 按
+    # 欠尺寸（0 字节）产出 issue，让模型走正常返工通道。
+    if len(content.encode("utf-8", errors="replace")) < spec.min_bytes:
         findings.append((
             f"{spec.path} 为空文件",
             f"为 {spec.path} 补充实质内容（至少 {spec.min_bytes} 字节）",

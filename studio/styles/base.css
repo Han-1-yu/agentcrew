@@ -1,4 +1,6 @@
-/* 基础重置与全局排版（box-sizing、字体栈、滚动条、焦点环、工具类）。 */
+/* 基础重置与全局排版 —— WorkBuddy 扁平语言：
+   正文 13px / 400 / 1.6，标题只用 500，全局仅 400 与 500 两档字重；
+   强调色焦点环 2px；细滚动条；sentence case（无 uppercase）。 */
 
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
@@ -22,7 +24,7 @@ button { cursor: pointer; }
 h1, h2, h3, h4 {
   margin: 0;
   font-family: var(--font-display);
-  font-weight: 600;
+  font-weight: 500;
   letter-spacing: var(--ls-tight);
   line-height: var(--lh-tight);
 }
@@ -41,7 +43,7 @@ h1, h2, h3, h4 {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-corner { background: transparent; }
 
-/* 键盘焦点环：只在键盘操作时出现，且与铜色强调一致 */
+/* 键盘焦点环：只在键盘操作时出现 */
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -57,12 +59,11 @@ h1, h2, h3, h4 {
   font-variant-numeric: tabular-nums;
 }
 
-/* 小号全大写标签（区块副标题 / 表头） */
+/* 小号标签（区块副标题 / 表头）：sentence case，12px 次要色 */
 .eyebrow {
   font-family: var(--font-display);
   font-size: var(--fs-xs);
-  letter-spacing: var(--ls-wide);
-  text-transform: uppercase;
+  letter-spacing: 0;
   color: var(--text-ter);
 }
 

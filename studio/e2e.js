@@ -45,8 +45,8 @@ function run(win) {
     check('1. 应用启动且侧边栏导航就绪', booted);
     await sleep(1500);
 
-    // ── 2. 9 页导航 ──
-    const pages = ['dashboard', 'tasks', 'dag', 'agents', 'gates', 'artifacts', 'events', 'providers', 'settings'];
+    // ── 2. 12 页导航 ──
+    const pages = ['conversation', 'dashboard', 'tasks', 'dag', 'agents', 'profiles', 'gates', 'artifacts', 'events', 'providers', 'schedules', 'settings'];
     const pageResults = {};
     for (const page of pages) {
       await js(`document.querySelector('.nav-item[data-nav="${page}"]')?.click()`);
@@ -55,11 +55,28 @@ function run(win) {
       pageResults[page] = visible;
     }
     const allPagesOk = pages.every(p => pageResults[p]);
-    check('2. 9 页导航全部可切换且 active 状态正确', allPagesOk, JSON.stringify(pageResults));
+    check('2. 12 页导航全部可切换且 active 状态正确', allPagesOk, JSON.stringify(pageResults));
     // F3 防回归：每个 nav-item 都有可见文字
     const navTextOk = await js(`Array.from(document.querySelectorAll('.nav-item')).every(b => b.textContent.trim().length > 0)`);
     check('2b. 侧边栏每个导航按钮含可见文字', !!navTextOk);
     await shot('01-9页导航验证');
+
+    // 2c. 新增页内容渲染：执行体档案 / 定时任务 各出标题（不只 nav 高亮）
+    await js(`document.querySelector('.nav-item[data-nav="profiles"]')?.click()`);
+    await sleep(700);
+    const profilesOk = await js(`!!document.querySelector('#placeholder-view .page-head h2') && document.querySelector('#placeholder-view .page-head h2').textContent.includes('执行体')`);
+    await shot('01b-执行体档案');
+    await js(`document.querySelector('.nav-item[data-nav="schedules"]')?.click()`);
+    await sleep(700);
+    const schedulesOk = await js(`!!document.querySelector('#placeholder-view .page-head h2') && document.querySelector('#placeholder-view .page-head h2').textContent.includes('定时任务')`);
+    check('2c. 执行体档案 / 定时任务 页内容渲染', !!(profilesOk && schedulesOk), JSON.stringify({ profilesOk, schedulesOk }));
+
+    // 2d. 对话页：消息流渲染（用户目标气泡 + 任务气泡）
+    await js(`document.querySelector('.nav-item[data-nav="conversation"]')?.click()`);
+    await sleep(700);
+    const convOk = await js(`!!document.querySelector('#placeholder-view .conv-list') && !!document.querySelector('#placeholder-view .conv-user') && !!document.querySelector('#placeholder-view .conv-agent')`);
+    check('2d. 对话页消息流渲染（目标+任务气泡）', !!convOk, JSON.stringify({ convOk }));
+    await shot('01c-对话页');
 
     // 回到 Dashboard
     await js(`document.querySelector('.nav-item[data-nav="dashboard"]')?.click()`);
@@ -105,7 +122,7 @@ function run(win) {
     const modalFields = await js(`(() => ({
       goal: !!document.querySelector('#nr-goal'),
       mock: !!document.querySelector('#nr-mock'),
-      auto: !!document.querySelector('#nr-auto'),
+      mode: !!document.querySelector('#nr-mode') && document.querySelectorAll('#nr-mode .nr-mode-btn').length === 3,
       demo: !!document.querySelector('#nr-demo'),
       project: !!document.querySelector('#nr-project'),
       nrProvider: !!document.querySelector('#nr-provider'),
@@ -114,9 +131,9 @@ function run(win) {
       providerOptions: document.querySelectorAll('#nr-provider option').length,
       modelOptions: document.querySelectorAll('#nr-model option').length,
     }))()`);
-    const modalOk = modalFields && modalFields.goal && modalFields.mock && modalFields.auto && modalFields.demo && modalFields.project
+    const modalOk = modalFields && modalFields.goal && modalFields.mock && modalFields.mode && modalFields.demo && modalFields.project
       && modalFields.nrProvider && modalFields.nrModel && Number(modalFields.providerOptions) > 1;
-    check('6. 新建运行模态框包含目标/项目/Mock/自动/Demo/模型选择字段', modalOk, JSON.stringify(modalFields));
+    check('6. 新建运行模态框包含目标/项目/Mock/执行模式(3态)/Demo/模型选择字段', modalOk, JSON.stringify(modalFields));
     // 6b. Mock 勾选置灰模型选择区（--mock 时别名不参与 CLI 参数）
     const mockToggle = await js(`(() => {
       const m = document.querySelector('#nr-mock'); if (!m) return null;
@@ -336,19 +353,18 @@ function run(win) {
     // ── 14. 键盘快捷键 ──
     await js(`document.querySelector('.nav-item[data-nav="dashboard"]')?.click()`);
     await sleep(300);
-    // 模拟按 '4' 切换到 Agents —— 应用监听 window 的 keydown，直接派发到 window
-    await js(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '4' }))`);
+    // 数字键映射对齐侧边栏顺序：1→对话、5→Agents、8→产物（对话页是新增首位）
+    await js(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' }))`);
+    await sleep(300);
+    const convActive = await js(`document.querySelector('.nav-item[data-nav="conversation"]')?.classList.contains('active')`);
+    await js(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '5' }))`);
     await sleep(300);
     const agentsActive = await js(`document.querySelector('.nav-item[data-nav="agents"]')?.classList.contains('active')`);
-    // 数字键映射须与侧边栏视觉顺序一致：8→供应商、9→设置
     await js(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '8' }))`);
     await sleep(300);
-    const providersActive = await js(`document.querySelector('.nav-item[data-nav="providers"]')?.classList.contains('active')`);
-    await js(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '9' }))`);
-    await sleep(300);
-    const settingsActive = await js(`document.querySelector('.nav-item[data-nav="settings"]')?.classList.contains('active')`);
-    check('14. 数字键 1-9 快捷键切换页面（对齐侧边栏顺序）', agentsActive && providersActive && settingsActive,
-      `按 4→Agents=${agentsActive}; 按 8→供应商=${providersActive}; 按 9→设置=${settingsActive}`);
+    const artifactsActive = await js(`document.querySelector('.nav-item[data-nav="artifacts"]')?.classList.contains('active')`);
+    check('14. 数字键 1-9 快捷键切换页面（对齐侧边栏顺序）', convActive && agentsActive && artifactsActive,
+      `按 1→对话=${convActive}; 按 5→Agents=${agentsActive}; 按 8→产物=${artifactsActive}`);
 
     // ── 15. 计划审查页面 ──
     await js(`document.querySelector('.nav-item[data-nav="tasks"]')?.click()`);
@@ -416,6 +432,33 @@ function run(win) {
     const hasAddBtn = await js(`[...document.querySelectorAll('button')].some(b => b.textContent.trim() === '从预设添加')`);
     check('17. 供应商页渲染卡片并含「从预设添加」按钮', Number(provCards) >= 1 && !!hasAddBtn, `${provCards} 张卡片, 添加按钮=${hasAddBtn}`);
     await shot('13-供应商页面');
+
+    // ── 18. 右侧结果区（概览 / 产物 双 tab）──
+    await js(`document.getElementById('btn-result')?.click()`);
+    await sleep(600);
+    const resultOpen = await js(`!!document.querySelector('#detail-panel:not(.hidden) .result-tabs')`);
+    const overviewOk = await js(`!!document.querySelector('#detail-panel .result-grid')`);
+    await shot('14a-结果区概览');
+    await js(`[...document.querySelectorAll('.result-tab')].find(b => b.textContent.trim() === '产物')?.click()`);
+    await sleep(900);
+    const artifactOk = await js(`!!document.querySelector('#detail-panel .result-art')`);
+    await shot('14b-结果区产物');
+    await js(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`);
+    await sleep(300);
+    check('18. 右侧结果区（概览/产物双 tab）', !!(resultOpen && overviewOk && artifactOk),
+      JSON.stringify({ resultOpen, overviewOk, artifactOk }));
+
+    // ── 19. 侧边栏任务列表（搜索 + 状态筛选 + 角色分组）──
+    const taskSearchOk = await js(`!!document.getElementById('sb-task-search')`);
+    const taskFiltersOk = await js(`document.querySelectorAll('#sb-task-filters .sb-task-chip').length >= 5`);
+    const taskGroupOk = await js(`!!document.querySelector('#sb-tasklist .sb-task-group') || !!document.querySelector('#sb-tasklist .sb-task-item')`);
+    await js(`(() => { const i = document.getElementById('sb-task-search'); i.value = 'T0'; i.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+    await sleep(300);
+    const taskFilteredOk = await js(`!!document.getElementById('sb-tasklist')`);
+    await js(`(() => { const i = document.getElementById('sb-task-search'); i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+    await sleep(200);
+    check('19. 侧边栏任务列表（搜索/筛选/分组）', !!(taskSearchOk && taskFiltersOk && taskGroupOk && taskFilteredOk),
+      JSON.stringify({ taskSearchOk, taskFiltersOk, taskGroupOk, taskFilteredOk }));
 
     // ── 汇总 ──
     const allPass = checks.every((c) => c.pass);

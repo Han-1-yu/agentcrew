@@ -1,5 +1,6 @@
-/* 悬浮命令输入框：主区底部居中，上方一条小型项目选择条，框内占位文字 + 左下加号/权限标签 + 右下模型/发送。
-   行为上它是「新建运行」的快捷入口：输入目标 → 发送 → 打开新建运行表单并预填。 */
+/* 悬浮命令输入框 —— 对齐 WorkBuddy 对话框形态：
+   主区底部居中限宽白卡、0.5px 边框、12px 圆角、聚焦 2px 紫色焦点环，
+   左上项目/模式 chips，右下模型选择 + 实心紫发送键。 */
 
 .composer {
   position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%);
@@ -14,17 +15,14 @@
   display: inline-flex; align-items: center; gap: 8px;
   height: 27px; padding: 0 12px;
   border-radius: var(--r-pill);
-  border: 1px solid var(--glass-border);
-  background: var(--glass-bg-quiet);
-  -webkit-backdrop-filter: blur(var(--blur-card)) saturate(var(--glass-saturate));
-  backdrop-filter: blur(var(--blur-card)) saturate(var(--glass-saturate));
-  box-shadow: var(--glass-highlight);
+  border: 0.5px solid var(--border);
+  background: var(--bg-panel);
   font-size: var(--fs-xs); color: var(--text-ter);
   max-width: 100%;
   cursor: pointer;
   transition: border-color var(--dur-1) ease, color var(--dur-1) ease;
 }
-.composer-bar:hover { border-color: var(--glass-border-strong); color: var(--text-sub); }
+.composer-bar:hover { border-color: var(--border-input); color: var(--text-sub); }
 .cb-dot { width: 4px; height: 4px; border-radius: 50%; background: var(--text-ter); flex: 0 0 auto; }
 .cb-proj { color: var(--text-sub); font-weight: 500; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cb-sep { opacity: 0.5; }
@@ -35,24 +33,21 @@
 .composer-box {
   width: 100%;
   padding: 12px 14px 10px;
-  border-radius: var(--r-xl);
-  border: 1px solid var(--glass-border);
-  background: var(--glass-bg);
-  -webkit-backdrop-filter: blur(var(--blur-float)) saturate(var(--glass-saturate));
-  backdrop-filter: blur(var(--blur-float)) saturate(var(--glass-saturate));
-  box-shadow: var(--glass-highlight), var(--shadow-3);
+  border-radius: var(--r-md);
+  border: 0.5px solid var(--border);
+  background: var(--bg-panel);
   transition: border-color var(--dur-2) ease, box-shadow var(--dur-2) ease;
 }
 .composer-box:focus-within {
-  border-color: var(--glass-border-strong);
-  box-shadow: var(--glass-highlight-strong), var(--shadow-3), 0 0 0 1px var(--accent-border-soft);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
 }
 .composer-input {
   display: block; width: 100%;
   min-height: 36px; max-height: 140px;
   padding: 0 3px;
   border: none; background: transparent; color: var(--text);
-  font-family: inherit; font-size: 13px; line-height: 1.6;
+  font-family: inherit; font-size: var(--fs-body); line-height: var(--lh-body);
   resize: none; outline: none;
 }
 .composer-input::placeholder { color: var(--text-ter); }
@@ -63,25 +58,25 @@
 .cf-add {
   display: grid; place-items: center;
   width: 26px; height: 26px; padding: 0;
-  border-radius: 50%;
-  border: 1px solid var(--glass-border);
-  background: var(--ink-05); color: var(--text-sub);
-  font-size: 15px; line-height: 1;
+  border-radius: var(--r-sm);
+  border: 0.5px solid var(--border);
+  background: var(--bg-panel); color: var(--text-sub);
+  font-size: var(--fs-h1); line-height: 1;
   transition: background var(--dur-1) ease, color var(--dur-1) ease, border-color var(--dur-1) ease;
 }
-.cf-add:hover { background: var(--ink-10); color: var(--text); border-color: var(--glass-border-strong); }
+.cf-add:hover { background: var(--bg-subtle); color: var(--text); border-color: var(--border-input); }
 
 .cf-tag {
   display: inline-flex; align-items: center; gap: 6px;
   height: 26px; padding: 0 11px;
   border-radius: var(--r-pill);
-  border: 1px solid var(--glass-border);
-  background: var(--ink-05); color: var(--text-sub);
+  border: 0.5px solid var(--border);
+  background: var(--bg-subtle); color: var(--text-sub);
   font-size: var(--fs-xs);
   transition: background var(--dur-1) ease, color var(--dur-1) ease;
 }
 .cf-tag i { width: 4px; height: 4px; border-radius: 50%; background: var(--accent); transition: background var(--dur-1) ease; }
-.cf-tag:hover { background: var(--ink-08); color: var(--text); }
+.cf-tag:hover { background: var(--bg-subtle); color: var(--text); }
 .cf-tag.off { color: var(--text-ter); }
 .cf-tag.off i { background: var(--text-ter); }
 
@@ -97,21 +92,20 @@
 
 .cf-send {
   display: grid; place-items: center;
-  width: 32px; height: 32px; padding: 0;
-  border: none; border-radius: 50%;
+  width: 30px; height: 30px; padding: 0;
+  border: none; border-radius: var(--r-sm);
   background: var(--cmp-send-bg); color: var(--cmp-send-fg);
-  box-shadow: var(--cmp-send-shadow);
-  transition: transform var(--dur-1) ease, filter var(--dur-1) ease;
+  transition: background var(--dur-1) ease, opacity var(--dur-1) ease;
 }
-.cf-send:hover { filter: brightness(1.04); }
-.cf-send:active { transform: scale(0.94); }
+.cf-send:hover { background: var(--accent-hover); }
+.cf-send:active { opacity: 0.8; }
 .cf-send:disabled { opacity: 0.45; cursor: not-allowed; }
 
 /* 窄窗口：让出左右留白，避免和依赖图抢宽度 */
 @media (max-width: 1180px) {
   .composer { width: calc(100% - 48px); bottom: 16px; }
 }
-/* 矮窗口：收起项目条、压低输入框，保证不和首屏内容打架 */
+/* 矮窗口：收起项目条、压低输入框 */
 @media (max-height: 760px) {
   .composer { bottom: 14px; gap: 6px; }
   .composer-bar { display: none; }

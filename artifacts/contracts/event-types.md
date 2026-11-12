@@ -7,6 +7,8 @@
 > 时间戳在外层 `ts`，naive 本地时间，格式 `YYYY-MM-DD HH:MM:SS.ffffff`（空格分隔）。
 >
 > **区分 ledger 事件 vs 看板事件**：`Scheduler._notify(...)` 发出的 `task_dispatched` / `task_completed` / `task_regated` / `scheduler_cancelled` / `deadlock` **只走 on_event 回调（SSE/终端看板），不写 ledger.jsonl**，本文不收录。
+>
+> **Ledger observer（明细事件实时化，2026-11-09）**：`Ledger` 构造时可传 `observer` 回调，`emit` 落盘后同步以 `(原始事件名, 已脱敏 data)` 调它一次（脱敏含 `default` 兜底对 `set`/`bytes` 的处理）。`Crew` 用 `_make_ledger_observer` 把本表绝大部分事件注入 `run_id` 后推 `on_event`（SSE），使订阅者不轮询文件也能实时拿到执行明细。**排除表** `crew/crew.py::_LEDGER_SSE_EXCLUDED` 收录不转发的事件：`run_started` / `run_paused` / `approval_requested` / `run_finished`（已走 `_dispatch_event`，避免重复）、`run_stalled`（scheduler `_notify` 已推）、`agent_stream_chunk`（逐块高频，正文走 `agent_stream_delta`）。**新增走 `_dispatch_event` 或 `_notify` 的事件时，必须同步登记进该排除表**，否则会在 SSE 通道重复推送。
 
 ---
 

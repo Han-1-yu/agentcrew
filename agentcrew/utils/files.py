@@ -197,12 +197,18 @@ def tree(root: Path, max_entries: int = 300) -> list[str]:
         except OSError:
             continue  # 目录不存在或不可读：跳过，不中断整次列举
         for child in children:
-            if is_link_like(child):
+            # A-16：循环体里的 stat 调用同样会失败——并发下另一个任务可能刚好
+            # 删掉这个子项，``is_dir`` / ``is_file`` 抛 OSError。单个条目消失
+            # 只应跳过它，不能因为一个竞态让整次列举抛出去（那会白烧一次 attempt）。
+            try:
+                if is_link_like(child):
+                    continue
+                if child.is_dir():
+                    pending.append(child)
+                elif child.is_file():
+                    entries.append(child.relative_to(root).as_posix())
+            except OSError:
                 continue
-            if child.is_dir():
-                pending.append(child)
-            elif child.is_file():
-                entries.append(child.relative_to(root).as_posix())
     return sorted(entries)[:max_entries]
 
 

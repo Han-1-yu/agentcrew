@@ -47,6 +47,10 @@ source = ["agentcrew"]
 
 [tool.coverage.report]
 precision = 1
+# D-10：覆盖率地板线。当前全量实测约 60%（Windows 本地受 pytest 插件加载抖动
+# 与沙箱拦截影响，取不到稳定值，门槛在 CI 的 Linux 单进程 job 生效）。
+# 这是「不得倒退」的下限，不是目标值；提升覆盖率后再往上调。
+fail_under = 50
 exclude_lines = [
     "pragma: no cover",
     "if TYPE_CHECKING:",

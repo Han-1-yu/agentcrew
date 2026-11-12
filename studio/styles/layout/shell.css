@@ -1,25 +1,15 @@
-/* 应用骨架：极光背景层 + 两列布局（通高侧边栏 / 主列），主列内再分 指标条 / 内容 / 悬浮命令框。 */
+/* 应用骨架 —— WorkBuddy 扁平布局：纯色页底 + 两列（通高侧边栏 / 主列），
+   主列内分 顶栏 / 内容 / 底部命令输入框。无极光、无渐变、无渐隐遮罩。 */
 
-/* ---------- 全局背景：深蓝黑渐变 + 三团弥散光晕 ---------- */
 .layout {
   position: relative;
   display: flex;
   height: 100vh;
   overflow: hidden;
-  background:
-    radial-gradient(760px 560px at 4% 8%, var(--aurora-1), transparent 62%),
-    radial-gradient(900px 720px at 98% 38%, var(--aurora-2), transparent 64%),
-    radial-gradient(720px 520px at 44% 112%, var(--aurora-3), transparent 62%),
-    linear-gradient(158deg, var(--aurora-base-from) 0%, var(--aurora-base-mid) 48%, var(--aurora-base-to) 100%);
+  background: var(--bg-page);
 }
-/* 极光层：三个大模糊色团，纯装饰。模糊值够大才不会出现色块边界 */
-.aurora { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 0; }
-.aurora i { position: absolute; display: block; border-radius: 50%; filter: blur(72px); }
-.aurora i:nth-child(1) { width: 660px; height: 460px; left: -180px; top: -120px; background: radial-gradient(circle at 50% 50%, var(--aurora-1), transparent 68%); }
-.aurora i:nth-child(2) { width: 780px; height: 600px; right: -210px; top: 110px;  background: radial-gradient(circle at 50% 50%, var(--aurora-2), transparent 68%); }
-.aurora i:nth-child(3) { width: 640px; height: 470px; left: 34%;    bottom: -230px; background: radial-gradient(circle at 50% 50%, var(--aurora-3), transparent 70%); }
 
-/* ---------- 主体两列 ---------- */
+/* 两列主体 */
 .body-row { flex: 1; display: flex; min-height: 0; }
 
 .main-col {
@@ -27,23 +17,15 @@
   flex: 1; min-width: 0;
   display: flex; flex-direction: column;
 }
-/* 命令框下方的渐隐带：内容从它后面柔和淡出，视觉上"留白"而不是"被压住" */
-.main-col::after {
-  content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 172px;
-  background: var(--scrim);
-  pointer-events: none; z-index: 24;
-  opacity: 0; transition: opacity var(--dur-2) ease;
-}
-.main-col.has-composer::after { opacity: 1; }
 
 /* ===== 主内容区 ===== */
 #main { flex: 1; min-width: 0; overflow-y: auto; overflow-x: hidden; }
 
-/* 看板：四周留白放宽，区块之间给足呼吸；底部预留悬浮命令框的高度 */
-#dashboard-view { padding: var(--sp-6) var(--sp-8) 192px; display: flex; flex-direction: column; gap: var(--sp-5); }
+/* 看板：垂直节奏 1.5rem，区块之间留足呼吸；底部预留悬浮命令框高度 */
+#dashboard-view { padding: 1.5rem 2rem 192px; display: flex; flex-direction: column; gap: 1.5rem; }
 
-/* 非看板页：页面自带内边距，避免和命令框打架 */
-#placeholder-view:not(.hidden) { padding-bottom: var(--sp-8); }
+/* 非看板页：页面自带内边距 */
+#placeholder-view:not(.hidden) { padding-bottom: 2rem; }
 
 /* 全局防溢出 */
 #main-content { overflow-x: hidden; }

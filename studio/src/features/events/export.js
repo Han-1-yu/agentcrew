@@ -113,10 +113,13 @@ function exportReport() {
 
   const blob = new Blob([md], { type: 'text/markdown' });
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
+  const url = URL.createObjectURL(blob);
+  a.href = url;
   a.download = `agentcrew-report-${run.run_id || 'run'}.md`;
   a.click();
-  URL.revokeObjectURL(a.href);
+  // C-15：不能同步 revoke——Chromium 在 click() 之后才异步取用 blob，立即
+  // 撤销会让下载失败或得到 0 字节。与同文件 exportEvents / exportRun 统一延迟。
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
   toast('success', '已导出', `运行报告 ${run.run_id || ''}.md`);
 }
 

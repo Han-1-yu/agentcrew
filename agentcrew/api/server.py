@@ -26,7 +26,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
+import time
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,6 +49,9 @@ from agentcrew.api.rbac import (
 )
 from agentcrew.api.run_options import validate_run_options
 from agentcrew.models.config import PROVIDER_PRESETS as PROVIDER_PRESETS_NAMES
+from agentcrew.utils.logger import redact
+
+_logger = logging.getLogger("agentcrew.api")
 
 
 def _validate_run_options(options: Mapping[str, Any]) -> str | None:
@@ -56,6 +61,21 @@ def _validate_run_options(options: Mapping[str, Any]) -> str | None:
     「HTTP 端校验、其他入口放行」的第二套规则。
     """
     return validate_run_options(options)
+
+
+def _parse_network(item: str) -> Any:
+    """P0-4：把一个 IP/CIDR 文本解析成网段对象；坏值记日志并返回 ``None``。
+
+    ``Settings`` 加载层已用 field_validator 拒绝坏值，这里只兜 ``model_copy``
+    等绕过 pydantic 的路径——坏项跳过（fail-closed：宁可少信一个网段）。
+    """
+    import ipaddress
+
+    try:
+        return ipaddress.ip_network(item.strip(), strict=False)
+    except ValueError:
+        _logger.warning("trusted_proxies 项 %r 无法解析，已跳过", item)
+        return None
 
 
 
@@ -119,9 +139,12 @@ class EventBus:
 _BODY_READ_TIMEOUT = 1.0
 
 
-def _clamp_int(raw: str, *, default: int, minimum: int) -> int:
-    """把查询参数里的整数读出来；非法 / 缺失用 ``default``，并压到 ``minimum`` 以上。"""
-    return http_transport.clamp_int(raw, default=default, minimum=minimum)
+def _clamp_int(
+    raw: str, *, default: int, minimum: int, maximum: int | None = None,
+) -> int:
+    """把查询参数里的整数读出来；非法 / 缺失用 ``default``，压到 ``[minimum, maximum]``。"""
+    return http_transport.clamp_int(
+        raw, default=default, minimum=minimum, maximum=maximum)
 
 
 def _env_int(name: str, default: int) -> int:
@@ -141,6 +164,8 @@ def _env_int(name: str, default: int) -> int:
 API_ROUTES: tuple[tuple[str, str], ...] = (
     ("GET", "/"),
     ("GET", "/health"),
+    # D-7：Prometheus 文本指标（与 /health 同一条认证链）
+    ("GET", "/metrics"),
     ("GET", "/runs"),
     ("POST", "/runs"),
     ("DELETE", "/runs/{run_id}"),
@@ -156,6 +181,7 @@ API_ROUTES: tuple[tuple[str, str], ...] = (
     ("GET", "/runs/{run_id}/events"),
     ("POST", "/runs/{run_id}/events"),
     ("POST", "/runs/{run_id}/agents"),
+    ("GET", "/runs/{run_id}/agents"),
     ("POST", "/runs/{run_id}/tasks/{task_id}/agent"),
     ("GET", "/providers"),
     ("GET", "/providers/{name}/models"),
@@ -175,6 +201,14 @@ API_ROUTES: tuple[tuple[str, str], ...] = (
 
 class ApiServer:
     """轻量 async HTTP 服务器 + SSE 事件流。"""
+
+    #: B-9：内存中 run 状态镜像的容量上限。
+    #:
+    #: 这个注册表只为「本进程见过哪些 run 的状态」服务，唯一的清理途径是
+    #: ``DELETE /runs/{id}``。长期运行的常驻服务会不断见到新 run_id（尤其配合
+    #: 定时任务），没有上界就是一条慢性内存泄漏。超限后不再建新镜像——事件仍会
+    #: 经 EventBus 推给 SSE 订阅者，只是 ``/runs`` 列表少一条。
+    MAX_TRACKED_RUNS: int = 500
 
     def __init__(
         self,
@@ -206,6 +240,11 @@ class ApiServer:
         self.port = port
         self.bus = event_bus or EventBus()
         self.runs: dict[str, RunState] = {}
+        #: D-7：最小可观测性状态。``_status_counts`` 按 HTTP 状态码累计请求数，
+        #: ``_started_at`` 用于 ``agentcrew_process_start_time_seconds``。
+        #: 只做计数（O(1)、无锁），不引入 Prometheus 客户端依赖。
+        self._status_counts: dict[int, int] = {}
+        self._started_at = time.time()
         self._server: asyncio.AbstractServer | None = None
         self._output_dir = output_dir
         self._settings = settings
@@ -231,6 +270,14 @@ class ApiServer:
         self._max_concurrent_runs = max(
             1, _env_int("AGENTCREW_MAX_CONCURRENT_RUNS", 8))
         self._active_run_count = 0
+        # P0-4：预解析可信代理网段（每请求只做 ``in`` 判断，不重复解析 CIDR）。
+        # 坏值跳过并落日志——Settings 加载层已校验，这里只兜 model_copy 旁路。
+        self._trusted_networks: tuple[Any, ...] = tuple(
+            net for net in (
+                _parse_network(item)
+                for item in getattr(settings, "trusted_proxies", ()) or ()
+            ) if net is not None
+        )
 
     async def start(self) -> None:
         self._server = await asyncio.start_server(
@@ -253,39 +300,54 @@ class ApiServer:
     def on_event(self, event: str, data: dict[str, Any]) -> None:
         """Crew 的 on_event 回调入口：推送到 SSE 客户端并更新内存状态。"""
         self.bus.publish(event, data)
-        run_id = data.get("run_id", "")
-        if run_id and run_id not in self.runs:
-            self.runs[run_id] = RunState(run_id=run_id)
+        run_id = str(data.get("run_id") or "")
+        # B-9：run_id 为空时立刻返回。此前只有「建表」那段判了空，后面的
+        # `task_transition` 分支直接用 ``self.runs[""]`` → KeyError → 500，
+        # 且异常文本会回显给客户端。
+        if not run_id:
+            return
+        state = self.runs.get(run_id)
+        if state is None:
+            # B-9：注册表上界。此前唯一清理途径是 DELETE，长期运行的服务会被
+            # 无数 run_id 撑大内存。超限后不再建内存镜像（事件仍已通过 bus
+            # 推给订阅者），并留一条 warning 便于运维发现。
+            if len(self.runs) >= self.MAX_TRACKED_RUNS:
+                _logger.warning(
+                    "内存中的 run 注册表已达上限 %d，忽略 run %s 的状态镜像；"
+                    "请用 DELETE /runs/{id} 清理不再关心的 run",
+                    self.MAX_TRACKED_RUNS, run_id)
+                return
+            state = self.runs[run_id] = RunState(run_id=run_id)
         if event == "task_transition":
             task_id = data.get("task_id", "")
             if task_id:
-                self.runs[run_id].tasks[task_id] = {
+                state.tasks[task_id] = {
                     "status": data.get("to_status", ""),
                     "role": data.get("role", ""),
                 }
         elif event == "run_started":
-            self.runs[run_id].status = "running"
+            state.status = "running"
             goal = data.get("goal")
             if isinstance(goal, str) and goal:
-                self.runs[run_id].goal = goal
+                state.goal = goal
         elif event == "run_paused":
             # R4：审批挂起不是终局，不能落到 run_finished 的 else→failed。
-            self.runs[run_id].status = str(
+            state.status = str(
                 data.get("status") or "awaiting_approval")
         elif event == "run_completed":
-            self.runs[run_id].status = "completed"
+            state.status = "completed"
         elif event == "run_failed":
-            self.runs[run_id].status = "failed"
+            state.status = "failed"
         elif event == "run_finished":
             # P1-5：Crew 封版统一发这一个事件（含 completed / cancelled /
-            # interrupted / failed），按状态落到徽章。
+            # interrupted / failed / planned），按状态落到徽章。
             status = data.get("status", "")
             if status == "completed":
-                self.runs[run_id].status = "completed"
-            elif status in ("cancelled", "interrupted"):
-                self.runs[run_id].status = status
+                state.status = "completed"
+            elif status in ("cancelled", "interrupted", "planned"):
+                state.status = status
             else:
-                self.runs[run_id].status = "failed"
+                state.status = "failed"
 
     # ── HTTP 处理 ────────────────────────────────────────────────────────
 
@@ -346,10 +408,12 @@ class ApiServer:
         except Exception as exc:
             # 兜底：任何未预料异常都必须给客户端一个 HTTP 响应。此前 OSError 会
             # 穿透所有 except，finally 只关连接 → 客户端拿到 0 字节、服务端无记录。
+            # P0-5：详情（路径/配置/密钥片段）只进日志，响应体固定文案 + 类型名。
+            _logger.error("unhandled api error on %s: %s",
+                          request.path, self._internal_detail(exc))
             try:
                 await self._send_json(
-                    writer, 500,
-                    {"error": f"服务端内部错误：{type(exc).__name__}: {exc}"})
+                    writer, 500, self._internal_error_body(exc))
             except (ConnectionError, OSError):
                 pass
         finally:
@@ -465,16 +529,39 @@ class ApiServer:
         await self._send_json(writer, 404, {"error": "run not found"})
         return True
 
-    @staticmethod
     def _client_ip(
-        headers: dict[str, str], writer: asyncio.StreamWriter
+        self, headers: dict[str, str], writer: asyncio.StreamWriter
     ) -> str:
-        """客户端 IP：优先 ``X-Forwarded-For`` 首地址，否则 socket peer 地址。"""
-        return http_transport.client_ip(headers, writer)
+        """客户端 IP（P0-4）：XFF 只在 peer 属于可信代理网段时才被解析。
+
+        可信网段来自 ``Settings.trusted_proxies``（``AGENTCREW_TRUSTED_PROXIES``，
+        逗号分隔的 IP/CIDR）；空 = 完全不信 XFF，限流/审计只用 socket peer。
+        """
+        return http_transport.client_ip(
+            headers, writer, trusted_proxies=self._trusted_networks)
 
     def _record_security(self, event: str, data: dict[str, Any]) -> None:
         """追加一条服务端安全审计事件（内存；与 Ledger 事件同形：event + data）。"""
         self.security_events.append({"event": event, "data": dict(data)})
+
+    def _internal_detail(self, exc: BaseException) -> str:
+        """P0-5：未预料异常的**服务端侧**详情——密钥脱敏 + 截断，只写日志。"""
+        try:
+            text = redact(
+                f"{type(exc).__name__}: {exc}",
+                self._settings.secret_values())
+        except Exception:  # noqa: BLE001 —— 脱敏自身失败也不能挡住记日志
+            text = type(exc).__name__
+        return text[:500]
+
+    def _internal_error_body(self, exc: BaseException) -> dict[str, str]:
+        """P0-5：500 响应体——固定文案 + 异常类型名（不含任何变量内容）。
+
+        ``str(exc)`` 里常带绝对路径、配置片段、密钥错误文本（SDK 会把该文案
+        原样抛给调用方），一律不进响应；完整详情走 :meth:`_internal_detail`
+        落服务端日志。
+        """
+        return {"error": f"服务端内部错误（{type(exc).__name__}）"}
 
     async def _handle_get(
         self, path: str, query: dict[str, list[str]], writer: asyncio.StreamWriter,
@@ -491,6 +578,11 @@ class ApiServer:
             return
         if p == "/health":
             await self._send_json(writer, 200, {"status": "ok"})
+            return
+        if p == "/metrics":
+            # D-7：Prometheus 文本格式。走与 /health 相同的认证链（默认开启时
+            # 抓取端必须带 key），避免把运行态信息暴露在匿名端口上。
+            await self._handle_metrics(writer)
             return
         if p == "/runs":
             await self._list_runs(writer)
@@ -550,6 +642,9 @@ class ApiServer:
                 return
             if action == "approvals":
                 await self._get_approvals(run_id, writer)
+                return
+            if action == "agents":
+                await self._get_agents(run_id, writer)
                 return
         await self._send_json(writer, 404, {"error": "Not Found"})
 
@@ -719,6 +814,12 @@ class ApiServer:
                 await self._switch_agent(run_id, body, writer)
                 return
             if action == "events":
+                # P0-2：与其余 run 级端点同一道归属校验（此前是唯一漏掉的
+                # 一个）——不校验的话，任意 ``runs:write`` key 可以向别人的
+                # run 注入事件：on_event 会改写 self.runs[run_id] 的状态并经
+                # EventBus 推给该 run 的全部 SSE 订阅者。
+                if await self._deny_if_run_hidden(run_id, writer):
+                    return
                 try:
                     data = json.loads(body.decode("utf-8")) if body else {}
                 except (json.JSONDecodeError, UnicodeDecodeError):
@@ -729,7 +830,16 @@ class ApiServer:
                         writer, 400, {"error": "body 必须是 JSON 对象"})
                     return
                 event = data.pop("_event", "custom")
-                data.setdefault("run_id", run_id)
+                # P0-3 第一层：入口就拒绝非法事件名（sse_frame 里还有第二层
+                # 降级兜底），带换行的名字可伪造任意 SSE 帧。
+                if not http_transport.valid_event_name(event):
+                    await self._send_json(
+                        writer, 400,
+                        {"error": "_event 必须是 1-64 位字母/数字/./_/- 的事件名"})
+                    return
+                # 强制覆盖（不能用 setdefault）：body 自带的 run_id 不允许
+                # 把事件记到/推到另一个 run 名下。
+                data["run_id"] = run_id
                 self.on_event(event, data)
                 await self._send_json(writer, 202, {"accepted": True})
                 return
@@ -802,8 +912,10 @@ class ApiServer:
             return
         except Exception as exc:  # crew.run 在首个事件前就炸了
             task.cancel()
+            _logger.error("run start failed: %s", self._internal_detail(exc))
             await self._send_json(
-                writer, 500, {"error": f"run 启动失败：{type(exc).__name__}: {exc}"})
+                writer, 500,
+                {"error": f"run 启动失败（{type(exc).__name__}）"})
             return
         self.active_crews[run_id] = crew
         self._run_tasks[run_id] = task
@@ -944,6 +1056,58 @@ class ApiServer:
             crew._on_event = forward
         except Exception:
             pass
+
+    async def _get_agents(self, run_id: str, writer: asyncio.StreamWriter) -> None:
+        """``GET /runs/{id}/agents``：读本次 run **解析后**的执行体编排计划。
+
+        数据取自 ledger 的 ``run_plan_resolved`` 事件（启动期解析完即落盘），
+        所以运行中与历史 run 都能读，而且回答的是「这次实际解析成了什么」
+        （别名已定、工具已收窄），不是「配置里声称是什么」。配合
+        ``/stats`` 的 ``llm.by_profile``，可以完整回答两个问题：
+        哪个 agent 用了哪个模型，以及那个 agent 花了多少钱。
+
+        早于该事件的历史 run 返回空列表并标注 ``source=none``——不拿配置层面
+        的猜测冒充实际运行事实。
+        """
+        if await self._deny_if_run_hidden(run_id, writer):
+            return
+        if self._output_dir is None:
+            await self._send_json(writer, 500, {"error": "server 未配置 output_dir"})
+            return
+        from agentcrew.runtime.ledger import LedgerReader
+
+        reader = LedgerReader(self._output_dir)
+        try:
+            if not reader.run_exists(run_id):
+                await self._send_json(
+                    writer, 404, {"error": f"run {run_id!r} 不存在"})
+                return
+            total = await asyncio.to_thread(
+                reader.count_events, run_id, event="run_plan_resolved")
+            if total == 0:
+                await self._send_json(writer, 200, {
+                    "run_id": run_id, "agents": [], "source": "none"})
+                return
+            # 取最后一条：同一个 run 可能 resume 多次，后一次的计划才是当前的。
+            page = await asyncio.to_thread(
+                reader.query_events, run_id,
+                event="run_plan_resolved", limit=1, offset=total - 1)
+        except ValueError as exc:
+            await self._send_json(writer, 400, {"error": str(exc)})
+            return
+        except OSError as exc:
+            # P0-5：OSError 文本带绝对路径，不进响应；详情落日志。
+            _logger.error("ledger read failed for %s: %s",
+                          run_id, self._internal_detail(exc))
+            await self._send_json(
+                writer, 500, {"error": "ledger 读取失败（OSError）"})
+            return
+        data = (page[0].get("data") or {}) if page else {}
+        await self._send_json(writer, 200, {
+            "run_id": run_id,
+            "agents": data.get("agents") or [],
+            "source": "run_plan_resolved",
+        })
 
     async def _switch_agent(
         self, run_id: str, body: bytes, writer: asyncio.StreamWriter
@@ -1147,9 +1311,12 @@ class ApiServer:
             # TypeError 等不在上面两类里。不在这里归还，_run_crew 根本没被创建，
             # 槽位会永久泄漏，累计到上限后所有 run 请求永久 429。
             self._active_run_count -= 1
+            _logger.error("resume %s failed: %s",
+                          run_id, self._internal_detail(exc))
             await self._send_json(
-                writer, 500, {"error": f"无法恢复 run {run_id!r}："
-                                      f"{type(exc).__name__}: {exc}"})
+                writer, 500,
+                {"error": f"无法恢复 run {run_id!r}"
+                          f"（{type(exc).__name__}）"})
             return
         started: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         task = asyncio.create_task(
@@ -1166,8 +1333,10 @@ class ApiServer:
             return
         except Exception as exc:  # resume 启动失败
             task.cancel()
+            _logger.error("resume launch failed: %s", self._internal_detail(exc))
             await self._send_json(
-                writer, 500, {"error": f"resume 启动失败：{type(exc).__name__}: {exc}"})
+                writer, 500,
+                {"error": f"resume 启动失败（{type(exc).__name__}）"})
             return
         self.active_crews[resumed_id] = crew
         self._run_tasks[resumed_id] = task
@@ -1524,7 +1693,11 @@ class ApiServer:
                     writer, 404, {"error": f"run {run_id!r} 不存在"})
                 return
             event = query.get("event", [None])[0] or None
-            limit = _clamp_int(query.get("limit", ["100"])[0], default=100, minimum=1)
+            # B-8：limit 设上界（1000），offset 无上界但 query_events 流式跳过
+            # 不会物化整份文件。
+            limit = _clamp_int(
+                query.get("limit", ["100"])[0], default=100, minimum=1,
+                maximum=1000)
             offset = _clamp_int(query.get("offset", ["0"])[0], default=0, minimum=0)
             # 2026-11 事件循环保护：ledger 查询会物化/遍历整个 JSONL 文件
             # （同步 IO），下放线程池，避免大 run 的读请求卡住事件循环。
@@ -1895,7 +2068,9 @@ class ApiServer:
             except Exception as exc:
                 await self._send_json(writer, 200, {
                     "ok": False, "stream_ok": False, "latency_ms": None,
-                    "error": f"{type(exc).__name__}: {exc}",
+                    # P0-5：诊断端点保留详情（运维要看连接/认证失败原因），
+                    # 但密钥脱敏 + 截断，防止 provider 异常文本带出敏感值。
+                    "error": self._internal_detail(exc),
                 })
                 return
             await self._send_json(writer, 200, {
@@ -1911,7 +2086,7 @@ class ApiServer:
         except Exception as exc:
             await self._send_json(writer, 200, {
                 "ok": False, "latency_ms": None,
-                "error": f"{type(exc).__name__}: {exc}",
+                "error": self._internal_detail(exc),
             })
             return
         await self._send_json(writer, 200, {
@@ -1919,6 +2094,61 @@ class ApiServer:
             "latency_ms": record.latency_ms,
             "error": record.error,
         })
+
+    async def _handle_metrics(self, writer: asyncio.StreamWriter) -> None:
+        """D-7：Prometheus 文本格式的运行时指标（只读、无副作用、不扫盘）。
+
+        刻意只暴露**进程内可即时算出**的量：run 数与状态分布来自内存表，
+        请求数来自 ``_send_json`` 的单点埋点。不统计磁盘用量/产物数——那需要
+        扫 ``output_dir``，抓取间隔一密集就会把服务拖慢，而这类指标更适合由
+        ``main.py status`` / 外部 exporter 离线产生。
+        """
+        try:
+            from importlib.metadata import version as _pkg_version
+            build = _pkg_version("agentcrew")
+        except Exception:  # noqa: BLE001 —— 未安装为包时不该让 /metrics 500
+            build = "unknown"
+
+        by_status: dict[str, int] = {}
+        for run in list(self.runs.values()):
+            by_status[run.status] = by_status.get(run.status, 0) + 1
+
+        lines = [
+            "# HELP agentcrew_up 服务存活（1=up）",
+            "# TYPE agentcrew_up gauge",
+            "agentcrew_up 1",
+            "# HELP agentcrew_build_info 构建版本信息",
+            "# TYPE agentcrew_build_info gauge",
+            f'agentcrew_build_info{{version="{build}"}} 1',
+            "# HELP agentcrew_process_start_time_seconds 进程启动时间（Unix 秒）",
+            "# TYPE agentcrew_process_start_time_seconds gauge",
+            f"agentcrew_process_start_time_seconds {self._started_at:.3f}",
+            "# HELP agentcrew_runs_in_memory 内存中跟踪的 run 数",
+            "# TYPE agentcrew_runs_in_memory gauge",
+            f"agentcrew_runs_in_memory {len(self.runs)}",
+            "# HELP agentcrew_runs_by_status 按状态统计的 run 数",
+            "# TYPE agentcrew_runs_by_status gauge",
+        ]
+        if by_status:
+            for status in sorted(by_status):
+                lines.append(
+                    f'agentcrew_runs_by_status{{status="{status}"}} {by_status[status]}')
+        else:
+            lines.append('agentcrew_runs_by_status{status="none"} 0')
+        lines += [
+            "# HELP agentcrew_http_requests_total 按状态码累计的 HTTP 响应数",
+            "# TYPE agentcrew_http_requests_total counter",
+        ]
+        if self._status_counts:
+            for code in sorted(self._status_counts):
+                lines.append(
+                    f'agentcrew_http_requests_total{{status="{code}"}}'
+                    f" {self._status_counts[code]}")
+        else:
+            lines.append('agentcrew_http_requests_total{status="none"} 0')
+        await http_transport.send_text(
+            writer, "\n".join(lines) + "\n",
+            content_type="text/plain; version=0.0.4; charset=utf-8")
 
     async def _handle_sse(self, run_id: str, writer: asyncio.StreamWriter) -> None:
         if await self._deny_if_run_hidden(run_id, writer):
@@ -1947,14 +2177,20 @@ class ApiServer:
                 # SSE 心跳注释行，防止代理超时
                 yield ": ping\n\n"
 
-    @staticmethod
     async def _send_json(
+        self,
         writer: asyncio.StreamWriter,
         status: int,
         body: dict[str, Any],
         *,
         extra_headers: Mapping[str, str] | None = None,
     ) -> None:
-        """写一条 JSON 响应（实现见 :func:`agentcrew.api.http.send_json`）。"""
+        """写一条 JSON 响应（实现见 :func:`agentcrew.api.http.send_json`）。
+
+        D-7 起是实例方法（原先为 ``@staticmethod``）：仅为了累计状态码计数。
+        所有调用点都走 ``self._send_json(...)``，签名对调用方无变化。
+        """
+        # D-7：按状态码累计（也是 /metrics 的唯一埋点，覆盖所有 JSON 响应）。
+        self._status_counts[status] = self._status_counts.get(status, 0) + 1
         await http_transport.send_json(
             writer, status, body, extra_headers=extra_headers)

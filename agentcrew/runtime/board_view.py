@@ -45,6 +45,7 @@ from agentcrew.runtime.ledger import LedgerEvent
 from agentcrew.task.state_machine import is_terminal
 from agentcrew.task.task import Task, TaskStatus
 from agentcrew.task.task_board import TaskBoard
+from agentcrew.utils.clock import seconds_between
 
 #: 状态值 → ``(符号, 颜色)``（spec §15.2）。必须覆盖 ``TaskStatus`` 的全部十个
 #: 值（``{s.value for s in TaskStatus}``），键是新状态字符串而不是枚举成员。
@@ -344,7 +345,7 @@ class BoardView:
                 None,
             )
             if started is not None:
-                return _format_duration((datetime.now() - started).total_seconds())
+                return _format_duration(seconds_between(started))
         return "—"
 
     def _header(self, record: RunRecord | None) -> str:
@@ -355,7 +356,7 @@ class BoardView:
             start = record.stats.started_at or record.created_at
         else:
             start = self._started_at
-        elapsed = _format_clock((datetime.now() - start).total_seconds())
+        elapsed = _format_clock(seconds_between(start))
         return f"AgentCrew · {self._goal} · {self._run_id} · {status} {elapsed}"
 
     def _footer(self, board: TaskBoard, record: RunRecord | None) -> Text:
@@ -472,7 +473,7 @@ class BoardView:
         stats = record.stats
         start = stats.started_at or record.created_at
         end = stats.finished_at or record.updated_at
-        return _format_duration((end - start).total_seconds())
+        return _format_duration(seconds_between(start, end))
 
     @staticmethod
     def _failure_line(task: Task) -> str:

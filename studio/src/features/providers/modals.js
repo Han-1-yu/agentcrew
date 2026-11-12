@@ -155,6 +155,8 @@ function openEndpointSpeedTest(p) {
       if (!seed.includes(u)) {
         row.appendChild(h('button', {
           class: 'ep-pick', type: 'button',
+          // C-7：测速期间禁用移除，配合快照回填，避免下标错位
+          disabled: testing,
           onclick: () => { urls = urls.filter(x => x !== u); resultMap.delete(u); renderList(); },
         }, '移除'));
       }
@@ -177,21 +179,27 @@ function openEndpointSpeedTest(p) {
 
   testAllBtn.addEventListener('click', async () => {
     if (!urls.length || testing) return;
-    testing = true; resultMap.clear(); renderList();
+    // C-7：固定快照。请求在途时用户仍可能增删端点，若按下标回填可变的 urls，
+    // 「最快」判定与「采用」会落到另一个端点上。测速期间同时禁用增删。
+    const snapshot = [...urls];
+    testing = true; resultMap.clear();
+    addBtn.disabled = true;
+    renderList();
     testAllBtn.disabled = true; testAllBtn.textContent = '测速中…';
     try {
-      // 测 GET /models；结果保序，按索引映射回 base URL
-      const targets = urls.map(u => {
+      // 测 GET /models；结果保序，按快照下标映射回 base URL
+      const targets = snapshot.map(u => {
         const b = u.replace(/\/+$/, '');
         return /\/models$/.test(b) ? b : b + '/models';
       });
       const r = await window.studio.providerTestEndpoints({ urls: targets });
-      if (r.ok) r.results.forEach((x, i) => resultMap.set(urls[i], x));
+      if (r.ok) r.results.forEach((x, i) => { if (snapshot[i]) resultMap.set(snapshot[i], x); });
       else toast('error', '测速失败', r.error || '');
     } catch (e) {
       toast('error', '测速失败', String(e && e.message || e));
     } finally {
-      testing = false; testAllBtn.disabled = false; testAllBtn.textContent = '⚡ 开始测速'; renderList();
+      testing = false; addBtn.disabled = false;
+      testAllBtn.disabled = false; testAllBtn.textContent = '⚡ 开始测速'; renderList();
     }
   });
 

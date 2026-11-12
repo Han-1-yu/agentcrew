@@ -418,9 +418,11 @@ def test_write_manifest_on_empty_store(tmp_path):
 
 def test_file_tree_lists_committed_files(store):
     store.commit("a/b.py", "x=1\n", spec=spec("a/b.py"), task=mk_task())
+    # A-12：commit 立即写 MANIFEST，但 file_tree 是「产物文件树」、
+    # 恒排除 MANIFEST.json（元数据不是交付物）。
     assert store.file_tree() == ["a/b.py"]
     store.write_manifest()
-    assert store.file_tree() == ["MANIFEST.json", "a/b.py"]
+    assert store.file_tree() == ["a/b.py"]
 
 
 # ── ledger 事件 ──
@@ -547,7 +549,7 @@ def test_discard_task_rewrites_manifest(tmp_path):
 
     manifest = json.loads((root / "MANIFEST.json").read_text(encoding="utf-8"))
     assert manifest["entries"] == []
-    assert st.file_tree() == ["MANIFEST.json"]
+    assert st.file_tree() == []   # 产物全删；MANIFEST 是元数据，不在产物文件树里
 
 
 def test_load_manifest_drops_records_whose_files_are_gone(tmp_path):

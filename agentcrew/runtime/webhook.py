@@ -55,7 +55,7 @@ from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 #: 接收方可据此分发，不必解析 body 才知道事件类型。
 EVENT_HEADER = "X-AgentCrew-Event"
@@ -71,6 +71,28 @@ DEFAULT_CLOSE_TIMEOUT = 5.0
 
 #: 重试退避的上限；到顶后不再增长，避免 2^n 把收尾拖长。
 _MAX_BACKOFF_SECONDS = 2.0
+
+#: B-7：``WebhookConfig`` 的兜底上界（``run options`` 入口另有同值校验）。
+#: 每个 run 一个投递线程、``close()`` 只等 5 秒——超大值会把后台线程与连接
+#: 占用放大成资源攻击面。
+_MAX_TIMEOUT_SECONDS = 30.0
+_MAX_RETRIES = 5
+
+
+class _NoRedirect(HTTPRedirectHandler):
+    """让 urllib 遇到 3xx 直接报错，而不是悄悄请求另一个地址。
+
+    即使接收端 URL 来自可信的服务端配置，重定向仍是放大面：公网端点被劫持后
+    302 到任意地址，签名头会跟着发过去。webhook 接收端不需要重定向语义，
+    3xx 一律按投递失败处理、走正常重试。
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        return None
+
+
+#: 进程级共享 opener：不跟随重定向。
+_OPENER = build_opener(_NoRedirect())
 
 #: 语义上就是「出了事」的事件：``only_failures`` 的接收端一律收。
 _FAILURE_EVENTS = frozenset({"error", "deadlock", "run_stalled", "budget_exhausted"})
@@ -138,6 +160,23 @@ class WebhookConfig:
     max_retries: int = 2
     only_failures: bool = False
     targets: tuple[WebhookTarget, ...] = ()
+
+    def __post_init__(self) -> None:
+        """B-7 兜底：``run options`` 入口之外（手写 YAML / 程序化构造）也能拿到
+        超大值的 ``timeout_seconds`` / ``max_retries``，这里 clamp 到安全上界。
+
+        frozen dataclass 用 ``object.__setattr__``；clamp 而不是抛错——通知是
+        辅助设施，配置笔误不该让整个 run 起不来（收不到通知这件事本身会以
+        ``webhook_failed`` 留痕）。
+        """
+        if not (0 < self.timeout_seconds <= _MAX_TIMEOUT_SECONDS):
+            object.__setattr__(
+                self, "timeout_seconds",
+                min(max(float(self.timeout_seconds), 0.1), _MAX_TIMEOUT_SECONDS))
+        if not (0 <= self.max_retries <= _MAX_RETRIES):
+            object.__setattr__(
+                self, "max_retries",
+                min(max(int(self.max_retries), 0), _MAX_RETRIES))
 
     def resolved(self) -> tuple[WebhookTarget, ...]:
         """展开成实际要投递的接收端列表（已剔除没有 URL 的）。"""
@@ -563,7 +602,10 @@ class WebhookDispatcher:
         request = Request(
             target.url, data=body, headers=headers, method="POST")
         try:
-            with urlopen(request, timeout=self._config.timeout_seconds) as response:
+            # 不跟随重定向（_NoRedirect）：3xx 视为失败进正常重试，
+            # 避免「可信公网端点 302 → 任意地址」的放大面。
+            with _OPENER.open(
+                    request, timeout=self._config.timeout_seconds) as response:
                 status = getattr(response, "status", 200)
                 if 200 <= status < 300:
                     return True, ""

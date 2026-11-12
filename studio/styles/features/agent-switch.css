@@ -8,19 +8,19 @@
 }
 
 .ag-switch-label {
-  font-size: 10px; color: var(--text-ter);
-  letter-spacing: 0.06em; text-transform: uppercase;
+  font-size: var(--fs-xs); color: var(--text-ter);
+  letter-spacing: 0.06em;
 }
 
 .ag-switch-select {
   height: 26px; padding: 0 6px; max-width: 180px;
-  border: 1px solid var(--accent-border); border-radius: var(--r-xs);
+  border: 0.5px solid var(--accent-border); border-radius: var(--r-xs);
   background: var(--accent-bg-soft); color: var(--accent-text);
-  font-size: 11px; font-family: var(--font-mono); cursor: pointer;
+  font-size: var(--fs-xs); font-family: var(--font-mono); cursor: pointer;
 }
 .ag-switch-select.hidden { display: none; }
 
-.ag-switch-msg { font-size: 11px; color: var(--text-ter); line-height: 1.5; }
+.ag-switch-msg { font-size: var(--fs-xs); color: var(--text-ter); line-height: 1.5; }
 .ag-switch-msg.ok { color: var(--success-text); }
 .ag-switch-msg.warn { color: var(--warn-text); }
 .ag-switch-msg.err { color: var(--error-text); }

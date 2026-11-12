@@ -1,0 +1,10 @@
+# AgentCrew 评测集：revision（离线、确定性）
+#
+# 与 linear 同形，唯一区别：T-003 的**第 1 轮复核**判「未满足首条验收标准」。
+# 用途：让 review_rounds 的收益与代价在配置矩阵里显形——
+#   * 不开 review_rounds：复核只出意见，主笔不重做，任务照样成功（成本最低）；
+#   * 开 review_rounds=1：多花 1 次主笔 + 1 次复核，换取"按意见改一轮"。
+# 断言刻意只钉「跑到底 + 产物齐全」，不钉"改得更好"——mock 回放里主笔前后
+# 返回同一份产物，"变好"是夹具声明的，不是真的发生了，钉它等于自欺。
+{"id": "revision-completes", "sample": "revision", "description": "首轮复核不通过，仍应跑到底且产物齐全", "checks": [{"kind": "run_status", "status": "completed"}, {"kind": "no_failed_tasks"}, {"kind": "artifact_exists", "path": "README.md"}, {"kind": "artifact_exists", "path": "logstat/core.py"}, {"kind": "task_status", "task": "T-003", "status": "succeeded"}]}
+{"id": "revision-has-review", "sample": "revision", "description": "复核确实发生过（不是被跳过）", "checks": [{"kind": "event_count", "event": "gate_result", "min": 3}, {"kind": "artifact_contains", "path": "logstat/core.py", "text": "def"}]}

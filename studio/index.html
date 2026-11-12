@@ -2,16 +2,16 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://localhost:* http://127.0.0.1:*;">
+<!-- C-16：显式声明 script-src（不再依赖 default-src 回退），并补齐
+     object-src / base-uri / form-action 三条兜底：禁止插件内容、禁止 <base>
+     劫持相对路径、禁止表单外发。 -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://localhost:* http://127.0.0.1:*; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none';">
 <title>AgentCrew Studio</title>
 <script src="boot-theme.js"></script>
 <link rel="stylesheet" href="styles/index.css">
 </head>
 <body>
 <div id="app" class="layout">
-
-  <!-- 背景极光层：纯装饰，不参与交互 -->
-  <div class="aurora" aria-hidden="true"><i></i><i></i><i></i></div>
 
   <!-- ===== 1. 通高侧边栏：品牌 / 新建 / 导航 / 分组 / 设置 ===== -->
   <nav id="sidebar" aria-label="主导航">
@@ -43,19 +43,22 @@
     </button>
 
     <div class="nav-items" id="nav-items">
+      <button class="nav-row nav-item" data-nav="conversation" type="button"><span class="nav-text">对话</span></button>
       <button class="nav-row nav-item active" data-nav="dashboard" type="button"><span class="nav-text">运行总览</span></button>
       <button class="nav-row nav-item" data-nav="tasks" type="button"><span class="nav-text">计划审查</span></button>
       <button class="nav-row nav-item" data-nav="dag" type="button"><span class="nav-text">任务图</span></button>
       <button class="nav-row nav-item" data-nav="agents" type="button"><span class="nav-text">Agents</span></button>
+      <button class="nav-row nav-item" data-nav="profiles" type="button"><span class="nav-text">执行体档案</span></button>
       <button class="nav-row nav-item" data-nav="gates" type="button"><span class="nav-text">质量门禁</span></button>
       <button class="nav-row nav-item" data-nav="artifacts" type="button"><span class="nav-text">产物</span></button>
       <button class="nav-row nav-item" data-nav="events" type="button"><span class="nav-text">事件日志</span></button>
       <button class="nav-row nav-item" data-nav="providers" type="button"><span class="nav-text">供应商</span></button>
+      <button class="nav-row nav-item" data-nav="schedules" type="button"><span class="nav-text">定时任务</span></button>
     </div>
 
     <!-- 项目分组：当前运行 = 一个 project，下方缩进任务列表 -->
     <div class="sb-group" id="sb-project-group">
-      <div class="sb-group-label">Projects</div>
+      <div class="sb-group-label">项目</div>
       <div class="sb-proj" id="sb-proj-row">
         <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
           <path d="M1.8 4.4c0-.7.6-1.2 1.2-1.2h3l1.3 1.5h5.7c.7 0 1.2.5 1.2 1.2v6.3c0 .7-.5 1.2-1.2 1.2H3c-.6 0-1.2-.5-1.2-1.2V4.4Z"
@@ -63,8 +66,12 @@
         </svg>
         <span class="sb-proj-name" id="tb-workspace" title="点击切换运行">未选择运行</span>
       </div>
+      <div class="sb-task-tools" id="sb-task-tools">
+        <input id="sb-task-search" class="sb-task-search" type="text" placeholder="搜索任务…" aria-label="搜索任务" />
+        <div class="sb-task-filters" id="sb-task-filters"></div>
+      </div>
       <ul class="sb-list" id="sb-tasklist"></ul>
-      <button class="sb-more" type="button" id="sb-more">Show more</button>
+      <button class="sb-more" type="button" id="sb-more">显示更多</button>
       <div id="run-dropdown" class="run-dropdown hidden">
         <div class="rd-head">最近运行</div>
         <div id="run-dropdown-list" class="rd-list"></div>
@@ -73,7 +80,7 @@
 
     <!-- 最近运行 -->
     <div class="sb-group sb-group-recents">
-      <div class="sb-group-label">Recents</div>
+      <div class="sb-group-label">最近运行</div>
       <ul class="sb-list" id="sb-recents"></ul>
     </div>
 
@@ -125,6 +132,9 @@
       </div>
 
       <div class="tb-actions">
+        <button id="btn-result" class="btn btn-icon" type="button" title="结果（概览 / 产物）" aria-label="结果">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h18v18H3z"/><path d="M3 9h18"/><path d="M9 9v12"/></svg>
+        </button>
         <button id="btn-theme" class="btn btn-icon" type="button" title="切换主题" aria-label="切换主题">
           <svg id="btn-theme-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
         </button>

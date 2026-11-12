@@ -9,6 +9,8 @@ import { connectSSE, resetRealtime } from './realtime.js';
 
 /* 快速连点两个 run 时，旧 loadRealRun 的异步续体不能覆盖新 run 的状态。 */
 let loadSeq = 0;
+/* C-19：当前载入代次。realtime 的 500ms 防抖快照用它校验响应是否仍是最新一次载入。 */
+function currentLoadSeq() { return loadSeq; }
 /* 将真实 task（tasks.json）映射为渲染层期望的格式 */
 function mapRealTask(t) {
   const status = t.status || 'pending';
@@ -112,8 +114,7 @@ function enrichRun(run) {
   });
 }
 
-/* 加载真实 run 数据并启动 watch */
-async function loadRealRun(dir) {
+/* 加载真实 run 数据并启动 watch */async function loadRealRun(dir) {
   const my = ++loadSeq;
   // 从「无 run 的演示模式」启动第一个真实运行时，2.5s 的 mock 推演定时器
   // 还在跑，会按演示逻辑改写真实任务状态、伪造事件。进真实模式前必须停掉。
@@ -129,9 +130,25 @@ async function loadRealRun(dir) {
     // 加载 ledger 历史
     let events = [];
     try {
-      const h = await window.studio.ledgerHistory(dir, 300);
+      const h = await window.studio.ledgerHistory(dir, 2000);
       if (my !== loadSeq) return false;
       events = (h && h.events) || [];
+    } catch {}
+    // 加载流式正文回溯（streams/<task_id>.md，刷新后可恢复 Agent 完整回复正文）。
+    // role 从任务派生（正文落盘不含 role），换 run 时一并清空。
+    S.convStreams = null;
+    try {
+      const streams = await window.studio.loadStreams(dir);
+      if (my !== loadSeq) return false;
+      if (streams && typeof streams === 'object') {
+        const roleOf = {};
+        tasks.forEach((t) => { roleOf[t.id] = t.role; });
+        const conv = {};
+        Object.entries(streams).forEach(([tid, text]) => {
+          conv[tid] = { role: roleOf[tid] || '', text: String(text || '') };
+        });
+        if (Object.keys(conv).length) S.convStreams = conv;
+      }
     } catch {}
     S.dash = {
       run: Object.assign(enrichRun(snap.run), { dir }),
@@ -165,6 +182,7 @@ async function loadRealRun(dir) {
 /* watch 事件：snapshot 更新（run.json/tasks.json 变化） */
 
 export {
+  currentLoadSeq,
   deriveAgents,
   deriveGates,
   enrichRun,

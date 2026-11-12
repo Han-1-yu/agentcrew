@@ -185,6 +185,7 @@ class OpenAICompatProvider(BaseProvider):
         api_key: str | None,
         client: Any | None = None,
         on_retry: Callable[[int, Exception, float], None] | None = None,
+        request_timeout_seconds: float | None = None,
     ) -> None:
         super().__init__(binding)
         self._on_retry = on_retry
@@ -193,8 +194,12 @@ class OpenAICompatProvider(BaseProvider):
 
             # max_retries=0：重试语义由 retry_async 独家负责（spec §17.6），
             # 否则 SDK 的内部重试会叠加在本引擎之上，且对 ledger 不可见。
+            # A-9：显式请求超时——此前用 SDK 默认 600s，超时又判可重试
+            # （4 次），门禁/评审路径无任务级兜底会整场停摆。None = 保持
+            # SDK 默认（向后兼容，测试注入 client 时不走此分支）。
             client = AsyncOpenAI(
-                api_key=api_key, base_url=binding.base_url, max_retries=0)
+                api_key=api_key, base_url=binding.base_url, max_retries=0,
+                timeout=request_timeout_seconds)
         self._client = client
 
     async def complete(

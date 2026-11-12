@@ -407,6 +407,19 @@ stderr 提示可 `resume`。升级前的老 run 没有 `heartbeat.json`，仍走
 `clean --protect-running` 的删除守卫与这套收敛是两回事：前者决定「能不能删」，
 后者只修正状态、从不删目录。
 
+**时钟异常时宁可不动（A-7）**：心跳与锁的时间戳现在写 aware UTC，旧的 naive 本地
+时间按本机时区补齐后比较，两种格式混存不会出错。若系统时钟**回拨超过 5 分钟**，
+判定一律作废（fail-closed）：孤儿不会被改写、锁不会被接管，`reconcile` 会返回
+`reason: clock_skew` 并提示校准时钟。这是刻意选择——在时钟不可信时误杀一个仍在跑
+的 run，代价远高于多留一个僵尸。**时钟前跳同理**：只有「心跳确实过期」才会收敛，
+判据本身依赖本机时钟，所以多机部署请统一走 NTP/UTC 时区。
+
+**时间戳口径（D-14）**：`run.json`、统计、评审、审批、ledger、心跳、产物清单
+落盘时间**全部是 aware UTC**（带时区标记：`run.json` 里是 `Z`，`isoformat` 产出的是 `+00:00`）。只有 `run_id` 目录名用本地时间生成
+（给人看）。存量 run 的 naive 本地时间不需要迁移，读取端会补齐。因此：
+**不要手工编辑 `run.json` 的时间字段为无时区格式**，也不要用脚本按字符串排序
+两类时间——按时间戳数值排。
+
 **工具 guardrails（P2-4）**：`tool_guards` 是「副作用前拦截」的唯一开关，示例：
 
 ```yaml
@@ -474,7 +487,28 @@ tool_guards:
 |---|---|---|
 | 进程 / 结构化日志 | stderr（`AGENTCREW_LOG_JSON=1`） | 服务起没起、有没有异常与脱敏后的错误信息 |
 | 审计事件 | `<output_dir>/<run_id>/ledger.jsonl`，或 `GET /runs/{id}/ledger` | 每个 run 到底发生了什么、门禁驳回了什么、钱花在哪 |
-| 对外推送 | Webhook（`run_started` / `run_finished` / `approval_requested` / `run_stalled` / `deadlock`，可配 `webhooks` 多接收端与「只推失败」） | 让外部系统不用轮询就知道关键节点 |
+| 外联推送 | Webhook（`run_started` / `run_finished` / `approval_requested` / `run_stalled` / `deadlock`，可配 `webhooks` 多接收端与「只推失败」） | 让外部系统不用轮询就知道关键节点 |
+| Prometheus 指标 | `GET /metrics`（`text/plain; version=0.0.4`） | 存活、版本、启动时间、内存中 run 数与状态分布、按状态码累计的请求数 |
+
+`/metrics` 只暴露**进程内可即时算出**的量，**不扫盘**——磁盘与产物统计请用
+`main.py status` 或外部 exporter，避免抓取间隔一密集就把服务拖慢。它和
+`/health` 走同一条认证链，抓取端需要带 key：
+
+```yaml
+# prometheus.yml（示例）
+scrape_configs:
+  - job_name: agentcrew
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["127.0.0.1:8765"]
+    authorization:
+      type: Bearer
+      credentials: <AGENTCREW_API_KEYS>
+```
+
+常用查询：`rate(agentcrew_http_requests_total{status=~"5.."}[5m])`（错误率）、
+`agentcrew_runs_by_status{status="running"}`（在跑 run 数，长期不降通常意味着
+有 run 卡住，配合 §7.3 排查）。
 
 巡检命令：
 
@@ -590,6 +624,43 @@ python main.py status <最近一次 run_id>
   `scripts/ci-check.ps1`（自动建 `.venv-ci`、装同版本工具）一键复现。本机
   Windows 全量回归用 `python scripts/test.py`（崩溃自动重试），见 HANDOVER §5.1。
 
+### 6.1 回滚（升级出问题时）
+
+升级失败要能**在 10 分钟内退回上一版**。四件东西按顺序退，任何一件都不能省：
+
+```bash
+# 1) 先停，让在跑 run 正常收尾（别 kill -9；残留 RUNNING 会被下一次启动收敛为 interrupted）
+sudo systemctl stop agentcrew
+
+# 2) 代码回到上一个可用版本
+git log --oneline -5                     # 确认目标 commit / tag
+git checkout <上一个可用 tag 或 commit>
+
+# 3) 依赖按锁回装（不要沿用新版的依赖集合）
+pip install -r requirements.txt
+# uv 路径：uv sync --frozen
+
+# 4) 配置回到升级前快照
+cp /etc/agentcrew/snapshot-<升级前日期>.yaml /etc/agentcrew/agentcrew.yaml
+# 若用的是 config import 写入的 agentcrew.yaml，它旁边有 agentcrew.yaml.bak
+
+# 5) 验证（不联网）
+python main.py doctor --json
+python main.py run --sample todo --no-live --auto
+sudo systemctl start agentcrew
+curl -H "Authorization: Bearer <key>" http://127.0.0.1:8765/health
+```
+
+回滚的三条边界：
+
+- **不要 resume 一个由新版创建的 run**。`run.json` 带 `schema_version`，旧版读到未知
+  字段会按自己的模型解析；即使不报错，事件表与状态机的差异也可能让旧版把 run 判成
+  异常终态。等确认新版无问题，或把该 run 跑完再回滚。
+- **`output/` 不需要回滚**。产物与 ledger 是只增不改的历史，旧版读新目录是安全的
+  （`load_manifest` 会丢弃指向不存在文件的记录、忽略未知事件名）。
+- **密钥不在快照里**。`config export` 输出已脱敏，回滚后必须从密钥管理（或 `.env`）
+  重新注入 `AGENTCREW_API_KEYS` / provider key；注入后立刻用 `/health` 验证 401→200。
+
 ---
 
 ## 7. 排障
@@ -703,6 +774,7 @@ HTTP 等价物是 `GET /tools` 与 `POST /tools/{name}/test`，看板首页「�
 - [ ] `python main.py doctor --json` 的 `ok=true`，`provider:*` 为 healthy
 - [ ] 已下发随机长 key（`keys add` 或 `AGENTCREW_API_KEYS`）；`/health` 带 key 返回 200。
       无密钥时 `serve` 直接退 3（任何地址）——这是期望行为，不要用改代码绕过
+- [ ] 监控已接入：`/metrics` 带 key 可抓取，且配好错误率与「在跑 run 数长期不降」两条告警（见 §5.1）
 - [ ] 确认 `AGENTCREW_CODE_EXEC_ENABLED` 保持关闭，除非确实需要模型执行 Python
 - [ ] 反代已配 TLS、`client_max_body_size 4m`、SSE 关闭缓冲并放长读超时
 - [ ] `8765` 只监听内网地址，公网入口只有反代
@@ -713,3 +785,7 @@ HTTP 等价物是 `GET /tools` 与 `POST /tools/{name}/test`，看板首页「�
 - [ ] 出站 Webhook 已配且接收端按 `X-AgentCrew-Delivery` 幂等；知道 `_webhook_spool/` 的位置
 - [ ] 备份与恢复演练过一次（含配置导出快照），`clean --protect-running` 干跑过
 - [ ] 停服用 SIGTERM / `systemctl stop`，不是 `kill -9`
+- [ ] `AGENTCREW_MAX_COST_USD` / `AGENTCREW_MAX_LLM_CALLS` 已设上限（留空 = 不限制，
+      一次多 Agent run 可能烧掉几十美元）
+- [ ] 容器部署时 `output/` 已挂卷（否则容器重建丢全部 run 记录），healthcheck 为
+      TCP 探活（`/health` 需认证，探针带密钥会进容器元数据）

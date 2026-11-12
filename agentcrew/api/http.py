@@ -17,8 +17,10 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
-from collections.abc import Mapping
+import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -32,15 +34,16 @@ __all__ = [
     "send_json",
     "sse_frame",
     "sse_headers",
+    "valid_event_name",
     "write_sse",
 ]
 
 #: 状态码 → reason phrase。只登记本项目实际用到的码；未登记的回落 ``OK``
 #: （与改造前逐字节一致：手写响应从不为未知状态码编造短语）。
 REASONS: dict[int, str] = {
-    200: "OK", 202: "Accepted", 400: "Bad Request", 401: "Unauthorized",
-    404: "Not Found", 405: "Method Not Allowed", 409: "Conflict",
-    413: "Payload Too Large", 429: "Too Many Requests",
+    200: "OK", 201: "Created", 202: "Accepted", 400: "Bad Request",
+    401: "Unauthorized", 404: "Not Found", 405: "Method Not Allowed",
+    409: "Conflict", 413: "Payload Too Large", 429: "Too Many Requests",
     500: "Internal Server Error", 503: "Service Unavailable",
     504: "Gateway Timeout",
 }
@@ -90,27 +93,77 @@ async def read_request(reader: asyncio.StreamReader) -> Request | None:
     return request
 
 
-def clamp_int(raw: str, *, default: int, minimum: int) -> int:
-    """把查询参数里的整数读出来；非法 / 缺失用 ``default``，并压到 ``minimum`` 以上。"""
+def clamp_int(
+    raw: str, *, default: int, minimum: int, maximum: int | None = None,
+) -> int:
+    """把查询参数里的整数读出来；非法 / 缺失用 ``default``，压到 ``[minimum, maximum]``。
+
+    ``maximum`` 为 ``None`` 时不设上界（B-8：分页 ``limit`` 必须设上界，否则
+    ``limit=999999999`` 会把整份 ledger 物化进内存）。
+    """
     try:
         value = int(raw)
     except (TypeError, ValueError):
         return default
-    return max(minimum, value)
+    value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
 
 
-def client_ip(headers: Mapping[str, str], writer: asyncio.StreamWriter) -> str:
-    """客户端 IP：优先 ``X-Forwarded-For`` 首地址（反代后真实客户端），否则
-    取 socket peer 地址；都取不到时记 ``unknown``。"""
-    forwarded = headers.get("x-forwarded-for", "")
-    if forwarded:
-        first = forwarded.split(",")[0].strip()
-        if first:
-            return first
+#: 已解析的可信代理网段类型（``ipaddress.ip_network`` 的产物）。
+TrustedNetworks = Sequence[ipaddress.IPv4Network | ipaddress.IPv6Network]
+
+
+def _in_trusted_networks(addr_text: str, trusted: TrustedNetworks) -> bool:
+    """地址是否落在任一可信网段；解析失败按不可信处理（fail-closed）。"""
+    if not trusted or not addr_text:
+        return False
+    try:
+        addr = ipaddress.ip_address(addr_text)
+    except ValueError:
+        return False
+    return any(addr in net for net in trusted)
+
+
+def _is_ip(addr_text: str) -> bool:
+    """文本是否是合法 IP 地址（XFF 里的垃圾跳不能当 client_ip 用）。"""
+    try:
+        ipaddress.ip_address(addr_text)
+    except ValueError:
+        return False
+    return True
+
+
+def client_ip(
+    headers: Mapping[str, str],
+    writer: asyncio.StreamWriter,
+    *,
+    trusted_proxies: TrustedNetworks = (),
+) -> str:
+    """客户端 IP：默认**只用 socket peer**；仅当 peer 是可信代理才解析 XFF。
+
+    P0-4：改造前无条件优先取 ``X-Forwarded-For`` 首地址——默认部署是直连
+    （无反代），客户端每请求换一个 XFF 就换一个限流分桶，限流恒不触发，
+    ``security_events`` 里的 client_ip 也被污染。
+
+    现在：peer 落在 ``trusted_proxies`` 网段内时，从 XFF **从右往左**取第一个
+    不可信地址（「最右侧不可信跳」语义，伪造的中间跳不能冒充真实客户端）；
+    全部可信则取最左（原始客户端）。都取不到时记 ``unknown``。
+    """
     peername = writer.get_extra_info("peername")
-    if peername:
-        return str(peername[0])
-    return "unknown"
+    peer = str(peername[0]) if peername else ""
+    forwarded = headers.get("x-forwarded-for", "")
+    if forwarded and _in_trusted_networks(peer, trusted_proxies):
+        hops = [hop.strip() for hop in forwarded.split(",") if hop.strip()]
+        for hop in reversed(hops):
+            # 垃圾跳（非 IP 文本）不可用，继续向左；可信跳跳过。
+            if _is_ip(hop) and not _in_trusted_networks(hop, trusted_proxies):
+                return hop
+        # 全部可信 → 取最左（原始客户端）；它也得是合法 IP 才可用。
+        if hops and _is_ip(hops[0]):
+            return hops[0]
+    return peer or "unknown"
 
 
 async def send_json(
@@ -166,6 +219,23 @@ async def send_html(writer: asyncio.StreamWriter, html: str) -> None:
     )
 
 
+async def send_text(
+    writer: asyncio.StreamWriter,
+    text: str,
+    *,
+    status: int = 200,
+    content_type: str = "text/plain; charset=utf-8",
+) -> None:
+    """写一条纯文本响应（D-7：``/metrics`` 的 Prometheus 文本格式）。"""
+    await _write_response(
+        writer,
+        status,
+        f"Content-Type: {content_type}\r\n".encode(),
+        text.encode("utf-8"),
+        extra_headers={"Cache-Control": "no-store"},
+    )
+
+
 async def _write_response(
     writer: asyncio.StreamWriter,
     status: int,
@@ -187,15 +257,39 @@ async def _write_response(
     await writer.drain()
 
 
+#: SSE 事件名白名单（P0-3）：``event`` 的值可能来自 ``POST /runs/{id}/events``
+#: 的 body；不约束的话，携带换行的名字可以闭合当前帧、向订阅者伪造任意
+#: ``event:`` / ``data:`` 行（JSON 序列化的 data 会转义换行，裸字符串 event 不会）。
+_EVENT_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+def valid_event_name(event: Any) -> bool:
+    """事件名是否合法：1–64 位字母 / 数字 / ``.`` / ``_`` / ``-``。"""
+    return (isinstance(event, str)
+            and _EVENT_NAME_RE.fullmatch(event) is not None)
+
+
 def sse_frame(event: str, data: Any) -> str:
     """一条 SSE 帧（``event:`` + ``data:`` + 空行）。
 
     ``data`` 用 ``ensure_ascii=False`` 序列化：中文事件内容在浏览器 DevTools 里
     应当可读；``default=str`` 兜住 ``Path`` / ``datetime`` 这类不可直接序列化的值。
+
+    注入防御（P0-3，纵深第二层；第一层在 ``POST /runs/{id}/events`` 入口）：
+
+    * ``event`` 不在白名单内一律降级为 ``custom``——本函数是所有 SSE 出口的
+      唯一拼帧点，保证任何调用路径都不可能把换行写进 ``event:`` 行；
+    * 字符串型 ``data`` 的换行按 SSE 规范拆成多条 ``data:`` 行。JSON 序列化
+      天然没有裸换行，此分支只影响直接传 ``str`` 的调用方（行为对无换行输入
+      与旧实现逐字节一致）。
     """
+    if not valid_event_name(event):
+        event = "custom"
     if not isinstance(data, str):
         data = json.dumps(data, ensure_ascii=False, default=str)
-    return f"event: {event}\ndata: {data}\n\n"
+    normalized = data.replace("\r\n", "\n").replace("\r", "\n")
+    data_lines = "".join(f"data: {line}\n" for line in normalized.split("\n"))
+    return f"event: {event}\n{data_lines}\n"
 
 
 async def sse_headers(writer: asyncio.StreamWriter) -> None:

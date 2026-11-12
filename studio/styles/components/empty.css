@@ -6,17 +6,17 @@
   min-height: 60vh; text-align: center; padding: 40px;
 }
 .placeholder-view .ph-icon {
-  width: 56px; height: 56px; border-radius: 12px; background: var(--ink-06);
+  width: 56px; height: 56px; border-radius: var(--r-md); background: var(--bg-subtle);
   display: flex; align-items: center; justify-content: center; color: var(--text-ter); margin-bottom: 14px;
 }
 .placeholder-view .ph-icon svg { width: 28px; height: 28px; }
-.placeholder-view h2 { font-size: 16px; margin-bottom: 6px; }
-.placeholder-view p { color: var(--text-sub); font-size: 12px; max-width: 340px; }
+.placeholder-view h2 { font-size: var(--fs-h1); margin-bottom: 6px; }
+.placeholder-view p { color: var(--text-sub); font-size: var(--fs-sm); max-width: 340px; }
 
-.skeleton { border-radius: 4px; background: linear-gradient(90deg, var(--ink-06) 25%, var(--ink-12) 50%, var(--ink-06) 75%); background-size: 200% 100%; animation: skel 1.3s infinite; }
-@keyframes skel { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+.skeleton { border-radius: var(--r-xs); background: var(--bg-subtle); animation: skel 1.3s ease-in-out infinite; }
+@keyframes skel { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 
-.banner { padding: 8px 12px; border-radius: 5px; font-size: 12px; margin-bottom: 10px; border: 1px solid transparent; }
+.banner { padding: 8px 12px; border-radius: var(--r-xs); font-size: var(--fs-sm); margin-bottom: 10px; border: 0.5px solid transparent; }
 .banner.warn { background: var(--warn-bg-soft); color: var(--warn-text); border-color: var(--warn-border-soft); }
 .banner.err { background: var(--error-bg); color: var(--error-text); border-color: var(--error-border-soft); }
 .banner.info { background: var(--accent-bg-soft); color: var(--accent-text); border-color: var(--accent-border-soft); }
@@ -24,12 +24,12 @@
 /* ---- 加载遮罩 ---- */
 /* 加载遮罩 */
 .loading-overlay { position: fixed; inset: 0; background: var(--loading-mask);
-  backdrop-filter: blur(2px); z-index: 100; display: flex; flex-direction: column;
+   z-index: 100; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 14px; }
 .loading-spinner { width: 28px; height: 28px; border: 2.5px solid var(--accent-track);
   border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
-.loading-text { font-size: 13px; color: var(--text-sub); }
+.loading-text { font-size: var(--fs-body); color: var(--text-sub); }
 
 /* ---- 页面级三态（loading / empty / error）----
    由 src/ui/states.js 统一产出，供各功能页共用；只负责状态本身，
@@ -39,7 +39,7 @@
   gap: var(--sp-2); min-height: 160px; padding: var(--sp-8) var(--sp-5);
   text-align: center; font-size: var(--fs-body); color: var(--text-sub);
 }
-.page-state-title { font-size: 14px; color: var(--text); }
+.page-state-title { font-size: var(--fs-h2); color: var(--text); }
 .page-state-detail {
   font-size: var(--fs-sm); color: var(--text-ter); max-width: 460px;
   line-height: 1.6; word-break: break-word;
@@ -51,7 +51,7 @@
   animation: spin .7s linear infinite;
 }
 .page-state.is-error .page-state-title { color: var(--error-text); }
-.page-state.is-error { background: var(--error-bg-faint); border-radius: 8px; }
+.page-state.is-error { background: var(--error-bg-faint); border-radius: var(--r-sm); }
 /* 运行下拉是紧凑列表，三态节点在这里收窄，避免把下拉撑成整屏 */
 #run-dropdown-list .page-state,
 #events-list .page-state { min-height: 72px; padding: var(--sp-4) var(--sp-3); gap: var(--sp-1); }

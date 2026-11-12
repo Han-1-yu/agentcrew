@@ -36,13 +36,12 @@ import asyncio
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Any, Literal, cast
-
-from pydantic import BaseModel, ConfigDict
+from typing import Literal, cast
 
 from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.config import Settings
+from agentcrew.gate.verdict import ReviewVerdict, derive_review
+from agentcrew.gate.verdict import is_malformed as _is_malformed
 from agentcrew.models.factory import ModelFactory
 from agentcrew.models.providers.base import Message
 from agentcrew.models.providers.mock import MockProvider, set_purpose
@@ -51,57 +50,18 @@ from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.roles.spec import RoleSpec
 from agentcrew.runtime.ledger import Ledger
 from agentcrew.task.task import ReviewRecord, Task
+from agentcrew.utils.clock import utc_now
 from agentcrew.utils.files import UnsafePathError
 from agentcrew.utils.tokens import estimate_tokens
-
-
-class CriterionJudgement(BaseModel):
-    """对**一条**验收标准的判定。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    criterion_index: int
-    """该判定对应 ``acceptance_criteria`` 里的第几条（**从 0 起**）。
-
-    用序号而非让模型逐字复述标准：改写一个字就会让文本比对失败，进而触发
-    「格式错误 → 重试 → 放行」，等于把评审悄悄关掉。序号是精确且稳健的。
-    """
-
-    satisfied: bool
-    evidence: str
-    """产物中支持该判定的具体依据（文件名 + 关键内容）。
-
-    ``satisfied=False`` 时必须写成「产物里缺什么、要改成什么」—— 它会直接成为
-    返工方看到的 ``fix_hints``，含糊的「不够好」等于没给。
-    """
-
-
-class ReviewVerdict(BaseModel):
-    """一次 LLM 评审的原始裁决（``complete_structured`` 的目标 schema）。
-
-    **刻意没有 ``verdict`` 字段。** 过去直接向模型要 approve/reject，等于让它对
-    「这份产出好不好」下开放式结论 —— 一个认真的评审员总能在两轮内挑够毛病，
-    于是**任何非平凡任务都注定 FAILED**（实测 run6：问题数 7→12→8 不收敛，
-    返工额度烧光、下游 5 个任务阻塞）。
-
-    现在只问它**逐条判定既定标准**，裁决由 :func:`derive_review` 推导：
-    有一条不满足才 reject，且必须逐条覆盖、不能多也不能少。改进意见单独放
-    ``suggestions``，**不构成不满足**、不引发返工 —— 「还能更好」不是驳回理由。
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    judgements: list[CriterionJudgement]
-    suggestions: list[str] = []
-    score: float = 0.0
-
-
-#: 与 ``ReviewVerdict`` 派生自同一处定义，供需要裸 schema 的调用方使用
-#: （实际调用由降级链按级别注入或经 ``response_format`` 携带，不重复内嵌）。
-REVIEW_OUTPUT_SCHEMA: dict[str, Any] = ReviewVerdict.model_json_schema()
+from agentcrew.utils.trace import TraceContext, reset_trace, set_trace
 
 #: 评审调用在 ledger 与 mock 回放里的 purpose（``MockProvider`` 据此查 reviews.json）。
 _REVIEW_PURPOSE = "review"
+
+#: 门禁评审的成本归因前缀：``gate:<评审角色>``。
+#: 它不是 ``AgentProfile``（门禁评审没有执行体），但必须能进 ``llm.by_profile``，
+#: 否则这笔开销会落进 ``unknown``，看起来像"账没算清"。
+_GATE_PROFILE_PREFIX = "gate:"
 
 #: ``RoleSpec.model`` 的哨兵值：字面量 ``"default"`` 表示按三级优先级解析。
 _DEFAULT_ALIAS = "default"
@@ -305,7 +265,18 @@ class Reviewer:
         if isinstance(provider, MockProvider):
             # purpose/task_id 是 mock 夹具的查找键，由调用方在每次调用前设置
             # （同 BaseAgent._configure_replay 的分工）。
-            set_purpose(provider, _REVIEW_PURPOSE, role=reviewer_key, task_id=task.id)
+            # ``attempt=0``：门禁评审**不分轮次**。用 0 而不是默认的 1，是为了
+            # 避开角色内复核的按轮次夹具（``"T-003@1"``）——两者都在 attempt=1
+            # 时，门禁会误读"第 1 轮修订前"的裁决，把好产物驳回。
+            set_purpose(provider, _REVIEW_PURPOSE, role=reviewer_key,
+                        task_id=task.id, attempt=0)
+        # 门禁评审不是"某个执行体在干活"，但它的花费必须可归因，否则
+        # ``llm.by_profile`` 里会出现一大坨 ``unknown``（实测 7 次里有 6 次是它）。
+        # 用 ``gate:<评审角色>`` 作为合成 profile：既区别于执行体，也能看出是哪个
+        # 评审角色的账单。
+        trace_token = set_trace(TraceContext(
+            task_id=task.id, role=reviewer_key, attempt=task.attempts,
+            profile=f"{_GATE_PROFILE_PREFIX}{reviewer_key}"))
         try:
             result = await self._models.complete_structured(
                 alias,
@@ -318,6 +289,8 @@ class Reviewer:
             )
         except StructuredOutputError:
             return None
+        finally:
+            reset_trace(trace_token)
         return cast(ReviewVerdict, result)
 
     # ── 评审材料 ──────────────────────────────────────────────────────────
@@ -506,7 +479,7 @@ class Reviewer:
             issues=issues,
             fix_hints=fix_hints,
             reviewer=reviewer,
-            created_at=datetime.now(),
+            created_at=utc_now(),
         )
 
 
@@ -524,46 +497,6 @@ def _resolve_alias(spec: RoleSpec, settings: Settings) -> str:
     if spec.model != _DEFAULT_ALIAS:
         return spec.model
     return settings.role_bindings.get(spec.key) or settings.default_model
-
-
-def derive_review(verdict: ReviewVerdict, task: Task) -> tuple[bool, list[str], list[str]]:
-    """由逐条判定推导裁决，返回 ``(approved, issues, fix_hints)``。
-
-    **有一条验收标准不满足才 reject。** 这是把 G2 从「开放式代码评审」拉回
-    spec §10.2「按验收标准评审」的那一步：评审员只能通过把某条**既定标准**判为
-    不满足来驳回，而「还能更好」进 ``suggestions``、不参与裁决。
-
-    标准原文由本函数按序号回填，不采信模型复述的文本 —— 引用的是契约里真正
-    写下的那一条，返工方看到的和 PM 写下的必然一致。
-    """
-    criteria = task.acceptance_criteria
-    unmet: list[CriterionJudgement] = []
-    for judgement in verdict.judgements:
-        if judgement.satisfied:
-            continue
-        unmet.append(judgement)
-    issues = [
-        f"未满足验收标准：{criteria[j.criterion_index]} —— {j.evidence.strip()}"
-        for j in unmet
-        if 0 <= j.criterion_index < len(criteria)
-    ]
-    hints = [j.evidence.strip() for j in unmet if 0 <= j.criterion_index < len(criteria)]
-    return (not unmet), issues, hints
-
-
-def _is_malformed(verdict: ReviewVerdict, task: Task) -> bool:
-    """判定是否**不可用**，两种情况：
-
-    1. **覆盖率不达标**：必须逐条判定 ``acceptance_criteria``，序号集合恰好等于
-       ``0..N-1``。漏一条 = 逃避判据；多一条（或越界）= 引入了标准之外的驳回
-       理由 —— 两者都会让裁决失去边界，正是过去不收敛的来源。
-    2. **判了不满足却不给依据**：返工方无从下手，等同于旧版的「reject 无 issues」。
-    """
-    expected = set(range(len(task.acceptance_criteria)))
-    got = {j.criterion_index for j in verdict.judgements}
-    if got != expected or len(verdict.judgements) != len(expected):
-        return True
-    return any(not j.satisfied and not j.evidence.strip() for j in verdict.judgements)
 
 
 def _dedup(items: Iterable[str]) -> list[str]:

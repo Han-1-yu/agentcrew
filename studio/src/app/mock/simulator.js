@@ -90,7 +90,10 @@ function simTick(){
   const unfinished=d.tasks.filter(t=>!['succeeded','failed','skipped','cancelled'].includes(t.status));
   if(unfinished.length===0){
     run.status='completed'; run.phase='delivery';
-    pushEvent('run_finished',{status:'completed',exit_code:0,duration_ms:Date.now()-parseTs(st.started_at).getTime()});
+    // C-13：parseTs 非法时间返回 null，直接 .getTime() 会中断模拟器。
+    const startedAt = parseTs(st.started_at);
+    pushEvent('run_finished',{status:'completed',exit_code:0,
+      duration_ms: startedAt ? Date.now()-startedAt.getTime() : 0});
     toast('success','运行完成','所有任务已通过，产物已就绪'); stopSim();
   }
   renderDashboard();

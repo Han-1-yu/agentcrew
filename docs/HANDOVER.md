@@ -11,12 +11,22 @@
 
 | 项 | 值 |
 |---|---|
-| 已提交 | R3–R34；最新提交 R34（具体 hash 以 `git log -1` 为准） |
-| **未提交** | **无，工作区干净**（R34 已于 2026-11-07 提交） |
-| 测试 | R34 后全量 **2632 passed / 1 skipped / 0 failed**（2633 collected；`scripts/test.py` 一次跑出） |
-| 静态检查 | `ruff check .` 全绿 · `mypy agentcrew/` 114 文件零错误（本机 3.12 首次跑通 CI 等价检查链） |
+| 已提交 | R3–R34 已提交；**R50（差距报告 69 条整改）在本工作区，尚未提交**（176 个文件变更，见 `git status`） |
+| 测试 | R50 后全量 **3110 passed / 2 skipped / 0 failed**（3112 collected；`scripts/test.py` 一次跑出，含 D-14 时间戳迁移） |
+| 静态检查 | `ruff check agentcrew/ tests/ sdk/` 全绿 · `mypy agentcrew/` 保持零错误 |
+| Studio | 架构检查 73 模块 / 42 分片通过、`test:unit` 18 passed |
 | 离线样例 | `todo` 9/9 · `linear` 5/5 · `hierarchy` 7/7，全部 `completed` |
 | 一句话定位 | 8 角色多 Agent 编排器：规划 → 执行 → 三层门禁 → 交付；可完全离线（mock）跑通 |
+
+**R50 做了什么**（交接时先看这两份，不必回读全部 176 个 diff）：
+
+- `docs/REMEDIATION-STATUS.md`：差距报告 69 条的逐条处置表（哪条改了、改在哪、怎么验、还剩什么）。
+- `docs/TIME-MIGRATION-PLAN.md`：时间戳全量 UTC 迁移的**执行记录与回滚依据**
+  （已落地：10 处落盘点归零，配套 `tests/test_time_migration_guard.py` 基线 = 0）。
+
+改动密度最高的三处，读代码时值得先看：`runtime/clock.py`（新增，时间语义的统一入口）、
+`runtime/lifecycle.py`（心跳/锁/僵尸收敛全部改走 `elapsed_since`）、`api/server.py`
+（`on_event` 的空 id 与注册表上界、`_send_json` 改实例方法用于指标计数）。
 
 **接手第一件事**：跑一次三套样例确认环境（§5.1）。**第一档、第二档功能项与
 全部小项均已闭环**（R17–R23：心跳收敛 / resume 锁、CI 检查链、限流窗口通道、
@@ -274,6 +284,21 @@ payload 前必须走 `secret_values()` 递归脱敏，别绕过 Ledger 已有的
 ---
 
 ## 7. 剩余工作
+
+### 7.0 R50 之后的真实剩余（2026-11-12）
+
+差距报告 69 条已全部有结论（67 修完 + 2 项部分完成），逐条见
+`docs/REMEDIATION-STATUS.md`。真正还需要动手的只剩这些：
+
+| 项 | 性质 | 说明 |
+|---|---|---|
+| ~~D-14 时间戳迁 UTC~~ | ✅ 已完成 | 落盘全量 aware UTC；守规基线 = 0；见 `docs/TIME-MIGRATION-PLAN.md` |
+| 覆盖率门槛 50% | 验证 | 已配 `fail_under`；本机 Win 测不准，看首次 CI 结果 |
+| Docker 构建 | 验证 | 三件套已交付；本机无 docker，验非 root 对 `output/` 写权限 |
+| CI 首次实跑 | 验证 | 新增 studio job + 覆盖率步骤，需推送后看 Actions |
+| `web_search` / 向量检索 | 大项 | 前者需外部 API 与密钥；后者需定 embedding 通道与存储 |
+
+以下小节是 2026-11-07 及更早的收口记录，保留作历史。
 
 ### 7.1 已收口（2026-11-07）
 

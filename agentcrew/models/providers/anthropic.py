@@ -54,6 +54,7 @@ class AnthropicProvider(BaseProvider):
         api_key: str | None,
         client: Any | None = None,
         on_retry: Callable[[int, Exception, float], None] | None = None,
+        request_timeout_seconds: float | None = None,
     ) -> None:
         super().__init__(binding)
         self._on_retry = on_retry
@@ -61,8 +62,10 @@ class AnthropicProvider(BaseProvider):
             from anthropic import AsyncAnthropic
 
             # max_retries=0：重试语义由 retry_async 独家负责（spec §17.6）。
+            # A-9：显式请求超时（默认 120s），避免单次调用 4×600s 放大。
             client = AsyncAnthropic(
-                api_key=api_key, base_url=binding.base_url, max_retries=0)
+                api_key=api_key, base_url=binding.base_url, max_retries=0,
+                timeout=request_timeout_seconds)
         self._client = client
 
     async def complete(

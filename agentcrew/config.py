@@ -5,7 +5,9 @@
 环境变量 → CLI 覆盖。
 """
 
+import ipaddress
 import json
+import math
 import os
 import re
 import sys
@@ -61,6 +63,8 @@ _ENV_TO_FIELD: dict[str, str] = {
     "AGENTCREW_API_RATE_LIMIT_ENABLED": "api_rate_limit_enabled",
     "AGENTCREW_API_RATE_LIMIT_MAX": "api_rate_limit_max",
     "AGENTCREW_API_RATE_LIMIT_WINDOW": "api_rate_limit_window",
+    "AGENTCREW_TRUSTED_PROXIES": "trusted_proxies",
+    "AGENTCREW_LLM_REQUEST_TIMEOUT_SECONDS": "llm_request_timeout_seconds",
     "AGENTCREW_REDACT_ENABLED": "redact_enabled",
     "AGENTCREW_REDACT_API_KEYS": "redact_api_keys",
     "AGENTCREW_REDACT_PII": "redact_pii",
@@ -84,6 +88,10 @@ _ENV_TO_FIELD: dict[str, str] = {
     "AGENTCREW_DEBUG_STEP": "debug_step",
     "AGENTCREW_MAX_PEER_MESSAGES": "max_peer_messages",
     "AGENTCREW_DELEGATION_MODE": "delegation_mode",
+    "AGENTCREW_AGENT_CIRCUIT_BREAKER_ENABLED": "agent_circuit_breaker_enabled",
+    "AGENTCREW_AGENT_CIRCUIT_BREAKER_THRESHOLD": "agent_circuit_breaker_threshold",
+    "AGENTCREW_COST_AWARE_ROUTING": "cost_aware_routing",
+    "AGENTCREW_COST_AWARE_HEADROOM": "cost_aware_headroom",
     "AGENTCREW_MAX_DELEGATION_DEPTH": "max_delegation_depth",
     "AGENTCREW_MAX_DYNAMIC_TASKS": "max_dynamic_tasks",
     "AGENTCREW_PEER_CONSULT_CAPTURE_ENABLED": "peer_consult_capture_enabled",
@@ -125,6 +133,10 @@ _YAML_SCALAR_KEYS = (
     "peer_dialogue_enabled", "max_peer_messages",
     # R6：动态委派的治理参数。
     "delegation_mode", "max_delegation_depth", "max_dynamic_tasks",
+    # R44：执行体级熔断（默认关）。
+    "agent_circuit_breaker_enabled", "agent_circuit_breaker_threshold",
+    # R44：成本感知路由（默认关）。
+    "cost_aware_routing", "cost_aware_headroom",
     "peer_consult_capture_enabled", "supervisor_review_enabled",
     "max_subtask_corrections", "supervisor_scope", "supervisor_role",
     "supervisor_chain",
@@ -133,6 +145,8 @@ _YAML_SCALAR_KEYS = (
     "webhook_max_retries", "webhooks",
     # E-3：限流三参数此前只有 env 通道，YAML 里写会被静默忽略（R18 补齐）。
     "api_rate_limit_enabled", "api_rate_limit_max", "api_rate_limit_window",
+    # P0-4：可信代理网段（限流/审计的 XFF 解析只在 peer 可信时进行）。
+    "trusted_proxies",
     # R20：单步断点开关（默认 False；只在 run 级快照里持久化）。
     "debug_step",
 )
@@ -292,9 +306,21 @@ def _validate_webhook_target_url(url: str, *, where: str = "webhook_url") -> str
     return url
 
 
-def _yaml_values() -> dict[str, object]:
-    """读取 ``AGENTCREW_CONFIG`` 或 ``./agentcrew.yaml``；缺失则返回空。"""
-    path = Path(os.environ.get("AGENTCREW_CONFIG") or "agentcrew.yaml")
+def _yaml_values(
+    config_path: Path | str | None = None, *, strict: bool = False
+) -> dict[str, object]:
+    """读取 ``AGENTCREW_CONFIG`` 或 ``./agentcrew.yaml``；缺失则返回空。
+
+    ``config_path`` 显式给出时读那一份。评测的「配置变体」走这条路径，保证与主配置
+    使用**完全相同**的归一化规则（``agents.profiles`` → ``agent_profiles``、
+    ``roles`` → ``role_agents``、``models.*`` 等），用户不必再学一种变体格式。
+
+    ``strict=True`` 时，无法识别的顶层段直接报错。主配置历来宽松（允许留注释性
+    字段），但变体必须严格：一个拼错的段名会让整个变体静默失效，跑出来的 A/B
+    结论是假的——这种错误必须在起跑前炸掉。
+    """
+    path = (Path(config_path) if config_path is not None
+            else Path(os.environ.get("AGENTCREW_CONFIG") or "agentcrew.yaml"))
     if not path.is_file():
         return {}
     # YAML 语法错误抛的是 yaml.YAMLError（ScannerError / ParserError / ComposerError），
@@ -307,6 +333,7 @@ def _yaml_values() -> dict[str, object]:
         raise ValueError(f"配置文件 YAML 解析失败：{path}: {exc}") from exc
     if not isinstance(data, dict):
         raise ValueError(f"配置文件必须是 YAML 映射：{path}")
+    unknown = unknown_yaml_keys(data)
     values: dict[str, object] = {
         key: data[key] for key in _YAML_SCALAR_KEYS if data.get(key) is not None
     }
@@ -409,7 +436,39 @@ def _yaml_values() -> dict[str, object]:
                     f"配置文件 role_fallback.{key} 必须是角色 key 列表：{path}")
             normalized[str(key)] = [str(item) for item in raw if str(item).strip()]
         values["role_fallback"] = normalized
+    if strict and unknown:
+        raise ValueError(
+            f"{path} 里有无法识别的顶层段：{', '.join(unknown)}"
+            "（应与 agentcrew.yaml 同形：agents.profiles / roles / models …）")
     return values
+
+
+#: 配置文件除标量外的结构化顶层段（见 :func:`unknown_yaml_keys`）。
+_YAML_SECTION_KEYS = frozenset({
+    "agents", "roles", "models", "mcp_servers", "gate_config",
+    "tool_permissions", "role_fallback", "config_version",
+})
+
+
+def unknown_yaml_keys(data: Mapping[str, object]) -> list[str]:
+    """``data`` 里当前**不认识**的顶层键（升序）。
+
+    归一化只挑它认识的段，其余会被静默忽略。主配置可以宽松，但**评测变体必须
+    严格**——否则"拼错段名 → 变体静默失效 → A/B 结论是假的"这种事故完全无声。
+    """
+    known = set(_YAML_SCALAR_KEYS) | _YAML_SECTION_KEYS
+    return sorted(key for key in data if key not in known)
+
+
+def load_yaml_config(
+    path: Path | str, *, strict: bool = False
+) -> dict[str, object]:
+    """读一份**用户面** YAML（与 ``agentcrew.yaml`` 同形）并归一成 Settings 字段。
+
+    供评测的配置变体使用：变体文件只写要覆盖的那一段（如 ``agents`` / ``roles``），
+    其余沿用基线配置。写法与主配置完全一致，不需要第二套格式。
+    """
+    return _yaml_values(path, strict=strict)
 
 
 def _env_values() -> dict[str, object]:
@@ -466,6 +525,12 @@ def _env_values() -> dict[str, object]:
         values["api_keys"] = [
             key.strip() for key in raw_api_keys.split(",") if key.strip()
         ]
+    # P0-4：AGENTCREW_TRUSTED_PROXIES 逗号分隔 → list[str]（同 api_keys 的拆法）。
+    raw_trusted = values.get("trusted_proxies")
+    if isinstance(raw_trusted, str):
+        values["trusted_proxies"] = [
+            item.strip() for item in raw_trusted.split(",") if item.strip()
+        ]
     # A1：AGENTCREW_CUSTOM_PROVIDERS 紧凑 JSON → dict[str, dict]。
     # 形如 '{"myrelay":{"implementation":"openai_compat","base_url":"http://h/v1",
     # "api_key_env":"MYRELAY_KEY"}}'。
@@ -513,6 +578,12 @@ class Settings(BaseModel):
     mock: bool = False
     mock_latency_ms: int = 0
     plan_max_attempts: int = 2
+    plan_only: bool = False
+    """Ask 模式：只生成计划并落盘，不派发执行（``--plan-only``）。
+
+    一次性行为标志，不参与 resume 的配置快照比对（不在 ``_COMPARABLE_KEYS``），
+    也不随 resume 携带——续跑时默认执行计划。
+    """
     role_bindings: dict[str, str] = Field(default_factory=dict)
     agent_profiles: dict[str, AgentProfile] = Field(default_factory=dict)
     """执行体档案（多 agent 的"怎么干"）：key → AgentProfile。"""
@@ -556,12 +627,24 @@ class Settings(BaseModel):
     ``None`` = 不限制。ModelFactory 在每次记账后检查累计成本，超限时抛
     ``BudgetExhaustedError``，Crew 优雅收尾（等在跑任务完成，不再派发新任务），
     记 ``budget_exhausted`` 事件，退出码 1。环境变量 ``AGENTCREW_MAX_COST_USD``。
+
+    NaN / inf / 负值在库层构造期即拒绝（A-22，见 ``_validate_max_cost_usd``）：
+    NaN 会使 ``>`` 比较恒为 False、上限静默失效；负值让任何调用都超限。
     """
-    max_llm_calls: int | None = None
+    max_llm_calls: int | None = Field(default=None, ge=0)
     """累计 LLM 调用次数硬上限（P0-3）。
 
     ``None`` = 不限制。与 ``max_cost_usd`` 任一超限即触发预算耗尽收尾。
     环境变量 ``AGENTCREW_MAX_LLM_CALLS``。
+    """
+    llm_request_timeout_seconds: float = Field(default=120.0, ge=1)
+    """单次 LLM 请求的超时（秒，A-9）。
+
+    此前 provider 构造 client 时不传 ``timeout``，用 SDK 默认 600 秒，且超时被
+    判为可重试（``_ATTEMPTS=4``）——单次调用最坏 4×600s，门禁/评审路径没有
+    任务级兜底会整场停摆。这里给请求层一个独立上限（默认 120s），执行阶段的
+    任务级 ``timeout_seconds`` 仍是外层兜底。环境变量
+    ``AGENTCREW_LLM_REQUEST_TIMEOUT_SECONDS``。
     """
     budget_warning_threshold: float = 0.8
     """预算接近警告阈值（P2 增强）：占 ``max_cost_usd`` 的比例。
@@ -721,6 +804,17 @@ class Settings(BaseModel):
     顶层标量，且可经 ``config export/import`` 往返。``ge=1`` 让非法窗口在配置
     加载期就报错——窗口为 0 会让限流静默失效；``serve`` 启动期仍保留同一条
     校验，兜住 ``model_copy`` 绕过 pydantic 的路径。
+    """
+    trusted_proxies: list[str] = Field(default_factory=list)
+    """可信反向代理网段（P0-4；IP 或 CIDR，逗号分隔）。
+
+    空列表（默认）= **完全不信** ``X-Forwarded-For``：限流与安全审计只用
+    socket peer 地址。此前无条件优先取 XFF 首地址——直连场景下客户端每请求
+    换一个 XFF 就换一个限流分桶，限流形同虚设，``client_ip`` 审计也被污染。
+
+    只有 peer 落在这些网段内时，才解析 XFF（且取「最右侧不可信跳」，不是
+    首地址——伪造的中间跳不能冒充真实客户端）。环境变量
+    ``AGENTCREW_TRUSTED_PROXIES``（如 ``10.0.0.0/8,192.168.1.5``）。
     """
     gate_config: dict[str, Any] = Field(default_factory=dict)
     """门禁规则配置化（P2-5）：G1/G2/G3 开关与评审参数。
@@ -906,6 +1000,34 @@ class Settings(BaseModel):
       派出的子任务会被接受；执行角色擅自派活记 ``subtask_unauthorized`` 并拒绝。
       对标 CrewAI ``Process.hierarchical`` 的「由经理分配工作」语义。
     """
+    agent_circuit_breaker_enabled: bool = False
+    """R44：执行体级熔断——默认**关闭**，关闭时行为与引入前逐字一致。
+
+    开启后，同一角色内某个执行体连续失败达到阈值就被跳过，后续任务改由同角色
+    的其它 primary 承担（``split_by_path`` 下该成员不再参与，任务按 quorum 判定）。
+    它解决的是"某个 agent 一直失败却一直重试"：provider 级冷却只管模型不可用，
+    管不了"这个执行体本身有问题"（工具权限配错、模型吃不下长上下文等）。
+    """
+    agent_circuit_breaker_threshold: int = 3
+    """R44：连续失败多少次判定该执行体不可用（默认 3，``ge=2``）。
+
+    计数按 run 内存活（不落盘、不跨 run）：上一个 run 的失败不该影响这一次。
+    成功一次即清零——熔断的是"持续失败"，不是"曾经失败过"。
+    """
+    cost_aware_routing: bool = False
+    """R44：成本感知路由——默认**关闭**，关闭时选模与引入前逐字一致。
+
+    开启后，某个执行体的**剩余**额度低于 ``cost_aware_headroom`` 就提前把本次
+    调用改走更便宜的备别名。与既有 ``budget_downgrade_threshold``（默认 90%）
+    的区别是"早 vs 晚"：90% 是快花完才刹车，本项是留出余量、避免最后几次调用
+    仍按最贵的模型跑完。
+    """
+    cost_aware_headroom: float = 0.3
+    """R44：剩余额度低于该比例即触发成本感知路由（默认 0.3 = 只剩 30% 时）。
+
+    只对**声明了 run 级额度**的执行体生效（``AgentProfile.run_cost_ceiling_usd``）；
+    没有额度就没有"剩余"，不做猜测。
+    """
     max_delegation_depth: int = 2
     """R6：动态委派的层数上限（默认 2：根任务 → 子任务 → 孙任务）。
 
@@ -1010,12 +1132,17 @@ class Settings(BaseModel):
     多数接收方只关心「跑完了没有、卡在哪」。需要细粒度就自己加。
     """
     webhook_timeout_seconds: float = 5.0
-    """R12：单次投递超时（默认 5 秒）。投递在后台线程，不阻塞 run。"""
+    """R12：单次投递超时（默认 5 秒）。投递在后台线程，不阻塞 run。
+
+    B-7：上限 30s（校验在 ``_validate_webhook_timeout`` 里，保留中文错误消息）。
+    """
     webhook_max_retries: int = 2
     """R12：投递失败的重试次数（默认 2，指数退避上限 2 秒）。
 
     总耗时受 ``max_retries`` 与退避上限共同约束；run 结束等待队列排空最多 5 秒，
     排不完的部分记 ``webhook_failed(shutdown_timeout)`` 而不是无限等。
+
+    B-7：上限 5 次（校验在 ``_validate_webhook_retries`` 里）。
     """
     webhooks: list[dict[str, Any]] = Field(default_factory=list)
     """R14：多接收端配置（``webhooks`` YAML 段）。**非空时旧的单接收端字段被忽略。**
@@ -1041,6 +1168,38 @@ class Settings(BaseModel):
             return ""
         return _validate_webhook_target_url(url)
 
+    @field_validator("max_cost_usd")
+    @classmethod
+    def _validate_max_cost_usd(cls, value: float | None) -> float | None:
+        """A-22：``None`` 放行；否则必须是 ``>= 0`` 的有限数。
+
+        ``ge=0`` 挡不住 NaN（NaN 与任何数比较都是 False），这里用
+        ``math.isfinite`` 显式拦截——NaN 会让预算上限静默失效。
+        """
+        if value is not None and (
+            not math.isfinite(value) or value < 0
+        ):
+            raise ValueError(
+                f"max_cost_usd 必须是 >= 0 的有限数，收到 {value!r}")
+        return value
+
+    @field_validator("trusted_proxies")
+    @classmethod
+    def _validate_trusted_proxies(cls, value: list[str]) -> list[str]:
+        """P0-4：每一项都必须能解析为 IP 或 CIDR 网段。
+
+        坏值在配置加载期报错而不是静默忽略——一个拼错的网段意味着「以为在
+        信任它实际没有」或反过来，限流分桶会因此错位且难以察觉。
+        """
+        for item in value:
+            try:
+                ipaddress.ip_network(item, strict=False)
+            except ValueError as exc:
+                raise ValueError(
+                    f"trusted_proxies 项 {item!r} 不是合法的 IP/CIDR：{exc}"
+                ) from exc
+        return value
+
     @field_validator("webhooks")
     @classmethod
     def _validate_webhooks(
@@ -1061,6 +1220,12 @@ class Settings(BaseModel):
     def _validate_webhook_timeout(cls, value: float) -> float:
         if value <= 0:
             raise ValueError("webhook_timeout_seconds 必须 > 0")
+        # B-7：上限 30s。此前只校验 > 0，配 3600 会让 run 收尾排队干等一小时。
+        # 约束放在 validator 而不是 Field(le=) 里，是为了保留面向用户的中文
+        # 错误消息（Field 约束会先于 validator 生效，报 pydantic 的英文）。
+        if value > 30:
+            raise ValueError(
+                f"webhook_timeout_seconds 不得超过 30（当前 {value}）")
         return value
 
     @field_validator("webhook_max_retries")
@@ -1068,6 +1233,10 @@ class Settings(BaseModel):
     def _validate_webhook_retries(cls, value: int) -> int:
         if value < 0:
             raise ValueError("webhook_max_retries 必须 >= 0")
+        # B-7：上限 5 次。此前只校验 >= 0，配 1000000 会让每个 run 起一个长期
+        # 存活的 daemon 线程反复重试。
+        if value > 5:
+            raise ValueError(f"webhook_max_retries 不得超过 5（当前 {value}）")
         return value
 
     # ── P1-12：非法配置在**加载期**报错，不留运行时兜底 ──────────────────
