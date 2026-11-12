@@ -13,7 +13,7 @@
 | 指标 | 当前值 |
 | --- | --- |
 | 全量测试 | **3177 passed / 2 skipped / 0 failed**（`python scripts/test.py`，崩溃隔离跑器一次跑出；R51 新增 62 例：沙箱后端 17、联网搜索 17、run_tests 9、执行校验 10、配置通道 8、工具实验台 +1） |
-| 静态检查 | `ruff check agentcrew/ main.py tests/` **全绿**；`mypy agentcrew/` **137 文件零新增错误**（本机基线有 5 条 HEAD 既存错误，见 §3.64） |
+| 静态检查 | `ruff check agentcrew/ main.py tests/` **全绿**；`mypy agentcrew/` **137 文件零错误**（本机与 CI 同口径；CI 首跑暴露的 5 条既存错误已在本批修复，见 §3.64） |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
@@ -1722,8 +1722,11 @@ Studio 架构检查 73 模块 / 42 分片通过、`test:unit` 18 passed。
 工具实验台 +1），全量 **3177 passed / 0 failed / 2 skipped**（160 文件 / 40 批次，
 `python scripts/test.py` 一次跑出）。
 `ruff check agentcrew/ main.py tests/` 全绿；`mypy agentcrew/` 137 文件**零新增错误**
-（HEAD 基线本机就有 5 条既存错误：`flow/spec.py` 3 条 `TaskDraft` 参数、`api/server.py`
-2 条 Optional 访问——与本次改动无关，未在本批处理）。
+（首次 CI 实跑暴露了 5 条随 e4add0f 带入、从未被 CI 检出的既存错误，已在本批
+顺手修掉：`flow/spec.py` 三处 `TaskDraft` 显式补 `timeout_seconds=300`、
+`api/server.py` 两处 Optional 访问补空值守卫；Studio job 的
+`package-lock.json` 被 `studio/.gitignore` 忽略导致 `npm ci` 无锁可用，已改为
+跟踪 lock 文件）。
 
 **明确不做**：不引 docker SDK（拼 CLI 参数即可）、不实现 gVisor/microVM（留
 `ExecutionBackend` 接口）、不把 `sandbox_backend` 开进 API options（防隔离降级）、

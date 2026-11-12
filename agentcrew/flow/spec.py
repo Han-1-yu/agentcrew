@@ -297,7 +297,7 @@ def sample_flow() -> FlowSpec:
             deliverables=[ArtifactSpec(path="docs/PRD.md", kind="markdown",
                                       description="PRD",
                                       must_contain=["验收"])],
-            priority=9, brief="先定范围",
+            priority=9, brief="先定范围", timeout_seconds=300,
         ),
         TaskDraft(
             id="T-002", title="后端实现", role="backend_dev",
@@ -306,7 +306,7 @@ def sample_flow() -> FlowSpec:
             deliverables=[ArtifactSpec(path="backend/app/main.py", kind="python",
                                       description="服务入口",
                                       must_contain=["def "])],
-            dependencies=["T-001"], priority=6,
+            dependencies=["T-001"], priority=6, timeout_seconds=300,
         ),
         TaskDraft(
             id="T-003", title="交付说明", role="technical_writer",
@@ -316,7 +316,7 @@ def sample_flow() -> FlowSpec:
                                       kind="markdown",
                                       description="交付说明补充",
                                       must_contain=["运行"])],
-            dependencies=["T-001", "T-002"], priority=4,
+            dependencies=["T-001", "T-002"], priority=4, timeout_seconds=300,
             when_outcomes=["ready"],
         ),
     ])

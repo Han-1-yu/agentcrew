@@ -1,5 +1,4 @@
 node_modules/
-package-lock.json
 npm-install.log
 selftest/
 e2e-out/

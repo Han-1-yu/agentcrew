@@ -410,7 +410,8 @@ class ApiServer:
             # 穿透所有 except，finally 只关连接 → 客户端拿到 0 字节、服务端无记录。
             # P0-5：详情（路径/配置/密钥片段）只进日志，响应体固定文案 + 类型名。
             _logger.error("unhandled api error on %s: %s",
-                          request.path, self._internal_detail(exc))
+                          request.path if request else "-",
+                          self._internal_detail(exc))
             try:
                 await self._send_json(
                     writer, 500, self._internal_error_body(exc))
@@ -547,9 +548,9 @@ class ApiServer:
     def _internal_detail(self, exc: BaseException) -> str:
         """P0-5：未预料异常的**服务端侧**详情——密钥脱敏 + 截断，只写日志。"""
         try:
+            values = self._settings.secret_values() if self._settings else []
             text = redact(
-                f"{type(exc).__name__}: {exc}",
-                self._settings.secret_values())
+                f"{type(exc).__name__}: {exc}", values)
         except Exception:  # noqa: BLE001 —— 脱敏自身失败也不能挡住记日志
             text = type(exc).__name__
         return text[:500]
