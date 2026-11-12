@@ -1,0 +1,7 @@
+# C11 试点子集：每类一条（代码/文档/数据/驳回），先测真实通道成本与耗时，
+# 再决定是否跑全量 23 条。跑法：
+#   python main.py eval examples/evals/capability-live-pilot.jsonl --live --max-cost 0.25
+{"id": "code-slugify", "goal": "实现 Python 函数 slugify(text)：转小写、非字母数字替换为单个连字符、去掉首尾连字符；同时写 pytest 用例覆盖空格、中文、连续符号三种输入。交付代码与测试文件。", "checks": [{"kind": "run_status", "status": "completed"}, {"kind": "no_failed_tasks"}, {"kind": "artifact_any_matches", "pattern": "def\\s+slugify", "path_pattern": "\\.py$"}, {"kind": "artifact_any_matches", "pattern": "def\\s+test_", "path_pattern": "\\.py$"}]}
+{"id": "doc-readme", "goal": "为一个名为 logstat 的命令行日志统计工具写 README：包含做什么、安装、三个用法示例、如何跑测试。不超过 120 行。", "checks": [{"kind": "run_status", "status": "completed"}, {"kind": "no_failed_tasks"}, {"kind": "artifact_any_contains", "text": "logstat", "path_pattern": "\\.md$"}, {"kind": "artifact_any_matches", "pattern": "安装|install", "path_pattern": "\\.md$"}]}
+{"id": "data-sales", "goal": "给定月度销售数据（1月 12000 元、2月 15000 元、3月 9000 元），算出合计、均值、环比增长率（2→3月），写成 markdown 报告并给出结论。", "checks": [{"kind": "run_status", "status": "completed"}, {"kind": "no_failed_tasks"}, {"kind": "artifact_any_matches", "pattern": "36000|36,000", "path_pattern": "\\.md$"}, {"kind": "artifact_any_matches", "pattern": "-40|下降", "path_pattern": "\\.md$"}]}
+{"id": "reject-empty-file", "goal": "交付 docs/EMPTY.md，要求文件内容必须为 0 字节（完全空文件），不要写任何文字。", "checks": [{"kind": "run_status", "status": "failed"}]}

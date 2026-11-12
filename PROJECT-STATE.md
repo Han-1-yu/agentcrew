@@ -18,7 +18,7 @@
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
 | Studio | `npm run check` **73** 模块 / 42 分片通过、`test:unit` 18/18（e2e / selftest / probe 等脚本保持不变，需 Electron 环境才跑） |
-| Git | 已与 `origin/master` 同步（R51–R54 全部推送）；**CI 连续四轮全绿**（R51: 43215021310 / R52: 43224838619 / R53: 43234922972 / R54: 43240197970，六 job 全 success）；整批验收报告见 `docs/ACCEPTANCE-2026-11-12.md` |
+| Git | 已与 `origin/master` 同步（R51–R55 全部推送）；**CI 连续五轮全绿**；验收报告 `docs/ACCEPTANCE-2026-11-12.md`；真实模型评测首批 8/8 通过（DeepSeek），余 15 条因账户余额中断挂账（`bench/eval-live-2026-11-13.md`） |
 | 角色 | 8 个内置岗位角色 + 执行体（Agent Profile）可多绑 |
 
 ```bash
@@ -1792,6 +1792,13 @@ ruff 全绿；mypy 139 文件零错误。THREAT_MODEL v1.3（§2.3 补两类输�
 **整批验收**：R51–R54 的逐项验收结论（对标路线文档验收标准、区分已验证/待真机）
 汇总在 `docs/ACCEPTANCE-2026-11-12.md`——总评**通过**，P0/P1 共 9 项能力全部落地，
 待真机 6 项挂账 §7。
+
+**真实模型评测首批实测（2026-11-13）**：DeepSeek 真实通道 8 条（代码 6 / 文档 1 /
+数据 1 / 驳回 1）**8/8 通过**——驳回类 case 证明 G1 空文件检查在真实通道下真实拦截。
+余 15 条因 DeepSeek 账户 402 余额耗尽中断（chunk04 起 2 条 FAIL 均为 402，非能力
+问题），充值后 `python main.py eval examples/evals/capability-live.jsonl --live
+--max-cost 0.25 --output-dir output/_eval` 直接续跑。明细见
+`bench/eval-live-2026-11-13.md`；试点子集 `examples/evals/capability-live-pilot.jsonl`。
 
 ---
 

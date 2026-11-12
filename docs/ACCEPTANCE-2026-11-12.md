@@ -75,7 +75,7 @@
 | 验收标准 | 结果 | 证据 |
 | --- | --- | --- |
 | mock 离线 | ✅ | `capabilities.jsonl` 4/4 通过 + `smoke.jsonl` 全量回归 |
-| 真实模型 | ⏳ 待真机 | `capability-live.jsonl` 23 条 + `eval --live --max-cost` + `scripts/nightly_eval.py` 就绪 |
+| 真实模型 | 🟡 **部分通过（2026-11-13 实测）** | DeepSeek 真实通道跑通 **8/8**（代码 6 / 文档 1 / 数据 1 / 驳回 1——驳回类证明 G1 尺寸检查在真实通道真实拦截）；余 15 条因账户 **402 余额耗尽**中断，充值后直接续跑（命令与明细见 `bench/eval-live-2026-11-13.md`） |
 
 ### C12 发布证据（R51–R54）｜✅ 通过
 
