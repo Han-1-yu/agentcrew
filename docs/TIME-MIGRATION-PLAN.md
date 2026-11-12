@@ -1,6 +1,6 @@
 # 时间戳 UTC 迁移方案（D-14）
 
-> 状态：**已执行（2026-11-12）**。三步全部落地，全量 3110 passed / 0 failed。
+> 状态：**已执行（2026-11-12）**。三步全部落地，全量 3115 passed / 0 failed。
 > 本文保留为**迁移记录与回滚依据**，第 1 节的「待迁移」列现在全部是 UTC。
 
 ## 0. 执行结果（回填）
@@ -75,7 +75,7 @@ naive 串按本机时区补齐，`elapsed_since()` 统一做差值并处理时�
 
 ## 4. 验证清单
 
-- [x] `python scripts/test.py` 全绿（3110 passed / 0 failed）
+- [x] `python scripts/test.py` 全绿（3115 passed / 0 failed）
 - [x] 存量 run（naive 时间）与新 run 混存时 `status` / `resume` 正常——`test_clock_liveness` 的兼容用例覆盖
 - [x] 新跑一个 run，`run.json` 里 `updated_at` 为 `...Z`（pydantic 序列化）
 - [x] 看板「运行时长」不出现负数或 8 小时偏差（改走 `seconds_between`）

@@ -14,7 +14,7 @@
 | D · 契约与工程化 | 15 | 15 | — | — |
 | **合计** | **69** | **69** | **0** | **0** |
 
-全量回归：**3110 passed / 0 failed / 2 skipped**（`python scripts/test.py`）。
+全量回归：**3115 passed / 0 failed / 2 skipped**（`python scripts/test.py`）。
 Studio：架构检查通过（73 模块 / 42 样式分片）、`test:unit` 18 passed。
 
 ## §1 P0（8 项，全部关闭）

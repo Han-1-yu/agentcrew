@@ -11,8 +11,8 @@
 
 | 项 | 值 |
 |---|---|
-| 已提交 | R3–R34 已提交；**R50（差距报告 69 条整改）在本工作区，尚未提交**（176 个文件变更，见 `git status`） |
-| 测试 | R50 后全量 **3110 passed / 2 skipped / 0 failed**（3112 collected；`scripts/test.py` 一次跑出，含 D-14 时间戳迁移） |
+| 已提交 | **R50 已提交**（`e4add0f`，191 文件 / +13045 −1802；随后 `3919a83` 清理误提交的临时日志）。工作区干净，本地领先 `origin/master` 2 个提交，**未推送** |
+| 测试 | R50 后全量 **3115 passed / 2 skipped / 0 failed**（3117 collected；`scripts/test.py` 一次跑出，含 D-14 时间戳迁移） |
 | 静态检查 | `ruff check agentcrew/ tests/ sdk/` 全绿 · `mypy agentcrew/` 保持零错误 |
 | Studio | 架构检查 73 模块 / 42 分片通过、`test:unit` 18 passed |
 | 离线样例 | `todo` 9/9 · `linear` 5/5 · `hierarchy` 7/7，全部 `completed` |
