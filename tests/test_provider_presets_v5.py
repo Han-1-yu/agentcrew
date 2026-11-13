@@ -87,7 +87,8 @@ def test_original_15_presets_unchanged(name, base_url, env_name, impl):
 # ── 4. 每个预设元数据完整度 ──────────────────────────────────────────────
 
 # 这些预设不需要 api_key_url（本地/离线/CLI）
-_NO_API_KEY_URL = {"ollama", "mock", "cli"}
+# claude-code / codex 是 R60 的 agentic CLI 预设：认证由 CLI 自带，平台不持有密钥。
+_NO_API_KEY_URL = {"ollama", "mock", "cli", "claude-code", "codex"}
 # 这些预设不需要 search_aliases（无对外品牌名）
 _NO_SEARCH_ALIAS = {"mock", "cli"}
 

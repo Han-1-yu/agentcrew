@@ -14,9 +14,16 @@ from agentcrew.utils.files import safe_relpath
 ArtifactKind = Literal[
     "python", "json", "yaml", "toml", "markdown", "text",
     "html", "css", "js", "dockerfile", "sql", "shell",
+    # R61：二进制图像产物（经 commit_bytes 落盘，不走文本围栏/文本门禁）。
+    "image",
 ]
 
 ARTIFACT_KINDS: tuple[str, ...] = get_args(ArtifactKind)
+
+#: R61：二进制 kind 集合。这些产物以字节落盘（``commit_bytes``），G1 只做尺寸
+#: 校验、不做文本解析/``must_contain``；也没有对应的围栏语言名（``LANG_TO_KIND``
+#: 只覆盖文本 kind）。
+BINARY_KINDS: frozenset[str] = frozenset({"image"})
 
 
 def parse_kind(value: str) -> ArtifactKind:

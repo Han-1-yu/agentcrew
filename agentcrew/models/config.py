@@ -12,6 +12,11 @@ from pydantic import BaseModel, ConfigDict, Field
 #: provider 的实现方式（决定 Task 21 的 ModelFactory 如何构造 Provider）。
 Implementation = Literal["openai_compat", "anthropic", "mock", "cli"]
 
+#: R60：agentic coding CLI 的结构化输出形状。``plain``＝stdout 即文本（与一次性
+#: cli 桥同）；``claude-json``＝Claude Code ``--output-format json`` 单对象；
+#: ``codex-jsonl``＝Codex ``exec --json`` 事件流。
+CliOutputFormat = Literal["plain", "claude-json", "codex-jsonl"]
+
 #: 预设的业务分类（用于 Studio / CLI 的分组与过滤）。
 #: - ``aggregator``：聚合/中转平台（一家 Key 调多家模型）
 #: - ``national``：国内主流大模型平台
@@ -57,6 +62,13 @@ class ProviderPreset(BaseModel):
     #: CLI 引擎的命令模板（仅 implementation="cli" 时使用）。
     #: 支持占位符 {model} {prompt} {max_tokens} {temperature}。
     command: str | None = None
+    #: R60：cli 是否为**真 agentic 执行体**（cwd=run 工作区 + 结构化输出解析 +
+    #: 用量抽取）。默认 ``False``＝仍走一次性 stdin→stdout 桥，行为逐字不变。
+    cli_agentic: bool = False
+    #: R60：agentic cli 的结构化输出形状（仅 cli_agentic=True 时生效）。
+    cli_output: CliOutputFormat = "plain"
+    #: R60：agentic cli 超时（秒）；``None`` 用 provider 默认（多步执行放宽）。
+    cli_timeout_seconds: int | None = None
     #: 建议模型名清单（供 Studio / CLI 模型选择器展示，不参与调度）。
     suggested_models: list[str] = Field(default_factory=list)
     #: 模型发现端点覆写（缺省时由 base_url 派生 ``/models``）。
@@ -105,6 +117,9 @@ class ModelBinding(BaseModel):
     api_key_env: str
     capabilities: ProviderCapabilities
     command: str | None = None
+    cli_agentic: bool = False
+    cli_output: CliOutputFormat = "plain"
+    cli_timeout_seconds: int | None = None
     models_url: str | None = None
     # ── V5 P1：与 ProviderPreset 对齐的元数据（从 preset 拷贝）─────────
     category: ProviderCategory = "international"
@@ -307,6 +322,50 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         category="specialized",
         family="cli",
         search_aliases=[],
+        api_key_url=None,
+        fallback_models=[],
+        input_price=None,
+        output_price=None,
+        context_window=None,
+        max_output_tokens=None,
+    ),
+    # ── R60：外部 coding CLI 真 agentic 执行体（默认关闭，显式选用才生效）─────
+    # 命令模板自带**安全权限默认**：claude 只自动接受文件编辑（acceptEdits），
+    # codex 沙箱限定工作区写（workspace-write）。prompt 走 stdin，模板不含
+    # {prompt}；cwd 由 provider 注入为 run 工作区，故无需 -C。
+    "claude-code": ProviderPreset(
+        implementation="cli",
+        base_url=None,
+        api_key_env="",  # Claude Code 自带认证，平台不持有其密钥
+        capabilities=ProviderCapabilities(
+            supports_json_schema=False, supports_json_object=False),
+        command="claude -p --output-format json --permission-mode acceptEdits",
+        cli_agentic=True,
+        cli_output="claude-json",
+        suggested_models=["default"],
+        category="specialized",
+        family="cli",
+        search_aliases=["claude code", "cc"],
+        api_key_url=None,
+        fallback_models=[],
+        input_price=None,
+        output_price=None,
+        context_window=None,
+        max_output_tokens=None,
+    ),
+    "codex": ProviderPreset(
+        implementation="cli",
+        base_url=None,
+        api_key_env="",  # Codex 自带认证，平台不持有其密钥
+        capabilities=ProviderCapabilities(
+            supports_json_schema=False, supports_json_object=False),
+        command="codex exec --json --sandbox workspace-write --skip-git-repo-check",
+        cli_agentic=True,
+        cli_output="codex-jsonl",
+        suggested_models=["default"],
+        category="specialized",
+        family="cli",
+        search_aliases=["codex", "openai codex"],
         api_key_url=None,
         fallback_models=[],
         input_price=None,
@@ -791,6 +850,9 @@ def parse_alias(
         api_key_env=preset.api_key_env,
         capabilities=preset.capabilities,
         command=preset.command,
+        cli_agentic=preset.cli_agentic,
+        cli_output=preset.cli_output,
+        cli_timeout_seconds=preset.cli_timeout_seconds,
         models_url=preset.models_url,
         category=preset.category,
         family=preset.family,

@@ -646,7 +646,17 @@ function readArtifact(runDir, relPath) {
   const ext = path.extname(relPath).toLowerCase();
   const base = path.basename(relPath);
   const isText = TEXT_EXTS.has(ext) || TEXT_BASENAMES.has(base);
-  if (!isText) return { binary: true, sizeBytes: st.size, path: relPath };
+  if (!isText) {
+    // R61：图像产物（kind=image）回 base64 供渲染端预览；超限仍按二进制处理。
+    const mime = IMAGE_MIME_BY_EXT[ext];
+    if (mime && st.size <= MAX) {
+      const imgBuf = fs.readFileSync(full);
+      return { binary: true, image: true, mime,
+               dataBase64: imgBuf.toString('base64'),
+               sizeBytes: st.size, path: relPath };
+    }
+    return { binary: true, sizeBytes: st.size, path: relPath };
+  }
   const truncated = st.size > MAX;
   const fd = fs.openSync(full, 'r');
   let buf;

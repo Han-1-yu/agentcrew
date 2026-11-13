@@ -20,6 +20,7 @@ from agentcrew.tools.builtins import (
     RunPythonTool,
     WriteFileTool,
 )
+from agentcrew.tools.image import GenerateImageTool, build_image_provider
 from agentcrew.tools.mcp_adapter import MCPToolAdapter
 from agentcrew.tools.network import WebFetchTool
 from agentcrew.tools.registry import ToolRegistry
@@ -40,10 +41,12 @@ __all__ = [
     "WriteFileTool",
     "WebFetchTool",
     "WebSearchTool",
+    "GenerateImageTool",
     "ExecutionBackend",
     "LocalBackend",
     "build_backend",
     "build_search_provider",
+    "build_image_provider",
     "validate_tool_args",
     "schema_hint",
     "MCPToolAdapter",

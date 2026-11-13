@@ -107,6 +107,7 @@ from agentcrew.models.providers.base import (
     StreamChunk,
 )
 from agentcrew.models.providers.cli import CliProvider
+from agentcrew.models.providers.cli_agentic import AgenticCliProvider
 from agentcrew.models.providers.mock import MockProvider
 from agentcrew.models.providers.openai_compat import (
     RETRY_AFTER_CLAMPED_ATTR,
@@ -750,6 +751,18 @@ class ModelFactory:
         except Exception:  # noqa: BLE001 —— 只做能力探测，错误留给真正的调用
             return False
 
+    def is_agentic_cli(self, alias: str) -> bool:
+        """R60：该别名是否为真 agentic coding CLI（cwd=工作区 + 结构化解析）。
+
+        以**解析出的 Provider 类型**为准（而非绑定标记）：mock 通道下绑定虽保留
+        ``cli_agentic`` 标记但已被换成 MockProvider，此时必须返回 ``False``——
+        离线回放仍走围栏解析，行为不变。取 Provider 失败返回 ``False``。
+        """
+        try:
+            return isinstance(self.get(alias), AgenticCliProvider)
+        except Exception:  # noqa: BLE001 —— 只做能力探测，错误留给真正的调用
+            return False
+
 
     def alias_for_task(self, task: TaskLike) -> str:
         """按任务复杂度选模型别名（V2：按认知复杂度自动选模型）。
@@ -840,6 +853,13 @@ class ModelFactory:
                     self._on_mock_fallback if self._ledger is not None else None),
             )
         if implementation == "cli":
+            # R60：显式标记 agentic 才走工作区自主执行；否则仍是一次性 stdin 桥。
+            if binding.cli_agentic:
+                return AgenticCliProvider(
+                    binding,
+                    output_format=binding.cli_output,
+                    timeout_seconds=binding.cli_timeout_seconds,
+                )
             return CliProvider(binding)
         api_key = self._require_api_key(binding)
         if implementation == "anthropic":

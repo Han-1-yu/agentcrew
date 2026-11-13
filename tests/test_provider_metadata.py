@@ -2,7 +2,7 @@
 
 覆盖：
 - GET /providers 响应包含价格/窗口/并发/RPM 字段；
-- 27 个内置预设全部能加载，且新字段有合理值；
+- 29 个内置预设全部能加载，且新字段有合理值；
 - _account 在 binding 给出 preset 价格时优先用 preset 价格。
 """
 
@@ -32,11 +32,11 @@ def settings(tmp_path, monkeypatch):
     return Settings.load()
 
 
-# ── 1. 全部 27 个预设正常加载 ────────────────────────────────────────────
+# ── 1. 全部 29 个预设正常加载 ────────────────────────────────────────────
 
 def test_all_presets_load():
-    """27 个内置预设全部能被 pydantic 校验通过，新字段有默认值。"""
-    assert len(PROVIDER_PRESETS) == 27
+    """29 个内置预设全部能被 pydantic 校验通过，新字段有默认值。"""
+    assert len(PROVIDER_PRESETS) == 29
     for name, preset in PROVIDER_PRESETS.items():
         # 新字段必须存在（即使是 None / 空列表）
         assert hasattr(preset, "input_price"), f"{name} 缺 input_price"

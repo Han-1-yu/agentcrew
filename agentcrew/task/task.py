@@ -91,6 +91,13 @@ class Task(BaseModel):
     title: str
     description: str  # 发给 Agent 的任务描述
     role: str  # RoleSpec.key
+    agent: str = ""
+    """R59：规划期指派的执行体 profile key（空 = 沿用角色默认绑定）。
+
+    PM 拆解时可为每个任务从执行体池里挑一个最合适的执行体（``role`` 决定干什么活、
+    ``agent`` 决定谁来干）。派发优先级：**运行时人工覆盖 > 本字段 > 角色默认绑定**
+    （见 ``AgentFactory.agent_for_task``）。非法指派在规划校验期被拒；运行期目标
+    失效则丢指派、记 ``task_agent_assignment_dropped`` 并按角色默认继续。"""
     acceptance_criteria: list[str]  # 验收标准，供 G2 评审使用
     deliverables: list[ArtifactSpec]  # 交付物契约
     dependencies: list[str] = Field(default_factory=list)  # 前置任务 id

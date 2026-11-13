@@ -17,6 +17,7 @@ from agentcrew.contracts import EventSink, TaskLike
 from agentcrew.utils.clock import utc_now
 from agentcrew.utils.files import (
     UnsafePathError,
+    atomic_write_bytes,
     atomic_write_text,
     is_link_like,
     path_in_scope,
@@ -127,6 +128,27 @@ class ArtifactStore:
         self, rel: str, content: str, *, spec: ArtifactSpec, task: TaskLike,
         path_scope: Sequence[str] | None = None, agent: str = "",
     ) -> ArtifactRecord:
+        """校验并原子写入一个文本产物（UTF-8 编码后走字节通道）。"""
+        return self._commit_data(
+            rel, content.encode("utf-8"), spec=spec, task=task,
+            path_scope=path_scope, agent=agent)
+
+    def commit_bytes(
+        self, rel: str, data: bytes, *, spec: ArtifactSpec, task: TaskLike,
+        path_scope: Sequence[str] | None = None, agent: str = "",
+    ) -> ArtifactRecord:
+        """R61：校验并原子写入一个**二进制**产物（如 image），返回落盘记录。
+
+        与 :meth:`commit` 共用同一套校验/冲突/清单/事件逻辑（:meth:`_commit_data`），
+        只是不做 UTF-8 编码——字节原样落盘。G1 对二进制 kind 只做尺寸校验。
+        """
+        return self._commit_data(
+            rel, data, spec=spec, task=task, path_scope=path_scope, agent=agent)
+
+    def _commit_data(
+        self, rel: str, data: bytes, *, spec: ArtifactSpec, task: TaskLike,
+        path_scope: Sequence[str] | None = None, agent: str = "",
+    ) -> ArtifactRecord:
         """校验并原子写入一个产物，返回落盘记录。
 
         顺序（**先校验后写盘**，任何一步失败都不留文件、目录或记录）：
@@ -167,13 +189,12 @@ class ArtifactStore:
                 normalized, existing.produced_by_task, task.id
             )
 
-        data = content.encode("utf-8")
         if len(data) > spec.max_bytes:
             raise ArtifactTooLargeError(normalized, len(data), spec.max_bytes)
         # 只有上限在这里：min_bytes 是 G1 的质量判据，见 docstring。
 
         target.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_text(target, content)
+        atomic_write_bytes(target, data)
 
         record = ArtifactRecord(
             path=normalized,

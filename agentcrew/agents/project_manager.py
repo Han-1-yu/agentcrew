@@ -19,12 +19,13 @@ agents 层，顶层导入安全。
 ``feedback`` 回灌到下一次调用。
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import cast
 
 from agentcrew.agents.base_agent import BaseAgent
 from agentcrew.models.providers.base import Message
 from agentcrew.models.providers.mock import MockProvider, set_purpose
+from agentcrew.roles.binding import AgentProfile
 from agentcrew.roles.spec import RoleSpec
 from agentcrew.task.planner import PlanOutput
 
@@ -113,7 +114,8 @@ class ProjectManagerAgent(BaseAgent):
         result = await self._models.complete_structured(
             alias,
             _plan_messages(
-                self.spec, goal, feedback, self._prompt_roles(), context_hint
+                self.spec, goal, feedback, self._prompt_roles(), context_hint,
+                agents_menu=self._agents_menu(),
             ),
             PlanOutput,
             temperature=self.spec.temperature,
@@ -132,6 +134,12 @@ class ProjectManagerAgent(BaseAgent):
         if self._catalog is not None:
             return self._catalog.all()
         return _builtin_roles()
+
+    def _agents_menu(self) -> str:
+        """R59：可用执行体菜单；池为空时返回空串（提示词与 R59 之前逐字一致）。"""
+        if not self._agent_profiles:
+            return ""
+        return _agent_menu(self._agent_profiles)
 
     def _set_plan_replay(self, alias: str) -> None:
         """给 mock provider 设置 ``plan`` 回放上下文。
@@ -168,32 +176,58 @@ def _plan_messages(
     feedback: Sequence[str],
     roles: Sequence[RoleSpec],
     context_hint: str = "",
+    *,
+    agents_menu: str = "",
 ) -> list[Message]:
     """规划对话：system 钉死输出契约与硬约束，user 给目标与上轮错误。"""
     return [
-        {"role": "system", "content": _plan_system_prompt(spec, roles)},
+        {"role": "system", "content": _plan_system_prompt(spec, roles, agents_menu)},
         {"role": "user", "content": _plan_user_message(goal, feedback, context_hint)},
     ]
 
 
-def _plan_system_prompt(spec: RoleSpec, roles: Sequence[RoleSpec]) -> str:
+def _plan_system_prompt(
+    spec: RoleSpec, roles: Sequence[RoleSpec], agents_menu: str = ""
+) -> str:
     """PM 规划系统提示词：角色提示词 + 输出形状 + 可用角色清单 + 硬约束。
 
     角色清单从 ``RoleSpec`` 数据渲染（key 与全部职责），且由调用方传入**本次
     run 的完整目录**：PM 因此既不可能建议一个目录里不存在的角色，也不会漏掉
     自定义角色 —— §7.2 校验 2 的错误只该来自模型笔误，不该来自提示词缺料。
+
+    ``agents_menu``（R59）非空时追加「可用执行体」段，引导 PM 为任务灵活指派
+    执行体；为空（未配置执行体池）时整段不出现，提示词与 R59 之前逐字一致。
     """
-    return "\n\n".join(
-        (
-            spec.system_prompt,
-            "## 拆解输出\n"
-            "输出一个 JSON 对象，顶层字段为 tasks（任务数组）；每个任务包含 "
-            "id、title、description、role、acceptance_criteria、deliverables、"
-            "dependencies、priority、brief，字段形状以随附的 JSON Schema 为准。",
-            "## 可用角色（role 只能取下列 key 之一）\n" + _role_menu(roles),
-            _PLAN_RULES,
+    sections = [
+        spec.system_prompt,
+        "## 拆解输出\n"
+        "输出一个 JSON 对象，顶层字段为 tasks（任务数组）；每个任务包含 "
+        "id、title、description、role、acceptance_criteria、deliverables、"
+        "dependencies、priority、brief，字段形状以随附的 JSON Schema 为准。",
+        "## 可用角色（role 只能取下列 key 之一）\n" + _role_menu(roles),
+        _PLAN_RULES,
+    ]
+    if agents_menu:
+        sections.append(
+            "## 可用执行体（agent 字段可选，灵活指派）\n"
+            "role 决定「干什么活」，agent 决定「谁来干」。你可以为每个任务从下面的"
+            "执行体池里挑一个最合适的：代码类任务选擅长 code 的，图文/图像类选擅长 "
+            "image/text 的，统筹规划类选擅长 plan 的。**agent 只能取下列 key 之一；"
+            "留空（或不写该字段）表示沿用该角色的默认执行体。** 指派要写进任务的 "
+            "agent 字段。\n" + agents_menu
         )
-    )
+    return "\n\n".join(sections)
+
+
+def _agent_menu(profiles: Mapping[str, AgentProfile]) -> str:
+    """执行体清单：一行一个 key，附能力描述、能力标签与模型别名。"""
+    lines = []
+    for key, prof in profiles.items():
+        desc = prof.description or prof.title or key
+        caps = "/".join(prof.capabilities) if prof.capabilities else "通用"
+        model = prof.model or "（角色默认模型）"
+        lines.append(f"- `{key}`：{desc}；能力 {caps}；模型 {model}")
+    return "\n".join(lines)
 
 
 def _role_menu(roles: Sequence[RoleSpec]) -> str:

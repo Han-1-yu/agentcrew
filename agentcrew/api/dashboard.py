@@ -130,6 +130,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .column h3 { font-size: 12px; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; text-align: center; }
   .task-card { background: var(--surface-2); border-radius: var(--radius-sm); padding: 6px 8px; margin-bottom: 6px; font-size: 12px; border: 1px solid var(--border); }
   .task-card .role { color: var(--accent); font-size: 11px; }
+  .task-card .agent { color: var(--warn); font-size: 10px; }
   .log { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; height: 300px; overflow-y: auto; font-family: var(--mono); font-size: 12px; }
   .log-entry { margin-bottom: 4px; opacity: 0.9; }
   .log-entry .ts { color: var(--muted); }
@@ -558,6 +559,8 @@ function updateTask(tasks) {
       const card = el("div", "task-card");
       card.appendChild(el("div", null, id));
       card.appendChild(el("div", "role", t.role || ""));
+      // R59：规划期指派的执行体（空=沿用角色默认绑定，不显示）。
+      if (t.agent) card.appendChild(el("div", "agent", "→ " + t.agent));
       col.appendChild(card);
     }
   });
@@ -1205,10 +1208,10 @@ function flowRenderProps() {
   addField("条件标签（逗号，可空）",
            input("fp-when", (task.when_outcomes || []).join(",")));
   addField("产物（每行 path|kind|说明）", textarea("fp-deliv",
-    (task.deliverables || []).map(d => `${d.path}|${d.kind}|${d.description || ""}`).join("\n"),
+    (task.deliverables || []).map(d => `${d.path}|${d.kind}|${d.description || ""}`).join("\\n"),
     "52px"));
   addField("验收标准（每行一条）",
-           textarea("fp-accept", (task.acceptance_criteria || []).join("\n"), "44px"));
+           textarea("fp-accept", (task.acceptance_criteria || []).join("\\n"), "44px"));
   const apply = el("button", "small", "应用");
   apply.addEventListener("click", flowApplyProps);
   box.appendChild(apply);
@@ -1229,12 +1232,12 @@ function flowApplyProps() {
   current.description = value("fp-desc");
   current.dependencies = value("fp-deps").split(",").map(s => s.trim()).filter(Boolean);
   current.when_outcomes = value("fp-when").split(",").map(s => s.trim()).filter(Boolean);
-  current.deliverables = value("fp-deliv").split("\n").map(line => line.trim()).filter(Boolean).map(line => {
+  current.deliverables = value("fp-deliv").split("\\n").map(line => line.trim()).filter(Boolean).map(line => {
     const parts = line.split("|");
     return { path: (parts[0] || "").trim(), kind: (parts[1] || "markdown").trim(),
              description: (parts[2] || "").trim() };
   }).filter(d => d.path);
-  current.acceptance_criteria = value("fp-accept").split("\n").map(s => s.trim()).filter(Boolean);
+  current.acceptance_criteria = value("fp-accept").split("\\n").map(s => s.trim()).filter(Boolean);
   flowRender();
 }
 

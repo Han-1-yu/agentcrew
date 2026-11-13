@@ -40,7 +40,7 @@ import inspect
 import json
 import re
 from abc import ABC
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from functools import wraps
 from typing import Any, NoReturn
@@ -64,7 +64,7 @@ from agentcrew.agents.prompting import (
     truncate_summary,
 )
 from agentcrew.artifacts.parser import ParsedOutput, parse_fenced_blocks
-from agentcrew.artifacts.spec import ArtifactRecord
+from agentcrew.artifacts.spec import BINARY_KINDS, ArtifactRecord
 from agentcrew.artifacts.store import (
     ArtifactConflictError,
     ArtifactScopeError,
@@ -87,6 +87,7 @@ from agentcrew.models.providers.base import (
     assemble_tool_calls,
 )
 from agentcrew.models.providers.mock import MockProvider, set_purpose
+from agentcrew.roles.binding import AgentProfile
 from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.roles.spec import RoleSpec
 from agentcrew.runtime.ledger import Ledger
@@ -97,6 +98,7 @@ from agentcrew.tools.schema import function_spec, schema_hint, validate_tool_arg
 from agentcrew.utils.clock import seconds_between, utc_now
 from agentcrew.utils.files import UnsafePathError
 from agentcrew.utils.trace import TraceContext, reset_trace, set_trace
+from agentcrew.utils.workspace import current_workspace
 
 #: 默认摘要的长度上限（spec §8.1「取 notes 前 400 字符」）。
 #: P3-6 起：有产物时产物正文智能摘要优先于此额度，notes 作为补充；无产物时
@@ -169,6 +171,7 @@ _SUBTASK_SECTION = """\
 </subtask>
 
 - `deliverables` 是子任务要产出的文件路径列表（字符串数组）。
+- `agent` 可选：指派某个执行体（profile key）来做这个子任务；留空则用该角色的默认执行体。
 - 子任务创建后由调度器独立派发；你创建完子任务后**继续完成本任务**，本任务自己的交付物仍须按上面的产物协议输出。
 - 不要在最终产物回复里遗漏本任务自己的 `file=` 围栏——`<subtask>` 只是请求拆任务，不替代交付物。
 """
@@ -470,6 +473,7 @@ class BaseAgent(ABC):
         tool_guard: Any | None = None,
         stream_sink: Callable[[str, str, str], None] | None = None,
         images: list[dict[str, Any]] | None = None,
+        agent_profiles: Mapping[str, AgentProfile] | None = None,
     ) -> None:
         """``catalog`` 是本 run 的角色目录（含自定义角色），可为 ``None``。
 
@@ -511,6 +515,9 @@ class BaseAgent(ABC):
         self._ledger = ledger
         self._project_goal = project_goal
         self._catalog = catalog
+        #: R59：执行体池（profile key → AgentProfile）。只有 PM 的拆解提示词用它
+        #: 渲染「可用执行体」菜单；``None``/空 = 不渲染，行为与 R59 之前逐字一致。
+        self._agent_profiles = agent_profiles
         self._tool_registry = tool_registry
         self._max_tool_calls = max_tool_calls
         self._subtask_creator = subtask_creator
@@ -725,8 +732,73 @@ class BaseAgent(ABC):
         ]
 
     def parse_output(self, raw: str, task: Task) -> ParsedOutput:
-        """默认解析围栏块（spec §9.1）；只有带 ``file=`` 的块会成为产物。"""
+        """默认解析围栏块（spec §9.1）；只有带 ``file=`` 的块会成为产物。
+
+        R60：agentic coding CLI 的产物是**工作区里的文件**而非回复围栏——此时改从
+        工作区按契约读取（见 :meth:`_agentic_workspace_files`），CLI 的总结文本只作
+        notes。非 agentic / 无工作区时逐字走原围栏解析。
+        """
+        workspace_files = self._agentic_workspace_files(task)
+        if workspace_files is not None:
+            return ParsedOutput(files=workspace_files, notes=raw)
         return parse_fenced_blocks(raw)
+
+    def _agentic_workspace_files(self, task: Task) -> dict[str, str] | None:
+        """R60：agentic CLI 执行后，从 run 工作区按契约读回交付物。
+
+        返回 ``None`` 表示「不适用」（非 agentic 别名或未注入工作区），调用方回退
+        围栏解析；返回 dict（可能为空）表示「适用」，空 dict 会让必需产物缺失在
+        :meth:`validate_output` 判失败、走返工通道——CLI 没写出来就是没写出来。
+
+        只读**契约声明过**的路径（``spec.path`` 构造时已规范化为安全相对路径），
+        并再验一次解析后仍在工作区内，双保险防逃逸；读失败/不存在跳过该文件。
+        """
+        workspace = current_workspace()
+        if workspace is None:
+            return None
+        if not self._models.is_agentic_cli(self._resolve_alias(task)):
+            return None
+        root = workspace.resolve()
+        files: dict[str, str] = {}
+        for spec in task.deliverables:
+            if spec.kind in BINARY_KINDS:
+                continue  # 二进制走 _workspace_binary_files，不按文本读
+            candidate = (workspace / spec.path).resolve()
+            if not candidate.is_relative_to(root):
+                continue
+            try:
+                if candidate.is_file():
+                    files[spec.path] = candidate.read_text(
+                        encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+        return files
+
+    def _workspace_binary_files(self, task: Task) -> dict[str, bytes]:
+        """R61：从 run 工作区按契约读回**二进制**交付物（image）。
+
+        与文本桥不同，这里**不**要求 agentic CLI：``generate_image`` 是任何 Agent
+        都能在 ReAct 循环里调的工具，它把图片字节写进工作区，故只要注入了工作区且
+        契约声明了二进制 kind 就适用。只读声明路径 + 二次防逃逸；不存在/读失败跳过。
+        返回空 dict 时必需二进制产物缺失会在 :meth:`validate_output` 判失败走返工。
+        """
+        workspace = current_workspace()
+        if workspace is None:
+            return {}
+        root = workspace.resolve()
+        files: dict[str, bytes] = {}
+        for spec in task.deliverables:
+            if spec.kind not in BINARY_KINDS:
+                continue
+            candidate = (workspace / spec.path).resolve()
+            if not candidate.is_relative_to(root):
+                continue
+            try:
+                if candidate.is_file():
+                    files[spec.path] = candidate.read_bytes()
+            except OSError:
+                continue
+        return files
 
     def validate_output(self, parsed: ParsedOutput, task: Task) -> None:
         """默认契约校验：必需路径齐全 + 无未声明路径（两个方向都判失败）。
@@ -737,6 +809,8 @@ class BaseAgent(ABC):
         """
         declared = {spec.path for spec in task.deliverables}
         produced = {_canonical_path(path) for path in parsed.files}
+        # R61：二进制交付物由工作区字节桥产出（不在文本围栏里），计入已产出。
+        produced |= set(self._workspace_binary_files(task))
         missing = sorted(
             {spec.path for spec in task.deliverables if spec.required} - produced
         )
@@ -1559,9 +1633,21 @@ class BaseAgent(ABC):
         produced = {
             _canonical_path(path): content for path, content in parsed.files.items()
         }
+        binary = self._workspace_binary_files(task)
         records: list[ArtifactRecord] = []
         try:
             for spec in task.deliverables:
+                if spec.kind in BINARY_KINDS:
+                    data = binary.get(spec.path)
+                    if data is None:
+                        continue  # 未产出：validate_output 已按必需/可选判过
+                    records.append(
+                        self._store.commit_bytes(
+                            spec.path, data, spec=spec, task=task,
+                            path_scope=self.path_scope or None,
+                            agent=self.agent_key)
+                    )
+                    continue
                 content = produced.get(spec.path)
                 if content is None:
                     continue  # 非必需且未产出：validate_output 已放行

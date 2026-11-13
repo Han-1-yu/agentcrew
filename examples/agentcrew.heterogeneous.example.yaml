@@ -1,0 +1,104 @@
+# 异构执行体 + 规划期灵活指派示例（R59）。
+# 复制到仓库根的 agentcrew.yaml 即可生效；密钥只走环境变量，绝不写进本文件。
+#
+# 这份示例演示用户愿景的核心：把需求拆成任务后，**每个任务可以灵活指派给
+# 任意一个执行体**，而不是把角色写死到某个模型。机制分两层：
+#
+#   1) agents.profiles —— 定义一个「执行体池」，每个执行体带 description /
+#      capabilities（给 PM 看的能力说明）+ model / tools / 预算等治理参数。
+#   2) PM 规划时读到这份池子菜单，按任务性质在拆解结果的 `agent` 字段里
+#      指派某个执行体（profile key）。引擎确定性派发：
+#         运行时人工覆盖 > 规划期 agent 指派 > 角色默认绑定（roles 段）。
+#      指派了未定义/已失效的 key 不会拖垮 run：记一条
+#      task_agent_assignment_dropped 事件并回退角色默认绑定。
+#
+# 默认关闭：不配 agents.profiles 时，PM 菜单为空、`agent` 字段恒空，
+# 行为与 R59 之前逐字一致。空池即便偶然带了 agent 也只优雅降级，不打回计划。
+#
+# 密钥环境变量（按需设置，缺哪个哪个执行体不可用）：
+#   ARK_API_KEY        豆包 / 火山方舟
+#   ANTHROPIC_API_KEY  Claude
+#   DEEPSEEK_API_KEY   DeepSeek
+
+agents:
+  profiles:
+    # ── 统筹规划：强推理模型，适合拆解、设计、复核这类「想清楚」的活 ──
+    planner:
+      title: 统筹规划
+      description: 负责需求拆解、架构设计与方案复核，强推理、全局视角
+      capabilities: [plan, design, review]
+      model: deepseek:deepseek-reasoner
+      cost_ceiling_usd: 0.20
+      max_concurrency: 1
+
+    # ── 代码开发：Claude，适合实现、重构、写测试这类「动手写代码」的活 ──
+    coder:
+      title: 代码开发
+      description: 负责后端/前端实现、重构与单元测试，代码质量与工程规范优先
+      capabilities: [code, refactor, test]
+      model: anthropic:claude-sonnet-5
+      tools: [read_file, grep, run_python, run_tests]
+      path_scope: ["src/", "tests/"]
+      cost_ceiling_usd: 0.30
+      max_concurrency: 2
+
+    # ── 文本生成：豆包，适合文案、文档、说明这类「写中文文本」的活 ──
+    writer:
+      title: 文本生成
+      description: 负责产品文案、使用文档与中文说明，表达清晰、成本低
+      capabilities: [text, doc, copywriting]
+      model: doubao:doubao-pro-32k
+      cost_ceiling_usd: 0.08
+      max_rpm: 30
+
+    # ── 图像生成（R61 已落地，可选启用）──────────────────────────────────
+    # 启用两步：① 顶层设 image_provider（ark / openai / mock，见文件末注释）；
+    # ② 取消下面注释。generate_image 工具把图片字节写进工作区，再经二进制产物
+    # 通道（kind=image）成为受契约保护、Studio 可预览的交付物。
+    # image:
+    #   title: 图像生成
+    #   description: 负责配图、海报与插画生成（豆包 Seedream）
+    #   capabilities: [image, illustration]
+    #   model: doubao:doubao-pro-32k   # 文本推理档；产图走 generate_image 工具
+    #   tools: [generate_image]
+
+# 角色默认绑定：PM **没有**显式指派 agent 时的兜底执行体。
+# 注意这只是默认值——PM 仍可按任务把任意角色指派给池里任意执行体。
+roles:
+  architect:
+    agents:
+      - ref: planner
+        duty: primary
+  backend_dev:
+    agents:
+      - ref: coder
+        duty: primary
+  technical_writer:
+    agents:
+      - ref: writer
+        duty: primary
+
+# 外部 coding CLI（Claude Code / Codex）作为「真 agentic 执行体」已由 R60 落地：
+# cli provider 以 run 工作区为 cwd 自主多步执行，结构化输出解析 + 用量记账，
+# 工作区改动文件按契约桥接成产物（过 G1/G2 门禁）。需要本机装好对应 CLI 并登录；
+# 取消下面注释并把某个角色的默认绑定或 PM 指派指向它即可启用。
+# 安全默认已内置：claude 仅自动接受文件编辑（acceptEdits）、codex 沙箱限工作区写。
+#
+#   claude_code:
+#     title: Claude Code 自主开发
+#     description: 在工作区里自主多步写代码/改代码/跑测试，适合整块实现任务
+#     capabilities: [code, refactor, test]
+#     model: claude-code:default
+#     path_scope: ["src/", "tests/"]
+#   codex:
+#     title: Codex 自主开发
+#     description: OpenAI Codex 自主执行，沙箱限定工作区写
+#     capabilities: [code, test]
+#     model: codex:default
+#     path_scope: ["src/", "tests/"]
+
+# R61 图像生成开关（顶层标量，默认空=关闭）：取消注释即注册 generate_image 工具。
+# 密钥只走环境变量：ARK_API_KEY（ark）/ OPENAI_API_KEY（openai）/
+# AGENTCREW_IMAGE_API_KEY（通用）；mock 为离线夹具，仅测试与评测用。
+# image_provider: ark
+# image_timeout_seconds: 60

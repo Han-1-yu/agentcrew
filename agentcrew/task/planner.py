@@ -12,12 +12,13 @@
 """
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from agentcrew.artifacts.spec import ArtifactSpec
+from agentcrew.roles.binding import AgentProfile
 from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.task.conditions import normalize_condition
 from agentcrew.task.graph import TaskGraph
@@ -71,6 +72,11 @@ class TaskDraft(BaseModel):
     title: str
     description: str
     role: str  # RoleSpec.key
+    agent: str = ""
+    """R59：可选指派的执行体 profile key；留空 = 沿用角色默认绑定。
+
+    随 ``PlanOutput.model_json_schema()`` 自动进入 PM 的结构化输出约束。合法性
+    （必须存在于执行体池）由 :func:`validate_plan` 在传入 ``profiles`` 时校验。"""
     acceptance_criteria: list[str]
     deliverables: list[ArtifactSpec]
     dependencies: list[str] = Field(default_factory=list)
@@ -118,6 +124,7 @@ def to_tasks(plan: PlanOutput) -> list[Task]:
             title=draft.title,
             description=draft.description,
             role=draft.role,
+            agent=draft.agent,
             acceptance_criteria=list(draft.acceptance_criteria),
             deliverables=list(draft.deliverables),
             dependencies=list(draft.dependencies),
@@ -130,7 +137,12 @@ def to_tasks(plan: PlanOutput) -> list[Task]:
     ]
 
 
-def validate_plan(tasks: Sequence[Task], catalog: RoleCatalog) -> None:
+def validate_plan(
+    tasks: Sequence[Task],
+    catalog: RoleCatalog,
+    *,
+    profiles: Mapping[str, AgentProfile] | None = None,
+) -> None:
     """按 spec §7.2 校验拆解方案；任一条不过则抛 :class:`PlanValidationError`。
 
     收集全部错误后一次性抛出，消息为中文且指名具体的任务 id / 角色 / 路径，
@@ -156,6 +168,7 @@ def validate_plan(tasks: Sequence[Task], catalog: RoleCatalog) -> None:
         errors.append(_EMPTY_PLAN_ERROR)
     errors.extend(_check_ids(tasks))
     errors.extend(_check_roles(tasks, catalog))
+    errors.extend(_check_agent_assignments(tasks, profiles))
     errors.extend(_check_dependencies(tasks))
     errors.extend(_check_cycles(tasks))
     errors.extend(_check_artifact_paths(tasks))
@@ -213,6 +226,28 @@ def _check_roles(tasks: Sequence[Task], catalog: RoleCatalog) -> list[str]:
         f"任务 {task.id} 使用了未注册的角色 {task.role}；可用角色：{available}"
         for task in tasks
         if not catalog.has(task.role)
+    ]
+
+
+def _check_agent_assignments(
+    tasks: Sequence[Task], profiles: Mapping[str, AgentProfile] | None
+) -> list[str]:
+    """R59：任务指派的执行体必须存在于执行体池。
+
+    ``profiles`` 为 ``None``（调用方未提供池，如 G3 编辑器的纯结构重检）**或空池**
+    （用户没配任何执行体，本能力默认关闭）时跳过——与既有行为逐字一致，绝不因为
+    PM 偶然吐了个 ``agent`` 就把整份计划打回。空池时即便带了 ``agent``，派发层
+    :meth:`AgentFactory.agent_for_task` 也会记 ``task_agent_assignment_dropped``
+    并回退角色默认绑定，优雅降级而非硬失败。空 ``agent``（未指派）永远合法。
+    报错附上可用 key 供 PM 修正。
+    """
+    if not profiles:
+        return []
+    available = "、".join(sorted(profiles))
+    return [
+        f"任务 {task.id} 指派了未定义的执行体 {task.agent}；可用执行体：{available}"
+        for task in tasks
+        if task.agent and task.agent not in profiles
     ]
 
 
@@ -664,6 +699,7 @@ _EDITABLE_TASK_FIELDS = frozenset(
         "title",
         "description",
         "role",
+        "agent",
         "acceptance_criteria",
         "deliverables",
         "dependencies",

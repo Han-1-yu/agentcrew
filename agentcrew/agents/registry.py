@@ -278,24 +278,34 @@ class AgentFactory:
             tools=narrow_tools(spec.allowed_tools, prof),
             path_scope=list(prof.path_scope))
 
-    def agent_for_task(self, role_key: str, task_id: str) -> BaseAgent | TeamAgent:
-        """派发入口：**任务级覆盖 > 角色绑定**。
+    def agent_for_task(
+        self, role_key: str, task_id: str, *, assigned: str = ""
+    ) -> BaseAgent | TeamAgent:
+        """派发入口：**运行时人工覆盖 > 规划期指派 > 角色绑定**。
 
-        覆盖只作用于这一个任务（含它的每次 attempt 与返工），别的任务照旧。
-        目标在执行前失效（配置被删/改名）时不静默失败也不炸掉 run：丢掉这条
-        覆盖、记 ``task_agent_override_dropped``，按角色默认继续。
+        ``assigned``（R59）是 PM 拆解时写在任务上的执行体（``Task.agent``）；
+        人工覆盖（``set_task_override``）优先于它，别的任务照旧。覆盖只作用于
+        这一个任务（含它的每次 attempt 与返工）。目标在执行前失效（配置被删/改名）
+        时不静默失败也不炸掉 run：人工覆盖丢掉记 ``task_agent_override_dropped``、
+        规划指派失效记 ``task_agent_assignment_dropped``，都按角色默认继续。
         """
         override = self._task_overrides.get(task_id) or {}
-        profile = override.get("profile") or ""
+        manual = override.get("profile") or ""
+        profile = manual or assigned or ""
         if not profile:
             return self.get(role_key)
         try:
             return self.get(role_key, profile)
         except ValueError:
-            self._task_overrides.pop(task_id, None)
-            self._ledger.emit(
-                "task_agent_override_dropped", task_id=task_id,
-                role=role_key, profile=profile)
+            if manual:
+                self._task_overrides.pop(task_id, None)
+                self._ledger.emit(
+                    "task_agent_override_dropped", task_id=task_id,
+                    role=role_key, profile=profile)
+            else:
+                self._ledger.emit(
+                    "task_agent_assignment_dropped", task_id=task_id,
+                    role=role_key, profile=profile)
             return self.get(role_key)
 
     def set_task_override(
@@ -493,6 +503,9 @@ class AgentFactory:
             stream_sink=self._stream_sink,
             # C4：多模态输入——是否真发给模型由 provider 能力位决定（降级可见）。
             images=self._images,
+            # R59：执行体池下发给 PM 渲染规划菜单（其余 Agent 不读）。
+            agent_profiles=(
+                self._settings.agent_profiles if self._settings is not None else None),
         )
         if resolved is not None:
             agent.path_scope = list(resolved.path_scope)

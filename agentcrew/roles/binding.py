@@ -36,6 +36,17 @@ class AgentProfile(BaseModel):
 
     key: str
     title: str = ""
+    description: str = ""
+    """R59：执行体的一句话能力描述，供 PM 规划菜单与 Studio 展示。
+
+    纯描述字段，不参与任何调度判定；留空时菜单回落 ``title``/``key``。"""
+
+    capabilities: list[str] = Field(default_factory=list)
+    """R59：能力标签（如 ``text`` / ``code`` / ``image`` / ``plan``）。
+
+    供 PM 按任务类型挑选执行体（代码任务选擅长 code 的、图文任务选擅长 image 的）。
+    是**给模型看的提示**，不是硬路由约束——引擎不据此做任何判定，调度仍是确定性的。"""
+
     model: str = ""
     """模型别名；留空表示沿用角色的 ``model`` / ``role_bindings`` / 默认模型。"""
 

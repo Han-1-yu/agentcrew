@@ -121,6 +121,15 @@ async function previewArtifact(preview, f) {
   preview.appendChild(content);
   try {
     const r = await window.studio.readArtifact(S.dash.run.dir, f.path);
+    // R61：图像产物直接预览（data URL 走 <img>，不经过 innerHTML，无注入面）。
+    if (r && r.image && r.dataBase64) {
+      const img = h('img', { alt: f.path || '图像产物' });
+      img.src = `data:${r.mime};base64,${r.dataBase64}`;
+      img.style.maxWidth = '100%';
+      img.style.borderRadius = '6px';
+      content.replaceWith(img);
+      return;
+    }
     const text = r && r.content != null ? String(r.content) : (r && typeof r === 'string' ? r : '');
     if (!text) { content.textContent = '（空文件或二进制）'; return; }
     const truncated = text.length > 100000 ? text.slice(0, 100000) + '\n…（已截断，共 ' + text.length + ' 字符）' : text;

@@ -8,19 +8,19 @@
 
 ## 0. 一句话现状
 
-**本次复核的代码基线：`fd455ca`（本次提交仅回填状态文档）。自动化回归、静态检查与 CI 均通过；云主机回环验收实例仍在运行。** 本次全量测试 **3258 passed / 0 failed / 6 skipped / 0 error**（169 文件 / 85 批次 / 509.6s），跑器报告 3 个批次在进程崩溃后重试恢复，未输出“首次失败、重试通过”的待核项。真实模型评测与 Studio 分项数字保留为历史实测证据，本次未逐项重跑；当前 CI 的 Studio job 为 success。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道；R19 给主管审核开了独立、不阻塞的 `suggestions` 建议通道；R20 补上单步/断点调试——每个任务派发前可挂起裁决，第二档功能项全部闭环；R21 给 API 契约装上守卫，openapi.yaml 与代码路由双向锁死、不再漏端点；R22 补上 resume 状态白名单与 MCP 管道显式关闭；R23 产出 2501 用例的模块/场景覆盖矩阵（`docs/TEST-REPORT.md`），验收报告遗留的最后一项小项闭环；R24 补上工具管理页与单工具试跑；R25 把共享 API Key 升级为多用户 RBAC（密钥/角色/作用域/归属/审计）；R26 补上拖拽式可视化编排（画布 + YAML 双向 + 图校验）；R27 给检索加向量通道（混合打分 + 磁盘缓存 + 本地退化）；R28 打通「画布 → run」直通规划；R29 让实体记忆也走向量混合（不加列、不迁移）；R30 给审批单加等待窗口与过期告警；R31 给条件边补否定/兜底写法；R32 把控制台 UI 重构成令牌化 + 明暗主题 + 侧栏布局；R33 把单层主管复核扩成可配的多级链；R34 修好本机测试环境（崩溃隔离跑器，一条命令出可信结论）；R50 按差距报告 69 条完成上线前加固——8 项 P0 全关、时钟容错让"前跳误杀/回拨死锁"不再可能、审批与预算的并发边界收口、`/metrics` 补齐可观测入口、Studio 断线可自愈（明细见 `docs/REMEDIATION-STATUS.md`）。R51 按能力路线第一批补上三根支柱的关键缺口：**能查**（`web_search`，四提供方、默认关、密钥只走环境变量）、**敢跑**（可插拔执行后端，默认 `local` 行为逐字不变，`docker` 可选：禁网/非 root/资源上限/只挂 run 目录，缺 docker 即报错）、**跑得出结论**（`run_tests` + G1 执行校验，失败并入既有返工通道），并把评测做成 mock/真实双轨（`eval --live` + 23 条真实小目标 + 夜间脚本）。R52 补上互操作与无人值守：**C7** 暴露为 MCP server（`mcp-serve`，5 个工具全走 HTTP API 复用 RBAC/审计）、**C6 第一步**借现成浏览器 MCP（配置模板 + 读优先白名单，零开发）、**C8** 入站 Webhook 触发（`POST /webhooks/trigger`，HMAC 或 API Key 两条认证路径，来源进 ledger）。R53 补上多模态输入（**C4**）：`run --image` / `POST /runs` 的 `images`（内联 base64，最多 4 张），provider 能力位 `supports_vision`（默认关）决定是否真发图，不支持时降级纯文本并落 `vision_unsupported`（降级可见），图片落盘留证。R54 补上文档 RAG（**C5**）：`knowledge/docs/` 下的团队手册/规范增量摄取分块，按相关性注入 PM 规划提示词与每个任务的上下文（复用 R11/R27 检索资产），`docs list/search` 管理入口。能力路线第二批至此全部落地。
+**当前代码基线：`c740906`（已推送到 `origin/master` / `origin/main`）+ 工作区 R59–R61（未提交）。自动化回归与静态检查通过；云主机回环验收实例仍在运行。** R59–R61 工作区全量测试 **3342 passed / 0 failed / 6 skipped / 0 error**（173 文件 / 87 批次 / 444.1s），跑器报告 5 个批次在进程崩溃后重试恢复，并输出 2 项「首次失败、重试通过」——已人工核对均为环境负载所致（`crew.py` 瞬时解析损坏但 `py_compile` 通过、`test_run_tests_passes` 隔离连跑 5 次全过），非代码回归。真实模型评测与 Studio 分项数字保留为历史实测证据，本次未逐项重跑；当前 CI 的 Studio job 为 success。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道；R19 给主管审核开了独立、不阻塞的 `suggestions` 建议通道；R20 补上单步/断点调试——每个任务派发前可挂起裁决，第二档功能项全部闭环；R21 给 API 契约装上守卫，openapi.yaml 与代码路由双向锁死、不再漏端点；R22 补上 resume 状态白名单与 MCP 管道显式关闭；R23 产出 2501 用例的模块/场景覆盖矩阵（`docs/TEST-REPORT.md`），验收报告遗留的最后一项小项闭环；R24 补上工具管理页与单工具试跑；R25 把共享 API Key 升级为多用户 RBAC（密钥/角色/作用域/归属/审计）；R26 补上拖拽式可视化编排（画布 + YAML 双向 + 图校验）；R27 给检索加向量通道（混合打分 + 磁盘缓存 + 本地退化）；R28 打通「画布 → run」直通规划；R29 让实体记忆也走向量混合（不加列、不迁移）；R30 给审批单加等待窗口与过期告警；R31 给条件边补否定/兜底写法；R32 把控制台 UI 重构成令牌化 + 明暗主题 + 侧栏布局；R33 把单层主管复核扩成可配的多级链；R34 修好本机测试环境（崩溃隔离跑器，一条命令出可信结论）；R50 按差距报告 69 条完成上线前加固——8 项 P0 全关、时钟容错让"前跳误杀/回拨死锁"不再可能、审批与预算的并发边界收口、`/metrics` 补齐可观测入口、Studio 断线可自愈（明细见 `docs/REMEDIATION-STATUS.md`）。R51 按能力路线第一批补上三根支柱的关键缺口：**能查**（`web_search`，四提供方、默认关、密钥只走环境变量）、**敢跑**（可插拔执行后端，默认 `local` 行为逐字不变，`docker` 可选：禁网/非 root/资源上限/只挂 run 目录，缺 docker 即报错）、**跑得出结论**（`run_tests` + G1 执行校验，失败并入既有返工通道），并把评测做成 mock/真实双轨（`eval --live` + 23 条真实小目标 + 夜间脚本）。R52 补上互操作与无人值守：**C7** 暴露为 MCP server（`mcp-serve`，5 个工具全走 HTTP API 复用 RBAC/审计）、**C6 第一步**借现成浏览器 MCP（配置模板 + 读优先白名单，零开发）、**C8** 入站 Webhook 触发（`POST /webhooks/trigger`，HMAC 或 API Key 两条认证路径，来源进 ledger）。R53 补上多模态输入（**C4**）：`run --image` / `POST /runs` 的 `images`（内联 base64，最多 4 张），provider 能力位 `supports_vision`（默认关）决定是否真发图，不支持时降级纯文本并落 `vision_unsupported`（降级可见），图片落盘留证。R54 补上文档 RAG（**C5**）：`knowledge/docs/` 下的团队手册/规范增量摄取分块，按相关性注入 PM 规划提示词与每个任务的上下文（复用 R11/R27 检索资产），`docs list/search` 管理入口。能力路线第二批至此全部落地。
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | 本次重跑 **3258 passed / 0 failed / 6 skipped / 0 error**（169 文件 / 85 批次 / 509.6s，`scripts/test.py --batch 2 --retries 4 --retry-failed 3`）。跑器报告 3 个批次在进程崩溃后重试恢复，未输出“首次失败、重试通过”的待核项；6 个 skip 沿用跑器结果，其中 4 个 docker 真容器用例由 CI 覆盖 |
-| 静态检查 | 本次复核重跑 `ruff check agentcrew/ main.py tests/`：**All checks passed**；`mypy agentcrew/`：**139 文件零错误** |
+| 全量测试 | R59–R61 工作区重跑 **3342 passed / 0 failed / 6 skipped / 0 error**（173 文件 / 87 批次 / 444.1s，`scripts/test.py --batch 2 --retries 4 --retry-failed 3 --keep-pycache`）。跑器报告 5 个批次在进程崩溃后重试恢复；2 项「首次失败、重试通过」已人工核对为环境负载（见 §3.82）；6 个 skip 沿用跑器结果，其中 4 个 docker 真容器用例由 CI 覆盖 |
+| 静态检查 | R59–R61 工作区重跑 `ruff check agentcrew/ main.py tests/`：**All checks passed**；`mypy agentcrew/`：**142 文件零错误** |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
 | Studio | `npm run check` **73** 模块 / 42 分片通过、`test:unit` **18/18**、electron `e2e` **32/32**（2026-11-13 本机实跑） |
 | 上线自检 | 本机可验 **9 项全通过**（doctor / 离线冒烟 / REST 认证 200·401 / `/metrics` / 无密钥退 3 / `clean` 干跑 / Studio 三连 / ruff+mypy）；目标机 10 项判据见 `docs/DEPLOY-CHECK-2026-11-13.md` |
 | 收尾 | 交付说明见 **`docs/CLOSURE-2026-11-13.md`**；B 类外部环境项 **5/5 全部闭环**；云主机真实部署验收 10 项中 **7 项闭环**（TLS/SSE、告警规则、日志、密钥、成本、webhook、备份），仅剩独立数据盘与两项 Docker 依赖（§3.77、`docs/DEPLOYMENT-VM-2026-11-13.md`） |
-| Git | 状态文档提交前执行 `git fetch`：`HEAD`、`origin/master`、`origin/main` 均为 **`fd455ca`**，工作区干净；该基线 CI run **43425986756** 的 **7 个 job 全部 success**（Python 3.10/3.11/3.12/3.13、Windows、Studio、Docker 真隔离），Sync main run **43425986731** success；验收报告 `docs/ACCEPTANCE-2026-11-12.md`；真实模型评测历史证据为 23 条中 22 通过（`bench/eval-live-2026-11-13.md`，本次未重跑真实模型评测） |
+| Git | `git rev-parse HEAD origin/master origin/main` 三者均为 **`c740906`**；R59–R61 改动**尚未提交**。`fd455ca` 基线 CI run **43425986756** 的 **7 个 job 全部 success**（Python 3.10/3.11/3.12/3.13、Windows、Studio、Docker 真隔离），Sync main run **43425986731** success；`c740906` 为纯文档提交，其 CI 结果尚未核对；验收报告 `docs/ACCEPTANCE-2026-11-12.md`；真实模型评测历史证据为 23 条中 22 通过（`bench/eval-live-2026-11-13.md`，本次未重跑真实模型评测） |
 | 角色 | 8 个内置岗位角色 + 执行体（Agent Profile）可多绑 |
 
 ```bash
@@ -74,7 +74,7 @@ contracts.py（零依赖契约层：EventSink / TaskLike）
 | 委派（R8） | 被拒原因**回灌模型**：`SubtaskDispatcher` 暴露 `last_rejection`，Agent 据此回灌并重问一次（`max_subtask_corrections`，默认 1）；裸闭包不回灌（调用次数不变）；只纠正一轮不套娃 |
 | 门禁 | G1 静态校验（语法/危险导入/非空/契约）；G2 并行多评审 + Jaccard 去重（收敛默认关）；G3 人工卡点；`bump_rework` 唯一调用点在 Gatekeeper。R51：G1 增加**执行校验档**（`gate_config.exec_verify`，默认关）——在沙箱里跑任务自己交付的 pytest，失败并入 G1 issue 走既有返工通道 |
 | 门禁（R7/R9/R10） | 主管审核：动态委派任务在 G1/G2 放行后，由**派活的人**再评一次（`layer="supervisor"`），复用同一套返工通道；不受 score / 收敛旁路保护。R9 起 `supervisor_scope=all` 时规划期任务回落到 `supervisor_role`（默认 PM）验收，主管已在 G2 评审人里则跳过。R10 起主管驳回可**换人**：按 `role_fallback` 挑替代角色、改 `task.role` 后仍走 REWORK，上限 `max_supervisor_reassignments` 且换人消耗返工额度。默认关闭、mock 通道明确跳过 |
-| 模型 | 7 类 provider（openai 兼容 / anthropic / mock / cli / 三传输 MCP）；27 个预设；四级别名解析；故障转移 + 冷却矩阵（402=30min，429=Retry-After 或指数退避，5xx=指数退避）；per-provider 并发信号量 + 60s RPM 滑动窗口；复杂度自动选模 + 动态校准；响应缓存（temperature=0）；预算硬上限 + 80%/90% 软阈值 |
+| 模型 | 7 类 provider（openai 兼容 / anthropic / mock / cli / 三传输 MCP）；29 个预设（R60 新增 `claude-code` / `codex`）；四级别名解析；故障转移 + 冷却矩阵（402=30min，429=Retry-After 或指数退避，5xx=指数退避）；per-provider 并发信号量 + 60s RPM 滑动窗口；复杂度自动选模 + 动态校准；响应缓存（temperature=0）；预算硬上限 + 80%/90% 软阈值 |
 | 可观测 | `ledger.jsonl` 全事件审计（run/task/llm_call/gate/error…）；contextvars 链路追踪（`utils/trace.py`，`llm_call` 自动带 `task_id`/`attempt`）；`log_level` + `AGENTCREW_LOG_JSON=1` 结构化日志（含脱敏）；`diff` / `status` / 统计端点 |
 | 产物 | 契约校验（路径/类型/最小字节/必需符号）+ 命名空间隔离 + `MANIFEST.json` + sha256；安全落盘（双侧路径规范化） |
 | 工具（R3/R13/R51） | 7 个内置工具（`read_file` / `list_files` / `grep` / `run_python` / `run_tests` / `write_file` / `web_fetch`）+ `web_search`（C1，配置提供方才出现）+ **R13 起 MCP 服务器的工具**（`server__tool` 前缀防撞名、schema 原样透传、单服务器失败只跳过）；`tools_enabled` 默认关闭的 run 级自动装配 + `tool_permissions` 执行期下发；执行前 JSON Schema 子集强校验（失败带正确形状回灌、绝不执行）；`web_fetch` / `web_search` 全链路 SSRF 防护 |
@@ -2255,6 +2255,140 @@ nginx TLS 反代 `https://localhost:18443`**。完整证据与复跑入口见
 本次没有重跑真实模型评测、RAG 对照、MCP/Playwright 或 Studio 分项测试；这些仍按
 各自报告作为历史证据，不包装成本次新结果。当前 CI 的 Studio 与 Docker 真隔离 job
 已重新确认成功。
+
+---
+
+### 3.79 R59：规划期灵活指派执行体——任务分好后任意指派，不写死角色（2026-11-13）
+
+**起因**：用户愿景是「把需求拆成任务后，**每个任务灵活指派给任意执行体**」（例：豆包管
+文本/图、Claude Code 管代码、Codex 统筹，但**不固定**）。此前 PM 拆解只产出 `role`，
+执行体只能靠角色默认绑定或运行时人工覆盖（`set_task_override`），规划期无法自主指派。
+R59 把「指派」前移到规划期，复用既有 `agent_for_task` 派发机制，**确定性引擎不变**
+（PM 的选择是数据，引擎按固定优先级解析，调度决策全程无 LLM）。
+
+| 改动 | 说明 |
+| --- | --- |
+| `agentcrew/task/task.py` / `task/planner.py` | `Task.agent` / `TaskDraft.agent`（默认空=沿用角色默认）；`to_tasks` 映射；进 JSON Schema；`_EDITABLE_TASK_FIELDS` 加 `agent` |
+| `agentcrew/roles/binding.py` | `AgentProfile.description` / `capabilities`（给 PM 看的能力说明，非硬路由约束），纯数据层向后兼容 |
+| `agentcrew/agents/project_manager.py` | 池非空时 PM 系统提示词追加「可用执行体」菜单（`_agent_menu`）；池空时提示词**逐字不变** |
+| `agentcrew/task/planner.py` | `validate_plan(..., profiles=)` 校验指派必须存在于池；**池为 None 或空=默认关闭，跳过校验**（绝不因 PM 偶然吐 agent 打回计划） |
+| `agentcrew/agents/registry.py` | `agent_for_task(..., assigned=)` 优先级「运行时人工覆盖 > 规划指派 > 角色默认」；失效指派记 `task_agent_assignment_dropped` 并回退角色默认 |
+| `agentcrew/crew/scheduler.py` | 派发传 `assigned=task.agent`；`task_dispatched` 留痕 `agent`（审计）；动态子任务 spec 透传 `agent` |
+| `agentcrew/api/dashboard.py` | 运行看板任务卡显示指派执行体（`→ key`，空不显示） |
+| `examples/agentcrew.heterogeneous.example.yaml`（新增） | 异构池示例：planner/coder/writer 三执行体 + 角色默认绑定，注释标明 R60/R61 前瞻位 |
+
+**默认关闭与四通道**：不配 `agents.profiles` 时菜单为空、`agent` 恒空，行为与 R59 前逐字
+一致；空池即便带 agent 也只优雅降级。`description`/`capabilities` 为 pydantic 字段，
+YAML/env/export-import/API 四通道自动往返（已实测）。密钥仍只走环境变量。
+
+**顺带修复一个既有前端缺陷（非 R59 引入）**：`dashboard.py` 的 `.join("\n")`/`.split("\n")`
+处在非 raw Python 串里被解析成**真实换行**，注入浏览器即 JS 语法错误，导致**整块看板脚本
+不执行**（函数全 undefined、看板列不生成）。改为 `\\n` 转义（4 处）后脚本恢复。已用浏览器
+实测：修复前 `updateTask` 等全 undefined，修复后全部 function、看板列生成、指派行正确渲染。
+
+**验证**：`tests/test_task_assignment.py` **21 例**（数据/校验/派发/提示词/委派/默认关/派发留痕）；
+R59 触及面合并回归 **387 passed**（planner/crew/scheduler/binding/architecture/config/
+delegation/subtask/checkpoint/dashboard/api）；ruff 全绿、mypy 139 文件零错误；
+异构示例配置经 `load_yaml_config`+`Settings` 实测加载与往返；看板指派行浏览器实测
+（指派显示 `→ coder`、未指派不显示）。**未做**：端到端 eval case（eval runner 的
+`model_copy` 不 coerce 嵌套 `agent_profiles`，属既有基础设施问题，不在本轮扩scope）。
+
+**后续**：R60 把外部 coding CLI（Claude Code/Codex）接成真 agentic 执行体（cli provider
+以 run 工作区为 cwd 自主多步 + 改动文件桥接产物）；R61 补图像生成工具 + 二进制产物通道。
+两者落地后异构示例的前瞻位即可启用。
+
+---
+
+### 3.80 R60：外部 coding CLI 接成真 agentic 执行体（2026-11-13）
+
+**起因**：R59 让规划期能灵活指派执行体，但「Claude Code 管代码」这类愿景此前落不了地——
+既有 `cli` provider 只是**一次性 stdin→stdout 桥**（把 prompt 喂进去、拿一段文本回来），
+不会自主多步读写文件，算不上 agentic 执行体。R60 补上这一层，且**默认关闭**：不显式选用
+agentic 别名时，所有既有路径逐字不变。
+
+| 改动 | 说明 |
+| --- | --- |
+| `agentcrew/utils/workspace.py`（新增） | run 工作区 contextvar（零依赖，同 `utils/trace` 模式）：crew 写入、provider 读取作 cwd |
+| `agentcrew/models/providers/cli_agentic.py`（新增） | `AgenticCliProvider`：cwd=run 工作区（缺失明确报错，绝不退回服务进程 cwd）、claude-json / codex-jsonl / plain 三种结构化解析、用量抽取（缺失回退启发式）、可配置超时（默认 900s）、继承 cli 的「先切分后替换、不经 shell」加固 |
+| `agentcrew/models/config.py` | `ProviderPreset`/`ModelBinding` 加 `cli_agentic`/`cli_output`/`cli_timeout_seconds`（pydantic 四通道自动往返）；新增 `claude-code`/`codex` 预设，命令模板自带安全权限默认（acceptEdits / workspace-write） |
+| `agentcrew/models/factory.py` | `implementation=="cli"` 且 `cli_agentic` 才构造 `AgenticCliProvider`；`is_agentic_cli()` 以**解析出的 Provider 类型**为准（mock 通道恒 False） |
+| `agentcrew/crew/crew.py` | run 入口 `set_workspace(run_dir/workspace)`、finally `reset_workspace`；只声明路径不建目录（非 agentic run 零 IO、布局不变） |
+| `agentcrew/agents/base_agent.py` | `parse_output` 桥接：agentic 别名 + 有工作区时改从工作区**按契约**读回交付物（只读声明路径 + 二次防逃逸），CLI 总结文本作 notes；缺文件→必需产物缺失走返工；非 agentic/无工作区逐字走围栏解析 |
+| `examples/agentcrew.heterogeneous.example.yaml` | 补 claude_code/codex 可选执行体注释块（需本机装 CLI 并登录） |
+
+**安全与默认关闭**：权限/沙箱旗标写在预设命令模板里；cwd 隔离到 run 工作区；未注入工作区
+时 agentic provider 明确报错而非乱写；mock 通道下 `is_agentic_cli` 恒 False（离线回放仍走
+围栏）。密钥仍只走环境变量（Claude Code/Codex 自带认证，平台不持有其密钥）。
+
+**验证**：`tests/test_cli_agentic.py` **26 例**（纯解析 / cwd / argv / stdin / 用量 / 超时 /
+错误收敛 / 四通道 / 预设安全默认 / 工厂选择 / mock 覆盖 / 工作区桥接四态）；
+`test_model_config.py` 预设清单同步 +2；引擎默认关回归 **~410 passed**（crew/scheduler/
+binding/assignment/config/delegation/subtask/checkpoint/cli/provider/architecture）；
+ruff 全绿、mypy 141 文件零错误。**真机证据待补**：本机 Claude Code headless 冒烟此前报
+`connection_failed`（网络/代理阻断，同 git push 受阻一类），故 agentic 真跑证据留待网络恢复
+或 CI；离线 mock 已覆盖装配与解析全链路。
+
+**后续**：R61 补图像生成工具 + 二进制产物通道（`ArtifactStore` 现仅 str，需 bytes 通道与
+image kind），落地后异构示例的 image 前瞻位即可启用。
+
+---
+
+### 3.81 R61：图像生成工具 + 二进制产物通道（2026-11-13）
+
+**起因**：用户愿景里「豆包管图画生成」此前完全缺位——平台只有文本产物通道
+（`ArtifactStore.commit` 仅 str、`ArtifactKind` 无 image），Agent 既不能产图、产了也
+落不成受契约保护的交付物。R61 补齐「产图 → 二进制落盘 → 门禁 → 预览」整链，默认关闭。
+
+| 改动 | 说明 |
+| --- | --- |
+| `agentcrew/tools/image.py`（新增） | `generate_image` 工具 + 可插拔 `ImageProvider`（ark Seedream / openai / mock），密钥只走环境变量、端点写死公网 https 不跟随重定向、落盘路径过 `safe_relpath` 限工作区；mock 回放固定 PNG 离线可测；`image_generated` 留痕（含 size/mime/provider/cost） |
+| `agentcrew/artifacts/spec.py` | `ArtifactKind` 加 `image`；新增 `BINARY_KINDS`（二进制 kind 集合，无围栏语言名） |
+| `agentcrew/artifacts/store.py` | `commit` 重构为薄包装 + 共享 `_commit_data`；新增 `commit_bytes`（字节原样落盘，共用校验/冲突/清单/事件） |
+| `agentcrew/gate/static_checks.py` | G1 对 `BINARY_KINDS` 只判尺寸下界（`_binary_content_findings`），跳过文本解析与 `must_contain` |
+| `agentcrew/agents/base_agent.py` | 二进制桥 `_workspace_binary_files`：**不**要求 agentic CLI（generate_image 是通用 ReAct 工具），只要注入工作区且契约声明二进制 kind 即读回字节；`validate_output` 计入、`_commit` 走 `commit_bytes` |
+| `agentcrew/config.py` + `crew/crew.py` | `image_provider`/`image_timeout_seconds`（YAML/env/快照四通道，默认空=关）；crew 仅在配置时注册 `generate_image`，不可信输入下不下发 |
+| `studio/main.js` + `src/features/{artifacts,result}/index.js` | 图像产物预览：`readArtifact` 对图像扩展名回 base64（≤2MB），渲染端用 `<img src=data:…>`（不经 innerHTML，无注入面） |
+| `examples/agentcrew.heterogeneous.example.yaml` | image 执行体与 `image_provider` 开关改为「已落地、可选启用」注释 |
+
+**默认关闭与安全**：不配 `image_provider` 就没有 `generate_image`（模型看不见）；密钥绝不
+落盘；二进制产物仍过跨任务冲突/路径逃逸/`max_bytes` 护栏；G1 尺寸判据保留（欠尺寸走返工）。
+
+**验证**：`tests/test_image_tool.py` **17 例** + `tests/test_image_artifacts.py` **13 例**
+（提供方工厂/密钥 env/b64 解析/落盘与路径安全/错误收敛/commit_bytes 上限与冲突/G1 image
+三态/非 agentic 二进制桥/门控默认关与不可信只读/四通道）；`test_artifact_parser.py` 语言表
+覆盖改为「文本 kind 全覆盖 + image 属二进制」；受影响面回归 **~290 passed**（parser/store/
+static/gatekeeper/config/agent/cli_agentic）；ruff 全绿、mypy 142 文件零错误；Studio
+`npm run check` 73 模块/42 分片 + `test:unit` 18/18 通过（electron e2e 本轮未重跑）。
+**真机证据待补**：真实产图需 ARK/OPENAI Key 与网络，离线 mock 已覆盖全链路。
+
+至此 R59（规划期灵活指派）/ R60（coding CLI agentic 执行体）/ R61（图像生成 + 二进制通道）
+三批全部落地，用户「拆解 → 灵活指派任意执行体（文本/代码/图像/统筹）→ 汇总」的愿景在
+配置与代码层面闭环；真实模型/真机证据留待网络恢复或 CI。
+
+---
+
+### 3.82 R59–R61 契约哨兵同步：4 条硬编码守卫按新事实更新（2026-11-13）
+
+**起因**：R59–R61 落地时只做了受影响面子集回归，没有跑全量；补跑全量后
+**3338 passed / 4 failed**，四条既有哨兵仍按旧事实断言。这不是随机失败，正是
+「新增能力必须被主动决定」的守卫在起作用。
+
+| 失败用例 | 原因 | 处置 |
+| --- | --- | --- |
+| `test_contract::test_every_kind_is_explicitly_classified` | `image` 既不在结构解析器、也不在「无结构」名单，`KIND_PARSERS["image"]` 静默落到 `_always_ok` —— 正是该哨兵要拦的降级 | `contract._NO_STRUCTURE_KINDS` 显式加入 `image`（二进制无文本结构，G1 走 `BINARY_KINDS` 尺寸判据）；模块 docstring「其余 8 个」改 9 |
+| `test_models::test_artifact_kind_has_exactly_twelve_values` | `ArtifactKind` 由 12 增至 13 | 更名 `..._thirteen_values` 并补 `image`；顺带把 `test_kind_parsers_covers_all_twelve_kinds` 改成不带计数的 `..._all_kinds`，避免下次再漂 |
+| `test_provider_metadata::test_all_presets_load` | 预设由 27 增至 29（R60 新增 `claude-code` / `codex`） | 断言、docstring、分节注释同步为 29 |
+| `test_provider_presets_v5::test_presets_have_api_key_url_when_expected` | 两个新预设是 CLI 预设：认证由 CLI 自带，平台不持有密钥 | 加入 `_NO_API_KEY_URL` 白名单并注明原因 |
+
+**性质区分**：第一条是**真缺口**（新 kind 的校验方式没被决策，靠 `.get` 默认值滑过；
+实际影响被 G1 的二进制尺寸校验兜住）；后三条是能力扩展后按新事实更新哨兵，**门槛未放宽**。
+
+**验证**：四条用例单跑与四文件合跑 **266 passed**；`ruff` **All checks passed**；
+`mypy` **142 文件零错误**；全量 **3342 passed / 0 failed / 6 skipped / 0 error**
+（173 文件 / 87 批次 / 444.1s，`--keep-pycache`）。跑器标 2 项「首次失败、重试通过」，
+已人工核实为环境负载：`crew.py` 报的瞬时解析错误 `py_compile` 通过、
+`test_run_tests_passes` 隔离连跑 5 次全过，均非回归。文档同步：§0 指标与 §2 预设数
+（27→29）。**R59–R61 仍未提交**，本轮未推送。
 
 ---
 

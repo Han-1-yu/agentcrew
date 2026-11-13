@@ -17,7 +17,7 @@ from agentcrew.artifacts.parser import (
     normalize_lang,
     parse_fenced_blocks,
 )
-from agentcrew.artifacts.spec import ArtifactKind
+from agentcrew.artifacts.spec import BINARY_KINDS, ArtifactKind
 
 # ── brief 指定的用例 ──────────────────────────────────────────────
 
@@ -107,11 +107,15 @@ def test_unknown_lang_returns_none():
 # ── 语言名表与 ArtifactKind 对齐 ─────────────────────────────────
 
 
-def test_lang_table_values_cover_exactly_the_twelve_kinds():
-    """表里的值必须恰好是 ``ArtifactKind`` 的 12 个取值（Task 12 会依赖）。"""
+def test_lang_table_values_cover_exactly_the_text_kinds():
+    """表里的值必须恰好覆盖全部**文本** kind；二进制 kind（R61 image）无围栏语言。"""
     kinds = set(get_args(ArtifactKind))
-    assert len(kinds) == 12
-    assert set(LANG_TO_KIND.values()) == kinds
+    text_kinds = kinds - BINARY_KINDS
+    assert len(text_kinds) == 12
+    assert set(LANG_TO_KIND.values()) == text_kinds
+    # R61：image 是二进制 kind，不在围栏语言表里，但必须是合法 ArtifactKind。
+    assert BINARY_KINDS <= kinds
+    assert not (set(LANG_TO_KIND.values()) & BINARY_KINDS)
 
 
 @pytest.mark.parametrize("lang,kind", [

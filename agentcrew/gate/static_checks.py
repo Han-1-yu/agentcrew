@@ -34,7 +34,7 @@ import ast
 from pathlib import Path
 
 from agentcrew.artifacts.contract import has_placeholder, parse_check
-from agentcrew.artifacts.spec import ArtifactRecord, ArtifactSpec
+from agentcrew.artifacts.spec import BINARY_KINDS, ArtifactRecord, ArtifactSpec
 from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.task.task import ReviewRecord, Task
 from agentcrew.utils.clock import utc_now
@@ -59,9 +59,15 @@ def run_static(task: Task, store: ArtifactStore, *, round_no: int) -> ReviewReco
     findings: list[_Finding] = []
     findings += _missing_findings(task.deliverables, produced)
     findings += _undeclared_findings(records, declared)
+    by_path = {record.path: record for record in records}
     for spec in task.deliverables:
         # 未产出的路径不得读取：缺失已由检查 1 报出（必需）或本就合法（可选）。
-        if spec.path in produced:
+        if spec.path not in produced:
+            continue
+        if spec.kind in BINARY_KINDS:
+            # R61：二进制产物（image）只做尺寸校验，不做文本解析/must_contain。
+            findings += _binary_content_findings(spec, by_path[spec.path])
+        else:
             findings += _content_findings(spec, store.read(spec.path))
 
     issues = [issue for issue, _ in findings]
@@ -99,6 +105,22 @@ def _undeclared_findings(
         for record in records
         if record.path not in declared
     ]
+
+
+def _binary_content_findings(
+    spec: ArtifactSpec, record: ArtifactRecord
+) -> list[_Finding]:
+    """R61：二进制产物（image）的内容检查——只判尺寸下界。
+
+    字节产物没有「文本解析 / must_contain」语义；``max_bytes`` 已在 commit 写入前
+    拦下，这里只补 ``min_bytes``（欠尺寸＝质量缺陷，走返工通道，与文本同口径）。
+    """
+    if record.size_bytes < spec.min_bytes:
+        return [(
+            f"{spec.path} 为空文件",
+            f"为 {spec.path} 补充实质内容（至少 {spec.min_bytes} 字节）",
+        )]
+    return []
 
 
 def _content_findings(spec: ArtifactSpec, content: str) -> list[_Finding]:

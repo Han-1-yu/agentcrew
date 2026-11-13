@@ -60,7 +60,7 @@ def test_unknown_kind_is_error():
     assert parse_check("nonsense", "x") is not None
 
 
-def test_kind_parsers_covers_all_twelve_kinds():
+def test_kind_parsers_covers_all_kinds():
     assert set(KIND_PARSERS) == set(get_args(ArtifactKind))
 
 

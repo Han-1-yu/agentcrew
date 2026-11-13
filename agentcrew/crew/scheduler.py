@@ -523,9 +523,9 @@ class Scheduler:
                 # V2: 预取上游摘要的 LLM 压缩（未配置摘要模型时为 no-op 截断）。
                 await self._context_bus.prefetch_summaries(task)
                 pack = self._context_bus.build(task, fix_hints=fix_hints)
-                return await self._agents.agent_for_task(task.role, task.id).execute(
-                    task, pack, fix_hints=fix_hints
-                )
+                return await self._agents.agent_for_task(
+                    task.role, task.id, assigned=task.agent
+                ).execute(task, pack, fix_hints=fix_hints)
             result = await asyncio.wait_for(
                 _run_with_timeout(), timeout=task.timeout_seconds
             )
@@ -559,6 +559,9 @@ class Scheduler:
             "task_dispatched",
             task_id=task.id,
             role=task.role,
+            # R59：留痕规划期指派的执行体（空=沿用角色默认绑定）。派发实际解析
+            # 失效指派时另记 task_agent_assignment_dropped，两条合起来可审计。
+            agent=task.agent,
             attempt=task.attempts,
             rework=_is_rework_dispatch(task),
             discarded=discarded,
@@ -960,6 +963,7 @@ class Scheduler:
             title=str(spec.get("title") or "动态子任务"),
             description=str(spec.get("description") or ""),
             role=str(spec.get("role") or "generic"),
+            agent=str(spec.get("agent") or ""),
             acceptance_criteria=[],
             deliverables=deliverables,
             dependencies=[],

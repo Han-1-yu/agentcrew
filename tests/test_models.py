@@ -120,7 +120,7 @@ def test_artifact_spec_defaults():
     assert s.max_bytes == 524288
 
 
-def test_artifact_kind_has_exactly_twelve_values():
+def test_artifact_kind_has_exactly_thirteen_values():
     assert get_args(ArtifactKind) == (
         "python",
         "json",
@@ -134,6 +134,7 @@ def test_artifact_kind_has_exactly_twelve_values():
         "dockerfile",
         "sql",
         "shell",
+        "image",
     )
 
 

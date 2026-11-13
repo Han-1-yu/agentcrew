@@ -117,6 +117,7 @@ from agentcrew.task.task import (
 )
 from agentcrew.task.task_board import TaskBoard
 from agentcrew.tools import (
+    GenerateImageTool,
     GrepTool,
     ListFilesTool,
     ReadFileTool,
@@ -125,6 +126,7 @@ from agentcrew.tools import (
     WebFetchTool,
     WebSearchTool,
     WriteFileTool,
+    build_image_provider,
 )
 from agentcrew.tools.guard import build_tool_guard
 from agentcrew.tools.registry import ToolRegistry
@@ -132,6 +134,7 @@ from agentcrew.tools.sandbox import ExecutionBackend, build_backend
 from agentcrew.tools.search import build_search_provider
 from agentcrew.utils.clock import elapsed_since, seconds_between, utc_now
 from agentcrew.utils.files import atomic_write_text
+from agentcrew.utils.workspace import reset_workspace, set_workspace
 
 _logger = logging.getLogger(__name__)
 
@@ -944,7 +947,14 @@ class Crew:
                     # 不再拆解、不再烧规划 token。交付卡点无需特殊分支：
                     # _execute 的终局判定天然会再次走到 human_delivery_gate。
                     board = await self._plan_gate(run, board, board.all())
-            return await self._execute(run, board)
+            # R60：把 run 工作区注入协程上下文，供 agentic coding CLI 作 cwd。
+            # 只声明路径、不建目录——非 agentic run 完全不读它，行为逐字不变；
+            # 目录由 AgenticCliProvider 在真正起子进程时按需创建。
+            ws_token = set_workspace(run.checkpoint.run_dir / "workspace")
+            try:
+                return await self._execute(run, board)
+            finally:
+                reset_workspace(ws_token)
         except ApprovalPending as pending:
             # R4：人工审批挂起 —— 这是**正常退出路径**，不是失败。绝不落到
             # 下面的 BaseException 兜底（那会把 run 封版成 FAILED）。
@@ -1066,7 +1076,7 @@ class Crew:
         try:
             tasks = with_final_task(
                 to_tasks(PlanOutput(tasks=list(self._preset_tasks))))
-            validate_plan(tasks, self._catalog)
+            validate_plan(tasks, self._catalog, profiles=self._settings.agent_profiles)
         except PlanValidationError as exc:
             errors = list(exc.errors)
             run.ledger.emit("plan_rejected", attempt=1, errors=errors,
@@ -1132,7 +1142,7 @@ class Crew:
                 else:
                     plan = await pm.decompose(run.goal, feedback=feedback)
                 tasks = with_final_task(to_tasks(plan))
-                validate_plan(tasks, self._catalog)
+                validate_plan(tasks, self._catalog, profiles=self._settings.agent_profiles)
             except PlanValidationError as exc:
                 errors = list(exc.errors)
                 feedback = tuple(errors)
@@ -1153,7 +1163,7 @@ class Crew:
         """G3 编辑结果：重新追加 T-FINAL 并重跑 §7.2 校验（spec §10.3）。"""
         try:
             tasks = with_final_task(edited)
-            validate_plan(tasks, self._catalog)
+            validate_plan(tasks, self._catalog, profiles=self._settings.agent_profiles)
         except PlanValidationError as exc:
             raise PlanFailedError(exc.errors) from exc
         return tasks
@@ -2064,6 +2074,15 @@ class Crew:
                     provider=build_search_provider(self._settings.search_provider),
                     max_results=self._settings.search_max_results,
                     timeout_secs=self._settings.search_timeout_seconds,
+                ))
+            # R61：``generate_image`` 只在配置了提供方时注册（默认关闭，同 C1）。
+            # 图片字节写进工作区，再经二进制产物通道成为受契约保护的交付物。
+            if self._settings.image_provider.strip():
+                tools.append(GenerateImageTool(
+                    provider=build_image_provider(self._settings.image_provider),
+                    workdir=workspace,
+                    timeout_secs=self._settings.image_timeout_seconds,
+                    ledger=ledger,
                 ))
             tools.extend((WriteFileTool(workdir=workspace), WebFetchTool()))
         for tool in tools:

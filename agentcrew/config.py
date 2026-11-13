@@ -83,6 +83,8 @@ _ENV_TO_FIELD: dict[str, str] = {
     "AGENTCREW_SEARCH_PROVIDER": "search_provider",
     "AGENTCREW_SEARCH_MAX_RESULTS": "search_max_results",
     "AGENTCREW_SEARCH_TIMEOUT_SECONDS": "search_timeout_seconds",
+    "AGENTCREW_IMAGE_PROVIDER": "image_provider",
+    "AGENTCREW_IMAGE_TIMEOUT_SECONDS": "image_timeout_seconds",
     "AGENTCREW_OTEL_ENABLED": "otel_enabled",
     "AGENTCREW_OTEL_ENDPOINT": "otel_endpoint",
     "AGENTCREW_OTEL_SERVICE_NAME": "otel_service_name",
@@ -134,6 +136,8 @@ _YAML_SCALAR_KEYS = (
     "sandbox_allow_network",
     # C1：联网搜索的提供方与配额。
     "search_provider", "search_max_results", "search_timeout_seconds",
+    # R61：图像生成的提供方与超时。
+    "image_provider", "image_timeout_seconds",
     "approval_mode",
     # P3-3：流式开关（默认关）。此前 ``BaseAgent(stream=...)`` 只有测试在传，
     # 生产 run 路径没有任何入口能打开它——等于一个「测过但从未跑过」的能力。
@@ -962,6 +966,17 @@ class Settings(BaseModel):
 
     search_timeout_seconds: float = Field(default=15.0, gt=0, le=60)
     """C1：单次搜索请求超时（秒，默认 15）。"""
+
+    image_provider: str = ""
+    """R61：图像生成提供方（默认空 = **关闭**，``generate_image`` 不注册）。
+
+    可选 ``ark``（豆包 Seedream）/ ``openai`` / ``mock``（离线夹具，仅测试与评测
+    用）。密钥只从环境变量读取（``ARK_API_KEY`` / ``OPENAI_API_KEY``，或通用的
+    ``AGENTCREW_IMAGE_API_KEY``），**绝不落盘**。
+    """
+
+    image_timeout_seconds: float = Field(default=60.0, gt=0, le=300)
+    """R61：单次图像生成请求超时（秒，默认 60）。"""
 
     stream: bool = False
     """是否让 Agent 走流式 LLM 路径（默认**关闭**，P3-3）。

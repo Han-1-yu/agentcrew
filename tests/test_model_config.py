@@ -21,6 +21,8 @@ def test_all_providers_present():
         "baichuan", "minimax", "stepfun", "lingyi", "xinghuo",
         # V5 P1 新增：国际
         "gemini", "mistral", "cohere",
+        # R60 新增：外部 coding CLI 真 agentic 执行体
+        "claude-code", "codex",
     }
 
 

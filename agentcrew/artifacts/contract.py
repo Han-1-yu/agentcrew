@@ -1,9 +1,9 @@
 """按 kind 的解析原语（spec §5.2、§12 G1）。
 
 ``parse_check`` 是产物的「结构合法性」原语：只有真能解析出语法的 kind
-（python/json/yaml/toml）在这里校验，其余 8 个 kind 恒通过 —— 它们的结构检查
+（python/json/yaml/toml）在这里校验，其余 9 个 kind 恒通过 —— 它们的结构检查
 由 Task 13 的 G1 用 :func:`has_placeholder` 与契约的 ``must_contain`` 承担，
-本模块不发明按 kind 的额外判据。
+本模块不发明按 kind 的额外判据（其中 ``image`` 是二进制，G1 只判尺寸）。
 
 硬性契约：**``parse_check`` 绝不抛异常**。畸形产物是数据，不是异常；返回的中文
 消息会作为 G1 的 issue 回灌给模型当返工提示，因此每条都带 kind 名与（解析器
@@ -246,6 +246,8 @@ _STRUCTURAL_PARSERS: dict[str, KINDParser] = {
 #: 必须恰好铺满 :data:`ArtifactKind`。
 _NO_STRUCTURE_KINDS: tuple[str, ...] = (
     "markdown", "text", "html", "css", "js", "sql", "shell", "dockerfile",
+    # R61：二进制产物没有文本结构可解析；G1 走 ``BINARY_KINDS`` 的尺寸判据。
+    "image",
 )
 
 #: kind → 解析器。键由 :data:`ArtifactKind` 字面量生成，与字面量不可能漂移。
