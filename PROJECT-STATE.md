@@ -8,19 +8,19 @@
 
 ## 0. 一句话现状
 
-**引擎与管线健康，无 P0/P1 阻断项。** 全量测试 **3242 passed / 2 skipped / 0 failed**（167 文件 / 42 批次，`scripts/test.py` 一次跑出），三个预设样例 100% 通过，真实模型通道可用（`doctor` 6/6 通过）；**C11 真实模型评测 23 条已全部跑过、22 条通过（95.7%）**（见 §3.70）；Studio 架构检查 73 模块 / 42 分片、`test:unit` 18 passed、e2e 32/32 全绿。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道；R19 给主管审核开了独立、不阻塞的 `suggestions` 建议通道；R20 补上单步/断点调试——每个任务派发前可挂起裁决，第二档功能项全部闭环；R21 给 API 契约装上守卫，openapi.yaml 与代码路由双向锁死、不再漏端点；R22 补上 resume 状态白名单与 MCP 管道显式关闭；R23 产出 2501 用例的模块/场景覆盖矩阵（`docs/TEST-REPORT.md`），验收报告遗留的最后一项小项闭环；R24 补上工具管理页与单工具试跑；R25 把共享 API Key 升级为多用户 RBAC（密钥/角色/作用域/归属/审计）；R26 补上拖拽式可视化编排（画布 + YAML 双向 + 图校验）；R27 给检索加向量通道（混合打分 + 磁盘缓存 + 本地退化）；R28 打通「画布 → run」直通规划；R29 让实体记忆也走向量混合（不加列、不迁移）；R30 给审批单加等待窗口与过期告警；R31 给条件边补否定/兜底写法；R32 把控制台 UI 重构成令牌化 + 明暗主题 + 侧栏布局；R33 把单层主管复核扩成可配的多级链；R34 修好本机测试环境（崩溃隔离跑器，一条命令出可信结论）；R50 按差距报告 69 条完成上线前加固——8 项 P0 全关、时钟容错让"前跳误杀/回拨死锁"不再可能、审批与预算的并发边界收口、`/metrics` 补齐可观测入口、Studio 断线可自愈（明细见 `docs/REMEDIATION-STATUS.md`）。R51 按能力路线第一批补上三根支柱的关键缺口：**能查**（`web_search`，四提供方、默认关、密钥只走环境变量）、**敢跑**（可插拔执行后端，默认 `local` 行为逐字不变，`docker` 可选：禁网/非 root/资源上限/只挂 run 目录，缺 docker 即报错）、**跑得出结论**（`run_tests` + G1 执行校验，失败并入既有返工通道），并把评测做成 mock/真实双轨（`eval --live` + 23 条真实小目标 + 夜间脚本）。R52 补上互操作与无人值守：**C7** 暴露为 MCP server（`mcp-serve`，5 个工具全走 HTTP API 复用 RBAC/审计）、**C6 第一步**借现成浏览器 MCP（配置模板 + 读优先白名单，零开发）、**C8** 入站 Webhook 触发（`POST /webhooks/trigger`，HMAC 或 API Key 两条认证路径，来源进 ledger）。R53 补上多模态输入（**C4**）：`run --image` / `POST /runs` 的 `images`（内联 base64，最多 4 张），provider 能力位 `supports_vision`（默认关）决定是否真发图，不支持时降级纯文本并落 `vision_unsupported`（降级可见），图片落盘留证。R54 补上文档 RAG（**C5**）：`knowledge/docs/` 下的团队手册/规范增量摄取分块，按相关性注入 PM 规划提示词与每个任务的上下文（复用 R11/R27 检索资产），`docs list/search` 管理入口。能力路线第二批至此全部落地。
+**本次复核的代码基线：`fd455ca`（本次提交仅回填状态文档）。自动化回归、静态检查与 CI 均通过；云主机回环验收实例仍在运行。** 本次全量测试 **3258 passed / 0 failed / 6 skipped / 0 error**（169 文件 / 85 批次 / 509.6s），跑器报告 3 个批次在进程崩溃后重试恢复，未输出“首次失败、重试通过”的待核项。真实模型评测与 Studio 分项数字保留为历史实测证据，本次未逐项重跑；当前 CI 的 Studio job 为 success。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道；R19 给主管审核开了独立、不阻塞的 `suggestions` 建议通道；R20 补上单步/断点调试——每个任务派发前可挂起裁决，第二档功能项全部闭环；R21 给 API 契约装上守卫，openapi.yaml 与代码路由双向锁死、不再漏端点；R22 补上 resume 状态白名单与 MCP 管道显式关闭；R23 产出 2501 用例的模块/场景覆盖矩阵（`docs/TEST-REPORT.md`），验收报告遗留的最后一项小项闭环；R24 补上工具管理页与单工具试跑；R25 把共享 API Key 升级为多用户 RBAC（密钥/角色/作用域/归属/审计）；R26 补上拖拽式可视化编排（画布 + YAML 双向 + 图校验）；R27 给检索加向量通道（混合打分 + 磁盘缓存 + 本地退化）；R28 打通「画布 → run」直通规划；R29 让实体记忆也走向量混合（不加列、不迁移）；R30 给审批单加等待窗口与过期告警；R31 给条件边补否定/兜底写法；R32 把控制台 UI 重构成令牌化 + 明暗主题 + 侧栏布局；R33 把单层主管复核扩成可配的多级链；R34 修好本机测试环境（崩溃隔离跑器，一条命令出可信结论）；R50 按差距报告 69 条完成上线前加固——8 项 P0 全关、时钟容错让"前跳误杀/回拨死锁"不再可能、审批与预算的并发边界收口、`/metrics` 补齐可观测入口、Studio 断线可自愈（明细见 `docs/REMEDIATION-STATUS.md`）。R51 按能力路线第一批补上三根支柱的关键缺口：**能查**（`web_search`，四提供方、默认关、密钥只走环境变量）、**敢跑**（可插拔执行后端，默认 `local` 行为逐字不变，`docker` 可选：禁网/非 root/资源上限/只挂 run 目录，缺 docker 即报错）、**跑得出结论**（`run_tests` + G1 执行校验，失败并入既有返工通道），并把评测做成 mock/真实双轨（`eval --live` + 23 条真实小目标 + 夜间脚本）。R52 补上互操作与无人值守：**C7** 暴露为 MCP server（`mcp-serve`，5 个工具全走 HTTP API 复用 RBAC/审计）、**C6 第一步**借现成浏览器 MCP（配置模板 + 读优先白名单，零开发）、**C8** 入站 Webhook 触发（`POST /webhooks/trigger`，HMAC 或 API Key 两条认证路径，来源进 ledger）。R53 补上多模态输入（**C4**）：`run --image` / `POST /runs` 的 `images`（内联 base64，最多 4 张），provider 能力位 `supports_vision`（默认关）决定是否真发图，不支持时降级纯文本并落 `vision_unsupported`（降级可见），图片落盘留证。R54 补上文档 RAG（**C5**）：`knowledge/docs/` 下的团队手册/规范增量摄取分块，按相关性注入 PM 规划提示词与每个任务的上下文（复用 R11/R27 检索资产），`docs list/search` 管理入口。能力路线第二批至此全部落地。
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | **3256 passed / 6 skipped / 0 failed**（169 文件 / 85 批次 / 432.6s，`scripts/test.py --batch 2 --retries 4 --retry-failed 3` 一次跑出；R51 +62 / R52 +27 / R53 +14 / R54 +13 / R56 +4 / R57 +5 / R58 +1 / R59 +4 / R60 +10，明细见 §3.64–§3.74）。6 个 skip 里 4 个是 docker 真容器用例（无 `AGENTCREW_DOCKER_LIVE=1` 时按规定 skip），2 个是既存 skip |
-| 静态检查 | `ruff check agentcrew/ main.py tests/` **全绿**；`mypy agentcrew/` **139 文件零错误**（本机与 CI 同口径；CI 首跑暴露的 5 条既存错误已在本批修复，见 §3.64） |
+| 全量测试 | 本次重跑 **3258 passed / 0 failed / 6 skipped / 0 error**（169 文件 / 85 批次 / 509.6s，`scripts/test.py --batch 2 --retries 4 --retry-failed 3`）。跑器报告 3 个批次在进程崩溃后重试恢复，未输出“首次失败、重试通过”的待核项；6 个 skip 沿用跑器结果，其中 4 个 docker 真容器用例由 CI 覆盖 |
+| 静态检查 | 本次复核重跑 `ruff check agentcrew/ main.py tests/`：**All checks passed**；`mypy agentcrew/`：**139 文件零错误** |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
 | Studio | `npm run check` **73** 模块 / 42 分片通过、`test:unit` **18/18**、electron `e2e` **32/32**（2026-11-13 本机实跑） |
 | 上线自检 | 本机可验 **9 项全通过**（doctor / 离线冒烟 / REST 认证 200·401 / `/metrics` / 无密钥退 3 / `clean` 干跑 / Studio 三连 / ruff+mypy）；目标机 10 项判据见 `docs/DEPLOY-CHECK-2026-11-13.md` |
 | 收尾 | 交付说明见 **`docs/CLOSURE-2026-11-13.md`**；B 类外部环境项 **5/5 全部闭环**；云主机真实部署验收 10 项中 **7 项闭环**（TLS/SSE、告警规则、日志、密钥、成本、webhook、备份），仅剩独立数据盘与两项 Docker 依赖（§3.77、`docs/DEPLOYMENT-VM-2026-11-13.md`） |
-| Git | 已与 `origin/master` 同步（R51–R60 全部推送）；**`main` 与 `master` 每次都指向同一 commit**（首次用 `git push master:main` 快进，之后由 `sync-main.yml` 自动快进）；**CI 连续全绿**——run **43404026920**（R60：7 job，含 `Sandbox·docker` 与 4 个 Python 版本 + Windows + Studio）success，**收尾 run `43406060256`（b9b4776）七 job 全 success**，`Sync main` 同步成功；此前的 43392129252 / 43393524865 / 43399398936 同样全绿；验收报告 `docs/ACCEPTANCE-2026-11-12.md`；**真实模型评测 23 条：22 通过 / 1 条字面契约失败（已由 R58 修提示） / 1 条证据缺口**（`bench/eval-live-2026-11-13.md`） |
+| Git | 状态文档提交前执行 `git fetch`：`HEAD`、`origin/master`、`origin/main` 均为 **`fd455ca`**，工作区干净；该基线 CI run **43425986756** 的 **7 个 job 全部 success**（Python 3.10/3.11/3.12/3.13、Windows、Studio、Docker 真隔离），Sync main run **43425986731** success；验收报告 `docs/ACCEPTANCE-2026-11-12.md`；真实模型评测历史证据为 23 条中 22 通过（`bench/eval-live-2026-11-13.md`，本次未重跑真实模型评测） |
 | 角色 | 8 个内置岗位角色 + 执行体（Agent Profile）可多绑 |
 
 ```bash
@@ -2221,6 +2221,40 @@ nginx TLS 反代 `https://localhost:18443`**。完整证据与复跑入口见
 - 验收实例只监听回环地址、使用本地测试 CA；公网正式证书、Alertmanager、外部日志
   聚合和 systemd 启用仍是生产切换动作，未写成已完成。webhook 测试接收端已停止，
   serve 与 nginx 保留供复核。
+
+---
+
+### 3.78 状态复核：以当前现场重跑为准（2026-11-13）
+
+本次不是按历史结论抄状态，而是分别重查 Windows 仓库、GitHub Actions 和云主机：
+
+- 全量测试重新执行 `scripts/test.py --batch 2 --retries 4 --retry-failed 3`：
+  **3258 passed / 0 failed / 6 skipped / 0 error**，169 文件 / 85 批次 / 509.6s。
+  跑器报告 3 个批次进程崩溃后重试恢复；没有输出“首次失败、重试通过”的待核项。
+  这里只记录跑器事实，不额外推断三次进程崩溃的根因。
+- 静态检查重新执行：ruff `All checks passed!`；mypy `139 source files` 零错误。
+- `git fetch` 后 `HEAD`、`origin/master`、`origin/main` 均为 `fd455ca`，工作区干净。
+  CI run `43425986756` 的 7 个 job 逐一查询均为 success；Sync main run
+  `43425986731` 为 success。`19a55c5` 的 CI 曾被后续提交取消，不写成成功；
+  其代码由后续 `af3336d`、`fd455ca` 的成功 CI 覆盖。
+- 云主机仓库已快进到 `fd455ca`。`127.0.0.1:8765` 与 `127.0.0.1:18443`
+  仍在监听，webhook 测试端口 18096 未监听。环境文件权限仍为 0600。
+- 云主机重新执行 `deploy_check.py`，结果仍是 **6 PASS / 1 FAIL / 5 SKIP**，
+  退出码 1；唯一 FAIL 仍是数据目录与仓库同挂载点。备份恢复仍为 3 run / 6 文件。
+  原始输出为 `logs/deploy-check-reverify.txt`。
+- 数据目录和仓库经 `findmnt` 均位于 `/home/user` 的 `fs-913d972175601020`
+  （`hpvs_fs`）；`docker` 可执行文件不存在。因此独立数据盘、容器挂卷/healthcheck、
+  Docker 下 `g1_exec_check` 仍不能判通过。
+- promtool 2.55.1 重跑：`check rules` 识别 2 条规则，`test rules` 为 SUCCESS。
+  SSE 证据文件仍为 4,567 字节，响应头含 `Content-Type: text/event-stream` 与
+  `X-Accel-Buffering: no`。
+- webhook 原始 `webhook-requests.jsonl` 重新解析为 3 条记录、2 个不同 delivery id，
+  duplicate flags 为 `[false, false, true]`，即处理 2 次、重复拦截 1 次。
+  修复后的 run `20261113-202149-4fe3` 快照字段重新读取仍为 `api_keys=['***']`。
+
+本次没有重跑真实模型评测、RAG 对照、MCP/Playwright 或 Studio 分项测试；这些仍按
+各自报告作为历史证据，不包装成本次新结果。当前 CI 的 Studio 与 Docker 真隔离 job
+已重新确认成功。
 
 ---
 

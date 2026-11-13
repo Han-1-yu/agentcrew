@@ -4,11 +4,15 @@
 7 项闭环，剩余 3 项是这台机器的硬约束，不能用软件绕过。** 本实例只监听
 `127.0.0.1`，使用本地测试 CA，不是公网生产入口。
 
+**复核口径：本次状态更新再次检查了仓库提交、监听端口、挂载点和 Docker 可执行
+文件，重跑 `deploy_check.py` 与 promtool，并重算 webhook 原始记录；结论未变。**
+复核自检原始输出为 `/home/user/agentcrew-runtime/logs/deploy-check-reverify.txt`。
+
 ## 1. 实际部署形态
 
 | 组件 | 地址 / 路径 | 状态 |
 | --- | --- | --- |
-| 仓库 | `/home/user/agentcrew`，`main` | 验收时 `af3336d` |
+| 仓库 | `/home/user/agentcrew`，`main` | 复核基线 `fd455ca`；验收代码为 `af3336d`，此后提交仅文档与配置资产 |
 | AgentCrew serve | `127.0.0.1:8765` | 运行中，API 认证开启 |
 | nginx TLS 反代 | `https://localhost:18443` | 运行中，SSE 不缓冲 |
 | 运行数据 | `/home/user/agentcrew-runtime/output` | 与仓库同一挂载点，故独立数据盘 FAIL |
@@ -58,6 +62,8 @@ python3 scripts/deploy_check.py \
   算作未做。
 
 原始输出：`/home/user/agentcrew-runtime/logs/deploy-check-final.txt`。
+状态复核重跑输出：`/home/user/agentcrew-runtime/logs/deploy-check-reverify.txt`，
+结果仍为 **6 PASS / 1 FAIL / 5 SKIP**，`deploy_check_exit=1`。
 
 ## 4. 验收暴露并修复的两个真实缺陷
 
@@ -69,7 +75,9 @@ python3 scripts/deploy_check.py \
    把每个值替换为 `***`，并新增落盘回归用例。云主机已轮换本次临时 key、清除旧
    副本，再用修复后的 run `20261113-202149-4fe3` 验证快照只剩 `['***']`。
 
-两项修复合计相关测试 **40 passed**，ruff / mypy 通过；完整回归由 CI 执行。
+两项修复合计相关测试 **40 passed**，ruff / mypy 通过；状态复核已重新执行完整回归，
+结果为 **3258 passed / 0 failed / 6 skipped / 0 error**，当前 `fd455ca` 的 CI
+7 个 job 也全部 success。
 
 ## 5. 仓库内可复用资产
 
