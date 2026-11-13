@@ -40,7 +40,7 @@
 | 验收标准 | 结果 | 证据 |
 | --- | --- | --- |
 | 无 vision 能力的 provider 明确降级提示 | ✅ | 丢图 + 每 Agent 一次 `vision_unsupported` ledger 事件；带图消息与纯文本路径逐字节对拍钉住（`tests/test_multimodal.py` 14 例） |
-| 真实模型「截图→复刻/修改前端」端到端 | ⏳ 待真机 | 需 vision 模型；`run --image` / `POST /runs` images 入口 + 落盘留证已就绪 |
+| 真实模型「截图→复刻/修改前端」端到端 | ✅ 通过（2026-11-13） | 智谱 GLM-4.5V，run `20261113-194447-e27c`：4/4 任务成功、14 次真实调用、`vision_unsupported=0`；蓝按钮改绿并新增忘记密码链接，产物二次截图比对通过（`docs/VISION-2026-11-13.md`） |
 
 ### C5 文档 RAG（R54）｜✅ 通过（本机）
 

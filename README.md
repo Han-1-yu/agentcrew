@@ -554,7 +554,10 @@ DELETE /runs/{run_id}?confirm=1
   数组（内联 base64，最多 4 张）。是否真发给模型由
   `capabilities.supports_vision` 决定（默认关）；不支持时降级纯文本并落
   `vision_unsupported` 事件——降级可见，不静默。图片落盘到
-  `<run_dir>/context/images/` 并记 `images_attached`。
+  `<run_dir>/context/images/` 并记 `images_attached`。智谱 GLM-4.5V 的
+  真实「截图→改前端」已验收（`docs/VISION-2026-11-13.md`）；可复用配置见
+  `examples/agentcrew.vision.example.yaml`（注意 `AGENTCREW_DEFAULT_MODEL`
+  会覆盖 YAML 默认模型，且 `glm-4v-flash` 输出上限仅 1024 tokens）。
 - **诚实留痕**：每次工具调用都记 ledger `tool_call` 事件（工具名、入参摘要、
   success、耗时、**mode**）。
 - **原生 function calling（P2-1，默认关闭）**：把 provider 的

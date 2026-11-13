@@ -68,11 +68,9 @@
   （`Permission denied`）→ 已改为默认取宿主 uid（Windows 退回 nobody）并拒绝 `uid=0`，
   二轮 run `43399398936` 该 job 全绿。目标机上线时仍需按 §四 第 10 项跑一次
   `g1_exec_check`。
-- **vision 端到端缺多模态模型**：`.env` 里 `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`
-  为空串，`ARK` / `DASHSCOPE` / `QIANFAN` 是占位短串（len 11 / 6 / 13），
-  `providers --json` 里只有 `deepseek` 的 `key_configured=true` 且
-  `supports_vision=false`。通道本身已由 `tests/test_multimodal.py` 覆盖，
-  拿到任一多模态 key 即可跑 `run --image`。
+- **vision 端到端已闭环（2026-11-13）**：用户提供智谱 key 后，GLM-4.5V
+  真实跑通「截图→改前端」，4/4 任务成功、`vision_unsupported=0`；证据与复跑配置见
+  `docs/VISION-2026-11-13.md` 和 `examples/agentcrew.vision.example.yaml`。
 - **MCP 互通已验（不再算边界）**：用官方 `@modelcontextprotocol/sdk`（Node）当客户端，
   对 `main.py mcp-serve` 完成 `initialize`（server=agentcrew 1.0.0）→ `tools/list`
   （5 个工具）→ `create_run`（run_id `20261113-165919-5a0c`）→ `wait_for_run`
