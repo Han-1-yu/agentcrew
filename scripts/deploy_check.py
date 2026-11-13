@@ -32,6 +32,7 @@ import ssl
 import sys
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -104,6 +105,14 @@ def check_metrics(base_url: str, key: str) -> list[Check]:
     return [Check("metrics 暴露", PASS, "200 且含 agentcrew_up")]
 
 
+def _tls_address(base_url: str) -> tuple[str, int]:
+    """从 HTTPS URL 取握手地址；显式端口不能被悄悄改回 443。"""
+    parsed = urllib.parse.urlsplit(base_url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError(f"不是有效的 HTTPS 地址：{base_url!r}")
+    return parsed.hostname, parsed.port or 443
+
+
 def check_tls(base_url: str) -> list[Check]:
     """TLS：https 时校验证书有效期；http 时明确 SKIP（要反代补）。"""
     if not base_url:
@@ -112,12 +121,14 @@ def check_tls(base_url: str) -> list[Check]:
         return [Check(
             "TLS / 反代", SKIP,
             "当前是明文 http；上线必须挂反代（并关掉 SSE 缓冲，见 OPERATIONS §8）")]
-    host = urllib.request.url2pathname(base_url.split("://", 1)[1].split("/", 1)[0])
-    host = host.split(":")[0]
+    try:
+        host, port = _tls_address(base_url)
+    except ValueError as exc:
+        return [Check("TLS / 反代", FAIL, str(exc))]
     context = ssl.create_default_context()
     try:
         with context.wrap_socket(
-            __import__("socket").create_connection((host, 443), timeout=10),
+            __import__("socket").create_connection((host, port), timeout=10),
             server_hostname=host,
         ) as sock:
             cert = sock.getpeercert()

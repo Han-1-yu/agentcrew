@@ -40,6 +40,13 @@ def test_plain_http_is_skipped_with_actionable_detail():
     assert "反代" in checks[0].detail
 
 
+def test_tls_address_honors_explicit_port_and_ipv6():
+    """反代不一定在 443：自签/内网验收常用 8443 等端口。"""
+    assert deploy_check._tls_address("https://localhost:18443") == ("localhost", 18443)
+    assert deploy_check._tls_address("https://example.com/health") == ("example.com", 443)
+    assert deploy_check._tls_address("https://[::1]:8443") == ("::1", 8443)
+
+
 def test_separate_disk_detects_same_device(tmp_path):
     repo = tmp_path / "repo"
     data = repo / "output"
