@@ -19,7 +19,7 @@
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
 | Studio | `npm run check` **73** 模块 / 42 分片通过、`test:unit` **18/18**、electron `e2e` **32/32**（2026-11-13 本机实跑） |
 | 上线自检 | 本机可验 **9 项全通过**（doctor / 离线冒烟 / REST 认证 200·401 / `/metrics` / 无密钥退 3 / `clean` 干跑 / Studio 三连 / ruff+mypy）；目标机 10 项判据见 `docs/DEPLOY-CHECK-2026-11-13.md` |
-| Git | 已与 `origin/master` 同步（R51–R55 全部推送）；**CI 连续五轮全绿**（R56/R57 之后未再推，待下一次 push 触发）；验收报告 `docs/ACCEPTANCE-2026-11-12.md`；**真实模型评测 23 条：22 通过 / 1 条字面契约失败 / 1 条证据缺口**（`bench/eval-live-2026-11-13.md`） |
+| Git | 已与 `origin/master` 同步（R51–R58 全部推送，HEAD `3480867`）；**CI 连续第六轮全绿**——run **43392129252**（R58）：四版本矩阵 + Windows(uv) + Studio 共 **6 job 全部 success**；验收报告 `docs/ACCEPTANCE-2026-11-12.md`；**真实模型评测 23 条：22 通过 / 1 条字面契约失败（已由 R58 修提示） / 1 条证据缺口**（`bench/eval-live-2026-11-13.md`） |
 | 角色 | 8 个内置岗位角色 + 执行体（Agent Profile）可多绑 |
 
 ```bash
@@ -1982,7 +1982,8 @@ test_end_to_end_against_real_serve` 起真 `serve` 后只给约 5 秒就绪预�
 **验证**：`tests/test_static_checks.py` + `tests/test_gatekeeper.py` **56 passed**；
 全量 `scripts/test.py --batch 4 --retries 3 --retry-failed 2`（167 文件 / 42 批次 /
 486.0s）→ **3242 passed · 0 failed · 2 skipped · 0 error**（崩溃重试恢复 5 个，无待核项）；
-ruff 全绿；mypy 139 文件零错误。
+ruff 全绿；mypy 139 文件零错误。**CI 仲裁**：run **43392129252** 六 job 全 success
+（Python 3.10/3.11/3.12/3.13 + Windows(uv) + Studio Node 20）。
 
 ---
 
