@@ -779,6 +779,20 @@ HTTP 等价物是 `GET /tools` 与 `POST /tools/{name}/test`，看板首页「�
 
 ## 8. 上线前检查清单
 
+> **先跑脚本，再对照清单。** 其中能自动判的 8 项已由 `scripts/deploy_check.py`
+> 实现（`PASS/FAIL/SKIP`，有 FAIL 退出码为 1，可直接接进部署流水线）：
+>
+> ```bash
+> python scripts/deploy_check.py \
+>     --base-url https://crew.example.com --api-key "$AGENTCREW_API_KEY" \
+>     --data-dir /var/lib/agentcrew/output --log-file /var/log/agentcrew/api.log \
+>     --container agentcrew
+> ```
+>
+> 判不了的 4 项（反代细节 / 告警规则 / 密钥托管 / webhook 幂等）会明确打印成
+> SKIP 并附人工判据，**不会显示成通过**。判据明细见
+> `docs/DEPLOY-CHECK-2026-11-13.md` §7。
+>
 > 本机已验项与实测结果见 `docs/DEPLOY-CHECK-2026-11-13.md`（doctor / 离线冒烟 /
 > REST 认证 200·401 / `/metrics` / 无密钥退 3 / `clean --dry-run` / Studio 三连 / 静态检查）。
 > 下面这些仍需在目标机上逐条打勾。
