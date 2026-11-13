@@ -89,6 +89,37 @@ jobs:
         env:
           AGENTCREW_MOCK: "true"
 
+  # C2 的 docker 后端此前只有「命令行参数拼得对」的纯函数单测——那答不出
+  # 「这些参数真进容器后是否真的隔离」。真隔离需要一台有 docker 的机器，
+  # 开发机与云主机都起不来容器（unshare: operation not permitted），于是把
+  # runner 当那台机器：真拉镜像、真起容器、真跑四条逃逸用例。
+  # 用例见 tests/test_docker_isolation_live.py（无开关默认 skip，避免假绿）。
+  sandbox-docker:
+    name: "Sandbox · docker 真隔离"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Pull sandbox image
+        run: docker pull python:3.12-slim
+
+      - name: 真容器隔离用例（禁网 / 宿主不可见 / 非 root / 资源上限）
+        run: AGENTCREW_DOCKER_LIVE=1 pytest -q tests/test_docker_isolation_live.py
+        env:
+          AGENTCREW_MOCK: "true"
+
   # D-8：Studio（Electron 前端）此前完全没有 CI——架构分层、模块体量、单元测试
   # 只能靠人记得在本地跑。这里补一个纯 Node job（不启动 Electron：CI 无显示服务）。
   studio:
