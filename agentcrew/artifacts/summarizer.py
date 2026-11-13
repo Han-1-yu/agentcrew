@@ -96,7 +96,7 @@ def summarize_records(
     blocks: list[str] = []
     for record in records:
         try:
-            content = store.read(record.path, max_bytes=64 * 1024)
+            content = store.read_for_prompt(record.path, max_bytes=64 * 1024)
         except Exception:  # noqa: BLE001 - 单个产物读失败不影响其余
             blocks.append(f"[{record.kind} 摘要] {record.path}：（正文不可读）")
             continue

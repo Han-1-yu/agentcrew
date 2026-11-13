@@ -44,6 +44,7 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from agentcrew.artifacts.spec import BINARY_KINDS
 from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.config import GateMode
 from agentcrew.context.context_bus import ContextBus
@@ -395,6 +396,10 @@ class Gatekeeper:
         by_kind: dict[str, list[tuple[Path | str, str]]] = {}
         for spec in task.deliverables:
             if spec.path not in produced:
+                continue
+            # 二进制产物没有文本可查：``store.read`` 会按 UTF-8 解码 PNG 并抛
+            # ``UnicodeDecodeError``；尺寸判据已由 G1 的 ``run_static`` 覆盖。
+            if spec.kind in BINARY_KINDS:
                 continue
             by_kind.setdefault(spec.kind, []).append(
                 (spec.path, self._store.read(spec.path)))

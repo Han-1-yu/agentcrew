@@ -24,6 +24,7 @@ from agentcrew.runtime.ledger import Ledger
 from agentcrew.task.task import Task
 from agentcrew.task.task_board import TaskBoard
 from agentcrew.tools import ReadFileTool, Tool, ToolRegistry
+from agentcrew.tools.image import GenerateImageTool, MockImageProvider
 
 
 class _SecretTool(Tool):
@@ -92,6 +93,42 @@ def test_system_prompt_has_no_tool_section_without_registry(env):
     system = messages[0]["content"]
     assert "<tool_call>" not in system
     assert "可用工具" not in system
+
+
+# ── R61：图像交付物的提示词（必须调工具，不能写围栏）──────────────────────
+
+def _image_task() -> Task:
+    return Task(
+        id="T-9", title="出图", description="生成封面图", role="backend_dev",
+        acceptance_criteria=["图能打开"],
+        deliverables=[ArtifactSpec(path="assets/cover.png", kind="image",
+                                   description="封面图")])
+
+
+def _image_agent(env, registry: ToolRegistry | None):
+    return _make_agent(env, registry)
+def test_image_deliverable_prompt_requires_tool_not_fence(env):
+    registry = ToolRegistry()
+    registry.register(GenerateImageTool(
+        provider=MockImageProvider(), workdir=env["proj"]))
+    task = _image_task()
+    bus = ContextBus("目标", TaskBoard([task]), env["store"])
+    system = _image_agent(env, registry).build_messages(task, bus.build(task), ())[0][
+        "content"]
+    assert "二进制图像产物" in system
+    assert "generate_image" in system
+    assert "不要" in system and "`file=` 围栏" in system
+
+
+def test_image_prompt_omits_hint_when_tool_unavailable(env):
+    """工具没注册时不承诺能力：提示词里不得出现「调用 generate_image」。"""
+    registry = ToolRegistry()
+    registry.register(ReadFileTool(workdir=env["proj"]))
+    task = _image_task()
+    bus = ContextBus("目标", TaskBoard([task]), env["store"])
+    system = _image_agent(env, registry).build_messages(task, bus.build(task), ())[0][
+        "content"]
+    assert "二进制图像产物" not in system
 
 
 # ── ReAct 主循环 ──────────────────────────────────────────────────────

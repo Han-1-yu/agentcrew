@@ -152,6 +152,20 @@ _ARTIFACT_FORMAT = """\
 #: 反引号），免得和 ``file=`` 产物围栏相互干扰。
 _TOOL_CALL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
 
+#: DeepSeek 私有工具标记：``<｜｜DSML｜｜ calls><｜｜DSML｜｜ invoke name="x">…``。
+#: 实测（``deepseek-chat``，2026-11-13）：同一提示词下模型时而写 ``<tool_call>``、
+#: 时而漏出这套原生标记。后者不被解析时，该轮会被判成「没有工具调用」→ 循环退出
+#: → 任务缺产物，且从报告只能看到「缺少必需产物」，推不出病因。这里按同义语法
+#: 读它：只增加容错，**不改变**对模型宣告的协议。
+_DSML_MARK = r"[|｜]{2}DSML[|｜]{2}"
+_DSML_INVOKE_RE = re.compile(
+    r"<" + _DSML_MARK + r"\s*invoke\s+name=\"([^\"]+)\"\s*>(.*?)"
+    r"</" + _DSML_MARK + r"\s*invoke>", re.DOTALL)
+_DSML_PARAM_RE = re.compile(
+    r"<" + _DSML_MARK + r"\s*parameter\s+name=\"([^\"]+)\""
+    r"(?:\s+string=\"(true|false)\")?\s*>(.*?)"
+    r"</" + _DSML_MARK + r"\s*parameter>", re.DOTALL)
+
 #: ReAct 循环的默认最大轮数（每轮 = 一次 LLM 调用 + 一批工具执行）。
 _DEFAULT_MAX_TOOL_CALLS = 10
 
@@ -162,6 +176,19 @@ _SUBTASK_RE = re.compile(r"<subtask>\s*(.*?)\s*</subtask>", re.DOTALL)
 
 #: P2-1：仅当本 Agent 注入了 ``subtask_creator`` 时才在系统提示词里告知模型
 #: 可以请求动态子任务——未注入时模型看不到这段，行为与原来完全一致。
+
+#: R61：二进制产物不能走文本围栏——图片必须由 ``generate_image`` 写进工作区。
+#: 仅在「任务确有二进制交付物」且「该工具真的可用」时注入，其余路径逐字不变。
+_BINARY_ARTIFACT_SECTION = """\
+## 二进制图像产物
+本任务的以下交付物是**二进制图片**，不能用文本围栏输出：
+{paths}
+
+请调用 `generate_image` 工具生成，`path` 参数逐字使用上面的路径。
+生成成功后**不要**再为这些路径写 `file=` 围栏——围栏里的文字会被当作图片内容保存，
+产物将不可用。回复里用一句话说明已生成即可。
+"""
+
 _SUBTASK_SECTION = """\
 ## 动态子任务（可选）
 如果本任务需要拆出独立的子任务来完成，可以在回复中用一对 `<subtask>` 围栏请求创建一个子任务。围栏内是一个 JSON 对象：
@@ -273,11 +300,45 @@ def _native_tool_calls(completion: CompletionResult) -> list[ParsedToolCall]:
     return calls
 
 
+def _dsml_args(body: str) -> dict[str, Any]:
+    """解析 DSML ``invoke`` 块里的 ``parameter`` 集合。
+
+    两种形状都实测见过：整包 ``{"args": {...}}`` 作为一个参数传进来，或逐参数
+    （``path`` / ``prompt`` / ``size``）平铺。``string="true"`` 表示原样字符串，
+    否则按 JSON 尝试一次（数字 / 布尔 / 对象），失败再退回字符串。
+    """
+    args: dict[str, Any] = {}
+    for match in _DSML_PARAM_RE.finditer(body):
+        name = match.group(1).strip()
+        raw = match.group(3)
+        value: Any = raw
+        if match.group(2) != "true":
+            try:
+                value = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                value = raw
+        if name == "args" and isinstance(value, dict):
+            args.update(value)
+        else:
+            args[name] = value
+    return args
+
+
+def _extract_dsml_calls(raw: str) -> list[ParsedToolCall]:
+    """从 DeepSeek 私有标记里提取工具调用（``<｜｜DSML｜｜ invoke>``）。"""
+    return [
+        ParsedToolCall(match.group(1).strip(), _dsml_args(match.group(2)))
+        for match in _DSML_INVOKE_RE.finditer(raw)
+    ]
+
+
 def _extract_tool_calls(raw: str) -> list[ParsedToolCall]:
     """从模型回复里提取全部 ``<tool_call>`` 块并解析其 JSON。
 
     JSON 非法或不是对象的块以 ``name="<malformed>"`` 占位——执行层会把它转成
     一条错误文本回灌给模型，而不是悄悄丢掉（丢了模型就不知道自己写错了）。
+
+    DeepSeek 漏出的 ``<｜｜DSML｜｜ invoke>`` 同义语法一并读（见 ``_DSML_MARK``）。
     """
     calls: list[ParsedToolCall] = []
     for match in _TOOL_CALL_RE.finditer(raw):
@@ -299,6 +360,7 @@ def _extract_tool_calls(raw: str) -> list[ParsedToolCall]:
         if not isinstance(args, dict):
             args = {}
         calls.append(ParsedToolCall(name, args))
+    calls.extend(_extract_dsml_calls(raw))
     return calls
 
 
@@ -704,6 +766,13 @@ class BaseAgent(ABC):
         tools_section = self._tools_section(native=native_tools)
         if tools_section:
             system_parts.append(tools_section)
+        # R61：有二进制交付物且工具确实可用时，才告诉模型「必须调工具、不要写围栏」。
+        binary_paths = [s.path for s in task.deliverables if s.kind in BINARY_KINDS]
+        if binary_paths and any(
+            tool.name == "generate_image" for tool in self._available_tools()
+        ):
+            system_parts.append(_BINARY_ARTIFACT_SECTION.format(
+                paths="\n".join(f"- `{path}`" for path in binary_paths)))
         # P2-1：仅在注入了子任务回调时告知模型可以请求动态子任务。
         if self._subtask_creator is not None:
             system_parts.append(_SUBTASK_SECTION)

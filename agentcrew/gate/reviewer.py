@@ -355,7 +355,8 @@ class Reviewer:
         remaining = self._excerpt_budget_tokens
         blocks: list[str] = []
         for path in paths:
-            excerpt, truncated = _truncate_lines(self._store.read(path), remaining)
+            excerpt, truncated = _truncate_lines(
+                self._store.read_for_prompt(path), remaining)
             remaining = max(0, remaining - estimate_tokens(excerpt))
             block = f"### {path}\n{excerpt}"
             if truncated:
@@ -412,7 +413,8 @@ class Reviewer:
             if remaining <= 0:
                 blocks.append("（预算用尽，其余参考文件未附）")
                 break
-            excerpt, truncated = _truncate_lines(self._store.read(path), remaining)
+            excerpt, truncated = _truncate_lines(
+                self._store.read_for_prompt(path), remaining)
             remaining = max(0, remaining - estimate_tokens(excerpt))
             block = f"### {path}\n{excerpt}"
             if truncated:

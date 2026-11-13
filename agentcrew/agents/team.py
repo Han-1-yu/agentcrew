@@ -26,7 +26,7 @@ from typing import cast
 
 from agentcrew.agents.base_agent import AgentExecutionError, BaseAgent
 from agentcrew.agents.plan import ResolvedAgent, pick_primary
-from agentcrew.artifacts.spec import ArtifactRecord
+from agentcrew.artifacts.spec import BINARY_KINDS, ArtifactRecord
 from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.config import Settings
 from agentcrew.context.context_bus import ContextPack, UpstreamDigest
@@ -569,7 +569,7 @@ class TeamAgent:
         blocks: list[str] = []
         for record in records:
             try:
-                text = self._store.read(record.path)
+                text = self._store.read_for_prompt(record.path)
             except OSError:
                 blocks.append(f"### {record.path}\n（读取失败）")
                 continue
@@ -668,22 +668,37 @@ class TeamAgent:
     ) -> TaskResult:
         started = datetime.now()
         pairs = await self._run_shadows(task, pack, fix_hints)
-        contents: dict[str, list[tuple[str, str]]] = {}
+        contents: dict[str, list[tuple[str, str | bytes]]] = {}
         for member, _result in pairs:
             for spec in task.deliverables:
                 draft = f"{_DRAFT_DIR}/{member.profile}/{spec.path}"
                 try:
-                    contents.setdefault(spec.path, []).append(
-                        (member.profile, self._store.read(draft)))
+                    # 二进制产物读原始字节：按文本拼两份 PNG 既无意义也会解码失败。
+                    value: str | bytes = (
+                        self._store.read_bytes(draft)
+                        if spec.kind in BINARY_KINDS
+                        else self._store.read_for_prompt(draft)
+                    )
                 except OSError:
                     continue
+                contents.setdefault(spec.path, []).append((member.profile, value))
         records: list[ArtifactRecord] = []
         for spec in task.deliverables:
             parts = contents.get(spec.path)
             if not parts:
                 continue
+            if spec.kind in BINARY_KINDS:
+                # 二进制不做文本合并：取第一个执行体的草稿原样提交。
+                raw = parts[0][1]
+                if not isinstance(raw, bytes):
+                    continue
+                records.append(
+                    self._store.commit_bytes(spec.path, raw, spec=spec, task=task))
+                continue
             merged = "\n\n".join(
-                f"<!-- {profile} -->\n{text}" for profile, text in parts)
+                f"<!-- {profile} -->\n{text}"
+                for profile, text in parts
+                if isinstance(text, str))
             records.append(self._store.commit(spec.path, merged, spec=spec, task=task))
         self._ledger.emit(
             "agent_aggregated", task_id=task.id, role=self.spec.key, mode="merge",
@@ -708,6 +723,11 @@ class TeamAgent:
             relative = record.path.split("/", 2)[-1]
             spec = next((d for d in task.deliverables if d.path == relative), None)
             if spec is None:
+                continue
+            if spec.kind in BINARY_KINDS:
+                records.append(self._store.commit_bytes(
+                    spec.path, self._store.read_bytes(record.path),
+                    spec=spec, task=task))
                 continue
             records.append(self._store.commit(
                 spec.path, self._store.read(record.path), spec=spec, task=task))

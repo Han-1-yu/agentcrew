@@ -12,7 +12,12 @@ from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
-from agentcrew.artifacts.spec import ArtifactRecord, ArtifactSpec, Manifest
+from agentcrew.artifacts.spec import (
+    BINARY_KINDS,
+    ArtifactRecord,
+    ArtifactSpec,
+    Manifest,
+)
 from agentcrew.contracts import EventSink, TaskLike
 from agentcrew.utils.clock import utc_now
 from agentcrew.utils.files import (
@@ -244,6 +249,36 @@ class ArtifactStore:
         if len(data) <= max_bytes:
             return text
         return data[:max_bytes].decode("utf-8", errors="replace")
+
+    def read_bytes(self, rel: str) -> bytes:
+        """读取产物原始字节（二进制产物用；路径安全同 :meth:`read`）。"""
+        return self.resolve(rel).read_bytes()
+
+    def kind_of(self, rel: str) -> str | None:
+        """已登记产物的 kind；未登记返回 ``None``（调用方按文本处理）。"""
+        normalized = safe_relpath(rel).as_posix()
+        for record in self._records:
+            if record.path == normalized:
+                return record.kind
+        return None
+
+    def read_for_prompt(self, rel: str, *, max_bytes: int | None = None) -> str:
+        """按 kind 读取产物，供提示词 / 评审上下文使用。
+
+        文本产物与 :meth:`read` 完全一致；二进制产物（``BINARY_KINDS``）**不做
+        UTF-8 解码**——那一定会抛 ``UnicodeDecodeError``，让一张 PNG 把整个
+        gate/review 链路打断——改返回一行元数据摘要，让下游知道「有这个产物、
+        多大、在哪」，而不是拿到乱码或异常。
+        """
+        kind = self.kind_of(rel)
+        if kind in BINARY_KINDS:
+            normalized = safe_relpath(rel).as_posix()
+            size = self.resolve(normalized).stat().st_size
+            return (
+                f"[二进制产物 {kind}：{normalized}，{size} 字节；"
+                f"内容不注入文本上下文]"
+            )
+        return self.read(rel, max_bytes=max_bytes)
 
     def exists(self, rel: str) -> bool:
         """``root`` 下是否已有该文件；不安全路径照抛 ``UnsafePathError``。"""

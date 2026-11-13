@@ -103,6 +103,65 @@ def test_g1_image_ignores_must_contain(tmp_path):
     assert review.verdict == "approve"  # 二进制不做 must_contain
 
 
+# ── 文本读取链路：二进制产物不得按 UTF-8 解码 ──────────────────────────────
+#
+# 2026-11-13 真实模型端到端抓到的缺陷：generate_image 已成功落盘，但 G1 之后的
+# 扩展检查 / G2 评审 / 上下文组装仍用 ``store.read`` 把 PNG 当文本解码，
+# ``UnicodeDecodeError`` 直接把任务判失败。以下用例钉住「二进制只出元数据」。
+
+def _gatekeeper(tmp_path, store, ledger):
+    from agentcrew.gate.gatekeeper import Gatekeeper, NullPrompter
+    from agentcrew.gate.reviewer import Reviewer
+    from agentcrew.roles.catalog import RoleCatalog
+    from agentcrew.task.task_board import TaskBoard
+
+    models = ModelFactory(Settings(default_model="mock:model"),
+                          ledger=ledger, fixtures_dir=tmp_path)
+    reviewer = Reviewer(models, RoleCatalog(BUILTIN_ROLES), store, ledger)
+    return Gatekeeper(reviewer, store, TaskBoard([]), gate="none",
+                      ledger=ledger, prompter=NullPrompter())
+
+
+def test_read_for_prompt_keeps_text_content(tmp_path):
+    store, _ = _store(tmp_path)
+    task = Task(id="T-2", title="t", description="d", role="backend_dev",
+                acceptance_criteria=["ok"],
+                deliverables=[ArtifactSpec(path="a.md", kind="markdown",
+                                           description="d")])
+    store.commit("a.md", "# 标题\n正文", spec=task.deliverables[0], task=task)
+    assert store.read_for_prompt("a.md") == "# 标题\n正文"
+
+
+def test_read_for_prompt_describes_binary_without_decoding(tmp_path):
+    store, _ = _store(tmp_path)
+    task = _image_task()
+    store.commit_bytes("cover.png", _PNG, spec=task.deliverables[0], task=task)
+    text = store.read_for_prompt("cover.png")
+    assert "二进制产物 image" in text
+    assert "cover.png" in text and str(len(_PNG)) in text
+    assert store.kind_of("cover.png") == "image"
+    assert store.read_bytes("cover.png") == _PNG
+
+
+def test_extended_checks_skip_binary_artifact(tmp_path):
+    """修复前这里抛 UnicodeDecodeError，整个 task 被判失败。"""
+    store, ledger = _store(tmp_path)
+    task = _image_task()
+    store.commit_bytes("cover.png", _PNG, spec=task.deliverables[0], task=task)
+    result = _gatekeeper(tmp_path, store, ledger)._run_extended_checks(task)
+    assert result.errors == [] and result.warnings == []
+
+
+def test_reviewer_excerpt_uses_metadata_for_image(tmp_path):
+    store, ledger = _store(tmp_path)
+    task = _image_task()
+    store.commit_bytes("cover.png", _PNG, spec=task.deliverables[0], task=task)
+    reviewer = _gatekeeper(tmp_path, store, ledger)._reviewer
+    blocks = reviewer._render_artifacts(task)
+    joined = "\n".join(blocks)
+    assert "二进制产物 image" in joined and "cover.png" in joined
+
+
 # ── BaseAgent 二进制桥（非 agentic 也适用）─────────────────────────────────
 
 def _agent(tmp_path) -> BaseAgent:

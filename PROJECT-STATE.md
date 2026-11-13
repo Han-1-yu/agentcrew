@@ -8,11 +8,11 @@
 
 ## 0. 一句话现状
 
-**当前代码基线：`c740906`（已推送到 `origin/master` / `origin/main`）+ 工作区 R59–R61（未提交）。自动化回归与静态检查通过；云主机回环验收实例仍在运行。** R59–R61 工作区全量测试 **3342 passed / 0 failed / 6 skipped / 0 error**（173 文件 / 87 批次 / 444.1s），跑器报告 5 个批次在进程崩溃后重试恢复，并输出 2 项「首次失败、重试通过」——已人工核对均为环境负载所致（`crew.py` 瞬时解析损坏但 `py_compile` 通过、`test_run_tests_passes` 隔离连跑 5 次全过），非代码回归。真实模型评测与 Studio 分项数字保留为历史实测证据，本次未逐项重跑；当前 CI 的 Studio job 为 success。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道；R19 给主管审核开了独立、不阻塞的 `suggestions` 建议通道；R20 补上单步/断点调试——每个任务派发前可挂起裁决，第二档功能项全部闭环；R21 给 API 契约装上守卫，openapi.yaml 与代码路由双向锁死、不再漏端点；R22 补上 resume 状态白名单与 MCP 管道显式关闭；R23 产出 2501 用例的模块/场景覆盖矩阵（`docs/TEST-REPORT.md`），验收报告遗留的最后一项小项闭环；R24 补上工具管理页与单工具试跑；R25 把共享 API Key 升级为多用户 RBAC（密钥/角色/作用域/归属/审计）；R26 补上拖拽式可视化编排（画布 + YAML 双向 + 图校验）；R27 给检索加向量通道（混合打分 + 磁盘缓存 + 本地退化）；R28 打通「画布 → run」直通规划；R29 让实体记忆也走向量混合（不加列、不迁移）；R30 给审批单加等待窗口与过期告警；R31 给条件边补否定/兜底写法；R32 把控制台 UI 重构成令牌化 + 明暗主题 + 侧栏布局；R33 把单层主管复核扩成可配的多级链；R34 修好本机测试环境（崩溃隔离跑器，一条命令出可信结论）；R50 按差距报告 69 条完成上线前加固——8 项 P0 全关、时钟容错让"前跳误杀/回拨死锁"不再可能、审批与预算的并发边界收口、`/metrics` 补齐可观测入口、Studio 断线可自愈（明细见 `docs/REMEDIATION-STATUS.md`）。R51 按能力路线第一批补上三根支柱的关键缺口：**能查**（`web_search`，四提供方、默认关、密钥只走环境变量）、**敢跑**（可插拔执行后端，默认 `local` 行为逐字不变，`docker` 可选：禁网/非 root/资源上限/只挂 run 目录，缺 docker 即报错）、**跑得出结论**（`run_tests` + G1 执行校验，失败并入既有返工通道），并把评测做成 mock/真实双轨（`eval --live` + 23 条真实小目标 + 夜间脚本）。R52 补上互操作与无人值守：**C7** 暴露为 MCP server（`mcp-serve`，5 个工具全走 HTTP API 复用 RBAC/审计）、**C6 第一步**借现成浏览器 MCP（配置模板 + 读优先白名单，零开发）、**C8** 入站 Webhook 触发（`POST /webhooks/trigger`，HMAC 或 API Key 两条认证路径，来源进 ledger）。R53 补上多模态输入（**C4**）：`run --image` / `POST /runs` 的 `images`（内联 base64，最多 4 张），provider 能力位 `supports_vision`（默认关）决定是否真发图，不支持时降级纯文本并落 `vision_unsupported`（降级可见），图片落盘留证。R54 补上文档 RAG（**C5**）：`knowledge/docs/` 下的团队手册/规范增量摄取分块，按相关性注入 PM 规划提示词与每个任务的上下文（复用 R11/R27 检索资产），`docs list/search` 管理入口。能力路线第二批至此全部落地。
+**当前代码基线：R59–R61 已提交并推送（`c9cc47c`，CI 七 job 全绿）+ §3.83 的真机缺陷修复（与本文档同一提交）。自动化回归与静态检查通过；云主机回环验收实例仍在运行。** 最近一次全量 **3354 passed / 0 failed / 6 skipped / 0 error**（174 文件 / 87 批次 / 508.7s），跑器报告 6 个批次在进程崩溃后重试恢复，并输出 3 项「首次失败、重试通过」——已人工核对均为环境负载所致（`serve` 子进程 `0xC0000005`、`rich` 源码瞬时读取损坏、webhook spool 用例；两项隔离复跑全过），非代码回归。真实模型评测与 Studio 分项数字保留为历史实测证据，本次未逐项重跑；当前 CI 的 Studio job 为 success。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道；R19 给主管审核开了独立、不阻塞的 `suggestions` 建议通道；R20 补上单步/断点调试——每个任务派发前可挂起裁决，第二档功能项全部闭环；R21 给 API 契约装上守卫，openapi.yaml 与代码路由双向锁死、不再漏端点；R22 补上 resume 状态白名单与 MCP 管道显式关闭；R23 产出 2501 用例的模块/场景覆盖矩阵（`docs/TEST-REPORT.md`），验收报告遗留的最后一项小项闭环；R24 补上工具管理页与单工具试跑；R25 把共享 API Key 升级为多用户 RBAC（密钥/角色/作用域/归属/审计）；R26 补上拖拽式可视化编排（画布 + YAML 双向 + 图校验）；R27 给检索加向量通道（混合打分 + 磁盘缓存 + 本地退化）；R28 打通「画布 → run」直通规划；R29 让实体记忆也走向量混合（不加列、不迁移）；R30 给审批单加等待窗口与过期告警；R31 给条件边补否定/兜底写法；R32 把控制台 UI 重构成令牌化 + 明暗主题 + 侧栏布局；R33 把单层主管复核扩成可配的多级链；R34 修好本机测试环境（崩溃隔离跑器，一条命令出可信结论）；R50 按差距报告 69 条完成上线前加固——8 项 P0 全关、时钟容错让"前跳误杀/回拨死锁"不再可能、审批与预算的并发边界收口、`/metrics` 补齐可观测入口、Studio 断线可自愈（明细见 `docs/REMEDIATION-STATUS.md`）。R51 按能力路线第一批补上三根支柱的关键缺口：**能查**（`web_search`，四提供方、默认关、密钥只走环境变量）、**敢跑**（可插拔执行后端，默认 `local` 行为逐字不变，`docker` 可选：禁网/非 root/资源上限/只挂 run 目录，缺 docker 即报错）、**跑得出结论**（`run_tests` + G1 执行校验，失败并入既有返工通道），并把评测做成 mock/真实双轨（`eval --live` + 23 条真实小目标 + 夜间脚本）。R52 补上互操作与无人值守：**C7** 暴露为 MCP server（`mcp-serve`，5 个工具全走 HTTP API 复用 RBAC/审计）、**C6 第一步**借现成浏览器 MCP（配置模板 + 读优先白名单，零开发）、**C8** 入站 Webhook 触发（`POST /webhooks/trigger`，HMAC 或 API Key 两条认证路径，来源进 ledger）。R53 补上多模态输入（**C4**）：`run --image` / `POST /runs` 的 `images`（内联 base64，最多 4 张），provider 能力位 `supports_vision`（默认关）决定是否真发图，不支持时降级纯文本并落 `vision_unsupported`（降级可见），图片落盘留证。R54 补上文档 RAG（**C5**）：`knowledge/docs/` 下的团队手册/规范增量摄取分块，按相关性注入 PM 规划提示词与每个任务的上下文（复用 R11/R27 检索资产），`docs list/search` 管理入口。能力路线第二批至此全部落地。
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | R59–R61 工作区重跑 **3342 passed / 0 failed / 6 skipped / 0 error**（173 文件 / 87 批次 / 444.1s，`scripts/test.py --batch 2 --retries 4 --retry-failed 3 --keep-pycache`）。跑器报告 5 个批次在进程崩溃后重试恢复；2 项「首次失败、重试通过」已人工核对为环境负载（见 §3.82）；6 个 skip 沿用跑器结果，其中 4 个 docker 真容器用例由 CI 覆盖 |
+| 全量测试 | R59–R61 最新全量 **3354 passed / 0 failed / 6 skipped / 0 error**（174 文件 / 87 批次 / 508.7s，`scripts/test.py --batch 2 --retries 4 --retry-failed 3 --keep-pycache`）。跑器报告 6 个批次在进程崩溃后重试恢复；3 项「首次失败、重试通过」已人工核对为环境负载（见 §3.83 末段）；6 个 skip 沿用跑器结果，其中 4 个 docker 真容器用例由 CI 覆盖 |
 | 静态检查 | R59–R61 工作区重跑 `ruff check agentcrew/ main.py tests/`：**All checks passed**；`mypy agentcrew/`：**142 文件零错误** |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
@@ -20,7 +20,7 @@
 | Studio | `npm run check` **73** 模块 / 42 分片通过、`test:unit` **18/18**、electron `e2e` **32/32**（2026-11-13 本机实跑） |
 | 上线自检 | 本机可验 **9 项全通过**（doctor / 离线冒烟 / REST 认证 200·401 / `/metrics` / 无密钥退 3 / `clean` 干跑 / Studio 三连 / ruff+mypy）；目标机 10 项判据见 `docs/DEPLOY-CHECK-2026-11-13.md` |
 | 收尾 | 交付说明见 **`docs/CLOSURE-2026-11-13.md`**；B 类外部环境项 **5/5 全部闭环**；云主机真实部署验收 10 项中 **7 项闭环**（TLS/SSE、告警规则、日志、密钥、成本、webhook、备份），仅剩独立数据盘与两项 Docker 依赖（§3.77、`docs/DEPLOYMENT-VM-2026-11-13.md`） |
-| Git | `git rev-parse HEAD origin/master origin/main` 三者均为 **`c740906`**；R59–R61 改动**尚未提交**。`fd455ca` 基线 CI run **43425986756** 的 **7 个 job 全部 success**（Python 3.10/3.11/3.12/3.13、Windows、Studio、Docker 真隔离），Sync main run **43425986731** success；`c740906` 为纯文档提交，其 CI 结果尚未核对；验收报告 `docs/ACCEPTANCE-2026-11-12.md`；真实模型评测历史证据为 23 条中 22 通过（`bench/eval-live-2026-11-13.md`，本次未重跑真实模型评测） |
+| Git | `c9cc47c`（R59–R61）已推送到 `origin/master`，CI run **43449592343** 的 **7 个 job 全部 success**（Python 3.10/3.11/3.12/3.13、Windows、Studio、Docker 真隔离）；`c740906`/`fd455ca` 的历史 CI 亦为 success。§3.83 的修复与本文档同属下一个提交，提交后需核对对应 CI。验收报告 `docs/ACCEPTANCE-2026-11-12.md`；真实模型评测历史证据为 23 条中 22 通过（`bench/eval-live-2026-11-13.md`，本次未重跑真实模型评测） |
 | 角色 | 8 个内置岗位角色 + 执行体（Agent Profile）可多绑 |
 
 ```bash
@@ -77,7 +77,7 @@ contracts.py（零依赖契约层：EventSink / TaskLike）
 | 模型 | 7 类 provider（openai 兼容 / anthropic / mock / cli / 三传输 MCP）；29 个预设（R60 新增 `claude-code` / `codex`）；四级别名解析；故障转移 + 冷却矩阵（402=30min，429=Retry-After 或指数退避，5xx=指数退避）；per-provider 并发信号量 + 60s RPM 滑动窗口；复杂度自动选模 + 动态校准；响应缓存（temperature=0）；预算硬上限 + 80%/90% 软阈值 |
 | 可观测 | `ledger.jsonl` 全事件审计（run/task/llm_call/gate/error…）；contextvars 链路追踪（`utils/trace.py`，`llm_call` 自动带 `task_id`/`attempt`）；`log_level` + `AGENTCREW_LOG_JSON=1` 结构化日志（含脱敏）；`diff` / `status` / 统计端点 |
 | 产物 | 契约校验（路径/类型/最小字节/必需符号）+ 命名空间隔离 + `MANIFEST.json` + sha256；安全落盘（双侧路径规范化） |
-| 工具（R3/R13/R51） | 7 个内置工具（`read_file` / `list_files` / `grep` / `run_python` / `run_tests` / `write_file` / `web_fetch`）+ `web_search`（C1，配置提供方才出现）+ **R13 起 MCP 服务器的工具**（`server__tool` 前缀防撞名、schema 原样透传、单服务器失败只跳过）；`tools_enabled` 默认关闭的 run 级自动装配 + `tool_permissions` 执行期下发；执行前 JSON Schema 子集强校验（失败带正确形状回灌、绝不执行）；`web_fetch` / `web_search` 全链路 SSRF 防护 |
+| 工具（R3/R13/R51/R61） | 7 个内置工具（`read_file` / `list_files` / `grep` / `run_python` / `run_tests` / `write_file` / `web_fetch`）+ `web_search`（C1，配置提供方才出现）+ **R13 起 MCP 服务器的工具**（`server__tool` 前缀防撞名、schema 原样透传、单服务器失败只跳过）+ **R61 的 `generate_image`**（配置 `image_provider` 才注册）；`tools_enabled` 默认关闭的 run 级自动装配 + `tool_permissions` 执行期下发；执行前 JSON Schema 子集强校验（失败带正确形状回灌、绝不执行）；`web_fetch` / `web_search` 全链路 SSRF 防护 |
 | 知识（R3/R11） | 经验库（R11 起为中文二元组 + BM25 检索：IDF 压虚词、长度归一、单字命中不算相关）+ 实体记忆（纯规则抽取五类实体、跨 run 追加归并、加权检索注入 PM 上下文）；`entity_memory_enabled` 默认关闭 |
 | 对外通知（R12/R14/R15） | 出站 Webhook：后台线程投递（不阻塞 run）、HMAC-SHA256 签名（时间戳纳入签名防重放）、`delivery` id 重试不变、失败重试有上限且不改 run 结局；默认推五个 run 级节点；密钥不导出/不进快照/进脱敏词表；默认关闭。R14 支持多接收端各自 `secret`/`events`/`only_failures`。R15 起每条「事件 × 接收端」入队前落盘、成功即删，进程退出或收尾超时的遗留记录由下一次启用 Webhook 的 run 补投（at-least-once，24h / 5 次淘汰），spool 不存 URL 与密钥 |
 | 接口 | CLI（`run/resume/status/roles/agents/switch/samples/clean/cancel/delete/serve/doctor/diff/providers/models/config`）；HTTP API + SSE + Web UI；API Key 认证 + IP 限流；并发 run 上限 `AGENTCREW_MAX_CONCURRENT_RUNS=8` |
@@ -2389,6 +2389,40 @@ static/gatekeeper/config/agent/cli_agentic）；ruff 全绿、mypy 142 文件零
 已人工核实为环境负载：`crew.py` 报的瞬时解析错误 `py_compile` 通过、
 `test_run_tests_passes` 隔离连跑 5 次全过，均非回归。文档同步：§0 指标与 §2 预设数
 （27→29）。**R59–R61 仍未提交**，本轮未推送。
+
+---
+
+### 3.83 R61 真机端到端：三个只有真跑才暴露的缺陷（2026-11-13）
+
+**做法**：用真实模型（`deepseek:deepseek-chat`）+ `image_provider=mock`（离线字节）跑完整链路，
+命令 `main.py run --flow examples/flows/image-e2e.yaml`（固定契约，避开 PM 随机阈值）。第一次真跑就把单测覆盖不到
+的三处打断点全暴露出来，逐个修完后 **2/2 任务成功、G1/G2 全过**。
+
+| # | 现象（真实输出） | 根因 | 处置 |
+| --- | --- | --- | --- |
+| 1 | 产图成功、`artifact_written` 70 字节，随后 `gate.evaluate` 抛 `UnicodeDecodeError: 0x89` | `Gatekeeper._run_extended_checks` 对所有 kind 都调 `store.read()`（UTF-8 解码）；同类调用还散在 G2 评审、上下文组装、团队评审、摘要器——R61 只接了 G1 | 新增 `ArtifactStore.kind_of` / `read_bytes` / `read_for_prompt`（二进制返回一行元数据，不解码）；扩展检查**显式跳过** `BINARY_KINDS`；7 处提示词/评审读取点改走 `read_for_prompt`；多执行体草稿的合并/晋升改走字节通道 |
+| 2 | 模型用 markdown 围栏「交付」PNG，或干脆不调工具，任务报「缺少必需产物」 | 执行体提示词只有「每个交付物用一个围栏代码块输出」，二进制产物没有对应指令 | 新增 `_BINARY_ARTIFACT_SECTION`：**仅当**任务确有二进制交付物且 `generate_image` 真的可用时注入，明确「调工具、path 逐字一致、不要再写 `file=` 围栏」；工具不可用时提示词逐字不变（不承诺假能力） |
+| 3 | 模型输出 `<｜｜DSML｜｜ calls>` 私有标记，该轮被判「没有工具调用」直接退出，报告只显示缺产物 | `deepseek-chat` 在未开原生 tools 时会漏出自家标记；解析器只认 `<tool_call>` | `_extract_tool_calls` 增加同义解析（invoke/parameter，支持整包 `args` JSON 与逐参数两种形状）；不改对外协议、不动其他 provider |
+
+**通过证据**：run `20261113-232015-e726`（flow `image-e2e`，`min_bytes=1`）——
+任务 2/2 成功、G1 `approve`、G2 `approve`（score 0.8，suggestions 还指出「70 字节对插画偏小」，
+说明评审真的看到了尺寸）、T-FINAL 亦 approve；`MANIFEST.json` 条目
+`kind=image / size_bytes=70 / sha256=497790…1581` 与磁盘文件逐字节一致（PNG 魔数校验通过）。
+
+**边界（不包装成已验）**：图像字节来自 `MockImageProvider`（1×1 PNG），**真实产图仍需
+ARK / OpenAI key**——`.env` 里 `ARK_API_KEY`、`OPENAI_API_KEY` 均为空（只有中文注释），
+本轮未做真实出图。链路（工具注册 → 模型调用 → 字节落工作区 → 二进制桥 → G1 → G2 →
+MANIFEST → Studio 预览）已真跑；像素内容尚未真验。
+
+**另一条不是缺陷的现象**：先用 `--goal` 自由规划时 PM 给图片定了 `min_bytes=1024`，
+mock 的 70 字节被 G1 判「为空文件」——这是契约判据正确生效，不是 bug；改用固定流程
+（`min_bytes=1`）才拿到链路证据。
+
+**回归**：新增 `tests/test_dsml_tool_parsing.py` 6 例、`test_image_artifacts.py` +4 例、
+`test_agent_tools.py` +2 例；全量 **3354 passed / 0 failed / 6 skipped / 0 error**
+（174 文件 / 87 批次 / 508.7s）。跑器标 3 项「首次失败、重试通过」，已人工核对均为环境：
+`test_sdk` 端到端（`serve` 子进程 `0xC0000005`）、`rich` 源码瞬时语法损坏、
+`test_webhook_spool` 端到端；前两项隔离复跑 2/2、webhook 1/1 全过，非回归。
 
 ---
 

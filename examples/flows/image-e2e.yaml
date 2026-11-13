@@ -1,0 +1,25 @@
+# R61 端到端验证流程：Agent 调 generate_image 产出二进制 image 交付物。
+#
+# 跑法（离线字节，不花钱、不碰网络）：
+#   AGENTCREW_TOOLS_ENABLED=true AGENTCREW_IMAGE_PROVIDER=mock \
+#     python main.py run --flow examples/flows/image-e2e.yaml --auto --no-live \
+#     --default-model deepseek:deepseek-chat
+#
+# 说明：`min_bytes: 1` 是给 MockImageProvider 的 1×1 PNG（70 字节）留的口子。
+# 真实产图请把 image_provider 换成 ark / openai 并按需调高 min_bytes。
+version: 1
+name: image-e2e
+description: R61 端到端：Agent 调 generate_image 产出二进制 image 交付物，过 G1/G2 并落 MANIFEST
+tasks:
+  - id: T1
+    title: 生成项目宣传插画
+    description: 用 generate_image 工具生成一张扁平插画风的项目宣传图（橘猫在电脑前敲代码，浅米色背景），保存到 assets/cover.png。
+    role: frontend_dev
+    acceptance_criteria:
+      - assets/cover.png 已生成且为有效的 PNG 图片
+    deliverables:
+      - path: assets/cover.png
+        kind: image
+        description: 扁平插画风项目宣传图
+        min_bytes: 1
+    priority: 5

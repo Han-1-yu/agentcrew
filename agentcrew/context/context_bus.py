@@ -191,7 +191,8 @@ class ContextBus:
                 truncated = True
                 break
             # 3*cap 字节足够覆盖任何 token 估算 ≤ cap 的前缀（estimate >= len//3）。
-            content = self._store.read(record.path, max_bytes=3 * cap + 3)
+            content = self._store.read_for_prompt(
+                record.path, max_bytes=3 * cap + 3)
             excerpt, was_truncated = _truncate_lines(content, cap)
             if not excerpt:
                 truncated = True
