@@ -20,7 +20,7 @@
 | Studio | `npm run check` **73** 模块 / 42 分片通过、`test:unit` **18/18**、electron `e2e` **32/32**（2026-11-13 本机实跑） |
 | 上线自检 | 本机可验 **9 项全通过**（doctor / 离线冒烟 / REST 认证 200·401 / `/metrics` / 无密钥退 3 / `clean` 干跑 / Studio 三连 / ruff+mypy）；目标机 10 项判据见 `docs/DEPLOY-CHECK-2026-11-13.md` |
 | 收尾 | 交付说明见 **`docs/CLOSURE-2026-11-13.md`**（状态数字 / 15 个提交清单 / 验收入口 / 未闭环两类 / 环境噪声判据）；未完成仅剩 ①多模态 key（B2）②目标机部署（判据 + `scripts/deploy_check.py` 已就绪） |
-| Git | 已与 `origin/master` 同步（R51–R60 全部推送）；**`main` 与 `master` 每次都指向同一 commit**（首次用 `git push master:main` 快进，之后由 `sync-main.yml` 自动快进）；**CI 连续第八轮全绿**——run **43404026920**（R60：7 job，含 `Sandbox·docker` 与 4 个 Python 版本 + Windows + Studio）success，`Sync main` 同步成功；此前的 43392129252 / 43393524865 / 43399398936 同样全绿；验收报告 `docs/ACCEPTANCE-2026-11-12.md`；**真实模型评测 23 条：22 通过 / 1 条字面契约失败（已由 R58 修提示） / 1 条证据缺口**（`bench/eval-live-2026-11-13.md`） |
+| Git | 已与 `origin/master` 同步（R51–R60 全部推送）；**`main` 与 `master` 每次都指向同一 commit**（首次用 `git push master:main` 快进，之后由 `sync-main.yml` 自动快进）；**CI 连续全绿**——run **43404026920**（R60：7 job，含 `Sandbox·docker` 与 4 个 Python 版本 + Windows + Studio）success，**收尾 run `43406060256`（b9b4776）七 job 全 success**，`Sync main` 同步成功；此前的 43392129252 / 43393524865 / 43399398936 同样全绿；验收报告 `docs/ACCEPTANCE-2026-11-12.md`；**真实模型评测 23 条：22 通过 / 1 条字面契约失败（已由 R58 修提示） / 1 条证据缺口**（`bench/eval-live-2026-11-13.md`） |
 | 角色 | 8 个内置岗位角色 + 执行体（Agent Profile）可多绑 |
 
 ```bash
