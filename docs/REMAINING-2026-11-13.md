@@ -9,32 +9,27 @@
 
 | 类别 | 项数 | 卡点 |
 | --- | --- | --- |
-| A. 待 DeepSeek 充值 | 1 项（含 15 条子项） | 账户 402 余额耗尽 |
+| ~~A. 待 DeepSeek 充值~~ | ✅ **已闭环**（2026-11-13） | 余额已恢复，15 条补跑完成，全量 23 条 22 通过（见 `bench/eval-live-2026-11-13.md`） |
 | B. 待外部环境 | 5 项 | docker / 多模态模型 / Claude Desktop / Playwright MCP / 真实文档集+embedding 端点 |
-| C. 代码侧小项（本机可做） | 4 项 | 均为低优先旧账，已评估过成本/收益 |
-| D. 待产品决策（P2 按需） | 4 项（C9/C10/C13/C14） | 需产品/业务输入 |
+| C. 代码侧小项（本机可做） | 3 项 | C2 已闭环，余 3 项均为低优先旧账 |
+| D. 待产品决策（P2 按需） | 4 项（C9/C10/C13/C14）+ 1 项评测口径 | 需产品/业务输入 |
 | E. 依赖部署决策 | 1 项 | run 目录静态加密 |
 | F. 环境问题（非代码） | 1 项 | 本机 Python 子进程偶发损坏 |
 
 ---
 
-## A. 待 DeepSeek 充值（恢复后一条命令）
+## A. ~~待 DeepSeek 充值~~｜✅ 已闭环（2026-11-13）
 
-**卡点**：账户 402 Insufficient Balance（2026-11-13 凌晨跑批中耗尽）。
-**恢复方式**：充值后直接跑，无需任何代码改动：
+**原卡点**：账户 402 Insufficient Balance（2026-11-13 凌晨跑批中耗尽）。
+**结果**：余额恢复后（`doctor` 6/6、`deepseek-chat` 1340ms healthy）补跑 15 条——
+**14 通过 / 1 失败**，全量 23 条 **22 通过（95.7%）**，补跑成本 **$0.5983**。
 
-```bash
-python main.py eval examples/evals/capability-live.jsonl --live \
-    --max-cost 0.25 --repeat 1 --output-dir output/_eval --json
-```
-
-| 子项 | 说明 |
+| 子项 | 结果 |
 | --- | --- |
-| 剩余 15 条评测 | 已 8/8 通过（代码 6 / 文档 1 / 数据 1 / 驳回 1）；预计总成本 $1–2，约 40–90 分钟 |
-| `code-csv-summary` 重跑确认 | 唯一一条非 402 失败，但发生时间紧邻首次 402，疑似同因，需重跑判定 |
-| 结论回填 | `bench/eval-live-2026-11-13.md` + 验收报告 C11 行 + PROJECT-STATE 指标表 |
-
-**前置条件**：无。**规模**：约 1 小时（机器时间）+ 结论回填 10 分钟。
+| 剩余 15 条评测 | ✅ 已跑（A 4/5 · B 5/5 · C 4/5）；分块文件 `examples/evals/capability-live-rest*.jsonl` |
+| `code-csv-summary` 重跑确认 | ✅ 通过（$0.0434）——确系当时 402 同因，非能力问题 |
+| 结论回填 | ✅ `bench/eval-live-2026-11-13.md` + `docs/ACCEPTANCE-2026-11-12.md` C11 行 + `PROJECT-STATE.md` §3.70 / §0 指标表 |
+| 遗留两条发现 | ①`doc-changelog`：文档类 `must_contain` 逐字匹配（语义等价不算命中）；②`reject-empty-json`：规划期路径冲突导致没走到 G1。**均需产品口径决策，见 D5** |
 
 ---
 
@@ -55,7 +50,7 @@ python main.py eval examples/evals/capability-live.jsonl --live \
 | # | 事项 | 为什么搁置 | 现在做值不值 | 规模 |
 | --- | --- | --- | --- | --- |
 | C1 | D-16「写盘注入 OSError」一致性用例 | 注入点与 `_finalize` 内部原子写耦合过紧 | **重构封版路径时顺手补**，单独做不划算 | ~1 人日 |
-| C2 | `stream_call` 设防（配额预扣/归还配对） | async generator + failover 的配对复杂，易引 bug | ✅ **已闭环**（R56 部分用量记账 + R57 配额设防，见 `PROJECT-STATE.md` §3.68/§3.69；全量 3241 passed / 0 failed） | — |
+| C2 | ~~`stream_call` 设防~~ | ✅ **已闭环** | R56 部分用量记账 + R57 配额设防（见 `PROJECT-STATE.md` §3.68/§3.69；全量 3241 passed / 0 failed） | — |
 | C3 | Webhook「恰好一次」投递 | at-least-once + 幂等头（`X-AgentCrew-Delivery`）已兜底 | **需接收端配合去重**，单方面做只能加落盘去重表（`delivery` 主键）——收益取决于接收端实现质量 | ~1 人日 |
 | C4 | Webhook 事件级表达式过滤 | R14 的 `webhook_events` 列表 + 「只推失败」已覆盖主要场景 | **按需**：出现「只推某个任务的事件」类需求再做 | ~1 人日 |
 
@@ -69,6 +64,7 @@ python main.py eval examples/evals/capability-live.jsonl --live \
 | D2 | C10 对话式入口 + run 中途引导 | Studio 对话页要从「只读展示」（R43）升级为「对话即入口」吗？ |
 | D3 | C13 SDK 生态 | 需要哪种语言的 SDK？（TypeScript / Go / 异步 Python） |
 | D4 | C14 容量与横向扩展 | 预期并发量级？多实例共享 `output_dir` 的方案（NFS vs 对象存储）选型 |
+| D5 | 评测口径两处（2026-11-13 实测暴露） | ①文档类 `must_contain` 是否改为「逐字包含」hint + 同步 `tests/test_gatekeeper.py:239/307`？②驳回类用例如何区分「门禁拒绝」与「规划期失败」（需新 check kind）？ |
 
 ---
 
