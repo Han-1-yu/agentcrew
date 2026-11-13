@@ -29,7 +29,10 @@ def _binding(**kwargs) -> ModelBinding:
 class TestCliProvider:
     @pytest.mark.asyncio
     async def test_basic_echo_command(self):
-        provider = CliProvider(_binding(command="echo hello"))
+        # 用解释器自身打印固定文本：`echo` 是 shell 内建，Windows 上没有同名
+        # 可执行文件（`shutil.which("echo")` 为 None），本机全量会 FileNotFoundError。
+        provider = CliProvider(_binding(
+            command=f"\"{sys.executable}\" -c \"print('hello')\""))
         result = await provider.complete(
             [{"role": "user", "content": "hi"}],
             temperature=0.7, max_tokens=100,
