@@ -1578,6 +1578,9 @@ class Settings(BaseModel):
         新配置，这里再抹一层：快照是文件，写出去就收不回来了。
         """
         data = self.model_dump(mode="json")
+        # REST/RBAC 共享密钥也绝不能落盘。保留条目数（便于 resume 判断配置
+        # 是否变化），但每个值一律替换成 ***；真实 key 只从环境变量重新读取。
+        data["api_keys"] = ["***" for _ in self.api_keys]
         data["provider_overrides"] = redact_overrides(self.provider_overrides)
         # custom_providers 的值形状与 ProviderPreset 一致，复用同款 schema 递归脱敏。
         data["custom_providers"] = redact_overrides(self.custom_providers)

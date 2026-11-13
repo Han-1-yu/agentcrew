@@ -148,6 +148,18 @@ def test_config_snapshot_redacts_secret_looking_override_values():
     assert YAML_SECRET not in yaml.safe_dump(snapshot, allow_unicode=True)
 
 
+def test_config_snapshot_redacts_rest_api_keys():
+    """AGENTCREW_API_KEYS 是共享 REST 密钥，不是可以写进 run.json 的配置。"""
+    first = "test-rest-key-abcdefghijkl"  # 专用假密钥，不使用任何真实值
+    second = "another-test-key-9876543210"
+    settings = Settings.load().model_copy(update={"api_keys": [first, second]})
+    snapshot = settings.config_snapshot()
+    assert snapshot["api_keys"] == ["***", "***"]
+    dumped = yaml.safe_dump(snapshot, allow_unicode=True)
+    assert first not in dumped
+    assert second not in dumped
+
+
 def test_config_snapshot_redacts_nested_secret_values():
     """脱敏必须递归：藏在 ``capabilities`` 里的密钥同样一个字符都不许落盘。"""
     nested = {"capabilities": {"api_key": YAML_SECRET, "max_output_tokens": 111}}
