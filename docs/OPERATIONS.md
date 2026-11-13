@@ -779,6 +779,10 @@ HTTP 等价物是 `GET /tools` 与 `POST /tools/{name}/test`，看板首页「�
 
 ## 8. 上线前检查清单
 
+> 本机已验项与实测结果见 `docs/DEPLOY-CHECK-2026-11-13.md`（doctor / 离线冒烟 /
+> REST 认证 200·401 / `/metrics` / 无密钥退 3 / `clean --dry-run` / Studio 三连 / 静态检查）。
+> 下面这些仍需在目标机上逐条打勾。
+
 - [ ] `python main.py doctor --json` 的 `ok=true`，`provider:*` 为 healthy
 - [ ] 已下发随机长 key（`keys add` 或 `AGENTCREW_API_KEYS`）；`/health` 带 key 返回 200。
       无密钥时 `serve` 直接退 3（任何地址）——这是期望行为，不要用改代码绕过

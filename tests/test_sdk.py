@@ -482,16 +482,26 @@ def test_end_to_end_against_real_serve(tmp_path, monkeypatch):
         try:
             client = AgentCrewClient(
                 f"http://127.0.0.1:{port}", api_key="sdk-test-key", timeout=30.0)
+            # 就绪预算 30s（原 50×0.1s≈5s）：本机并发跑多个 pytest 子进程时，serve 光是
+            # 导入 pydantic 就可能超过 5 秒，于是「服务还在启动」被记成「未就绪」——
+            # 2026-11-13 全量里正是这样假失败过一次（单跑 2s 就通过）。
+            # 同时盯 ``process.poll()``：serve 若已退出（端口被占 / 配置错 → 退 3），
+            # 再等满预算只是浪费时间，直接带退出码与日志判死。
+            deadline = time.monotonic() + 30.0
             ready = False
-            for _ in range(50):
+            while time.monotonic() < deadline:
+                if process.poll() is not None:
+                    break
                 try:
                     ready = client.health() == {"status": "ok"}
                     if ready:
                         break
                 except AgentCrewError:
                     pass
-                time.sleep(0.1)
-            assert ready, f"serve 未就绪：{log_path.read_text(encoding='utf-8')}"
+                time.sleep(0.2)
+            assert ready, (
+                f"serve 未就绪（exit={process.poll()}）："
+                f"{log_path.read_text(encoding='utf-8')}")
 
             assert client.list_runs() == []
             created = client.create_run(

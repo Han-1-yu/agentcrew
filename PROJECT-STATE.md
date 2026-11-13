@@ -18,6 +18,7 @@
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
 | Studio | `npm run check` **73** 模块 / 42 分片通过、`test:unit` **18/18**、electron `e2e` **32/32**（2026-11-13 本机实跑） |
+| 上线自检 | 本机可验 **9 项全通过**（doctor / 离线冒烟 / REST 认证 200·401 / `/metrics` / 无密钥退 3 / `clean` 干跑 / Studio 三连 / ruff+mypy）；目标机 10 项判据见 `docs/DEPLOY-CHECK-2026-11-13.md` |
 | Git | 已与 `origin/master` 同步（R51–R55 全部推送）；**CI 连续五轮全绿**（R56/R57 之后未再推，待下一次 push 触发）；验收报告 `docs/ACCEPTANCE-2026-11-12.md`；**真实模型评测 23 条：22 通过 / 1 条字面契约失败 / 1 条证据缺口**（`bench/eval-live-2026-11-13.md`） |
 | 角色 | 8 个内置岗位角色 + 执行体（Agent Profile）可多绑 |
 
@@ -1913,6 +1914,54 @@ T5/T-FINAL 未成功、run failed。**性质**：门禁按契约办事、判定�
 
 ---
 
+### 3.71 上线自检：本机可验 9 项全过 + `doctor` 可选依赖误报修复（2026-11-13）
+
+**目的**：把「代码写完了」推进到「按上线清单验过」。逐项对照 `docs/OPERATIONS.md`
+§8，只记本机真跑出来的结果（完整记录见 `docs/DEPLOY-CHECK-2026-11-13.md`）。
+
+| # | 检查 | 结果 |
+| --- | --- | --- |
+| 1 | `main.py doctor --json` | `ok=true`，6 项全 pass（含 `provider:deepseek:deepseek-chat` healthy 401ms） |
+| 2 | `run --sample todo --no-live --auto` | 9 任务 9 成功 / 0 失败 / 0 阻塞，返工 1 次，4s |
+| 3-5 | `serve --api-key <临时>` 下 `GET /health` / 无 key `GET /health` / `GET /metrics` | **200 / 401 / 200**（metrics 首行 `agentcrew_up 1`） |
+| 6 | 无密钥 `serve` | **退出码 3**，stderr 给三条修法，与文档一致 |
+| 7 | `clean --dry-run --protect-running` | 列出「将删除 225 个 run（保留最近 5 个）」，未真删 |
+| 8 | `cd studio`：`check` / `test:unit` / `e2e` | 73 模块 / 42 分片 · **18/18** · **32/32**（截图 20 张） |
+| 9 | `ruff` / `mypy` | 全绿 / 139 文件零错误 |
+
+**默认安全姿态核实**（`agentcrew/config.py` 默认值，逐个看过）：`api_auth_enabled=True`、
+`tools_enabled=False`、`code_exec_enabled=False`、`sandbox_backend=local`、
+`search_provider=""`（关）、`gate_config.exec_verify` 缺省关；`max_cost_usd` /
+`max_llm_calls` 默认 **None（不限制）**——这是唯一必须在部署侧设死的项，已写进清单。
+
+**修掉一处误报**：`doctor` 的可选依赖清单里列着 `aiohttp`，但**全仓没有任何 aiohttp
+导入**（API/SSE 是自研实现，见 `agentcrew/api/server.py` 模块注释），导致每个新环境
+都稳定收到一条「可选依赖缺失」warn。误报会让运维习惯性忽略黄色输出，比漏报更坏——
+已把 `_OPTIONAL_DEPS` 清空并留注释说明「将来真有可选依赖再逐项加回」；
+`dependencies` 由 warn 变 pass，`tests/test_doctor.py` + `tests/test_cli.py` 共 55 例
+全绿。
+
+**仍需目标机做**（本机无法证，已逐条列判据）：TLS 反代与 SSE 缓冲设置、监控两条告警、
+独立数据盘、`AGENTCREW_LOG_JSON` 采集与脱敏确认、密钥管理、成本上限、webhook 接收端
+幂等、容器挂卷与 healthcheck、备份恢复演练、docker 后端下 `g1_exec_check` 真跑一次
+`passed`。全部在 `docs/DEPLOY-CHECK-2026-11-13.md` §4。
+
+**顺带修掉一个真实测试缺陷（SDK 端到端就绪等待）**：`tests/test_sdk.py::
+test_end_to_end_against_real_serve` 起真 `serve` 后只给约 5 秒就绪预算（50×0.1s），
+本机并发跑多个 pytest 子进程时 serve 光导入 pydantic 就可能超 5 秒——于是「还在启动」
+被记成「未就绪」，全量里假失败过一次。改为 **30s 预算 + 盯 `process.poll()`**（子进程
+已退出就立刻判死、把退出码与 serve 日志带进断言消息），既不放宽任何业务断言，也让
+失败信息从「未就绪」升级为可定位的进程崩溃。实测：单跑 6/6、整文件 3 次里 2 次通过
+1 次**进程级崩溃**（`-1073741819`，子进程 import pydantic 时 heap corruption，属 §6
+环境噪声），组合跑 3 次里 2 通过 1 次抓到同一崩溃的完整栈——确认是环境而非用例缺陷。
+
+**最终回归**：`scripts/test.py --batch 4 --retries 3 --retry-failed 2`（167 文件 /
+42 批次 / 621.2s）→ **3241 passed · 0 failed · 2 skipped · 0 error**，崩溃重试恢复
+8 个（进程被杀），**没有「首次失败后重试通过」的待核项**。`ruff` 全绿、`mypy` 139 文件
+零错误。
+
+---
+
 ## 4. 历史报告汇总（已并入本文，原文归档）
 
 | 报告 | 时间 | 核心结论 | 现状 |
@@ -2079,6 +2128,8 @@ T5/T-FINAL 未成功、run failed。**性质**：门禁按契约办事、判定�
 | ~~CI 首次实跑~~ | ✅ **全绿** | run 43215021310：四版本矩阵 + Windows(uv) + Studio job 全部 success；首跑（43213290659）暴露的 5 条 mypy 与 Studio 缺 lock 已由 `2a25718` 修复 |
 | ~~`web_search` 工具~~ | ✅ **R51 已交付** | 四提供方（tavily/brave/duckduckgo/mock）+ SSRF 过滤 + 默认关 + 离线可测，见 §3.64 |
 | ~~真实评测报告（C11）~~ | ✅ **已闭环**（2026-11-13） | 23 条全部跑过、22 通过（95.7%）；补跑成本 $0.5983；两条发现与证据缺口见 §3.70 与 `bench/eval-live-2026-11-13.md` |
+| 上线自检（本机可验项） | ✅ **9 项全通过**（2026-11-13） | doctor / 离线冒烟 / REST 认证 200·401 / metrics / 无密钥退 3 / clean 干跑 / Studio 三连 / 静态检查；逐项命令与结果见 `docs/DEPLOY-CHECK-2026-11-13.md` |
+| 目标机上线项（TLS 反代、监控、数据盘、日志、密钥、成本上限、webhook 幂等、备份演练） | ⏳ 待部署侧 | 判据清单见 `docs/DEPLOY-CHECK-2026-11-13.md` §4 与 `docs/OPERATIONS.md` §8 |
 | 向量检索 / RAG | 未做（BM25 + 二元组已覆盖经验库） | 大项，需先定 embedding 通道与存储 |
 | run 目录静态加密 | 未做 | 依赖部署侧决策（LUKS / 云盘加密） |
 

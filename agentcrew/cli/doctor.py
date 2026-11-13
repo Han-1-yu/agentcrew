@@ -61,9 +61,12 @@ _REQUIRED_DEPS: tuple[tuple[str, str], ...] = (
 )
 
 #: 可选依赖：导入失败只 warn（没有也能跑核心流程）。
-_OPTIONAL_DEPS: tuple[tuple[str, str], ...] = (
-    ("aiohttp", "aiohttp"),
-)
+#:
+#: 2026-11-13 清空：此前列着 ``aiohttp``，但**全仓没有任何 aiohttp 导入**（REST/SSE
+#: 服务是自研实现，见 ``agentcrew/api/server.py``），于是每个全新环境都会稳定收到
+#: 一条「可选依赖缺失」的 warn——误报会让运维学会忽略 doctor 的黄色输出，比漏报更坏。
+#: 保留这个机制：将来真出现「装了更好、不装也能跑」的依赖再逐项加回。
+_OPTIONAL_DEPS: tuple[tuple[str, str], ...] = ()
 
 #: 不持钥的 provider（本地 / 离线 / CLI），缺 Key 不算错。
 _KEYLESS_PROVIDERS: frozenset[str] = frozenset({"mock", "ollama", "cli"})
