@@ -12,7 +12,7 @@
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | **3246 passed / 6 skipped / 0 failed**（168 文件 / 84 批次 / 459.1s，`scripts/test.py --batch 2 --retries 4 --retry-failed 3` 一次跑出；R51 +62 / R52 +27 / R53 +14 / R54 +13 / R56 +4 / R57 +5 / R58 +1 / R59 +4，明细见 §3.64–§3.73）。6 个 skip 里 4 个是 docker 真容器用例（无 `AGENTCREW_DOCKER_LIVE=1` 时按规定 skip），2 个是既存 skip |
+| 全量测试 | **3256 passed / 6 skipped / 0 failed**（169 文件 / 85 批次 / 432.6s，`scripts/test.py --batch 2 --retries 4 --retry-failed 3` 一次跑出；R51 +62 / R52 +27 / R53 +14 / R54 +13 / R56 +4 / R57 +5 / R58 +1 / R59 +4 / R60 +10，明细见 §3.64–§3.74）。6 个 skip 里 4 个是 docker 真容器用例（无 `AGENTCREW_DOCKER_LIVE=1` 时按规定 skip），2 个是既存 skip |
 | 静态检查 | `ruff check agentcrew/ main.py tests/` **全绿**；`mypy agentcrew/` **139 文件零错误**（本机与 CI 同口径；CI 首跑暴露的 5 条既存错误已在本批修复，见 §3.64） |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
@@ -2119,6 +2119,44 @@ skipped**（本机无 docker，skip 是正确结果）；`ruff` 全绿、`mypy` 
 `test_cli_deferred_approval_roundtrip` 两个文件单独连跑 **4 次**——3 次 25 passed、
 1 次宿主进程崩溃（`-1073741819`），无断言失败复现，确认属 §6 环境噪声而非回归。
 CI：run `43399398936` 七个 job 全 success。
+
+---
+
+### 3.74 D5② 收口：`rejected_by_gate` + 目标机自检脚本（2026-11-13）
+
+**D5② 的问题**：驳回类用例（「交付 0 字节文件」）本来就该失败，但
+`run_status: failed` 分不清两件事——**门禁真把不合格产物拒了**，还是**流程在规划期
+旁路崩了**。两者在报表上长得一模一样，等于这条验收证据是虚的。
+
+证据其实一直在 ledger 里，只是没有断言类型去读：`reject-empty-json` 是
+`plan_rejected` 两次（「T2 验收标准要文档但交付物无文档产物」「产物路径冲突」），
+`reject-empty-py` 是 `gate_result` 三轮 `verdict=reject`（`issues: ["src/empty.py
+为空文件"]`）。
+
+| 改动 | 说明 |
+| --- | --- |
+| `agentcrew/evals/checks.py` | 新增 check kind **`rejected_by_gate`**：`stage: plan|gate|any`（默认 any）+ 可选 `reason_contains`。**只认拒绝证据**（`plan_rejected` 事件、`gate_result` 且 `verdict=reject`）；`output.error` 非空、状态不是 `failed`、没有任何拒绝证据，三者任一都判失败并写明原因 |
+| `_evaluate` 求值顺序 | 该类型先于「error 一律失败」的短路求值——否则驳回 case 永远读不到证据（这正是 D5② 卡住的机制原因） |
+| `examples/evals/capability-live.jsonl` | `reject-empty-json` 加 `{"stage":"plan"}`、`reject-empty-py` 加 `{"stage":"gate","reason_contains":"为空文件"}`（`run_status: failed` 保留） |
+| `tests/test_evals_2026_11_08.py` | 新增 4 例：规划期证据 / 任务层证据 + 理由匹配 / **崩了≠被拒**（error、无证据、completed 三种反例）/ stage 与 reason 的负例 |
+| 验证（零成本） | `scripts/regrade_eval.py … --since 2026-11-13T00:00` 用盘上既有证据重算：`reject-empty-json` **2/2 PASS**、`reject-empty-py` **2/2 PASS**（不重新调用任何模型） |
+
+**目标机自检脚本**：§4 那 10 项此前是一张表，人照着敲。「敲过了」与「真的过了」在
+记录上没区别——所以 `scripts/deploy_check.py` 把能自动判的做成 `PASS/FAIL/SKIP`
+三态，判不了的（反代细节、告警规则、密钥托管、webhook 幂等）明确 SKIP 并打印人工
+判据。覆盖：REST 认证（带 key 200 / 无 key 401）、`/metrics` 含 `agentcrew_up`、
+TLS 证书剩余天数、数据盘是否独立（`st_dev`）、`max_cost_usd`、日志脱敏抽查、
+备份恢复演练（备份→异目录还原→sha256 比对）、容器挂卷 + HEALTHCHECK。退出码有
+FAIL 为 1，可直接接进部署流水线。开发机实跑：**4 PASS / 2 FAIL / 6 SKIP**，两条
+FAIL 是真实状态（产物与代码同盘、未配成本上限），不是脚本坏了。
+`tests/test_deploy_check.py` 6 例钉死「没验不等于通过」（缺前置条件必须 SKIP）。
+
+**验证**：`tests/test_evals_2026_11_08.py` 45 passed、`tests/test_deploy_check.py`
+6 passed；全量 `scripts/test.py --batch 2 --retries 4 --retry-failed 3`（169 文件 /
+85 批次 / 432.6s）→ **3256 passed · 0 failed · 6 skipped · 0 error**。跑器列出 2 条
+「首次失败、重试通过（未证实为环境）」待核项（`test_cli_deferred_approval_roundtrip`
+/ `test_e2e_sample_run_with_tools_enabled`），两个文件单独连跑 **4 次 37 passed**，
+未见断言复现，确认环境噪声。
 
 ---
 

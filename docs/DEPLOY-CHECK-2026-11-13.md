@@ -97,3 +97,48 @@
 已清空该清单并把原因写进代码注释（`agentcrew/cli/doctor.py::_OPTIONAL_DEPS`）。
 修后 `doctor --json` 的 `dependencies` 由 `warn` 变 `pass`，`tests/test_doctor.py`
 与 `tests/test_cli.py` 共 55 例全绿。
+
+## 七、目标机自检：一条命令，三态结论
+
+上面 §4 的 10 项判据此前是「一张表」：人照着敲，漏一两项很正常，而且「敲过了」
+与「真的过了」在记录上没区别。`scripts/deploy_check.py` 把能自动判的做成
+`PASS/FAIL/SKIP`，判不了的（反代细节、告警规则、密钥托管、webhook 幂等）**明确
+标 SKIP 并打印人工判据**——不把「没验」伪装成「通过」。
+
+```bash
+python scripts/deploy_check.py \
+    --base-url https://crew.example.com --api-key "$AGENTCREW_API_KEY" \
+    --data-dir /var/lib/agentcrew/output --log-file /var/log/agentcrew/api.log \
+    --container agentcrew
+# 退出码：有 FAIL 为 1（可直接接进部署流水线）
+```
+
+| 自动判的 | 判据 |
+| --- | --- |
+| REST 认证 | 带 key `/health` 200、**不带 key 必须 401**（401 才说明认证真开着） |
+| metrics 暴露 | `/metrics` 200 且含 `agentcrew_up` |
+| TLS | https 握手成功且证书剩余 > 30 天；明文 http 时 SKIP 并提示要挂反代 |
+| 独立数据盘 | 产出目录与仓库的 `st_dev` 不同 |
+| 成本上限 | `max_cost_usd` 已设且为正数 |
+| 日志脱敏 | 抽查日志文件，不得命中 `sk-…` / `Bearer …` / `api_key=…` 形状 |
+| 备份恢复演练 | 抽 3 个 run 的 `run.json`+`ledger.jsonl`，备份→异目录还原→sha256 比对 |
+| 容器 | `docker inspect`：要有数据卷挂载、要有 HEALTHCHECK |
+
+**开发机上跑一次的真实结果**（用来确认脚本本身没坏）：
+
+```
+[PASS] REST 认证 — 带 key 200、无 key 401
+[PASS] metrics 暴露 — 200 且含 agentcrew_up
+[SKIP] TLS / 反代 — 当前是明文 http；上线必须挂反代（并关掉 SSE 缓冲，见 OPERATIONS §8）
+[FAIL] 独立数据盘 — E:\agentcrew\output 与 E:\agentcrew 在同一个挂载点
+[FAIL] 成本上限 — max_cost_usd 未设置（AGENTCREW_MAX_COST_USD）
+[PASS] 日志脱敏 — 未命中密钥形状的串
+[PASS] 备份恢复演练 — 3 个 run / 6 个文件 备份还原一致
+[SKIP] 容器挂卷/healthcheck — 未提供 --container
+…（4 条人工项 SKIP）
+合计：4 PASS / 2 FAIL / 6 SKIP
+```
+
+两条 FAIL 都是**开发机的真实状态**（产物与代码同盘、没配成本上限），不是脚本坏
+了；目标机上它们本来就该是 FAIL，配好盘与 `AGENTCREW_MAX_COST_USD` 之后才转 PASS。
+
