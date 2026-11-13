@@ -1065,6 +1065,12 @@ class Settings(BaseModel):
     注意：上下文组装是同步路径，真实 embedding 端点（异步）在文档检索里
     用不上——启用 ``embedding_enabled`` 时文档检索也只走 BM25；本地哈希
     向量（离线兜底）不受影响。
+
+    **默认值 0.5 只在有真实语义向量时成立。** 只有本地哈希兜底时，0.5 会把
+    命中率拉低（486 条查询实测 hit@1 84.4% → 82.9%，权重 1.0 掉到 53.3%，
+    见 ``bench/rag-hitrate-2026-11-13.md``），因此 Crew 在兜底通道下会把
+    **实际**权重压到 0 并留 ``docs_vector_degraded`` 事件——这里配的值不变，
+    降级可见。
     """
     peer_dialogue_enabled: bool = False
     """R5：Agent 间真实咨询（``<message to="…">``）——默认**关闭**。

@@ -401,6 +401,9 @@ class Crew:
             dict(item) for item in (images or [])]
         #: C5：文档 RAG 索引（``docs_rag_enabled`` 开启时在 run 启动期摄取）。
         self._docs_store: Any | None = None
+        #: C5：文档检索**实际**使用的向量权重（哈希兜底时会被压到 0）。
+        self._docs_vector_weight: float = float(
+            getattr(self._settings, "docs_rag_vector_weight", 0.0))
         # P3-1（2026-11 会话隔离改造）：校准器从「模块级全局单例」改为 **Crew
         # 实例属性**，构造 ModelFactory 时显式注入。原实现每次构造 Crew 都调用
         # ``set_calibrator(ComplexityCalibrator())`` 全量替换全局单例——API 服务器
@@ -1920,8 +1923,26 @@ class Crew:
                         error=f"{type(exc).__name__}: {exc}"[:200])
             return
         self._docs_store = store
+        self._docs_vector_weight = self._docs_effective_weight(embedder, ledger)
         ledger.emit("docs_ingested", docs=result.docs, chunks=result.chunks,
                     rebuilt=result.rebuilt, skipped=result.skipped)
+
+    def _docs_effective_weight(self, embedder: Any, ledger: Ledger) -> float:
+        """C5：这次 run 文档检索**实际**用的向量权重。
+
+        配置默认 0.5 是按「有真实语义向量」写的。只有本地哈希兜底时，0.5 会把
+        命中率拉低（486 条查询实测 hit@1 84.4% → 82.9%，权重 1.0 更是 53.3%），
+        因此这里压到 0（纯 BM25），并留一条事件——降级可见，不静默。
+        """
+        weight = float(self._settings.docs_rag_vector_weight)
+        from agentcrew.knowledge.embeddings import is_semantic_embedder
+
+        if weight > 0 and not is_semantic_embedder(embedder):
+            ledger.emit("docs_vector_degraded",
+                        configured_weight=weight, effective_weight=0.0,
+                        reason="hash_embedder_is_not_semantic")
+            return 0.0
+        return weight
 
     def _docs_query_sync(self) -> Any | None:
         """C5：给 ContextBus 的同步检索回调；未启用返回 ``None``（零开销）。"""
@@ -1932,7 +1953,7 @@ class Crew:
         def retrieve(query: str) -> list[tuple[str, str]]:
             hits = docs_store.query_sync(
                 query, limit=self._settings.docs_rag_limit,
-                vector_weight=self._settings.docs_rag_vector_weight)
+                vector_weight=self._docs_vector_weight)
             return [(f"docs:{hit.chunk.doc}", f"[{hit.chunk.heading}] "
                                              f"{hit.chunk.text}") for hit in hits]
 

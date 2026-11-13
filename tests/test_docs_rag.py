@@ -174,6 +174,59 @@ def test_crew_docs_query_sync_none_when_disabled(tmp_path):
     assert crew._docs_query_sync() is None
 
 
+# ── 哈希兜底不等于语义向量（B5 实测结论，见 bench/rag-hitrate-2026-11-13.md）──
+
+class _FakeSemantic:
+    name = "fake-semantic"
+    dim = 3
+
+    async def embed(self, texts):
+        return [[1.0, 0.0, 0.0] for _ in texts]
+
+
+def test_is_semantic_embedder_distinguishes_hash_fallback():
+    from agentcrew.knowledge.embeddings import is_semantic_embedder
+
+    assert is_semantic_embedder(None) is False
+    assert is_semantic_embedder(HashEmbedder()) is False
+    # 生产路径上包了一层磁盘缓存，别被外壳骗过去
+    assert is_semantic_embedder(
+        CachedEmbedder(HashEmbedder(), Path("/tmp/x.jsonl"))) is False
+    assert is_semantic_embedder(_FakeSemantic()) is True
+
+
+def test_crew_docs_weight_drops_to_zero_on_hash_fallback():
+    """只有哈希兜底时，0.5 会把命中率拉低（对照实验见 bench 报告），必须压到 0。
+
+    降级不能静默：ledger 里要留 ``docs_vector_degraded``。
+    """
+    from agentcrew.crew.crew import Crew
+
+    class _Ledger:
+        def __init__(self):
+            self.events = []
+
+        def emit(self, name, **fields):
+            self.events.append((name, fields))
+
+    crew = Crew.__new__(Crew)
+    ledger = _Ledger()
+    settings = type("S", (), {"docs_rag_vector_weight": 0.5})()
+    crew._settings = settings
+
+    crew._docs_weight_probe = None
+    assert crew._docs_effective_weight(
+        CachedEmbedder(HashEmbedder(), Path("/tmp/x.jsonl")), ledger) == 0.0
+    assert ledger.events[0][0] == "docs_vector_degraded"
+    assert ledger.events[0][1]["configured_weight"] == 0.5
+
+    # 真语义向量照配置走，不降级、不留降级事件
+    ledger2 = _Ledger()
+    assert crew._docs_effective_weight(_FakeSemantic(), ledger2) == 0.5
+    assert ledger2.events == []
+
+
+
 def test_crew_manifest_persists_chunks(tmp_path):
     """manifest 里存分块结果：第二次摄取直接复用，不用重新分块。"""
     store = _store(tmp_path)

@@ -214,3 +214,22 @@ def build_embedder(
     inner = OpenAIEmbedder(model=model, api_key=api_key,
                            base_url=base_url, dim=dim)
     return CachedEmbedder(inner, cache_path)
+
+
+def is_semantic_embedder(embedder: Embedder | None) -> bool:
+    """这个通道给的是不是**语义**向量。
+
+    在只有 :class:`HashEmbedder` 兜底时答案是「不是」——它只对齐共享字面片段
+    （"幂等"与"幂等性"近，"幂等"与"原子性"不近）。实测（``bench/rag-hitrate-2026-11-13.md``）：
+    同一批 486 条查询、同一语料下，纯 BM25 的 hit@1 是 84.4%，按默认
+    ``docs_rag_vector_weight=0.5`` 混进去反而掉到 82.9%、权重 1.0 掉到 53.3%。
+    所以调用方在兜底通道下应当把向量权重压到 0，而不是照配置发车。
+    """
+    if embedder is None:
+        return False
+    if isinstance(embedder, HashEmbedder):
+        return False
+    inner = getattr(embedder, "_inner", None)
+    if isinstance(inner, HashEmbedder):
+        return False
+    return True
