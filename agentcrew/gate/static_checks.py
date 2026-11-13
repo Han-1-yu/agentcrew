@@ -132,9 +132,15 @@ def _content_findings(spec: ArtifactSpec, content: str) -> list[_Finding]:
         # 从症状根本推不出病因。假阳性（把 `DEF F()` 认成 `def f()`）的风险远小于
         # 假阴性，而符号语义真错时 G2 的 LLM 评审仍会把关。
         if needle.lower() not in lowered:
+            # hint 用「逐字包含」而不是「定义」：符号清单里既有代码符号（`def f`），
+            # 也有**自然语言短语**（文档类 case 会出现「迁移步骤」这类 must_contain）。
+            # 2026-11-13 真实模型评测里 `doc-changelog` 的产物写的是「分步迁移路径」
+            # +「| 步骤 |」表格，语义上完全有迁移步骤，但三轮返工收到的都是「定义
+            # 迁移步骤」，每轮都改写措辞、始终没有逐字出现这四个连续字，最终 run
+            # failed。「逐字包含」对两类符号都成立，判定仍是字面 `in`，不放宽门槛。
             findings.append((
                 f"{spec.path} 缺少必需符号：{needle}",
-                f"在 {spec.path} 中定义 {needle}",
+                f"在 {spec.path} 中逐字包含 {needle}",
             ))
     return findings
 

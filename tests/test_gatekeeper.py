@@ -236,7 +236,7 @@ async def test_g1_fix_hints_survive_to_decision(env, tmp_path):
     commit(env, "def g():\n    return 1\n")
     d = await _gk(env, tmp_path).evaluate(env["task"], round_no=1)
     assert d.verdict == "reject" and d.record.layer == "static"
-    assert d.record.fix_hints == ["在 a.py 中定义 def f"]        # 配对的 fix_hint
+    assert d.record.fix_hints == ["在 a.py 中逐字包含 def f"]   # 配对的 fix_hint
     assert d.fix_hints == d.record.fix_hints                     # 存活到 GateDecision
 
 
@@ -304,7 +304,7 @@ async def test_rework_decision_reaches_context_bus(env, tmp_path):
     decisions = bus.decisions()
     assert d.next_status is S.REWORK and len(decisions) == 1
     assert decisions[0].task_id == "T-2" and decisions[0].role == "backend_dev"
-    assert decisions[0].decision == "在 a.py 中定义 def f"
+    assert decisions[0].decision == "在 a.py 中逐字包含 def f"
 
 
 async def test_approve_records_both_layers_without_rework_side_effects(env, tmp_path):

@@ -244,3 +244,20 @@ def test_must_contain_still_reports_a_genuinely_absent_symbol(store):
     r = run_static(t, store, round_no=1)
     assert r.verdict == "reject"
     assert any("django" in i for i in r.issues)
+
+
+def test_fix_hint_tells_rewriter_to_include_the_text_verbatim(store):
+    """hint 必须说「逐字包含」，不能只说「定义」。
+
+    must_contain 里既有代码符号（`def f`），也有**自然语言短语**（文档类 case 会出现
+    「迁移步骤」）。2026-11-13 真实模型评测里 `doc-changelog` 正是被这条卡住：产物写了
+    「分步迁移路径」+「| 步骤 |」表格，语义上完全有迁移步骤，可三轮返工收到的提示都是
+    「定义 迁移步骤」，每轮都改写措辞、始终没逐字出现这四个连续字，最终 run failed。
+    「逐字包含」对两类符号都成立，且判定仍是字面 `in`——修的是提示，不是门槛。
+    """
+    t = task_with(ArtifactSpec(path="docs/migration.md", kind="text", description="d",
+                               must_contain=["迁移步骤"]))
+    commit(store, t, t.deliverables[0], "## 分步迁移路径\n| 步骤 | 动作 |\n")
+    r = run_static(t, store, round_no=1)
+    assert r.verdict == "reject"          # 逐字没有，仍必须拦
+    assert r.fix_hints == ["在 docs/migration.md 中逐字包含 迁移步骤"]
