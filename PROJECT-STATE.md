@@ -12,14 +12,14 @@
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | **3242 passed / 2 skipped / 0 failed**（`python scripts/test.py --retries 3 --retry-failed 2`，崩溃隔离跑器一次跑出；R51 +62 / R52 +27 / R53 +14 / R54 +13 / R56 +4 / R57 +5 / R58 +1，明细见 §3.64–§3.72） |
+| 全量测试 | **3246 passed / 6 skipped / 0 failed**（168 文件 / 84 批次 / 459.1s，`scripts/test.py --batch 2 --retries 4 --retry-failed 3` 一次跑出；R51 +62 / R52 +27 / R53 +14 / R54 +13 / R56 +4 / R57 +5 / R58 +1 / R59 +4，明细见 §3.64–§3.73）。6 个 skip 里 4 个是 docker 真容器用例（无 `AGENTCREW_DOCKER_LIVE=1` 时按规定 skip），2 个是既存 skip |
 | 静态检查 | `ruff check agentcrew/ main.py tests/` **全绿**；`mypy agentcrew/` **139 文件零错误**（本机与 CI 同口径；CI 首跑暴露的 5 条既存错误已在本批修复，见 §3.64） |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
 | Studio | `npm run check` **73** 模块 / 42 分片通过、`test:unit` **18/18**、electron `e2e` **32/32**（2026-11-13 本机实跑） |
 | 上线自检 | 本机可验 **9 项全通过**（doctor / 离线冒烟 / REST 认证 200·401 / `/metrics` / 无密钥退 3 / `clean` 干跑 / Studio 三连 / ruff+mypy）；目标机 10 项判据见 `docs/DEPLOY-CHECK-2026-11-13.md` |
-| Git | 已与 `origin/master` 同步（R51–R58 全部推送）；**CI 连续第六轮全绿**——run **43392129252**（R58）与 **43393524865**（状态文档）：四版本矩阵 + Windows(uv) + Studio 共 **6 job 全部 success**；验收报告 `docs/ACCEPTANCE-2026-11-12.md`；**真实模型评测 23 条：22 通过 / 1 条字面契约失败（已由 R58 修提示） / 1 条证据缺口**（`bench/eval-live-2026-11-13.md`） |
+| Git | 已与 `origin/master` 同步（R51–R59 全部推送）；**`main` 与 `master` 现指向同一 commit**（`git push master:main` 快进，未重写历史），并加 `sync-main.yml` 防再落后；**CI 连续第七轮全绿**——run **43392129252**（R58）、**43393524865**（状态文档）、**43399398936**（docker 真隔离 + uid 修复，**7 job** 含 `Sandbox·docker`）全部 success；验收报告 `docs/ACCEPTANCE-2026-11-12.md`；**真实模型评测 23 条：22 通过 / 1 条字面契约失败（已由 R58 修提示） / 1 条证据缺口**（`bench/eval-live-2026-11-13.md`） |
 | 角色 | 8 个内置岗位角色 + 执行体（Agent Profile）可多绑 |
 
 ```bash
@@ -1987,6 +1987,141 @@ ruff 全绿；mypy 139 文件零错误。**CI 仲裁**：run **43392129252** 六
 
 ---
 
+### 3.73 创造条件：三条「待真机」项不再等外部资源 + 两个实测缺陷（2026-11-13）
+
+**这一节的立场**：所谓「待外部环境」，先问一句「这条证据必须在那台机器上产生吗」。
+B1（docker 逃逸）、B3（MCP 互通）、B4（浏览器 MCP）三条都不是——缺的是「一台能跑
+容器的机器」和「一个桌面客户端」，两者都能用别的东西替代。只有 B2（vision）真的
+缺一个买不到就做不了的 key。
+
+#### B1 docker 真隔离 → 用 GitHub runner 当那台机器
+
+先取证「这台机器确实做不到」，再换路：
+
+- 云主机（Linux，2C/3GB）：装 `docker.io 29.1.3` 能起 daemon（`--iptables=false
+  --bridge=none --storage-driver=vfs`），但 `docker pull python:3.12-slim` 报
+  `failed to register layer: unshare: operation not permitted`；`capsh --print` 的
+  bounding set 里没有 `cap_sys_admin`；`sudo unshare -m true` 同样 EPERM；
+  rootless podman 报 `newuidmap: exit status 1`。**容器在这台机器上不可能跑起来。**
+- 本机 Windows 无 docker daemon。
+
+于是把 CI 当宿主机（runner 有 docker、有网络）：
+
+| 改动 | 说明 |
+| --- | --- |
+| `tests/test_docker_isolation_live.py`（新增） | 4 条**真容器**用例：能跑 python 且 workspace 可写 / `--network none` 出不了网 / 宿主文件在容器里不存在 / 非 root 且内存与 `pids.max` 落到 cgroup 上。默认 skip（缺 `AGENTCREW_DOCKER_LIVE=1` 一律不跑，不许「因为环境缺 docker 而绿」） |
+| `.github/workflows/ci.yml` 新增 `sandbox-docker` job | `docker pull python:3.12-slim` → `AGENTCREW_DOCKER_LIVE=1 pytest -q tests/test_docker_isolation_live.py` |
+
+**首轮真跑就抓到一个真缺陷**（run `43398109892`：4 条里 1 条失败，3 条过）：
+容器以 `--user 65534:65534` 跑时，写不进挂载进来的 `/workspace`——
+`PermissionError: [Errno 13] Permission denied: 'out.txt'`。`/workspace` 是宿主目录、
+属主是宿主用户，容器 uid 与它不一致就写不了；也就是说模型**连自己的产物都存不下**，
+`run_tests` / `exec_verify` 在这条路径上会全线失败。修法：
+
+| 改动 | 说明 |
+| --- | --- |
+| `agentcrew/tools/sandbox.py` | 新增 `default_container_user()`：POSIX 上取宿主 `uid:gid`（非 root，且与 `/workspace` 属主一致），Windows 无 uid 概念退回 `65534:65534`；`DockerBackend` 新增 `user` 参数，**uid 部分为 0/root 时构造期即 `SandboxError`**（沙箱里不许 root，这条是硬约束） |
+| `tests/test_sandbox_backend.py` | 参数断言从「等于 65534」改为**性质断言**「不是 root 且带 gid」——原断言把实现细节钉死了，换 uid 就假红；另新增 2 例：拒 root、默认值跟宿主一致 |
+| `tests/test_docker_isolation_live.py` | uid 断言同样改成「不是 0」（值随机器的宿主 uid 变化） |
+
+二轮 run **`43399398936`**：7 个 job 全 success（Python 3.10/3.11/3.12/3.13 +
+Windows(uv) + Studio + **Sandbox·docker 真隔离**）。B1 由此闭环，`docs/REMAINING`
+里那条「本机或 CI 装 Docker」不再是阻塞项。
+
+#### B3 MCP 互通 → 用官方 Node SDK 代替桌面客户端
+
+不装 Claude Desktop / Cursor，用官方 `@modelcontextprotocol/sdk` 直接当客户端
+（`output/_eval/mcp-interop/probe.mjs`）：`StdioClientTransport` 启动
+`.venv\Scripts\python.exe main.py mcp-serve --api-url … --api-key …`，实测
+
+```
+initialize      → server = {"name":"agentcrew","version":"1.0.0"}
+tools/list      → 5 个工具（create_run / run_status / list_approvals / approve / wait_for_run）
+tools/call      → create_run 得 run_id 20261113-165919-5a0c
+tools/call      → wait_for_run = completed，全程 6.2s
+interop PASS
+```
+
+两个坑记下来：① `serve` 冷启动（导入 pydantic）会超过 8s，脚本必须**轮询就绪**而不是
+固定 sleep；② 首版探针把 key 生成在另一个 shell 里，mcp-serve 拿到的 key 与 serve 不一致
+→ `create_run` 返回 `{"error":"Unauthorized","status":401}`；「401 但 initialize 成功」
+正是协议面与业务面分别鉴权的表现，值得在排障手册里留一句。
+
+#### B4 Playwright MCP → 用系统 Edge 代替 Chromium
+
+`npx -y @playwright/mcp@latest`（0.0.85，server `Playwright 1.66.0-alpha-2026-11-09`）
+`initialize` 通过、`tools/list` **25 个**浏览器工具。三个障碍逐一绕过：
+
+1. 本机没装 Chrome，`npx playwright install chromium` 下载失败（`Failed to download
+   Chrome for Testing … code=1`，网络受限）→ 改用系统自带 Edge：`--browser msedge`
+   （`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe` 存在，157.0）；
+2. Playwright MCP 默认**拦截 `file:` 协议** → 用 `python -m http.server 18095
+   --bind 127.0.0.1` 起本地页，导航 `http://127.0.0.1:18095/probe.html`；
+3. 首版探针「没命中标题也打印 PASS」是**假绿** → 改成命中失败即 `process.exit(1)`。
+
+最终输出：`Page Title: AgentCrew 探针页面`、`browser_snapshot 命中标题=true · 长度=325`、
+`playwright interop PASS`。
+
+#### 默认分支长期落后 → fast-forward + 自动同步 workflow
+
+`main` 停在 2026-11-09 的 `7d46321`（491 文件），`master` 已是 `de60f07`（582 文件）。
+「clone 拿到旧代码」这种错没人会注意到，因为两个分支都在 CI 里触发、红绿一样。
+
+- 想改仓库默认分支：`gh api -X PATCH … default_branch=master` → **403**
+  （token 无 admin 权限）；
+- 退而求其次且不重写历史：`git rev-list --left-right --count origin/main…origin/master`
+  显示 main 侧的独有提交为 **0**，于是 `git push origin master:main` 做成
+  **fast-forward**（`7d46321..de60f07`），两个分支现指向同一 commit；
+- 再加 `.github/workflows/sync-main.yml`：master 每次推送后，若 `main` 能快进就自动
+  推平；若 main 上出现 master 没有的提交（有人直接往 main 提交），**显式失败**并列出
+  那些提交，交给人合并——静默跳过比失败更坏。
+
+#### B5 RAG 命中率对照 → 语料和问题集都能自建
+
+缺的是「有标注的问答对」，不是「真实文档」。做法：`scripts/rag_hitrate.py` 用仓库
+自己的 `docs/*.md`（32 篇 / 1233 块）当语料，用每篇的二/三级标题当查询、标题所在
+文档当答案（486 条），在临时目录建索引，只改 `vector_weight` 做对照：
+
+| 权重 | hit@1 | hit@3 | MRR | 未命中 |
+| --- | --- | --- | --- | --- |
+| **0.0（纯 BM25）** | **84.4%** | **95.7%** | **0.897** | 3.7% |
+| 0.5（旧默认） | 82.9% | 94.0% | 0.885 | 3.9% |
+| 1.0（纯向量） | 53.3% | 77.2% | 0.655 | 15.4% |
+
+**哈希向量在这里是噪声而不是补充**，所以不能只写进报告：
+
+| 改动 | 说明 |
+| --- | --- |
+| `agentcrew/knowledge/embeddings.py` | 新增 `is_semantic_embedder()`，识别 `HashEmbedder` 与 `CachedEmbedder(HashEmbedder)`（缓存外壳骗不过去） |
+| `agentcrew/crew/crew.py` | `_docs_effective_weight()`：只有兜底通道时把**实际**权重压到 0，并 emit `docs_vector_degraded`（含配置值、实际值、原因）——降级可见，不静默 |
+| `agentcrew/config.py` | `docs_rag_vector_weight` 的 docstring 补上这条实测与降级行为（默认值本身不改：配了真端点时 0.5 是对的） |
+| `tests/test_docs_rag.py` | 新增 2 例：通道形态识别；Crew 层「哈希 → 0 + 留事件」「真语义 → 照配置、不留事件」 |
+| `bench/rag-hitrate-2026-11-13.md` | 方法、结果、处置、以及**指标边界**（标题即查询偏乐观；不能外推为「真 embedding 也无用」） |
+
+#### B2 vision 仍是唯一真外部依赖
+
+`.env` 里 `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` 为空串，`ARK` / `DASHSCOPE` /
+`QIANFAN` 是占位短串（len 11 / 6 / 13）；`providers --json` 中仅 `deepseek`
+`key_configured=true` 且 `supports_vision=false`。通道本身已由
+`tests/test_multimodal.py` 覆盖，拿到任一多模态 key 即可 `run --image` 收工。
+这条不再反复尝试，写进 `docs/DEPLOY-CHECK-2026-11-13.md` §5。
+
+#### 验证
+
+`tests/test_docs_rag.py` + `test_capability_config.py` + `test_crew.py` **76 passed**；
+`tests/test_sandbox_backend.py` + `test_docker_isolation_live.py` **19 passed / 4
+skipped**（本机无 docker，skip 是正确结果）；`ruff` 全绿、`mypy` 139 文件零错误。
+
+**全量回归**：`scripts/test.py --batch 2 --retries 4 --retry-failed 3`（168 文件 /
+84 批次 / 459.1s）→ **3246 passed · 0 failed · 6 skipped · 0 error**，崩溃重试恢复
+10 个。跑器列出 4 条「首次失败、重试通过（未证实为环境）」的待核项，已逐条人工复核：
+`test_exec_verify::test_verify_replaces_stale_workspace` 与
+`test_cli_deferred_approval_roundtrip` 两个文件单独连跑 **4 次**——3 次 25 passed、
+1 次宿主进程崩溃（`-1073741819`），无断言失败复现，确认属 §6 环境噪声而非回归。
+CI：run `43399398936` 七个 job 全 success。
+
+---
+
 ## 4. 历史报告汇总（已并入本文，原文归档）
 
 | 报告 | 时间 | 核心结论 | 现状 |
@@ -2155,7 +2290,11 @@ ruff 全绿；mypy 139 文件零错误。**CI 仲裁**：run **43392129252** 六
 | ~~真实评测报告（C11）~~ | ✅ **已闭环**（2026-11-13） | 23 条全部跑过、22 通过（95.7%）；补跑成本 $0.5983；两条发现与证据缺口见 §3.70 与 `bench/eval-live-2026-11-13.md` |
 | 上线自检（本机可验项） | ✅ **9 项全通过**（2026-11-13） | doctor / 离线冒烟 / REST 认证 200·401 / metrics / 无密钥退 3 / clean 干跑 / Studio 三连 / 静态检查；逐项命令与结果见 `docs/DEPLOY-CHECK-2026-11-13.md` |
 | 目标机上线项（TLS 反代、监控、数据盘、日志、密钥、成本上限、webhook 幂等、备份演练） | ⏳ 待部署侧 | 判据清单见 `docs/DEPLOY-CHECK-2026-11-13.md` §4 与 `docs/OPERATIONS.md` §8 |
-| 向量检索 / RAG | 未做（BM25 + 二元组已覆盖经验库） | 大项，需先定 embedding 通道与存储 |
+| ~~docker 后端真隔离（B1）~~ | ✅ **已闭环**（2026-11-13） | 本机/云主机都起不了容器（`unshare: operation not permitted`），改在 CI 上跑 4 条真容器用例；首轮抓到「容器 uid 与宿主不一致 → 写不进 workspace」的真缺陷并修掉（§3.73） |
+| ~~MCP 互通（B3/B4）~~ | ✅ **已闭环**（2026-11-13） | 官方 `@modelcontextprotocol/sdk` 客户端跑通 `mcp-serve` 全链路；Playwright MCP 25 工具 + 系统 Edge 导航成功（§3.73） |
+| ~~RAG 命中率对照（B5）~~ | ✅ **已闭环**（2026-11-13） | 486 条查询离线对照：哈希兜底下 0.5 权重反而更差 → 兜底时压到 0 并留 `docs_vector_degraded`；`bench/rag-hitrate-2026-11-13.md` |
+| vision 端到端（B2） | ⛔ 仍缺多模态 key（唯一真外部依赖） | 通道由 `tests/test_multimodal.py` 覆盖；`.env` 里除 deepseek 外均为空/占位（§3.73） |
+| 向量检索 / RAG | 部分完成：BM25 + 哈希兜底已可用并做过对照 | 真语义通道需 embedding 端点（配置已就绪，未接） |
 | run 目录静态加密 | 未做 | 依赖部署侧决策（LUKS / 云盘加密） |
 
 **仍未纳入修复**（按 ROI，需各自单独设计）：

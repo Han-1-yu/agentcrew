@@ -57,10 +57,35 @@
 
 ## 五、已知能力边界（不影响上线，但要写进交付说明）
 
-- **docker 逃逸用例未真跑**：本机无 docker（`sandbox_backend=docker` 的容器从未启动过）。
-- **vision 端到端缺多模态模型**：deepseek-chat 不支持图像，`supports_vision` 通道已实现待真机。
-- **Claude Desktop / Playwright MCP 互通未验**：协议层 13 例已测，外部客户端未接。
-- **RAG 命中率无对照数据**：需真实文档集 + embedding 端点。
+- **docker 逃逸用例**：本机与云主机都起不来容器（云主机 `docker pull` 报
+  `failed to register layer: unshare: operation not permitted`，bounding set 无
+  `cap_sys_admin`；rootless podman 亦因 `newuidmap` 失败）。已在 CI 用 GitHub runner
+  当「有 docker 的机器」补验：`tests/test_docker_isolation_live.py` 4 条用例
+  （能跑 python 且写得出 workspace / 禁网 / 宿主文件不可见 / 非 root + 内存与进程上限），
+  由 `ci.yml` 的 `sandbox-docker` job 执行，`AGENTCREW_DOCKER_LIVE=1` 才跑、
+  缺开关一律 skip（避免「因为环境缺 docker 而绿」的假绿）。
+  **首轮真跑抓到 1 个真缺陷**：容器固定以 `65534` 运行时写不进挂载的 `/workspace`
+  （`Permission denied`）→ 已改为默认取宿主 uid（Windows 退回 nobody）并拒绝 `uid=0`，
+  二轮 run `43399398936` 该 job 全绿。目标机上线时仍需按 §四 第 10 项跑一次
+  `g1_exec_check`。
+- **vision 端到端缺多模态模型**：`.env` 里 `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`
+  为空串，`ARK` / `DASHSCOPE` / `QIANFAN` 是占位短串（len 11 / 6 / 13），
+  `providers --json` 里只有 `deepseek` 的 `key_configured=true` 且
+  `supports_vision=false`。通道本身已由 `tests/test_multimodal.py` 覆盖，
+  拿到任一多模态 key 即可跑 `run --image`。
+- **MCP 互通已验（不再算边界）**：用官方 `@modelcontextprotocol/sdk`（Node）当客户端，
+  对 `main.py mcp-serve` 完成 `initialize`（server=agentcrew 1.0.0）→ `tools/list`
+  （5 个工具）→ `create_run`（run_id `20261113-165919-5a0c`）→ `wait_for_run`
+  （`completed`，6.2s）；Playwright MCP 侧 `initialize` + 25 个工具，导航本地页
+  `http://127.0.0.1:18095/probe.html` 后快照命中页面标题。两者输出均在
+  `output/_eval/mcp-interop/`（未入版本库的取证目录）。
+  说明：本机无 Chrome 且 Chromium 下载被网络挡住，Playwright 侧用系统 Edge
+  （`--browser msedge`）作等价验证；`file:` 协议默认被拦，故改用 127.0.0.1 本地页。
+- **RAG 命中率已有对照（不再是空白）**：本地哈希兜底下，混合权重 0.5 反而把
+  文档检索 hit@1 从 84.4% 拉到 82.9%（权重 1.0 掉到 53.3%，486 条查询 / 32 篇文档），
+  因此 Crew 在兜底通道下会把实际权重压到 0 并留 `docs_vector_degraded` 事件；
+  真语义通道需 embedding 端点（配置就绪、未接）。方法与边界见
+  `bench/rag-hitrate-2026-11-13.md`。
 - **评测两条口径待产品决策**（`docs/REMAINING-2026-11-13.md` D5）：文档类 `must_contain`
   逐字匹配；驳回类用例如何区分「门禁拒绝」与「规划期失败」。
 

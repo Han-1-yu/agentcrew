@@ -33,15 +33,15 @@
 
 ---
 
-## B. 待外部环境（5 项）
+## B. 真机/外部环境项（5 项）
 
-| # | 事项 | 需要什么 | 恢复方式 | 规模 |
+| # | 事项 | 状态 | 恢复方式 / 结果 | 规模 |
 | --- | --- | --- | --- | --- |
-| B1 | Docker 后端逃逸用例 | 本机或 CI 装 Docker | `AGENTCREW_SANDBOX_BACKEND=docker` 下跑 `tests/test_sandbox_backend.py` 的 3 条逃逸用例（出网/读宿主/资源耗尽）+ `run_tests` 真容器执行 | ~0.5 人日 |
-| B2 | vision「截图→改前端」端到端 | 多模态模型（deepseek-chat 不支持图像；需 openai:gpt-4o / claude 等） | `run --image 截图.png`（provider 开 `supports_vision`）；`tests/test_multimodal.py` 已覆盖通道 | ~0.5 人日 |
-| B3 | Claude Desktop ↔ `mcp-serve` 互通 | 装 Claude Desktop / Cursor | 配置块见 `docs/CAPABILITIES-P1-BATCH2.md` §1.3；协议层 13 例已测 | ~0.5 小时 smoke |
-| B4 | Playwright MCP 真网页「提取/填表」 | `npx @playwright/mcp@latest` 可用 | `examples/agentcrew.browser.example.yaml` 模板即配即用；注意与 `untrusted_inputs` 互斥 | ~1 人日 |
-| B5 | RAG 命中率对照（进 eval 矩阵） | 真实文档集 + embedding 端点 | 对照 `retrieval_vector_weight` 0 vs 0.5 的命中率；`docs_rag_*` 与 eval 框架均已就绪 | ~1 人日 |
+| B1 | Docker 后端逃逸用例 | ✅ 已闭环（改在 CI 上做） | 本机与云主机都起不来容器（`docker pull` → `failed to register layer: unshare: operation not permitted`，bounding set 无 `cap_sys_admin`；rootless podman `newuidmap` 失败）。改为把 GitHub runner 当那台机器：新增 `tests/test_docker_isolation_live.py` 4 条真容器用例（能跑 python / 禁网 / 宿主文件不可见 / 非 root + 内存与进程上限），由 `ci.yml` 的 `sandbox-docker` job 在 `AGENTCREW_DOCKER_LIVE=1` 下执行；默认无开关一律 skip（不许「因为缺 docker 而绿」）。首轮真跑抓到 1 个真缺陷：容器以 `65534` 跑时写不进挂载的 workspace（`Permission denied: 'out.txt'`）→ 已修 `DockerBackend` 默认取宿主 uid（Windows 退回 nobody），并加「uid=0 构造期即拒」。修后 run `43399398936` 的 sandbox job 4/4 绿 |
+| B2 | vision「截图→改前端」端到端 | ⛔ 仍缺多模态 key（本机不可自建） | `.env` 里 `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` 为空串，`ARK` / `DASHSCOPE` / `QIANFAN` 为占位短串（len 11 / 6 / 13）；`providers --json` 中仅 `deepseek` 有 key 且 `supports_vision=false`。通道由 `tests/test_multimodal.py` 覆盖；拿到任一多模态 key 即可 `run --image` | ~0.5 人日 |
+| B3 | Claude Desktop ↔ `mcp-serve` 互通 | ✅ 已闭环（用官方 SDK 代替桌面客户端） | 不装 Claude Desktop，用官方 `@modelcontextprotocol/sdk`（Node）当客户端：`initialize`（server=agentcrew 1.0.0）→ `tools/list` 5 工具 → `create_run`（`20261113-165919-5a0c`）→ `wait_for_run` = `completed`（6.2s）。取证脚本 `output/_eval/mcp-interop/probe.mjs` | ~0.5 小时 |
+| B4 | Playwright MCP 真网页「提取/填表」 | ✅ 已闭环（浏览器用系统 Edge） | `npx -y @playwright/mcp@latest`（0.0.85 / Playwright 1.66.0-alpha）连得上、25 个浏览器工具；本机无 Chrome 且 Chromium 下载被网络挡住 → `--browser msedge`（系统 Edge 157）；`file:` 协议默认被拦 → 本地 `http.server` 起 `127.0.0.1:18095/probe.html`，导航成功、快照命中页面标题。探针 `output/_eval/mcp-interop/playwright-probe.mjs`（未命中即 exit 1，防假绿） | ~1 人日 |
+| B5 | RAG 命中率对照（进 eval 矩阵） | ✅ 已闭环（离线自建语料） | `scripts/rag_hitrate.py`：仓库 `docs/*.md`（32 篇 / 1233 块）+ 二/三级标题当查询（486 条），权重 0 / 0.5 / 1.0 对照 → hit@1 **84.4% / 82.9% / 53.3%**；结论是「哈希兜底不是语义向量」，已改成兜底时实际权重压 0 并 emit `docs_vector_degraded`（`bench/rag-hitrate-2026-11-13.md`、`PROJECT-STATE.md` §3.73） | ~1 人日 |
 
 ---
 
