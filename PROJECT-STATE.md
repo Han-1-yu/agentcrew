@@ -1833,6 +1833,42 @@ ruff 全绿；mypy 139 文件零错误。全量由 CI 仲裁（本机当日 Pyth
 
 ---
 
+### 3.69 R57：C2 配额设防——流式调用不再绕过配额（2026-11-13）
+
+**缺口**：R56 让被打断的流也记账，但 ``stream_call`` 自始至终**不检查配额**：配额
+耗尽的别名照样能起流，预扣机制对并发流式调用完全空转（``call`` /
+``complete_structured`` 都已有「check + reserve + release」两段式，只有流式没有）。
+R50 起一直记为「只记账不设防」。
+
+| 改动 | 说明 |
+| --- | --- |
+| 起流前 ``check`` + ``reserve`` | 估算与 ``_attempt`` 同口径（请求体 + ``max_tokens``）。``check`` 与 ``reserve`` 之间**没有 await**，所以「检查 → 预扣」在事件循环内原子——并发流不能同时通过检查 |
+| 配额耗尽走故障转移 | ``QuotaExhaustedError`` 本就在 ``_PROVIDER_UNAVAILABLE_TYPES`` 里，这里手工沿 ``model_failover`` 切换（此时尚未吐块，不会产生两半不同来源的文本）；单别名时原样上抛 |
+| 任意退出路径 ``release`` | 正常结束由 ``_account`` 结算实际、被打断由部分记账结算、首块前失败什么都不结算——预扣一律在 ``finally`` 归还，绝不留在窗口里 |
+| 为什么 ``check`` 不在 try 里 | 与 ``_attempt`` 同一个坑：若与 ``reserve`` 同处 try，异常分支会把「本次从未预扣」误 release，抹掉别的并发流的预扣 → 并发超卖 |
+| 测试 | ``tests/test_stream_quota_2026_11_13.py`` 5 例：单别名耗尽不起流 / 多别名转移且备用只入账一次 / **in-flight 流的预扣拦住并发第二条流**（设防核心，此前必放行）/ 完整流只结算一次（预扣归零后第二条能过、第三条被拦）/ 首块前失败预扣不泄漏 |
+
+**顺带修掉一个跨平台测试缺陷**：``test_cli_provider::test_basic_echo_command`` 用
+``echo hello`` 当可执行文件——``echo`` 是 shell 内建，Windows 上
+``shutil.which("echo")`` 为 ``None``，本机全量报 ``FileNotFoundError``（只有 Git 的
+``usr/bin`` 恰好在 PATH 时才碰巧通过）。改为解释器自身打印固定文本，与同文件另两个
+用例的跨平台写法一致；Linux 行为不变。
+
+**验证**：新增 5 例全绿；定向回归 91 例（stream 系列 + ``test_quota_v7`` +
+``test_model_factory``）与 144 例（budget / cost-routing / agent-binding / crew /
+e2e / architecture）全绿；``ruff`` 全绿；``mypy agentcrew/`` 139 文件零错误。
+全量 ``scripts/test.py``（167 文件 / 42 批次 / 454.5s）**3241 passed · 0 failed ·
+2 skipped**（崩溃重试恢复 2 个进程级崩溃）。首次失败后重试通过的那条
+（``test_approval_interfaces::test_cli_approve_rejects_unknown_request``）已单独连跑
+3 次全过，确认是环境抖动、非回归。
+
+**仍属环境**：本机前两次全量分别以「3240 passed / 1 failed（即上面那个 echo 用例）」
+和「3191 passed / 0 failed + 4 文件在 collection 阶段被损坏的字节码拦下（Error 内容是
+pydantic ``fields.py`` 与 ``registry.py`` 的 ``SyntaxError``）」收场；后者单跑
+59 passed 全过。这类崩溃与代码无关（§6「环境与工具链类」有记录），跑器重试可收敛。
+
+---
+
 ## 4. 历史报告汇总（已并入本文，原文归档）
 
 | 报告 | 时间 | 核心结论 | 现状 |
@@ -2003,7 +2039,7 @@ ruff 全绿；mypy 139 文件零错误。全量由 CI 仲裁（本机当日 Pyth
 | run 目录静态加密 | 未做 | 依赖部署侧决策（LUKS / 云盘加密） |
 
 **仍未纳入修复**（按 ROI，需各自单独设计）：
-`stream_call` 仍是「只记账不设防」（async generator + failover 循环，预扣/归还配对复杂）；`RunPythonTool` 无文件 / 导入隔离（本轮只补了 timeout 校验）；~~`resume` 缺状态白名单与进程锁~~（均闭环：进程锁 R17，状态白名单 R22 §3.27）；~~过期 run 启动时自动 reconcile 仍缺~~（R17 已闭环，见 §3.22）。
+~~`stream_call` 只记账不设防~~（✅ R57 已闭环：起流前 check + reserve、任意退出路径 release，见 §3.69）；`RunPythonTool` 无文件 / 导入隔离（本轮只补了 timeout 校验）；~~`resume` 缺状态白名单与进程锁~~（均闭环：进程锁 R17，状态白名单 R22 §3.27）；~~过期 run 启动时自动 reconcile 仍缺~~（R17 已闭环，见 §3.22）。
 
 **11-06 已闭环**（见 §3.7）：`_max_review_attempts` 死字段接线、状态跃迁刷新停滞计时、内置工具逐段符号链接检查、`run_python` timeout、ledger 读端点越界归 400、`POST /runs` options 白名单、CLI 数值开关与坏 YAML、前端表单取值与三态反馈统一。
 

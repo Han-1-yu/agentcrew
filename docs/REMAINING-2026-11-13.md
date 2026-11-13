@@ -55,7 +55,7 @@ python main.py eval examples/evals/capability-live.jsonl --live \
 | # | 事项 | 为什么搁置 | 现在做值不值 | 规模 |
 | --- | --- | --- | --- | --- |
 | C1 | D-16「写盘注入 OSError」一致性用例 | 注入点与 `_finalize` 内部原子写耦合过紧 | **重构封版路径时顺手补**，单独做不划算 | ~1 人日 |
-| C2 | `stream_call` 设防（配额预扣/归还配对） | async generator + failover 的配对复杂，易引 bug | **推荐做**：stream 已默认开放（R38），配额不设防是真实缺口 | ~1–2 人日 |
+| C2 | `stream_call` 设防（配额预扣/归还配对） | async generator + failover 的配对复杂，易引 bug | ✅ **已闭环**（R56 部分用量记账 + R57 配额设防，见 `PROJECT-STATE.md` §3.68/§3.69；全量 3241 passed / 0 failed） | — |
 | C3 | Webhook「恰好一次」投递 | at-least-once + 幂等头（`X-AgentCrew-Delivery`）已兜底 | **需接收端配合去重**，单方面做只能加落盘去重表（`delivery` 主键）——收益取决于接收端实现质量 | ~1 人日 |
 | C4 | Webhook 事件级表达式过滤 | R14 的 `webhook_events` 列表 + 「只推失败」已覆盖主要场景 | **按需**：出现「只推某个任务的事件」类需求再做 | ~1 人日 |
 
@@ -94,6 +94,6 @@ WorkBuddy 自带 Python 3.13 运行时的问题，等环境更新自愈。
 
 1. **A**（充值后跑评测）——最高杠杆：一次执行完成 C11 全部证据，其余全是顺带回填；
 2. **B1 / B2**（docker + vision）——各半天，把验收报告剩余两个「功能级」待真机项清掉；
-3. **C2**（stream_call 设防）——唯一建议主动排期的代码项；
+3. ~~**C2**（stream_call 设防）~~——✅ 已闭环（R56 + R57），代码侧不再有建议主动排期项；
 4. **B3–B5 / C3–C4**——按需求出现时再做；
 5. **D / E**——等产品与部署决策。

@@ -964,13 +964,39 @@ class ModelFactory:
         :class:`~agentcrew.models.loop_guard.LoopGuard`；窗口内 distinct unit 过少即
         抛 :class:`LoopDetectedError` 中断流（已 yield 的 chunk 不回滚），并落
         ``loop_detected`` 事件。``False``（默认）时行为与改造前逐字节一致。
+
+        C2：配额与 :meth:`_attempt` 同口径——起流前 ``check`` + ``reserve``，
+        任何退出路径（正常结束 / 被打断 / 首块前失败 / 取消）都在 ``finally``
+        里 ``release``。预扣的意义是让**并发**流不能同时通过检查而一起超配额；
+        实际用量仍只由 ``_account`` / 部分记账结算一次。
         """
         aliases = self._failover_aliases(alias)
         last_error: BaseException | None = None
+        # C2：估算口径与 _attempt 一致（请求体 + max_tokens），一次算好复用。
+        estimated = _estimate_request_tokens(messages, max_tokens)
         for idx, current_alias in enumerate(aliases):
             self._guard_run_cost()
             agent_budget.guard()
             provider = self.get(current_alias)
+            # check 必须在 reserve 之外、try 之外：QuotaExhaustedError 属于故障
+            # 转移白名单，但若与 reserve 同处一个 try，异常分支会把「本次从未
+            # 预扣」误 release，抹掉别的并发流的预扣 → 并发超卖。因此这里手工
+            # 做转移（流尚未吐块，切换不会产生两半不同来源的文本）。
+            try:
+                self._quota_tracker.check(current_alias)
+            except QuotaExhaustedError as exc:
+                last_error = exc
+                self._mark_cooldown(
+                    current_alias, getattr(exc, "status_code", None), exc)
+                if idx < len(aliases) - 1:
+                    self._emit_failover(current_alias, aliases[idx + 1], exc)
+                    continue
+                if len(aliases) > 1:
+                    raise ProviderUnavailableError(
+                        f"全部故障转移别名均不可用（primary={alias!r}，"
+                        f"尝试了 {len(aliases)} 个）：{exc}") from exc
+                raise
+            self._quota_tracker.reserve(current_alias, estimated)
             started = time.perf_counter()
             parts: list[str] = []
             finish_reason: str | None = None
@@ -1091,6 +1117,10 @@ class ModelFactory:
                         _logger.warning(
                             "stream_call 部分用量记账失败（原异常照常传播）",
                             exc_info=True)
+                # C2：预扣必须归还。成功路径的实际用量已由 _account 结算，失败 /
+                # 取消路径要么由上面的部分记账结算、要么什么都没消耗；无论哪条
+                # 路，预扣都不能留在窗口里——否则后续流会被自己的旧预扣误拒。
+                self._quota_tracker.release(current_alias, estimated)
         if last_error is not None:
             raise last_error
 
