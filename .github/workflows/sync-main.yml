@@ -1,0 +1,42 @@
+name: Sync main
+
+# 默认分支是 `main`，实际开发在 `master`。此前 `main` 停在 2026-11-09 的旧提交，
+# 导致「git clone 拿到的还是旧代码」，而且没人会注意到——因为两个分支都在 CI 里
+# 触发，红绿看起来一样。这里把 `main` 自动快进到 `master`：
+#
+# - 只在 master 上触发（推 main 不会递归触发）；
+# - 必须能**快进**才推：main 上若出现 master 没有的提交，说明有人直接在 main 提交，
+#   自动 ff 会丢掉它们，于是这里显式失败，交给人合并（失败比静默更好）；
+# - 推完不触发新 workflow（Actions 用 GITHUB_TOKEN 推送不会触发后续运行）。
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-main
+  cancel-in-progress: true
+
+jobs:
+  fast-forward-main:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 快进 main 到 master
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          if git merge-base --is-ancestor origin/main HEAD; then
+            git push origin HEAD:main
+            echo "main 已快进到 $(git rev-parse --short HEAD)"
+          else
+            echo "::error::main 上有 master 没有的提交，无法快进；请人工合并后再推"
+            git log --oneline origin/main ^HEAD | head -n 20
+            exit 1
+          fi
