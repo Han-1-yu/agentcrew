@@ -148,6 +148,70 @@ def test_missing_artifact_parameter_is_reported():
     assert result.ok is False and "参数不合法" in result.detail
 
 
+# ── rejected_by_gate（D5②：驳回类用例要能证明「是门禁拒的」）──────────────
+
+def test_rejected_by_gate_reads_plan_rejection():
+    output = CaseOutput(
+        status="failed",
+        events=[{"event": "plan_rejected",
+                 "data": {"attempt": 2, "errors": ["产物路径冲突：data/blank.json"]}}],
+    )
+    result = evaluate_checks(
+        [{"kind": "rejected_by_gate", "stage": "plan"}], output)[0]
+    assert result.ok is True, result.detail
+    assert "产物路径冲突" in result.detail
+
+
+def test_rejected_by_gate_reads_gate_rejection_with_reason():
+    output = CaseOutput(
+        status="failed",
+        events=[{"event": "gate_result",
+                 "data": {"task_id": "T2", "layer": "static",
+                          "verdict": "reject", "issues": ["src/empty.py 为空文件"]}}],
+    )
+    result = evaluate_checks(
+        [{"kind": "rejected_by_gate", "stage": "gate",
+          "reason_contains": "为空文件"}], output)[0]
+    assert result.ok is True, result.detail
+
+
+def test_rejected_by_gate_distinguishes_crash_from_rejection():
+    """这是这个类型存在的理由：崩了 ≠ 被拒。"""
+    crashed = CaseOutput(status="failed", error="规划器抛异常：KeyError('tasks')")
+    result = evaluate_checks([{"kind": "rejected_by_gate"}], crashed)[0]
+    assert result.ok is False
+    assert "运行失败" in result.detail
+
+    # 没有任何拒绝事件，只是失败：同样不算「被门禁拒掉」
+    silent = CaseOutput(status="failed", events=[{"event": "run_finished",
+                                                  "data": {"status": "failed"}}])
+    result = evaluate_checks([{"kind": "rejected_by_gate"}], silent)[0]
+    assert result.ok is False and "没有任何拒绝证据" in result.detail
+
+    # 通过了就不叫被拒
+    passed = CaseOutput(status="completed")
+    assert evaluate_checks(
+        [{"kind": "rejected_by_gate"}], passed)[0].ok is False
+
+
+def test_rejected_by_gate_checks_stage_and_reason():
+    output = CaseOutput(
+        status="failed",
+        events=[{"event": "gate_result",
+                 "data": {"verdict": "reject", "issues": ["别的理由"]}}],
+    )
+    # 只给了任务层拒绝，却要求规划期拒绝 → 失败
+    assert evaluate_checks(
+        [{"kind": "rejected_by_gate", "stage": "plan"}], output)[0].ok is False
+    # 理由不匹配 → 失败，并把实际证据带进 detail
+    result = evaluate_checks(
+        [{"kind": "rejected_by_gate", "reason_contains": "为空文件"}], output)[0]
+    assert result.ok is False and "别的理由" in result.detail
+    # 非法 stage → 参数错误而不是静默通过
+    assert evaluate_checks(
+        [{"kind": "rejected_by_gate", "stage": "whatever"}], output)[0].ok is False
+
+
 def test_all_declared_kinds_have_handlers():
     """``CHECK_KINDS`` 与实现不能漂移：文档里列的类型必须真的能跑。"""
     for kind in CHECK_KINDS:

@@ -52,6 +52,7 @@ CHECK_KINDS: tuple[str, ...] = (
     "event_field",
     "run_status",
     "no_failed_tasks",
+    "rejected_by_gate",
 )
 
 
@@ -64,6 +65,10 @@ def evaluate_checks(
 
 def _evaluate(check: Mapping[str, Any], output: CaseOutput) -> CheckResult:
     kind = str(check.get("kind") or "").strip()
+    if kind == "rejected_by_gate":
+        # 这个类型**就是要**在「run 失败」时求值，所以必须先于下面的
+        # 「error 一律失败」短路——否则驳回类 case 永远无法把证据读出来。
+        return _rejected_by_gate(check, output)
     if output.error:
         # 运行本身失败时，断言一律失败：把运行错误带进 detail，避免
         # 「产物为空 + 断言 artifact_not_contains 恰好通过」这种假绿。
@@ -78,6 +83,73 @@ def _evaluate(check: Mapping[str, Any], output: CaseOutput) -> CheckResult:
         return handler(check, output)
     except (KeyError, TypeError, ValueError) as exc:
         return CheckResult(kind=kind, ok=False, detail=f"check 参数不合法：{exc}")
+
+
+#: 门禁拒绝的两类证据：规划期被拒（``plan_rejected``）与任务层被拒
+#: （``gate_result`` 且 ``verdict == "reject"``）。
+_REJECT_STAGES = ("any", "plan", "gate")
+
+
+def _rejection_evidence(output: CaseOutput, stage: str) -> list[str]:
+    """收集拒绝证据文本（错误列表 / issues）。"""
+    evidence: list[str] = []
+    for event in output.events:
+        name = str(event.get("event") or "")
+        data = event.get("data") or {}
+        if not isinstance(data, dict):
+            continue
+        if name == "plan_rejected" and stage in ("any", "plan"):
+            evidence.append(" ".join(str(item) for item in (data.get("errors") or [])))
+        elif name == "gate_result" and stage in ("any", "gate"):
+            if str(data.get("verdict") or "") == "reject":
+                evidence.append(
+                    " ".join(str(item) for item in (data.get("issues") or [])))
+    return [item for item in evidence if item]
+
+
+def _rejected_by_gate(
+    check: Mapping[str, Any], output: CaseOutput
+) -> CheckResult:
+    """断言「这次 run 是**被门禁拒掉**的」，而不是「跑崩了/跑错了」。
+
+    D5② 的口径问题：驳回类用例（要求交付 0 字节文件）本来就应该失败，但
+    ``run_status: failed`` 分不清两件事——门禁真的把不合格产物拒了，还是流程
+    在规划期就崩了。这个类型只认**拒绝证据**：
+
+    - ``stage: plan``：``plan_rejected`` 事件（规划评审驳回，可重试）；
+    - ``stage: gate``：``gate_result`` 且 ``verdict=reject``（G1 层驳回）；
+    - 默认 ``any``：两者任一。
+
+    反向也严格：``output.error`` 非空（运行级异常）、状态不是 ``failed``、
+    没有任何拒绝证据，三者任一都判失败并写明原因。
+    """
+    stage = str(check.get("stage") or "any").strip().lower()
+    if stage not in _REJECT_STAGES:
+        return CheckResult(
+            kind="rejected_by_gate", ok=False,
+            detail=f"stage 只能是 {'/'.join(_REJECT_STAGES)}，收到 {stage!r}")
+    if output.error:
+        return CheckResult(
+            kind="rejected_by_gate", ok=False,
+            detail=f"run 级 error 非空，这是运行失败而不是门禁拒绝：{output.error[:200]}")
+    if output.status != "failed":
+        return CheckResult(
+            kind="rejected_by_gate", ok=False,
+            detail=f"run 状态是 {output.status!r}，不是被拒的 failed")
+    evidence = _rejection_evidence(output, stage)
+    if not evidence:
+        return CheckResult(
+            kind="rejected_by_gate", ok=False,
+            detail=f"没有任何拒绝证据（stage={stage}）："
+                   "既没有 plan_rejected，也没有 verdict=reject 的 gate_result")
+    needle = str(check.get("reason_contains") or "").strip()
+    if needle and not any(needle.lower() in item.lower() for item in evidence):
+        return CheckResult(
+            kind="rejected_by_gate", ok=False,
+            detail=f"拒绝理由里没有 {needle!r}；实际证据：{evidence[0][:200]}")
+    return CheckResult(
+        kind="rejected_by_gate", ok=True,
+        detail=f"被拒证据 {len(evidence)} 条（stage={stage}）：{evidence[0][:160]}")
 
 
 def _artifact_any(check: Mapping[str, Any], output: CaseOutput) -> tuple[bool, str]:

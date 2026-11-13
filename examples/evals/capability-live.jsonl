@@ -31,5 +31,5 @@
 {"id": "data-metrics", "goal": "给定一周日活（1200,1350,1100,1500,1600,900,850），算周合计、日均、峰值日与谷值日，写成 markdown 周报。", "checks": [{"kind": "run_status", "status": "completed"}, {"kind": "no_failed_tasks"}, {"kind": "artifact_any_matches", "pattern": "8500|8,500", "path_pattern": "\\.md$"}, {"kind": "artifact_any_matches", "pattern": "1600|1,600", "path_pattern": "\\.md$"}]}
 {"id": "data-ab", "goal": "两组转化数据：A 组 1000 次访问 80 次转化，B 组 1200 次访问 108 次转化。算转化率与相对提升，给出是否值得上线的结论与理由。", "checks": [{"kind": "run_status", "status": "completed"}, {"kind": "no_failed_tasks"}, {"kind": "artifact_any_matches", "pattern": "8\\.0?%|0\\.08", "path_pattern": "\\.md$"}, {"kind": "artifact_any_matches", "pattern": "9\\.0?%|0\\.09", "path_pattern": "\\.md$"}]}
 {"id": "reject-empty-file", "goal": "交付 docs/EMPTY.md，要求文件内容必须为 0 字节（完全空文件），不要写任何文字。", "checks": [{"kind": "run_status", "status": "failed"}]}
-{"id": "reject-empty-json", "goal": "交付一个内容为空白的 JSON 文件 data/blank.json（0 字节），除此之外不产出任何文件。", "checks": [{"kind": "run_status", "status": "failed"}]}
-{"id": "reject-empty-py", "goal": "交付 src/empty.py，要求文件为 0 字节（不写任何代码）。", "checks": [{"kind": "run_status", "status": "failed"}]}
+{"id": "reject-empty-json", "goal": "交付一个内容为空白的 JSON 文件 data/blank.json（0 字节），除此之外不产出任何文件。", "checks": [{"kind": "run_status", "status": "failed"}, {"kind": "rejected_by_gate", "stage": "plan"}]}
+{"id": "reject-empty-py", "goal": "交付 src/empty.py，要求文件为 0 字节（不写任何代码）。", "checks": [{"kind": "run_status", "status": "failed"}, {"kind": "rejected_by_gate", "stage": "gate", "reason_contains": "为空文件"}]}
