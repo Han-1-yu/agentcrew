@@ -47,6 +47,7 @@ __all__ = [
     "SandboxError",
     "build_backend",
     "docker_available",
+    "default_container_user",
 ]
 
 #: 容器内的工作区挂载点。宿主机 ``workdir`` 一一对应挂到这里。
@@ -237,6 +238,22 @@ def docker_available(which: Callable[[str], str | None] | None = None) -> bool:
     return probe("docker") is not None
 
 
+def default_container_user() -> str:
+    """容器内默认跑什么 uid:gid。
+
+    取宿主当前 uid/gid：唯一挂进容器的 ``/workspace`` 属于宿主用户，容器 uid
+    与它不一致时模型连自己的产物都写不进去（真容器实测 ``Permission denied``）。
+    Windows 没有 uid 概念，退回 ``65534:65534``（nobody）。两种取值都**不是 root**。
+    """
+    getuid = getattr(os, "getuid", None)
+    getgid = getattr(os, "getgid", None)
+    if callable(getuid) and callable(getgid):
+        uid, gid = getuid(), getgid()
+        if uid != 0:
+            return f"{uid}:{gid}"
+    return "65534:65534"
+
+
 class DockerBackend(ExecutionBackend):
     """容器内执行：默认禁网、非 root、cap 全丢、资源有上限、只挂工作区。
 
@@ -244,8 +261,12 @@ class DockerBackend(ExecutionBackend):
 
     - ``--network none``：模型写的代码不能出网（数据外发、内网探测都断掉）。
       需要联网时显式 ``sandbox_allow_network=true``，这是运维决定，不是模型决定。
-    - ``--user 65534:65534`` + ``--cap-drop ALL`` + ``--security-opt
-      no-new-privileges``：容器内非 root、拿不到额外能力、无法提权。
+    - ``--user <宿主 uid>:<gid>``（Windows 上退回 ``65534:65534``）+ ``--cap-drop
+      ALL`` + ``--security-opt no-new-privileges``：容器内**非 root**、拿不到额外
+      能力、无法提权。之所以优先用宿主 uid 而不是固定的 nobody：唯一挂进来的
+      ``/workspace`` 是宿主目录，容器 uid 与宿主属主不一致时，模型连自己的产物都
+      写不进去（真容器上实测 ``Permission denied: 'out.txt'``）；宿主 uid 在
+      绝大多数部署里本来就不是 0，所以「非 root」这条并没有让步。
     - ``--read-only`` + 只读根文件系统 + ``/tmp`` tmpfs：写不进镜像层，也改不了
       宿主；唯一可写的持久位置是挂进来的工作区。
     - ``--memory`` / ``--cpus`` / ``--pids-limit``：内存、CPU、进程数三道上限，
@@ -269,6 +290,7 @@ class DockerBackend(ExecutionBackend):
         pids_limit: int = 256,
         allow_network: bool = False,
         binary: str = "docker",
+        user: str | None = None,
         which: Callable[[str], str | None] | None = None,
     ) -> None:
         if not image.strip():
@@ -277,6 +299,12 @@ class DockerBackend(ExecutionBackend):
             raise SandboxError("sandbox_memory_mb 不得小于 64")
         if cpus <= 0:
             raise SandboxError("sandbox_cpus 必须大于 0")
+        self.user = user or default_container_user()
+        if self.user.split(":", 1)[0].strip() in {"0", "root"}:
+            raise SandboxError(
+                "容器内不得以 root 运行（--user 的 uid 部分不能是 0）；"
+                "留空则自动取宿主当前 uid，Windows 上退回 65534"
+            )
         self.image = image.strip()
         self.memory_mb = int(memory_mb)
         self.cpus = float(cpus)
@@ -300,7 +328,7 @@ class DockerBackend(ExecutionBackend):
         flags = [
             self.binary, "run", "--rm", "--name", name,
             "--network", "bridge" if self.allow_network else "none",
-            "--user", "65534:65534",
+            "--user", self.user,
             "--read-only",
             "--tmpfs", f"/tmp:rw,nosuid,nodev,size={_TMPFS_SIZE}",
             "--cap-drop", "ALL",

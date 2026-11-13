@@ -26,6 +26,7 @@ from agentcrew.tools.sandbox import (
     LocalBackend,
     SandboxError,
     build_backend,
+    default_container_user,
     docker_available,
 )
 
@@ -129,8 +130,11 @@ def test_docker_argv_has_every_isolation_flag(tmp_path):
     assert argv[:3] == [backend.binary, "run", "--rm"]
     # 禁网：默认 --network none
     assert "--network" in argv and argv[argv.index("--network") + 1] == "none"
-    # 非 root + 不提权
-    assert argv[argv.index("--user") + 1] == "65534:65534"
+    # 非 root + 不提权。uid 具体值随宿主变化（POSIX 上传宿主 uid 才能写挂载的
+    # workspace，Windows 上退回 nobody），断言的是「不是 root」这个性质。
+    user = argv[argv.index("--user") + 1]
+    assert user.split(":", 1)[0] not in {"0", "root"}, user
+    assert ":" in user, user
     assert "--cap-drop" in argv and argv[argv.index("--cap-drop") + 1] == "ALL"
     assert "no-new-privileges" in joined
     # 只读根 + /tmp 可写
@@ -162,6 +166,26 @@ def test_docker_backend_rejects_bad_limits():
         DockerBackend(memory_mb=32)
     with pytest.raises(SandboxError):
         DockerBackend(cpus=0)
+
+
+def test_docker_backend_refuses_root_user():
+    """``--user 0`` 会让沙箱形同虚设，构造期就拒（fail loud）。"""
+    with pytest.raises(SandboxError):
+        DockerBackend(user="0:0")
+    with pytest.raises(SandboxError):
+        DockerBackend(user="root:root")
+
+
+def test_docker_backend_user_defaults_to_host_uid(tmp_path):
+    """默认 uid 必须跟宿主一致，否则容器写不进挂进来的 workspace（真容器实测）。
+
+    Windows 没有 uid 概念，退回 nobody —— 两种结果都非 root。
+    """
+    backend = DockerBackend()
+    assert backend.user == default_container_user()
+    assert backend.user.split(":", 1)[0] != "0"
+    argv = backend.build_argv(["true"], workdir=tmp_path, name="c3")
+    assert argv[argv.index("--user") + 1] == backend.user
 
 
 def test_docker_backend_python_is_container_interpreter():

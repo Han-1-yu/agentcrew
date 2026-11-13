@@ -98,7 +98,11 @@ async def test_container_cannot_read_host_files(tmp_path):
 
 
 async def test_container_is_non_root_with_limits(tmp_path):
-    """非 root、cap 全丢、内存与进程上限落到 cgroup 上。"""
+    """非 root、cap 全丢、内存与进程上限落到 cgroup 上。
+
+    uid 断言的是「不是 0」而不是某个定值：后端默认用宿主 uid（这样才写得进挂载的
+    workspace），值随机器变化，安全性在于非 root 而不是数字好看。
+    """
     workdir = tmp_path / "ws"
     workdir.mkdir()
     code = (
@@ -112,6 +116,9 @@ async def test_container_is_non_root_with_limits(tmp_path):
     )
     result = await _backend().run(["python3", "-c", code], workdir=workdir, timeout=120)
     assert result.exit_code == 0, result.stderr
-    assert "uid 65534" in result.stdout, result.stdout
+    uid_line = next(
+        line for line in result.stdout.splitlines() if line.startswith("uid ")
+    )
+    assert uid_line.split()[1] != "0", uid_line
     assert "memory.max 268435456" in result.stdout, result.stdout  # 256 MiB
     assert "pids.max 64" in result.stdout, result.stdout
