@@ -1043,7 +1043,7 @@ class ModelFactory:
                         f"全部故障转移别名均不可用（primary={alias!r}，"
                         f"尝试了 {len(aliases)} 个）：{exc}") from exc
                 raise
-            if success:
+            else:
                 self._reset_cooldown(current_alias)
                 latency_ms = int((time.perf_counter() - started) * 1000)
                 text = "".join(parts)
@@ -1061,6 +1061,36 @@ class ModelFactory:
                     result, purpose=purpose, role=role,
                     binding=provider.binding, alias=current_alias)
                 return
+            finally:
+                # C2：流被中途打断（调用方 break / cancel / 已 yield 后异常）也要记
+                # 账——已吐出的块是**确定的 token 消耗**，不记会让预算与用量偏低
+                # （取消后重跑 = 计数悄悄偏低，可能无限逼近实际上限却永不触发）。
+                # 这里**不**抛 BudgetExhaustedError：异常正在传播，抛会掩盖真实
+                # 原因；下一次调用的 ``_guard_run_cost`` 会按已累计成本拦截。
+                if not success and parts:
+                    partial_text = "".join(parts)
+                    partial_result = CompletionResult(
+                        text=partial_text,
+                        provider=provider.binding.provider,
+                        model=provider.binding.model,
+                        prompt_tokens=sum(
+                            estimate_tokens(m["content"]) for m in messages),
+                        completion_tokens=estimate_tokens(partial_text),
+                        latency_ms=int(
+                            (time.perf_counter() - started) * 1000),
+                        finish_reason=finish_reason or "aborted",
+                    )
+                    try:
+                        self._record_usage(
+                            partial_result, purpose=purpose, role=role,
+                            binding=provider.binding, alias=current_alias,
+                            temperature=temperature, max_tokens=max_tokens,
+                            partial=True)
+                        self._maybe_emit_budget_warning()
+                    except Exception:  # noqa: BLE001 —— 记账失败不掩盖原异常
+                        _logger.warning(
+                            "stream_call 部分用量记账失败（原异常照常传播）",
+                            exc_info=True)
         if last_error is not None:
             raise last_error
 
@@ -1928,6 +1958,90 @@ class ModelFactory:
             threshold=threshold,
         )
 
+    def _record_usage(
+        self,
+        result: CompletionResult,
+        *,
+        purpose: str,
+        role: str,
+        binding: ModelBinding | None = None,
+        alias: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        partial: bool = False,
+    ) -> float:
+        """累加用量 + 落 ``llm_call``，返回本次成本；**不做硬上限检查**。
+
+        C2：从 :meth:`_account` 拆出来，是为了让「流被中途打断」的部分用量也能
+        走**同一条**记账路径（单一记账口是刻意的——两套累加迟早漂移）。是否抛
+        ``BudgetExhaustedError`` 由调用方决定：正常完成走 :meth:`_account`（抛），
+        被打断的流走这里（不抛——异常正在传播，抛会掩盖真实原因；下次调用的
+        ``_guard_run_cost`` 会按已累计成本拦截）。
+        """
+        cost = self._estimate_cost(result, binding)
+        self._llm_calls += 1
+        self._total_prompt_tokens += result.prompt_tokens
+        self._total_completion_tokens += result.completion_tokens
+        self._total_cost_usd += cost
+        agent_budget.note_call(cost)
+        state = agent_budget.current()
+        if state is not None:
+            self._agent_run_cost[state.profile] = (
+                self._agent_run_cost.get(state.profile, 0.0) + cost)
+            slot = self._agent_usage.setdefault(state.profile, {
+                "calls": 0.0, "cost_usd": 0.0,
+                "prompt_tokens": 0.0, "completion_tokens": 0.0})
+            slot["calls"] += 1
+            slot["cost_usd"] += cost
+            slot["prompt_tokens"] += result.prompt_tokens
+            slot["completion_tokens"] += result.completion_tokens
+        # V7-P1：usage 路由策略的使用量追踪
+        if alias is not None:
+            self._note_usage(alias, result.prompt_tokens, result.completion_tokens)
+        # V7-P2：多窗口配额消耗记录
+        if alias is not None:
+            self._quota_tracker.consume(
+                alias, result.prompt_tokens, result.completion_tokens, cost)
+        # P2-3：span 也走这条「所有调用路径共用」的记账口。
+        if binding is not None:
+            self._record_llm_span(
+                result, binding=binding, alias=alias,
+                temperature=temperature, max_tokens=max_tokens)
+        if self._ledger is not None:
+            payload: dict[str, Any] = dict(
+                role=role,
+                model=result.model,
+                prompt_tokens=result.prompt_tokens,
+                completion_tokens=result.completion_tokens,
+                estimated_cost_usd=cost,
+                latency_ms=result.latency_ms,
+                purpose=purpose,
+            )
+            if partial:
+                # C2：被中途打断的流——用量是真实的，但不是一次完整调用。
+                payload["partial"] = True
+            self._ledger.emit("llm_call", **_trace_fields(), **payload)
+        return cost
+
+    def _estimate_cost(
+        self, result: CompletionResult, binding: ModelBinding | None,
+    ) -> float:
+        """成本估算：优先 preset 价格（USD/百万 token），否则回退定价表。
+
+        V6 P1 的单一口径；:meth:`_record_usage` 与 :meth:`_account` 共用。
+        """
+        if (
+            binding is not None
+            and binding.input_price is not None
+            and binding.output_price is not None
+        ):
+            return (
+                result.prompt_tokens / 1e6 * binding.input_price
+                + result.completion_tokens / 1e6 * binding.output_price
+            )
+        return estimate_cost(
+            result.model, result.prompt_tokens, result.completion_tokens)
+
     def _account(
         self,
         result: CompletionResult,
@@ -1953,60 +2067,13 @@ class ModelFactory:
         也必须留痕），Crew 捕获异常后优雅收尾。
 
         V7-P1：``alias`` 非空时同步记录到 usage 路由策略的使用量追踪。
+
+        C2：累加与落账已抽到 :meth:`_record_usage`（流被打断的部分用量共用同一
+        记账口）；本方法只多出「硬上限检查 + 软阈值 + 降级」这三层决策。
         """
-        if (
-            binding is not None
-            and binding.input_price is not None
-            and binding.output_price is not None
-        ):
-            cost = (
-                result.prompt_tokens / 1e6 * binding.input_price
-                + result.completion_tokens / 1e6 * binding.output_price
-            )
-        else:
-            cost = estimate_cost(
-                result.model, result.prompt_tokens, result.completion_tokens)
-        self._llm_calls += 1
-        self._total_prompt_tokens += result.prompt_tokens
-        self._total_completion_tokens += result.completion_tokens
-        self._total_cost_usd += cost
-        agent_budget.note_call(cost)
-        state = agent_budget.current()
-        if state is not None:
-            self._agent_run_cost[state.profile] = (
-                self._agent_run_cost.get(state.profile, 0.0) + cost)
-            slot = self._agent_usage.setdefault(state.profile, {
-                "calls": 0.0, "cost_usd": 0.0,
-                "prompt_tokens": 0.0, "completion_tokens": 0.0})
-            slot["calls"] += 1
-            slot["cost_usd"] += cost
-            slot["prompt_tokens"] += result.prompt_tokens
-            slot["completion_tokens"] += result.completion_tokens   # 执行体级预算累加（无上下文时零开销）
-        # V7-P1：usage 路由策略的使用量追踪
-        if alias is not None:
-            self._note_usage(alias, result.prompt_tokens, result.completion_tokens)
-        # V7-P2：多窗口配额消耗记录
-        if alias is not None:
-            self._quota_tracker.consume(
-                alias, result.prompt_tokens, result.completion_tokens, cost)
-        # P2-3：span 也走这条「所有调用路径共用」的记账口——放在 ``call()`` 里
-        # 只能覆盖 ReAct 路径，plan / review（走 complete_structured 的阶梯）
-        # 会整段缺失，trace 看起来像「run 只调了 5 次模型」。
-        if binding is not None:
-            self._record_llm_span(
-                result, binding=binding, alias=alias,
-                temperature=temperature, max_tokens=max_tokens)
-        if self._ledger is not None:
-            self._ledger.emit(
-                "llm_call",
-                **_trace_fields(),
-                role=role,
-                model=result.model,
-                prompt_tokens=result.prompt_tokens,
-                completion_tokens=result.completion_tokens,
-                estimated_cost_usd=cost,
-                latency_ms=result.latency_ms,
-                purpose=purpose)
+        self._record_usage(
+            result, purpose=purpose, role=role, binding=binding, alias=alias,
+            temperature=temperature, max_tokens=max_tokens)
         # P2 增强：预算分三层——软阈值警告（80%）、降级（90%）、硬上限（100%）。
         # A-23：**先算硬上限，再做另外两层**。``exhaustion_error`` 是纯计算、
         # 没有副作用；而软阈值要 emit ledger、降级要改 binding，都可能因为

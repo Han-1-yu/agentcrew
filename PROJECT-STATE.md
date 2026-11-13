@@ -12,7 +12,7 @@
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | **3231 passed / 2 skipped / 0 failed**（`python scripts/test.py`，崩溃隔离跑器一次跑出；R51 +62 / R52 +27 / R53 +14 / R54 +13，明细见 §3.64–§3.67） |
+| 全量测试 | **3231 passed / 2 skipped / 0 failed**（`python scripts/test.py`，崩溃隔离跑器一次跑出；R51 +62 / R52 +27 / R53 +14 / R54 +13 / R56 +4，明细见 §3.64–§3.68） |
 | 静态检查 | `ruff check agentcrew/ main.py tests/` **全绿**；`mypy agentcrew/` **137 文件零错误**（本机与 CI 同口径；CI 首跑暴露的 5 条既存错误已在本批修复，见 §3.64） |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
@@ -1804,6 +1804,32 @@ ruff 全绿；mypy 139 文件零错误。THREAT_MODEL v1.3（§2.3 补两类输�
 问题），充值后 `python main.py eval examples/evals/capability-live.jsonl --live
 --max-cost 0.25 --output-dir output/_eval` 直接续跑。明细见
 `bench/eval-live-2026-11-13.md`；试点子集 `examples/evals/capability-live-pilot.jsonl`。
+
+---
+
+### 3.68 R56：C2 部分用量记账——流被打断时预算不再漏算（2026-11-13）
+
+**缺口**：``stream_call`` 原本只在流**完整消费完**时记账。调用方 break / 取消 /
+已 yield 后抛错时，已吐出的块是确定的 token 消耗，但调用数、成本、配额全不落
+——取消后重跑 = 预算计数悄悄偏低，可能无限逼近上限却永不触发（R50 时搁置的
+stream_call 设防项，C2 剩余里唯一有真实风险敞口的）。
+
+| 改动 | 说明 |
+| --- | --- |
+| ``_record_usage``（新） | 从 ``_account`` 拆出「累加 + 落 ``llm_call`` + usage/配额/agent 级记账 + span」，**不做硬上限检查**——单一记账口保持（两套累加迟早漂移）；``partial=True`` 时事件多一个 ``partial`` 键（正常路径字段集与 spec §13.2 七项契约逐字节一致） |
+| ``_account`` | 改为调 ``_record_usage`` + 三层预算决策（硬上限/软阈值/降级），语义不变 |
+| ``stream_call`` finally | ``not success and parts`` 时落一条部分用量：估算 prompt + 已收文本 token；**不抛** ``BudgetExhaustedError``（异常正在传播，不能掩盖；下次调用的 ``_guard_run_cost`` 会按累计值拦截）；记账自身失败只 warning |
+| 测试 | ``tests/test_stream_partial_accounting.py`` 4 例：正常流无 partial 键；打断后 partial 事件 + 计数/ token 入账；部分用量计入 ``max_llm_calls``（第二次调用被拦）；记账异常不掩盖原异常 |
+
+**取舍**：曾尝试给 ``llm_call`` 事件加 ``finish_reason`` 字段，被
+``test_model_factory`` 的七项契约守卫拦下（「多一个少一个都算漂移」是刻意的）——
+撤掉，保持审计形状不变。
+
+定向回归：预算/流式/记账/配额/成本 218 例 + model_factory 56 例全绿；
+ruff 全绿；mypy 139 文件零错误。全量由 CI 仲裁（本机当日 Python 进程
+不稳定：反复段错误 / ``SystemError``，前半 76% 崩溃——环境问题，非回归，
+本地定向子集均通过）。**注意**：本机默认 ``python``（3.13.12）的依赖在
+2026-11-13 00:57 被环境重置清空，后续一律用 ``./.venv/Scripts/python.exe``。
 
 ---
 
