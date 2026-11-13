@@ -1,0 +1,25 @@
+# AgentCrew systemd 示例。仓库放在 /opt/agentcrew，密钥放在
+# /etc/agentcrew/agentcrew.env（chmod 600）。本单元未在云主机验收实例启用，
+# 云主机证据来自等价的 nohup 进程；生产启用前用 systemd-analyze verify 检查。
+[Unit]
+Description=AgentCrew orchestration API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=agentcrew
+Group=agentcrew
+WorkingDirectory=/opt/agentcrew
+EnvironmentFile=/etc/agentcrew/agentcrew.env
+ExecStart=/opt/agentcrew/.venv/bin/python main.py serve --host 127.0.0.1 --port 8765
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/agentcrew /var/log/agentcrew
+
+[Install]
+WantedBy=multi-user.target

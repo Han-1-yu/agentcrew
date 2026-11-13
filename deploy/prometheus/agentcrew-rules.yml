@@ -1,0 +1,18 @@
+groups:
+  - name: agentcrew-availability
+    rules:
+      - alert: AgentCrewDown
+        expr: agentcrew_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: AgentCrew 服务已停止上报存活指标
+          runbook: 检查 serve 进程、127.0.0.1:8765 与反代日志
+      - alert: AgentCrewRunFailureRateHigh
+        expr: sum(agentcrew_runs_by_status{status="failed"}) / clamp_min(sum(agentcrew_runs_by_status), 1) > 0.20
+        labels:
+          severity: warning
+        annotations:
+          summary: AgentCrew run 失败率超过 20%
+          runbook: 检查 run.json、ledger.jsonl 和 diagnostics/stall-report.md

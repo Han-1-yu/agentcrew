@@ -1,0 +1,49 @@
+rule_files:
+  - agentcrew-rules.yml
+
+tests:
+  - interval: 15s
+    input_series:
+      - series: agentcrew_up
+        values: "1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0"
+      - series: agentcrew_runs_by_status{status="completed"}
+        values: "10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10"
+      - series: agentcrew_runs_by_status{status="failed"}
+        values: "0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: AgentCrewDown
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: AgentCrewDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: AgentCrew 服务已停止上报存活指标
+              runbook: 检查 serve 进程、127.0.0.1:8765 与反代日志
+      - eval_time: 4m
+        alertname: AgentCrewRunFailureRateHigh
+        exp_alerts: []
+
+  - interval: 15s
+    input_series:
+      - series: agentcrew_up
+        values: "1 1 1 1"
+      - series: agentcrew_runs_by_status{status="completed"}
+        values: "10 10 10 10"
+      - series: agentcrew_runs_by_status{status="failed"}
+        values: "0 0 3 3"
+    alert_rule_test:
+      - eval_time: 15s
+        alertname: AgentCrewRunFailureRateHigh
+        exp_alerts: []
+      # promtool 在最后一个输入点之后求值，避免把边界点误读成前一个样本。
+      - eval_time: 1m
+        alertname: AgentCrewRunFailureRateHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: AgentCrew run 失败率超过 20%
+              runbook: 检查 run.json、ledger.jsonl 和 diagnostics/stall-report.md

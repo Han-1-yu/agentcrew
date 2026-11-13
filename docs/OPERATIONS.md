@@ -795,6 +795,9 @@ HTTP 等价物是 `GET /tools` 与 `POST /tools/{name}/test`，看板首页「�
 >
 > 本机已验项与实测结果见 `docs/DEPLOY-CHECK-2026-11-13.md`（doctor / 离线冒烟 /
 > REST 认证 200·401 / `/metrics` / 无密钥退 3 / `clean --dry-run` / Studio 三连 / 静态检查）。
+> **云主机真实部署验收见 `docs/DEPLOYMENT-VM-2026-11-13.md`**：10 项中 7 项闭环，
+> 剩余独立数据盘、容器挂卷/healthcheck、Docker 下 `g1_exec_check` 三项硬阻塞。
+> 可复用反代、环境文件、systemd 与 Prometheus 规则在 `deploy/`。
 > 下面这些仍需在目标机上逐条打勾。
 
 - [ ] `python main.py doctor --json` 的 `ok=true`，`provider:*` 为 healthy

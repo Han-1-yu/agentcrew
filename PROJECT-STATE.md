@@ -19,7 +19,7 @@
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
 | Studio | `npm run check` **73** 模块 / 42 分片通过、`test:unit` **18/18**、electron `e2e` **32/32**（2026-11-13 本机实跑） |
 | 上线自检 | 本机可验 **9 项全通过**（doctor / 离线冒烟 / REST 认证 200·401 / `/metrics` / 无密钥退 3 / `clean` 干跑 / Studio 三连 / ruff+mypy）；目标机 10 项判据见 `docs/DEPLOY-CHECK-2026-11-13.md` |
-| 收尾 | 交付说明见 **`docs/CLOSURE-2026-11-13.md`**；B 类外部环境项 **5/5 全部闭环**，其中 B2 多模态由智谱 GLM-4.5V 真实「截图→改前端」验收（§3.76、`docs/VISION-2026-11-13.md`）；未完成仅剩真实目标机部署（判据 + `scripts/deploy_check.py` 已就绪） |
+| 收尾 | 交付说明见 **`docs/CLOSURE-2026-11-13.md`**；B 类外部环境项 **5/5 全部闭环**；云主机真实部署验收 10 项中 **7 项闭环**（TLS/SSE、告警规则、日志、密钥、成本、webhook、备份），仅剩独立数据盘与两项 Docker 依赖（§3.77、`docs/DEPLOYMENT-VM-2026-11-13.md`） |
 | Git | 已与 `origin/master` 同步（R51–R60 全部推送）；**`main` 与 `master` 每次都指向同一 commit**（首次用 `git push master:main` 快进，之后由 `sync-main.yml` 自动快进）；**CI 连续全绿**——run **43404026920**（R60：7 job，含 `Sandbox·docker` 与 4 个 Python 版本 + Windows + Studio）success，**收尾 run `43406060256`（b9b4776）七 job 全 success**，`Sync main` 同步成功；此前的 43392129252 / 43393524865 / 43399398936 同样全绿；验收报告 `docs/ACCEPTANCE-2026-11-12.md`；**真实模型评测 23 条：22 通过 / 1 条字面契约失败（已由 R58 修提示） / 1 条证据缺口**（`bench/eval-live-2026-11-13.md`） |
 | 角色 | 8 个内置岗位角色 + 执行体（Agent Profile）可多绑 |
 
@@ -2196,6 +2196,31 @@ FAIL 是真实状态（产物与代码同盘、未配成本上限），不是脚
 
 至此 `docs/REMAINING-2026-11-13.md` 的 **B 类 5 项全部闭环**；剩余上线工作只有
 真实目标机及运维配置。
+
+---
+
+### 3.77 云主机真实部署验收：10 项中 7 项闭环（2026-11-13）
+
+云主机不再只是「新鲜克隆冒烟」环境，已实际运行 **回环 serve `127.0.0.1:8765` +
+nginx TLS 反代 `https://localhost:18443`**。完整证据与复跑入口见
+`docs/DEPLOYMENT-VM-2026-11-13.md`，可复用配置收在 `deploy/`。
+
+- 自动自检最终 **6 PASS / 1 FAIL / 5 SKIP**：REST 认证、metrics、TLS、成本上限、
+  日志脱敏、备份恢复通过；唯一 FAIL 是数据目录与仓库同盘。备份覆盖 3 run / 6 文件。
+- 四个人工 SKIP 已专项补齐：SSE 经反代实际流出 4,567 字节且带
+  `X-Accel-Buffering: no`；两条 Prometheus 告警用真正 promtool 2.55.1 测得触发与
+  不触发均 SUCCESS；webhook 真实接收 2 个事件后按原 delivery id 重投，
+  `processed=2 / duplicates=1`；密钥文件 0600 且 key 不在 ps / 快照 / 运行文件。
+- 验收抓到并修复两个真缺陷：`19a55c5` 让 TLS 自检尊重 URL 显式端口；
+  `af3336d` 让 `config_snapshot.api_keys` 只落 `***`。后者不是理论审查，而是实际
+  在 `run.json` 抓到明文后修复；云主机已轮换临时 key 并用 run
+  `20261113-202149-4fe3` 复验。
+- 剩余 **3 项硬阻塞**：独立数据盘、容器挂卷/healthcheck、Docker 下
+  `g1_exec_check`。没有用 tmpfs/loopback 冒充独立盘，也没有把 CI 的 Docker 证据
+  冒充目标机 g1 验收。
+- 验收实例只监听回环地址、使用本地测试 CA；公网正式证书、Alertmanager、外部日志
+  聚合和 systemd 启用仍是生产切换动作，未写成已完成。webhook 测试接收端已停止，
+  serve 与 nginx 保留供复核。
 
 ---
 
