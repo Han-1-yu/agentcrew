@@ -1,6 +1,6 @@
 # C10 切片一：run 中途指引（后端规格）
 
-> 2026-11-14 · 状态：**待批准**（未写任何实现代码）· 对应 `完善/AgentCrew落地完善路线-2026-11-12.md` 的 C10
+> 2026-11-14 · 状态：**切片一已实现**（分支 `c10-run-guidance`，待合并）· 对应 `完善/AgentCrew落地完善路线-2026-11-12.md` 的 C10
 >
 > 本文只覆盖**后端通道**（用户在一场 run 跑到一半时补一句话，引擎在下一次派发时吃到）。
 > Studio 的输入框与流式回显是切片二，需产品决策，另行立项。
@@ -145,3 +145,51 @@ class GuidanceStore:
 约 1.5–2 人日（含 8–10 条测试与三份契约文档同步）。风险集中在**契约守卫**（漏改一处即红，
 但有测试兜住）与**提示词回归**（黄金用例兜住）。引擎侧改动是加法：一个可选参数 + 一个字段
 + 一个渲染段，不改调度与门禁。
+
+---
+
+## 8. 实施记录（2026-11-14，切片一）
+
+### 8.1 落地文件
+
+| 文件 | 改动 |
+| --- | --- |
+| `agentcrew/runtime/guidance.py` | **新增**：`GuidanceItem` / `GuidanceStore`（追加写 + 归并读、进程锁、脱敏、0600） |
+| `agentcrew/context/context_bus.py` | `ContextPack.guidance` + `guidance_provider` 参数；`build()` 在级 1 之后、级 2 之前吸收 |
+| `agentcrew/agents/prompting.py` | `render_pack` 插入「用户中途指引」段（仅非空时） |
+| `agentcrew/crew/crew.py` | `_guidance_provider(run)`；`_execute` / `_clone_bus` 两处 `ContextBus` 接线 |
+| `agentcrew/config.py` | 三字段 + `_ENV_TO_FIELD` + `_YAML_SCALAR_KEYS` |
+| `agentcrew/api/server.py` / `rbac.py` | `API_ROUTES` 两条、`_ROUTE_SCOPES` 两条、`_get_guidance` / `_add_guidance` |
+| `main.py` | `guide` 子命令 + `_HANDLERS` 登记 + `status` 的「待吸收」行 |
+| `artifacts/contracts/openapi.yaml` / `event-types.md` | 两个端点 + `GuidanceItem`；`guidance_injected` / `guidance_truncated` |
+| `tests/test_run_guidance.py` | **新增 21 例** |
+
+### 8.2 与规格原文的偏差（都以真实代码为准）
+
+1. **`runtime/redact.py` 不存在**。真实脱敏入口是 `utils/logger.py::redact(text, secrets)`，
+   词表来自 `Settings.secret_values()`。`GuidanceStore` 通过构造参数收 `secrets`，
+   避免 `runtime` 层 import `config`（分层护栏）。
+2. **`_COMPARABLE_KEYS` 不存在**（全仓只在 `plan_only` 的注释里出现）。`run.json` 的
+   `config_snapshot` 是 `Settings.model_dump()` 全量快照，新增三个字段**自动**进入
+   resume 比对，无需登记任何常量。
+3. **落盘形态改为 `op` 追加**（`add` / `consume` 两行），对外视图仍是 spec 的
+   `id / ts / author / text / consumed_at`。理由：改 `consumed_at` 要重写整个文件，
+   多终端/API 并发写会互相覆盖；追加写与 `approvals.jsonl` 同族。代价是空文本被拒
+   的文案与 `items()` 的归并逻辑多一层。
+4. **指引不占 token 预算**（级 1.5）。规格没写计费规则；若按级 2 计费，预算紧张时
+   唯一一条人写的约束会被挤掉——那是「人说了算」被机器预算否决。
+5. **`GuidanceItem` 多一个 `truncated` 字段**（不落盘）。`pending()` 返回时不带
+   「是否被截断」，Crew 就没法补 `guidance_truncated` 事件；这个标志只在本次读取内有效。
+6. **终态 run 的写入口径分裂**：API 回 409（§3.6），CLI `guide` 允许落盘但永不吸收
+   （§4 的审计口径）。API 是控制面，不该给已结束的 run 伪造「还能纠偏」的错觉；
+   终端留痕则有用。
+7. **写入作用域 `runs:admin`**（与规格一致），不是 `runs:write`：给正在跑的 run 加约束
+   会改变产出，普通 operator 不该默认拥有。
+
+### 8.3 验证
+
+- `tests/test_run_guidance.py`：**21 passed**（存储 8 / 上下文与提示词 5 / 引擎接线 3 / HTTP 5）。
+- `tests/test_api_contract.py` + `tests/test_architecture.py`：**106 passed**（路由双向比对与逐条探测自动纳入两个新端点）。
+- `ruff check agentcrew/ main.py tests/`：**All checks passed**。
+- `mypy agentcrew/`：**140 文件零错误**。
+- 全量回归：见提交信息与 `PROJECT-STATE.md` 回填（分支上不重复记录）。

@@ -24,6 +24,7 @@
 """
 
 import json
+import logging
 import sys
 from collections.abc import Callable, Sequence
 from datetime import datetime
@@ -52,6 +53,8 @@ _MAX_PACK_DECISIONS = 20
 #: 折叠 ``file_tree`` 时用来完整列举一次、数出真实条数的上限（``tree`` 用切片截断，
 #: 需要一个具体整数；``+1`` 惯例只能判断「还有更多」，不能计数）。
 _UNBOUNDED_ENTRIES = sys.maxsize
+
+_logger = logging.getLogger(__name__)
 
 
 class UpstreamDigest(BaseModel):
@@ -95,6 +98,8 @@ class ContextPack(BaseModel):
 
     project_goal: str
     task: Task
+    #: C10：用户中途指引（派发前吸收，at-most-once）。默认空 = 关闭态零差异。
+    guidance: list[str] = Field(default_factory=list)
     upstream: list[UpstreamDigest] = Field(default_factory=list)
     decisions: list[DecisionRecord] = Field(default_factory=list)
     file_tree: list[str] = Field(default_factory=list)
@@ -117,6 +122,7 @@ class ContextBus:
         tree_max_entries: int = 300,
         summarizer: Summarizer | None = None,
         docs_retriever: Callable[[str], list[tuple[str, str]]] | None = None,
+        guidance_provider: Callable[[], list[str]] | None = None,
     ) -> None:
         self._goal = goal
         self._board = board
@@ -129,6 +135,10 @@ class ContextBus:
         #: C5：文档 RAG 检索回调（``None`` = 未启用，零开销）。``Callable(query)
         #: -> [(来源标签, 片段文本)]``，由 Crew 提供（query_sync，见 knowledge.docs）。
         self._docs_retriever = docs_retriever
+        #: C10：用户中途指引的读取回调（``None`` = 未启用，``build()`` 零新分支）。
+        #: 由 Crew 提供，闭包内部完成「读 pending → 标记 consumed → 记事件」，
+        #: ContextBus 因此不持有存储、也不认识 run 目录。
+        self._guidance_provider = guidance_provider
         #: task_id → 已压缩的 summary 文本（prefetch_summaries 写入，build 读取）。
         self._summary_cache: dict[str, str] = {}
 
@@ -154,6 +164,18 @@ class ContextBus:
 
         # 级 1：不可压缩，无条件装入、不占预算。
         incompressible = _incompressible_text(self._goal, task, fix_hints)
+
+        # 级 1.5（C10）：用户中途指引——派发前吸收，不占预算。
+        # 指引是人写的约束，与「不可压缩」同级：被预算挤掉等于没吃到。体量已由
+        # 配置封顶（max_guidance_items × max_guidance_chars）；provider 抛异常或
+        # 存储不可读时降级为空，绝不因为指引把 run 弄停。
+        guidance: list[str] = []
+        if self._guidance_provider is not None:
+            try:
+                guidance = list(self._guidance_provider() or [])
+            except Exception as exc:  # noqa: BLE001 —— 指引是辅助设施
+                _logger.warning("指引读取失败，按无指引继续：%s", exc)
+                guidance = []
 
         # 级 2：直接上游摘要（每个截到 400 tok 内，按截断后的实际大小计费）。
         upstream: list[UpstreamDigest] = []
@@ -231,11 +253,16 @@ class ContextBus:
         return ContextPack(
             project_goal=self._goal,
             task=task,
+            guidance=guidance,
             upstream=upstream,
             decisions=decisions,
             file_tree=file_tree,
             key_excerpts=key_excerpts,
-            total_estimated_tokens=estimate_tokens(incompressible) + budget.used,
+            total_estimated_tokens=(
+                estimate_tokens(incompressible)
+                + budget.used
+                + (estimate_tokens("\n".join(guidance)) if guidance else 0)
+            ),
             truncated=truncated,
         )
 

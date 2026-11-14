@@ -380,6 +380,10 @@ _ROUTE_SCOPES: tuple[tuple[str, str, str], ...] = (
     ("GET", r"^/runs/[^/]+/model$", SCOPE_RUNS_READ),
     ("GET", r"^/runs/[^/]+/approvals$", SCOPE_RUNS_READ),
     ("POST", r"^/runs/[^/]+/approvals$", SCOPE_APPROVALS_WRITE),
+    # C10：run 中途指引——读属 run 只读信息，写是 run 级管理动作
+    # （给正在跑的 run 加约束会改变产出，普通 operator 不该默认拥有）。
+    ("GET", r"^/runs/[^/]+/guidance$", SCOPE_RUNS_READ),
+    ("POST", r"^/runs/[^/]+/guidance$", SCOPE_RUNS_ADMIN),
     ("POST", r"^/runs/[^/]+/cancel$", SCOPE_RUNS_WRITE),
     ("POST", r"^/runs/[^/]+/resume$", SCOPE_RUNS_WRITE),
     # R62：rewind 会改任务状态与产物清单（删产物、重置终态任务），与 resume

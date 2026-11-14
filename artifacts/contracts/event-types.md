@@ -62,6 +62,28 @@
   | `checkpoint` | string | 是 | `plan` / `delivery` / `step`（R20 单步断点）。 |
   | `context` | object | 是 | 给审批人看的上下文（任务 id、目标摘要、统计等），不含密钥。 |
 
+### `guidance_injected`（C10）
+- **触发时机**：`Crew._guidance_provider` 在**任务派发前**吸收中途指引、并把这批 id
+  成功标记 `consumed_at` 后发一次。`guidance_enabled=false`（默认）时永不出现。
+- **data**：
+  | 字段 | 类型 | 必填 | 含义 |
+  |---|---|---|---|
+  | `ids` | string[] | 是 | 本次被吸收的指引 id（落盘顺序）。 |
+  | `count` | int | 是 | 实际吸收条数（= len(ids)）。 |
+  | `chars` | int | 是 | 注入文本的总字符数（截断后）。 |
+- **at-most-once**：同一 id 只会出现在一次 `guidance_injected` 里。并发下若另一个任务
+  先抢到，本次既不注入也不发事件（宁可少喂一次，不能让同一条指引被两个任务各吃一遍）。
+- **不碰的东西**：指引是上下文，不是裁决——不进 `fix_hints`、不改状态机、不影响返工额度。
+
+### `guidance_truncated`（C10）
+- **触发时机**：本次吸收的某条指引超过 `max_guidance_chars` 被截断时，紧随
+  `guidance_injected` 发一条。
+- **data**：
+  | 字段 | 类型 | 必填 | 含义 |
+  |---|---|---|---|
+  | `ids` | string[] | 是 | 被截断的指引 id。 |
+  | `max_chars` | int | 是 | 生效的字符上限。 |
+
 ### `peer_dialogue_enabled`（R5）
 - **触发时机**：`Crew._start()` 在 `peer_dialogue_enabled` 打开时构造并下发 `PeerRouter` 后发一次（默认关闭时不发）。
 - **data**：

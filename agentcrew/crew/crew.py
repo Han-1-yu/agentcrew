@@ -85,6 +85,7 @@ from agentcrew.runtime.checkpoint import (
     is_stale_running,
     repair_statuses,
 )
+from agentcrew.runtime.guidance import GuidanceStore
 from agentcrew.runtime.ledger import Ledger
 from agentcrew.runtime.lifecycle import (
     LIVENESS_STALE_AFTER,
@@ -1294,6 +1295,7 @@ class Crew:
             budget_tokens=self._settings.context_budget_tokens,
             summarizer=summarizer_from_factory(run.models),
             docs_retriever=self._docs_query_sync(),
+            guidance_provider=self._guidance_provider(run),
         )
         # 新 run 下该文件不存在（no-op）；resume 时载入既有决策供上下文包引用。
         bus.load_decisions(decisions_path)
@@ -1455,10 +1457,66 @@ class Crew:
             run.goal, board, run.store,
             budget_tokens=self._settings.context_budget_tokens,
             summarizer=summarizer_from_factory(run.models),
+            guidance_provider=self._guidance_provider(run),
         )
         for record in bus.decisions():
             clone.add_decision(record)
         return clone
+
+    def _guidance_provider(self, run: _Run) -> Callable[[], list[str]] | None:
+        """C10：把「用户中途指引」接到上下文包组装（派发前吸收，at-most-once）。
+
+        关闭（``guidance_enabled=False``，默认）时返回 ``None``——``ContextBus``
+        不持有 provider、``build()`` 连新分支都不进、``render_pack`` 不添段，
+        关闭态与改造前逐字节一致。开启时返回闭包：读 pending → 标记消费 →
+        记事件 → 返回文本。
+
+        存储绑定 ``run.checkpoint.run_dir``，不依赖内存状态，所以 resume（含
+        重新构造 ``Crew`` 的新进程）同样生效；``consumed_at`` 已落盘的指引
+        不会被二次注入。
+        """
+        if not self._settings.guidance_enabled:
+            return None
+        store = GuidanceStore(
+            run.checkpoint.run_dir,
+            secrets=tuple(self._settings.secret_values()),
+        )
+
+        def _take() -> list[str]:
+            pending = store.pending(
+                limit=self._settings.max_guidance_items,
+                max_chars=self._settings.max_guidance_chars,
+            )
+            if not pending:
+                return []
+            ids = [item.id for item in pending]
+            texts = [item.text for item in pending]
+            # at-most-once：只有「这批 id 全部标记成功」才注入。并发下另一个任务
+            # 抢先把它们消费掉（返回 0）时本次不注入——宁可少喂一次，也不能
+            # 让同一条指引被两个任务各吃一遍。
+            consumed = store.consume(ids)
+            if consumed != len(ids):
+                _logger.warning(
+                    "指引消费不完整（%d/%d），本次不注入：%s",
+                    consumed, len(ids), ids,
+                )
+                return []
+            run.ledger.emit(
+                "guidance_injected",
+                ids=ids,
+                count=consumed,
+                chars=sum(len(text) for text in texts),
+            )
+            truncated = [item.id for item in pending if item.truncated]
+            if truncated:
+                run.ledger.emit(
+                    "guidance_truncated",
+                    ids=truncated,
+                    max_chars=self._settings.max_guidance_chars,
+                )
+            return texts
+
+        return _take
 
     # ── 装配与善后 ────────────────────────────────────────────────────────
 

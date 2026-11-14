@@ -356,6 +356,97 @@ paths:
         '409':
           description: 审批单已裁决/已消费，或 action 不适合该卡点
 
+  /runs/{run_id}/guidance:
+    get:
+      tags: [runs]
+      summary: C10 列出 run 的中途指引（含已吸收）
+      description: >
+        从 `output_dir/<run_id>/guidance.jsonl` 按 id 归并读取。文件不存在 → 200
+        空列表；服务重启后仍可读。`pending` 是尚未被引擎吸收的条数。run_id 非法 → 400。
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: 指引列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [run_id, items, pending]
+                properties:
+                  run_id: { type: string }
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/GuidanceItem' }
+                  pending: { type: integer }
+        '400':
+          description: run_id 非法
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '503':
+          description: 服务端未配置 output_dir
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    post:
+      tags: [runs]
+      summary: C10 对运行中的 run 留言（下次任务派发时吸收）
+      description: >
+        写入同一份 guidance.jsonl。引擎在**下一次任务派发前**读取并标记
+        consumed（at-most-once：一条指引只被一个任务吃掉）。run 不存在 → 404；
+        终态（completed / failed / cancelled / interrupted）→ 409；空文本 → 400；
+        待吸收已达 `max_guidance_items` → 429。需 `guidance_enabled=true` 才会被
+        吸收（默认关，写入仍可审计）。作用域 `runs:admin`。
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text: { type: string }
+                author: { type: string, default: '' }
+      responses:
+        '202':
+          description: 已落盘（尚未被吸收）
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, count]
+                properties:
+                  id: { type: string }
+                  count: { type: integer }
+        '400':
+          description: 空文本 / body 形状非法 / run_id 非法
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: run 不存在
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: run 已终态，不接受中途指引
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429':
+          description: 待吸收指引已达上限
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '503':
+          description: 服务端未配置 output_dir / 写盘失败
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
   /runs/{run_id}/ledger:
     get:
       tags: [runs]
@@ -1467,6 +1558,19 @@ components:
       description: run 级状态
       enum: [pending, running, awaiting_approval, completed, failed, cancelled, interrupted]
       description: run 级状态；awaiting_approval 是 R4 的非终态人工审批挂起
+
+    GuidanceItem:
+      type: object
+      description: >
+        C10 一条 run 中途指引（<run_dir>/guidance.jsonl 按 id 归并后的视图）。
+        consumed_at 非空表示已被某个任务吸收（at-most-once，resume 不重放）。
+      required: [id, ts, author, text, consumed_at]
+      properties:
+        id: { type: string, example: GD-20261114T213000-a1b2c3 }
+        ts: { type: string, format: date-time }
+        author: { type: string }
+        text: { type: string }
+        consumed_at: { type: string, nullable: true }
 
     ApprovalRequest:
       type: object

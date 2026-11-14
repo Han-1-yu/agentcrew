@@ -66,6 +66,14 @@ def render_pack(pack: ContextPack, fix_hints: Sequence[str]) -> str:
         section("项目目标", pack.project_goal),
         section("本任务", render_task(pack.task)),
     ]
+    # C10：用户中途指引。刻意排在「本任务」之后、上游摘要之前——它是对计划的
+    # 实时修正，优先级高于历史摘要；交付物契约仍在末尾（近因效应，见下方注释）。
+    # 关闭态 ``pack.guidance`` 为空，这一段不会出现（黄金用例钉住逐字节不变）。
+    if pack.guidance:
+        sections.append(section(
+            "用户中途指引（优先于计划，与交付物契约冲突时先问清楚再改）",
+            "\n".join(f"- {item}" for item in pack.guidance),
+        ))
     if pack.upstream:
         sections.append(section("上游任务摘要", render_upstream(pack.upstream)))
     if pack.decisions:

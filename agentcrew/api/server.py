@@ -175,6 +175,9 @@ API_ROUTES: tuple[tuple[str, str], ...] = (
     ("GET", "/runs/{run_id}/status"),
     ("GET", "/runs/{run_id}/approvals"),
     ("POST", "/runs/{run_id}/approvals"),
+    # C10：run 中途指引——对正在跑的 run 说话（写 202 / 读 200）
+    ("GET", "/runs/{run_id}/guidance"),
+    ("POST", "/runs/{run_id}/guidance"),
     ("GET", "/runs/{run_id}/ledger"),
     ("GET", "/runs/{run_id}/stats"),
     ("POST", "/runs/{run_id}/cancel"),
@@ -208,6 +211,10 @@ API_ROUTES: tuple[tuple[str, str], ...] = (
 #: C8：入站 Webhook 触发的签名时间戳容差（秒）。窗口内可重放一次的代价远小于
 #: 引入 nonce 存储的复杂度——与出站 R12 的口径一致。
 _WEBHOOK_TRIGGER_MAX_DRIFT = 300
+
+#: C10：仍能接受中途指引的 run 状态。挂起等审批的 run 也会再跑起来，一并放行；
+#: 终态（completed / failed / cancelled / interrupted）明确 409。
+_GUIDANCE_RUNNABLE = frozenset({"running", "awaiting_approval"})
 
 
 class ApiServer:
@@ -668,6 +675,9 @@ class ApiServer:
             if action == "approvals":
                 await self._get_approvals(run_id, writer)
                 return
+            if action == "guidance":
+                await self._get_guidance(run_id, writer)
+                return
             if action == "agents":
                 await self._get_agents(run_id, writer)
                 return
@@ -789,6 +799,115 @@ class ApiServer:
         })
         await self._send_json(writer, 200, updated.model_dump(mode="json"))
 
+    # ── C10：run 中途指引 ────────────────────────────────────────────────
+
+    def _secret_values(self) -> tuple[str, ...]:
+        """脱敏词表（指引落盘前要过一遍，密钥不进盘）。settings 缺失时为空。"""
+        settings = self._settings
+        if settings is None:
+            return ()
+        try:
+            return tuple(settings.secret_values())
+        except Exception:  # noqa: BLE001 —— 脱敏不该让端点失败
+            return ()
+
+    async def _get_guidance(
+        self, run_id: str, writer: asyncio.StreamWriter
+    ) -> None:
+        """C10：读一个 run 的全部中途指引（含已吸收，服务重启后仍可读）。"""
+        if await self._deny_if_run_hidden(run_id, writer):
+            return
+        if self._output_dir is None:
+            await self._send_json(writer, 503, {"error": "output_dir 未配置"})
+            return
+        from agentcrew.runtime.checkpoint import _validated_run_id
+        from agentcrew.runtime.guidance import GuidanceStore
+
+        try:
+            rid = _validated_run_id(run_id)
+        except ValueError:
+            await self._send_json(writer, 400, {"error": "非法 run_id"})
+            return
+        store = GuidanceStore(self._output_dir / rid, secrets=self._secret_values())
+        items = store.items()
+        await self._send_json(writer, 200, {
+            "run_id": rid,
+            "items": [
+                {
+                    "id": item.id,
+                    "ts": item.ts,
+                    "author": item.author,
+                    "text": item.text,
+                    "consumed_at": item.consumed_at,
+                }
+                for item in items
+            ],
+            "pending": sum(1 for item in items if item.consumed_at is None),
+        })
+
+    async def _add_guidance(
+        self, run_id: str, body: bytes, writer: asyncio.StreamWriter
+    ) -> None:
+        """C10：对运行中的 run 留言；下次任务派发时被吸收（at-most-once）。
+
+        错误分流：run 不存在 404、终态 409、空文本 400、待吸收已满 429、
+        写盘失败 503。终态 run 的引导**故意**不落盘——API 是控制面，不该给
+        已经结束的 run 伪造「还能纠偏」的错觉；审计用途走 CLI ``guide``。
+        """
+        if await self._deny_if_run_hidden(run_id, writer):
+            return
+        if self._output_dir is None:
+            await self._send_json(writer, 503, {"error": "output_dir 未配置"})
+            return
+        from agentcrew.runtime.checkpoint import CheckpointStore, _validated_run_id
+        from agentcrew.runtime.guidance import EMPTY_TEXT_ERROR, GuidanceStore
+
+        try:
+            rid = _validated_run_id(run_id)
+            data = json.loads(body.decode("utf-8")) if body else {}
+        except (ValueError, UnicodeDecodeError):
+            await self._send_json(writer, 400, {"error": "非法 run_id 或 JSON"})
+            return
+        if not isinstance(data, dict):
+            await self._send_json(
+                writer, 400, {"error": "body 必须是 JSON 对象"})
+            return
+        text = data.get("text")
+        author = data.get("author", "")
+        if not isinstance(text, str) or not text.strip():
+            await self._send_json(writer, 400, {"error": EMPTY_TEXT_ERROR})
+            return
+        if not isinstance(author, str):
+            await self._send_json(writer, 400, {"error": "author 必须是字符串"})
+            return
+        try:
+            record = CheckpointStore(self._output_dir / rid).load_record()
+        except (OSError, ValueError):
+            await self._send_json(writer, 404, {"error": "run not found"})
+            return
+        if record.status.value not in _GUIDANCE_RUNNABLE:
+            await self._send_json(writer, 409, {
+                "error": f"run 当前状态 {record.status.value}，不接受中途指引"
+            })
+            return
+        store = GuidanceStore(self._output_dir / rid, secrets=self._secret_values())
+        max_items = int(getattr(self._settings, "max_guidance_items", 5) or 5)
+        if store.pending_count() >= max_items:
+            await self._send_json(writer, 429, {
+                "error": f"待吸收指引已达上限 {max_items}，等引擎吸收后再写"
+            })
+            return
+        try:
+            item = store.append(text, author)
+        except ValueError as exc:
+            await self._send_json(writer, 400, {"error": str(exc)})
+            return
+        except OSError as exc:
+            await self._send_json(writer, 503, {"error": f"指引写入失败：{exc}"})
+            return
+        await self._send_json(writer, 202, {
+            "id": item.id, "count": store.pending_count()})
+
     async def _handle_post(
         self, path: str, query: dict[str, list[str]], body: bytes,
         writer: asyncio.StreamWriter, headers: dict[str, str] | None = None,
@@ -840,6 +959,9 @@ class ApiServer:
                 return
             if action == "approvals":
                 await self._decide_approval(run_id, body, writer)
+                return
+            if action == "guidance":
+                await self._add_guidance(run_id, body, writer)
                 return
             if action == "agents":
                 await self._switch_agent(run_id, body, writer)

@@ -98,6 +98,10 @@ _ENV_TO_FIELD: dict[str, str] = {
     "AGENTCREW_APPROVAL_TIMEOUT_SECONDS": "approval_timeout_seconds",
     "AGENTCREW_PEER_DIALOGUE_ENABLED": "peer_dialogue_enabled",
     "AGENTCREW_DEBUG_STEP": "debug_step",
+    # C10：run 中途指引（默认关；三个键都是 run 级开关/配额）。
+    "AGENTCREW_GUIDANCE_ENABLED": "guidance_enabled",
+    "AGENTCREW_MAX_GUIDANCE_ITEMS": "max_guidance_items",
+    "AGENTCREW_MAX_GUIDANCE_CHARS": "max_guidance_chars",
     "AGENTCREW_MAX_PEER_MESSAGES": "max_peer_messages",
     "AGENTCREW_DELEGATION_MODE": "delegation_mode",
     "AGENTCREW_AGENT_CIRCUIT_BREAKER_ENABLED": "agent_circuit_breaker_enabled",
@@ -175,6 +179,8 @@ _YAML_SCALAR_KEYS = (
     "trusted_proxies",
     # R20：单步断点开关（默认 False；只在 run 级快照里持久化）。
     "debug_step",
+    # C10：run 中途指引（开关 + 两条配额，默认关）。
+    "guidance_enabled", "max_guidance_items", "max_guidance_chars",
 )
 
 #: 分层合并时按 key 覆盖（映射型）/ 按序合并去重（列表型）而非整体替换的字段。
@@ -1034,6 +1040,26 @@ class Settings(BaseModel):
     落盘，resume 时自动恢复——断点属于 run，不属于进程。
     环境变量 ``AGENTCREW_DEBUG_STEP=true``，或 YAML 顶层 ``debug_step: true``，
     或 ``run --debug-step``。
+    """
+    guidance_enabled: bool = False
+    """C10：run 中途指引（默认**关闭**，关闭时上下文包与提示词逐字节不变）。
+
+    开启后，人可以在 run 跑到一半时往 ``<run_dir>/guidance.jsonl`` 补一句话
+    （CLI ``guide`` / ``POST /runs/{id}/guidance``），引擎在**下一次任务派发前**
+    读取并吸收；一条指引只被一个任务吃掉（``consumed_at`` 落盘，resume 不重放）。
+    不打断在跑任务、不改调度顺序、不新增调度分支。
+    环境变量 ``AGENTCREW_GUIDANCE_ENABLED=true``，或 YAML 顶层 ``guidance_enabled``。
+    """
+    max_guidance_items: int = Field(default=5, ge=1, le=50)
+    """C10：单次派发最多吸收几条指引（默认 5）。
+
+    环境变量 ``AGENTCREW_MAX_GUIDANCE_ITEMS``；YAML 同名顶层标量。
+    """
+    max_guidance_chars: int = Field(default=400, ge=1, le=2000)
+    """C10：单条指引注入时的字符上限（默认 400），超出截断并记
+    ``guidance_truncated``。
+
+    环境变量 ``AGENTCREW_MAX_GUIDANCE_CHARS``；YAML 同名顶层标量。
     """
     entity_memory_enabled: bool = False
     """R3：跨 run 实体记忆（默认**关闭**）。

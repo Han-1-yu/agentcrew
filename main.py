@@ -83,6 +83,7 @@ from agentcrew.runtime.checkpoint import (
     clean,
     delete_run,
 )
+from agentcrew.runtime.guidance import GuidanceStore
 from agentcrew.runtime.ledger import Ledger, LedgerEvent
 from agentcrew.runtime.lifecycle import ResumeLockError, reconcile_stale_runs
 from agentcrew.utils.logger import setup_logging
@@ -254,6 +255,16 @@ def build_parser() -> argparse.ArgumentParser:
     status = sub.add_parser("status", help="打印一个 run 的记录与任务表")
     status.add_argument("run_id")
     status.add_argument("--output-dir", metavar="DIR", help="run 输出根目录")
+
+    guide = sub.add_parser(
+        "guide", help="C10：给正在跑的 run 留言指引（下次任务派发时吸收）")
+    guide.add_argument("run_id", help="run 目录名")
+    guide.add_argument("text", help="一句话指引（如「把登录页改成绿色」）")
+    guide.add_argument(
+        "--author", default="cli", metavar="NAME",
+        help="指引人标识（写进 guidance.jsonl 留痕）")
+    guide.add_argument("--json", action="store_true", help="输出机器可读 JSON")
+    guide.add_argument("--output-dir", metavar="DIR", help="run 输出根目录")
 
     sub.add_parser("roles", help="列出 8 个内置角色（职责 / 边界 / 产出）")
     p_tools = sub.add_parser(
@@ -1071,6 +1082,17 @@ def _cmd_status(args: argparse.Namespace) -> int:
             f"审批单  {len(approvals)} 条    待裁决 {pending} 条"
             + (f"    （python main.py approvals {record.run_id}）" if pending else ""),
         )
+    # C10：待吸收的中途指引同样要能在第一入口看见（否则人写了不知道吃没吃）。
+    guidance = GuidanceStore(
+        run_dir, secrets=tuple(settings.secret_values())).items()
+    if guidance or settings.guidance_enabled:
+        pending_guidance = sum(1 for item in guidance if item.consumed_at is None)
+        _out(
+            console,
+            f"指引    {len(guidance)} 条    待吸收 {pending_guidance} 条"
+            + ("    （guidance_enabled=false，不会被吸收）"
+               if not settings.guidance_enabled else ""),
+        )
     # R19：主管建议不参与裁决，但必须「有处可去」——否则它们只埋在 gate_result
     # 里没人看。status 是查看 run 的第一入口，在这里汇总最近几条。
     suggestion_events = list(ledger.events("supervisor_suggestions"))
@@ -1151,6 +1173,36 @@ def _cmd_approve(args: argparse.Namespace) -> int:
         return _fail(f"裁决失败：{exc}")
     print(f"已裁决 {updated.id}（{updated.checkpoint}）：{updated.decision}")
     print(f"用 python main.py resume {args.run_id} 从卡点继续")
+    return EXIT_CODES["ok"]
+
+
+def _cmd_guide(args: argparse.Namespace) -> int:
+    """C10：在另一个进程里对正在跑的 run 说一句话。
+
+    与 HTTP ``POST /runs/{id}/guidance`` 写同一个 store。CLI **不**校验 run 状态：
+    给已结束的 run 留言会落盘但永不吸收（``GET`` / ``status`` 仍可读），这是审计
+    用途；限定「只在跑着时才能说」是 API 控制面的口径，不该让终端也失忆。
+    是否真的被吸收取决于 ``guidance_enabled``（默认关）。
+    """
+    try:
+        settings = _settings_from(args)
+        run_dir = _run_dir(settings, args.run_id)
+    except (OSError, ValueError) as exc:
+        return _fail(f"无法读取 run {args.run_id}：{exc}")
+    store = GuidanceStore(run_dir, secrets=tuple(settings.secret_values()))
+    try:
+        item = store.append(args.text, args.author)
+    except ValueError as exc:
+        return _fail(str(exc))
+    except OSError as exc:
+        return _fail(f"指引写入失败：{exc}")
+    pending = store.pending_count()
+    if args.json:
+        print(json.dumps({"id": item.id, "pending": pending}, ensure_ascii=False))
+        return EXIT_CODES["ok"]
+    print(f"已记录指引 {item.id}（run {args.run_id}）")
+    print(f"待吸收 {pending} 条；引擎在下一次任务派发前读取"
+          "（需 guidance_enabled=true）")
     return EXIT_CODES["ok"]
 
 
@@ -2733,6 +2785,7 @@ _HANDLERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "status": _cmd_status,
     "approvals": _cmd_approvals,
     "approve": _cmd_approve,
+    "guide": _cmd_guide,
     "roles": _cmd_roles,
     "tools": _cmd_tools,
     "tool": _cmd_tool,
