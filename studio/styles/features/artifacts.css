@@ -15,7 +15,8 @@
 .art-tree-head { padding: 10px 14px; font-size: var(--fs-xs); font-weight: 500; color: var(--text-ter); letter-spacing: .5px; border-bottom: 0.5px solid var(--ink-06); }
 .art-tree-list { overflow-y: auto; flex: 1; padding: 4px 0; }
 .art-dir { padding: 8px 14px 4px; font-size: var(--fs-xs); font-weight: 500; color: var(--text-ter); letter-spacing: .4px; }
-.art-file { display: flex; align-items: center; gap: 8px; padding: 6px 14px; cursor: pointer;
+.art-file { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 14px;
+  border: none; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer;
   transition: background .1s; }
 .art-file:hover { background: var(--bg-subtle); }
 .art-file.active { background: var(--accent-bg); }
@@ -54,3 +55,9 @@
 .art-summary { display: flex; flex-wrap: wrap; gap: 4px 8px; padding: 8px 12px; font-size: var(--fs-xs); color: var(--text-sub);
   border-bottom: 0.5px solid var(--border-weak); background: var(--bg-subtle); }
 .art-summary-sep { color: var(--ink-20); }
+.art-manifest-warning {
+  margin: 8px 10px; padding: 7px 9px;
+  border: 0.5px solid var(--warn-border-soft); border-radius: var(--r-xs);
+  background: var(--warn-bg-soft); color: var(--warn-text);
+  font-size: var(--fs-xs); line-height: 1.5;
+}

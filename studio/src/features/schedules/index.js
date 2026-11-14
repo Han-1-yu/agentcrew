@@ -5,6 +5,7 @@
 import { h } from '../../lib/dom.js';
 
 import { MODES, MODE_ORDER } from '../../lib/mode.js';
+import { confirmAction } from '../../ui/modal.js';
 import { toast } from '../../ui/toast.js';
 
 const WEEKDAYS = [
@@ -35,6 +36,12 @@ async function refresh(listEl) {
   schedules.forEach(s => listEl.appendChild(scheduleCard(s, listEl)));
 }
 
+async function ensureScheduleOk(promise, fallback) {
+  const result = await promise;
+  if (!result || result.ok !== true) throw new Error((result && result.error) || fallback);
+  return result;
+}
+
 function scheduleCard(s, listEl) {
   const when = s.kind === 'recurring'
     ? `每周 ${(s.weekdays || []).join('·')} ${s.time || ''}`
@@ -44,12 +51,14 @@ function scheduleCard(s, listEl) {
     h('div', { class: 'schedule-head' },
       h('span', { class: `schedule-state ${s.enabled ? 'on' : 'off'}` }, s.enabled ? '启用' : '已触发/停用'),
       h('span', { class: 'schedule-meta mono' }, `${s.kind === 'recurring' ? '周期' : '一次性'} · ${modeLabel}${s.mock ? ' · Mock' : ''}`),
-      h('button', { class: 'btn btn-sm btn-danger', onclick: async () => {
-        try {
-          await window.studio.scheduleRemove({ id: s.id });
-          toast('success', '已删除', '定时任务已移除');
-          refresh(listEl);
-        } catch (e) { toast('error', '删除失败', String(e.message || e)); }
+      h('button', { class: 'btn btn-sm btn-danger', onclick: () => {
+        confirmAction('删除定时任务', `将删除「${s.goal}」，此操作不可撤销。`, async () => {
+          try {
+            await ensureScheduleOk(window.studio.scheduleRemove({ id: s.id }), '删除失败');
+            toast('success', '已删除', '定时任务已移除');
+            refresh(listEl);
+          } catch (e) { toast('error', '删除失败', String(e.message || e)); }
+        }, '删除');
       } }, '删除')),
     h('div', { class: 'schedule-goal' }, s.goal),
     h('div', { class: 'schedule-when' }, `下次触发：${s.next_run || '—'}`));
@@ -108,7 +117,7 @@ function buildAddCard(listEl) {
           payload.daily = time; payload.weekdays = wds.join(',');
         }
         try {
-          await window.studio.scheduleAdd(payload);
+          await ensureScheduleOk(window.studio.scheduleAdd(payload), '添加失败');
           toast('success', '已添加', '定时任务已注册');
           refresh(listEl);
         } catch (e) { toast('error', '添加失败', String(e.message || e)); }
@@ -126,7 +135,11 @@ async function renderSchedulesPage(container) {
   container.appendChild(h('div', { class: 'page-head' },
     h('h2', {}, '定时任务'),
     h('button', { class: 'btn', onclick: async () => {
-      try { const r = await window.studio.scheduleTick(); toast('info', '已检查', (r && r.ok) ? '没有到期的日程' : '检查完成'); }
+      try {
+        const result = await window.studio.scheduleTick();
+        if (!result || result.ok !== true) throw new Error((result && result.error) || '检查失败');
+        toast('info', '检查完成', result.data && result.data.triggered ? `已触发 ${result.data.triggered} 条到期日程` : '没有到期的日程');
+      }
       catch (e) { toast('error', '检查失败', String(e.message || e)); }
     } }, '立即检查到期')));
   const wrap = h('div', { class: 'schedules-wrap' });

@@ -5,6 +5,7 @@
  * 三层门禁；产物 tab 复用产物页的文件清单 + 内联预览 + 语法高亮。面板复用
  * ``#detail-panel`` 容器（同一套遮罩 / Esc 关闭 / 淡入动效）。
  */
+import { artifactExportOutcome, groupArtifacts, normalizeArtifactList } from '../../lib/artifacts.js';
 import { h } from '../../lib/dom.js';
 import { S } from '../../lib/store.js';
 import { RUN_META, STATUS_META, STATUS_ORDER } from '../../contracts/enums.js';
@@ -17,6 +18,7 @@ import { openDetailPanel } from '../detail/panel.js';
 import { ARTIFACT_ICONS, highlightCode } from '../artifacts/index.js';
 
 function currentTab() { return S.resultTab || 'overview'; }
+let resultPreviewSeq = 0;
 
 function openResultPanel(tab) {
   S.resultTab = tab || currentTab();
@@ -27,9 +29,11 @@ function tabBar() {
   const tab = currentTab();
   const mk = (key, label) => h('button', {
     class: `result-tab${tab === key ? ' active' : ''}`,
+    type: 'button', role: 'tab', id: `result-tab-${key}`, 'aria-selected': tab === key ? 'true' : 'false',
+    'aria-controls': 'result-tab-panel',
     onclick: () => openResultPanel(key),
   }, label);
-  return h('div', { class: 'result-tabs' }, mk('overview', '概览'), mk('artifacts', '产物'));
+  return h('div', { class: 'result-tabs', role: 'tablist', 'aria-label': '结果视图' }, mk('overview', '概览'), mk('artifacts', '产物'));
 }
 
 function buildResultPanel() {
@@ -40,7 +44,7 @@ function buildResultPanel() {
         h('button', { class: 'btn btn-icon', style: 'width:28px;height:28px', 'aria-label': '关闭', title: '关闭',
           onclick: () => document.getElementById('detail-mask').click() }, '✕')),
       tabBar()),
-    h('div', { class: 'dp-body', style: 'padding:0' },
+    h('div', { class: 'dp-body', id: 'result-tab-panel', role: 'tabpanel', 'aria-labelledby': `result-tab-${currentTab()}`, style: 'padding:0' },
       currentTab() === 'overview' ? renderOverview() : mountArtifactsTab()));
 }
 
@@ -124,7 +128,7 @@ function renderOverview() {
     cell(String(stats.llm_calls ?? 0), 'LLM 调用'),
     cell(fmtTokens((stats.prompt_tokens || 0) + (stats.completion_tokens || 0)), 'Token'),
     cell(fmtCost(stats.estimated_cost_usd), '成本'),
-    cell(fmtDur(runDuration(run, stats)), '已运行'),
+    cell(runDuration(run, stats), '已运行'),
     cell(fmtCost(run.budget_limit_usd), '预算上限')));
 
   // 任务状态分布
@@ -175,14 +179,17 @@ async function renderArtifactsInto(wrap) {
   }
   wrap.appendChild(loadingState('正在读取产物清单…'));
   let entries = [];
+  let manifestError = null;
   try {
-    entries = await window.studio.listArtifacts(run.dir);
+    const payload = await window.studio.listArtifacts(run.dir);
+    ({ entries, manifestError } = normalizeArtifactList(payload));
   } catch (e) {
     wrap.innerHTML = '';
     wrap.appendChild(h('div', { style: 'padding:16px' }, emptyState('产物加载失败', String(e.message || e))));
     return;
   }
   wrap.innerHTML = '';
+  if (manifestError) toast('warn', '产物清单降级', `MANIFEST 异常，已改用目录扫描：${manifestError}`);
 
   if (!entries || !entries.length) {
     wrap.appendChild(h('div', { style: 'padding:16px' }, emptyState('该运行暂无产物', '任务完成后产物会出现在这里。')));
@@ -191,7 +198,13 @@ async function renderArtifactsInto(wrap) {
 
   const toolbar = h('div', { class: 'result-art-toolbar' },
     h('button', { class: 'btn btn-sm', onclick: async () => {
-      try { await window.studio.exportArtifacts(run.dir); toast('success', '已导出', '产物已打包为 ZIP'); }
+      try {
+        const result = await window.studio.exportArtifacts(run.dir);
+        const outcome = artifactExportOutcome(result);
+        if (outcome.type === 'canceled') toast('info', '已取消', '未导出产物');
+        else if (outcome.type === 'saved') toast('success', '已导出', `产物已打包为 ZIP（${fmtBytes(outcome.size)}）`);
+        else throw new Error(outcome.message);
+      }
       catch (e) { toast('error', '导出失败', String(e.message || e)); }
     } }, '导出 ZIP'));
   const list = h('div', { class: 'result-art-list' });
@@ -200,16 +213,10 @@ async function renderArtifactsInto(wrap) {
   wrap.appendChild(list);
   wrap.appendChild(prev);
 
-  // 分组
-  const groups = {};
-  entries.forEach((e) => {
-    const dir = (e.path || '').split('/')[0] || '根目录';
-    (groups[dir] = groups[dir] || []).push(e);
-  });
-  for (const [dir, files] of Object.entries(groups)) {
+  for (const [dir, files] of groupArtifacts(entries)) {
     list.appendChild(h('div', { class: 'art-dir' }, dir));
     for (const f of files) {
-      list.appendChild(h('div', { class: 'art-file', onclick: () => previewResult(prev, f) },
+      list.appendChild(h('button', { class: 'art-file', type: 'button', onclick: () => previewResult(prev, f) },
         h('span', { class: 'art-file-icon' }, ARTIFACT_ICONS[f.kind] || '📄'),
         h('span', { class: 'art-file-name', title: f.path }, (f.path || '').split('/').pop()),
         h('span', { class: 'art-file-size' }, fmtBytes(f.sizeBytes))));
@@ -219,6 +226,7 @@ async function renderArtifactsInto(wrap) {
 }
 
 async function previewResult(prev, f) {
+  const seq = ++resultPreviewSeq;
   prev.innerHTML = '';
   prev.appendChild(h('div', { class: 'result-art-head' },
     h('span', { class: 'result-art-path' }, f.path || ''),
@@ -228,7 +236,7 @@ async function previewResult(prev, f) {
   prev.appendChild(content);
   try {
     const r = await window.studio.readArtifact(S.dash.run.dir, f.path);
-    // R61：图像产物直接预览（data URL 走 <img>，不经过 innerHTML，无注入面）。
+    if (seq !== resultPreviewSeq || !content.isConnected) return;
     if (r && r.image && r.dataBase64) {
       const img = h('img', { alt: f.path || '图像产物' });
       img.src = `data:${r.mime};base64,${r.dataBase64}`;
@@ -242,7 +250,7 @@ async function previewResult(prev, f) {
     const truncated = text.length > 100000 ? text.slice(0, 100000) + '\n…（已截断）' : text;
     content.innerHTML = highlightCode(truncated, f.path || '');
   } catch (e) {
-    content.textContent = '读取失败：' + String(e.message || e);
+    if (seq === resultPreviewSeq && content.isConnected) content.textContent = '读取失败：' + String(e.message || e);
   }
 }
 

@@ -61,10 +61,10 @@ function layoutDAG(tasks) {
   return { byId, layers, pos, width:(maxLayer+1)*(NW+COL_GAP), height:maxRows*(NH+ROW_GAP) };
 }
 
-function renderTaskDAG(svg, tasks) {
+function renderTaskDAG(svg, tasks, layout = null) {
   resetAnimIfNewRun();
   const wrap = $('#dag-canvas-wrap');
-  const L = layoutDAG(tasks);
+  const L = layout || layoutDAG(tasks);
   svg.innerHTML = '';
   const pad = 32, totalW = L.width + pad * 2, totalH = L.height + pad * 2;
   // 与 Agent 视图一致：画布按图形比例撑开，不留信箱边

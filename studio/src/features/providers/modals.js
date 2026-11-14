@@ -66,10 +66,21 @@ function showFetchedModelsModal(p, fetched) {
     if (!ids.length) return;
     if (!S.settings) S.settings = {};
     if (!S.settings.providerModels) S.settings.providerModels = {};
-    S.settings.providerModels[key] = [...new Set([...(S.settings.providerModels[key] || []), ...ids])];
+    const previous = S.settings.providerModels[key];
+    const nextModels = [...new Set([...(previous || []), ...ids])];
+    S.settings.providerModels[key] = nextModels;
     // 只回写变更字段：整份 S.settings 是启动时的快照，会把主进程期间写入的
     // recentGoals / theme 等覆盖掉（lost update）。
-    try { await window.studio.setSettings({ providerModels: S.settings.providerModels }); } catch (e) { /* 本地状态已更新 */ }
+    try {
+      const saved = await window.studio.setSettings({ providerModels: S.settings.providerModels });
+      if (!saved || !saved.providerModels) throw new Error('主进程未返回已保存的设置');
+      S.settings.providerModels = saved.providerModels;
+    } catch (e) {
+      if (previous == null) delete S.settings.providerModels[key];
+      else S.settings.providerModels[key] = previous;
+      toast('error', '保存失败', String(e.message || e));
+      return;
+    }
     toast('success', '已添加模型', `${p.label || key}：新增 ${ids.length} 个`);
     finish();
     switchNav('providers');

@@ -105,7 +105,8 @@ function run(win) {
     check('4. 点击任务节点打开详情面板', clickRes && clickRes.clicked && !clickRes.error && detailOpen,
       `点击=${clickRes && clickRes.clicked} 面板=${detailOpen}${clickRes && clickRes.error ? ' 异常=' + clickRes.error.split('\n')[0] : ''}`);
     await shot('03-任务详情面板');
-    await js(`document.querySelector('#detail-close, .detail-close')?.click()`);
+    await js(`document.querySelector('#detail-close')?.click()`);
+    await sleep(350);
 
     // ── 5. 运行下拉与项目分组 ──
     await js(`document.querySelector('#tb-workspace')?.click()`);
@@ -198,8 +199,19 @@ function run(win) {
     // ── 12. 产物页面 ──
     await js(`document.querySelector('.nav-item[data-nav="artifacts"]')?.click()`);
     await sleep(700);
-    const artItems = await js('document.querySelectorAll(".art-item, .file-item, [data-file]").length');
-    check('12. 产物页面显示文件列表', Number(artItems) >= 0, `${artItems} 个产物（空目录也通过）`);
+    const artItems = await js('document.querySelectorAll(".art-file").length');
+    const artButtons = await js('[...document.querySelectorAll(".art-file")].every(el => el.tagName === "BUTTON")');
+    let previewOk = false;
+    if (Number(artItems) > 0) {
+      await js('document.querySelector(".art-file")?.click()');
+      await sleep(500);
+      previewOk = !!(await js(`(() => {
+        const p = document.querySelector('.art-preview-content, .art-preview img');
+        return p && !String(p.textContent || '').includes('加载中…');
+      })()`));
+    }
+    check('12. 产物页面显示可预览文件列表', Number(artItems) > 0 && !!artButtons && previewOk,
+      `${artItems} 个产物, 键盘按钮=${artButtons}, 预览=${previewOk}`);
     await shot('09-产物页面');
 
     // ── 13. 设置页面 ──

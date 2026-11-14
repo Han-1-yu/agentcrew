@@ -24,8 +24,8 @@ function buildPageHead(cfg) {
       if (error) { toast('error', '设置未保存', error); return; }
       try {
         const prevApi = (S.settings && S.settings.apiBaseUrl) || '';
-        await window.studio.setSettings(next);
-        S.settings = Object.assign({}, S.settings, next);
+        const saved = await window.studio.setSettings(next);
+        S.settings = saved || Object.assign({}, S.settings, next);
         // 后端地址变了要立刻重建实时通道，否则仍连着旧地址 / 仍是文件监听。
         if (String(next.apiBaseUrl || '') !== String(prevApi)) {
           window.dispatchEvent(new Event('studio:reconnect'));

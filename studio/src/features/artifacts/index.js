@@ -1,7 +1,8 @@
 /**
  * 产物页：目录选择 + 代码预览 + 语法着色 + 导出。
  */
-import { $, $$, h, s } from '../../lib/dom.js';
+import { artifactExportOutcome, groupArtifacts, normalizeArtifactList } from '../../lib/artifacts.js';
+import { $$, h } from '../../lib/dom.js';
 import { fmtBytes } from '../../lib/format.js';
 import { S } from '../../lib/store.js';
 
@@ -14,6 +15,7 @@ import { openTaskDetail } from '../detail/panel.js';
 const ARTIFACT_ICONS = {
   code: '📄', doc: '📄', test: '🧪', report: '📊', config: '⚙️', other: '📦',
 };
+let previewSeq = 0;
 
 async function renderArtifactsPage(container) {
   const token = S.navToken;
@@ -23,7 +25,13 @@ async function renderArtifactsPage(container) {
     h('div', { style: 'display:flex;gap:8px' },
       h('button', { class: 'btn', onclick: async () => {
         if (!S.dash.run || !S.dash.run.dir) return;
-        try { await window.studio.exportArtifacts(S.dash.run.dir); toast('success', '已导出', '产物已打包为 ZIP'); }
+        try {
+          const result = await window.studio.exportArtifacts(S.dash.run.dir);
+          const outcome = artifactExportOutcome(result);
+          if (outcome.type === 'canceled') toast('info', '已取消', '未导出产物');
+          else if (outcome.type === 'saved') toast('success', '已导出', `产物已打包为 ZIP（${fmtBytes(outcome.size)}）`);
+          else throw new Error(outcome.message);
+        }
         catch (e) { toast('error', '导出失败', String(e.message || e)); }
       } }, '导出 ZIP'),
       h('button', { class: 'btn', onclick: () => switchNav('dashboard') }, '返回'))));
@@ -48,8 +56,10 @@ async function renderArtifactsPage(container) {
 
   listEl.appendChild(loadingState('正在读取产物清单…'));
   let entries = [];
+  let manifestError = null;
   try {
-    entries = await window.studio.listArtifacts(S.dash.run.dir);
+    const payload = await window.studio.listArtifacts(S.dash.run.dir);
+    ({ entries, manifestError } = normalizeArtifactList(payload));
   } catch (e) {
     listEl.innerHTML = '';
     listEl.appendChild(errorState('产物清单加载失败', String(e.message || e), reload));
@@ -58,6 +68,9 @@ async function renderArtifactsPage(container) {
   // await 期间可能已经切页：不再往已卸载的 DOM 继续渲染。
   if (isStaleRender(token, container)) return;
   listEl.innerHTML = '';
+  if (manifestError) {
+    listEl.appendChild(h('div', { class: 'art-manifest-warning' }, `MANIFEST 异常，已改用目录扫描：${manifestError}`));
+  }
 
   if (!entries || !entries.length) {
     listEl.appendChild(emptyState('该运行暂无产物', '任务完成后，产物会出现在这里。'));
@@ -76,19 +89,11 @@ async function renderArtifactsPage(container) {
     ...Object.entries(kinds).map(([k, v]) => [h('span', { class: 'art-summary-sep' }, '·'), h('span', {}, `${ARTIFACT_ICONS[k] || '📄'} ${v}`)]).flat());
   tree.insertBefore(summary, listEl);
 
-  // 按目录分组
-  const groups = {};
-  for (const e of entries) {
-    const dir = (e.path || '').split('/')[0] || '根目录';
-    if (!groups[dir]) groups[dir] = [];
-    groups[dir].push(e);
-  }
-
-  for (const [dir, files] of Object.entries(groups)) {
+  for (const [dir, files] of groupArtifacts(entries)) {
     listEl.appendChild(h('div', { class: 'art-dir' }, dir));
     for (const f of files) {
       const icon = ARTIFACT_ICONS[f.kind] || '📄';
-      const item = h('div', { class: 'art-file', onclick: async () => {
+      const item = h('button', { class: 'art-file', type: 'button', onclick: async () => {
         $$('.art-file').forEach(x => x.classList.remove('active'));
         item.classList.add('active');
         await previewArtifact(preview, f);
@@ -103,6 +108,7 @@ async function renderArtifactsPage(container) {
 }
 
 async function previewArtifact(preview, f) {
+  const seq = ++previewSeq;
   preview.innerHTML = '';
   preview.appendChild(h('div', { class: 'art-preview-head' },
     h('span', { class: 'art-preview-path' }, f.path || ''),
@@ -121,7 +127,8 @@ async function previewArtifact(preview, f) {
   preview.appendChild(content);
   try {
     const r = await window.studio.readArtifact(S.dash.run.dir, f.path);
-    // R61：图像产物直接预览（data URL 走 <img>，不经过 innerHTML，无注入面）。
+    // 快速连点不同文件时，旧请求晚到不能覆盖当前预览。
+    if (seq !== previewSeq || !content.isConnected) return;
     if (r && r.image && r.dataBase64) {
       const img = h('img', { alt: f.path || '图像产物' });
       img.src = `data:${r.mime};base64,${r.dataBase64}`;
@@ -135,7 +142,7 @@ async function previewArtifact(preview, f) {
     const truncated = text.length > 100000 ? text.slice(0, 100000) + '\n…（已截断，共 ' + text.length + ' 字符）' : text;
     content.innerHTML = highlightCode(truncated, f.path || '');
   } catch (e) {
-    content.textContent = '读取失败：' + String(e.message || e);
+    if (seq === previewSeq && content.isConnected) content.textContent = '读取失败：' + String(e.message || e);
   }
 }
 

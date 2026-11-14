@@ -63,6 +63,18 @@ function defaultSettings() {
     defaultModel: '',   // F2：默认模型别名 "<provider>:<model>"
     maxCostUsd: 0,     // F2：默认预算上限 USD，>0 时自动传给 CLI
     recentGoals: [],   // F4：最近目标历史（最多 5 条）
+    // V7 网关高级功能：设置页会展示并修改，必须纳入持久化白名单
+    redactEnabled: true,
+    redactApiKeys: true,
+    redactPii: true,
+    redactCredentials: true,
+    redactCustomWords: '',
+    routingStrategy: 'weighted',
+    affinityMode: 'off',
+    affinityTtlDays: 7,
+    providerModels: {}, // 供应商在线模型多选：{ [provider]: string[] }
+    quotas: {},         // 多窗口配额：{ [alias]: { daily, weekly, monthly } }
+    quota_enabled: false,
   };
 }
 
@@ -175,6 +187,10 @@ async function detectPython(candidate) {
   const candidates = [];
   if (candidate) candidates.push(candidate);
   else if (settings.pythonCmd) candidates.push(settings.pythonCmd);
+  else {
+    const projectPython = projectVenvPython();
+    if (projectPython) candidates.push(projectPython);
+  }
   candidates.push('python', 'python3', 'py -3');
   for (const c of candidates) {
     const ver = await tryCommand(c.split(/\s+/)[0], [...c.split(/\s+/).slice(1), '--version'], 2);
@@ -186,9 +202,18 @@ async function detectPython(candidate) {
   return null;
 }
 
+// 项目自带虚拟环境优先：桌面快捷方式启动时 PATH 往往没有项目依赖（如 PyYAML），
+// 但仓库内 .venv 已装齐。只在文件真实存在时启用，不影响用户显式配置的 pythonCmd。
+function projectVenvPython() {
+  const candidates = process.platform === 'win32'
+    ? [path.join(DEFAULT_REPO_ROOT, '.venv', 'Scripts', 'python.exe')]
+    : [path.join(DEFAULT_REPO_ROOT, '.venv', 'bin', 'python3'), path.join(DEFAULT_REPO_ROOT, '.venv', 'bin', 'python')];
+  return candidates.find((file) => fs.existsSync(file)) || '';
+}
+
 function pythonSpawnSpec(extraArgs) {
   // pythonCmd 允许带前缀参数（如 "py -3"），整体按空白拆分
-  const cmd = settings.pythonCmd || 'python';
+  const cmd = settings.pythonCmd || projectVenvPython() || 'python';
   const parts = cmd.split(/\s+/);
   return { cmd: parts[0], args: [...parts.slice(1), 'main.py', ...extraArgs] };
 }
@@ -413,7 +438,7 @@ function spawnCli(kind, args, outputDir, extraEnv) {
   const logPath = path.join(logDir, `${key}-${kind}.log`);
   const logLine = (s) => { try { fs.appendFileSync(logPath, s + '\n'); } catch { /* 忽略 */ } };
 
-  const candidates = [...new Set([settings.pythonCmd, 'python', 'python3'].filter(Boolean))];
+  const candidates = [...new Set([settings.pythonCmd, projectVenvPython(), 'python', 'python3'].filter(Boolean))];
   let ci = 0;
   let tries = 0;
 

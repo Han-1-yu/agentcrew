@@ -17,8 +17,8 @@ import { agentTone, buildAgentGraph } from './agent-graph.js';
 
 const CHIP_PRIORITY = { running: 0, review: 0, rework: 0, failed: 1, ready: 2, blocked: 3, pending: 4, succeeded: 5, skipped: 6, cancelled: 7 };
 
-function renderAgentDAG(svg, tasks) {
-  const L = buildAgentGraph(tasks);
+function renderAgentDAG(svg, tasks, graph = null) {
+  const L = graph || buildAgentGraph(tasks);
   resetAnimIfNewRun();
   svg.innerHTML = '';
 

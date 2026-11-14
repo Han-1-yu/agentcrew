@@ -25,7 +25,10 @@
 .ev-full-item { border-bottom: 0.5px solid var(--ink-04); }
 .ev-full-main {
   display: flex; align-items: center; gap: var(--sp-3);
+  width: 100%;
   padding: 6px var(--sp-5);
+  border: none; background: transparent;
+  color: inherit; font: inherit; text-align: left;
   cursor: pointer;
   transition: background var(--dur-1) ease;
 }

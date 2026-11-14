@@ -14,14 +14,13 @@ import { S } from '../lib/store.js';
 
 import { toast } from '../ui/toast.js';
 import { updateConnIndicator } from '../ui/conn-indicator.js';
-
 import { renderEvents } from '../features/dashboard/events.js';
+import { refreshEventsView } from '../features/events/index.js';
 import { appendStreamDelta, bindStreamPanel, resetStreamPanel } from '../features/dashboard/stream.js';
 import { appendConversationDelta, refreshConversation } from '../features/conversation/index.js';
 
 import { deriveAgents, deriveGates, enrichRun, mapRealTask, currentLoadSeq } from './data.js';
 import { canRetry, sseRetryDelay } from './realtime-retry.js';
-
 /* 事件去重：文件监听会把整份 ledger 再回放一遍，SSE 重连也可能重发，
    直接 push 会让事件页凭空多出一倍条目（审计卡最先暴露这一点）。 */
 function eventKey(e) {
@@ -100,6 +99,7 @@ function scheduleRenderEvents() {
     eventsRenderTimer = null;
     if (S.nav === 'dashboard') renderEvents();
     else if (S.nav === 'conversation') refreshConversation();
+    else if (S.nav === 'events') refreshEventsView();
   }, 120);
 }
 

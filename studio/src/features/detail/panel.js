@@ -13,15 +13,49 @@ import { toast } from '../../ui/toast.js';
 import { metaCell, renderAgents } from '../dashboard/agents.js';
 import { renderDashboard } from '../dashboard/index.js';
 import { buildTaskAgentControl } from './task-agent.js';
+let detailHideTimer = null;
+let detailReturnFocus = null;
+const DETAIL_FOCUSABLE = 'input:not([disabled]), textarea:not([disabled]), select:not([disabled]), button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])';
+
 function openDetailPanel(node){
-  const p=$('#detail-panel'); p.innerHTML=''; p.appendChild(node);
-  $('#detail-mask').classList.remove('hidden'); $('#detail-mask').classList.add('show');
+  const p=$('#detail-panel');
+  const mask=$('#detail-mask');
+  if (detailHideTimer) { clearTimeout(detailHideTimer); detailHideTimer = null; }
+  if (p.classList.contains('hidden')) detailReturnFocus = document.activeElement;
+  p.innerHTML=''; p.appendChild(node);
+  p.tabIndex = -1;
+  p.setAttribute('aria-hidden', 'false');
+  mask.classList.remove('hidden'); mask.classList.add('show');
   p.classList.remove('hidden'); p.classList.add('show');
+  requestAnimationFrame(() => {
+    const target = p.querySelector('[data-autofocus]') || p.querySelector(DETAIL_FOCUSABLE) || p;
+    try { target.focus({ preventScroll: true }); } catch { p.focus({ preventScroll: true }); }
+  });
 }
 function closeDetailPanel(){
-  const p=$('#detail-panel'); p.classList.remove('show'); $('#detail-mask').classList.remove('show');
-  setTimeout(()=>{p.classList.add('hidden');$('#detail-mask').classList.add('hidden');},220);
+  const p=$('#detail-panel');
+  if (!p || p.classList.contains('hidden')) return;
+  p.classList.remove('show'); $('#detail-mask').classList.remove('show');
+  p.setAttribute('aria-hidden', 'true');
+  if (detailHideTimer) clearTimeout(detailHideTimer);
+  detailHideTimer = setTimeout(()=>{
+    p.classList.add('hidden'); $('#detail-mask').classList.add('hidden');
+    detailHideTimer = null;
+    if (detailReturnFocus && detailReturnFocus.isConnected) {
+      try { detailReturnFocus.focus({ preventScroll: true }); } catch { /* 触发器已不可聚焦 */ }
+    }
+    detailReturnFocus = null;
+  },220);
 }
+$('#detail-panel').addEventListener('keydown', (event) => {
+  if (event.key !== 'Tab') return;
+  const p = event.currentTarget;
+  const items = [...p.querySelectorAll(DETAIL_FOCUSABLE)];
+  if (!items.length) return;
+  const first = items[0], last = items[items.length - 1];
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+});
 
 function openTaskDetail(taskId){
   const t=S.dash.tasks.find(x=>x.id===taskId); if(!t)return;
@@ -37,7 +71,7 @@ function openTaskDetail(taskId){
         h('div',{},
           h('div',{class:'mono',style:`color:${meta.color};font-size:12px`},t.id),
           h('div',{class:'dp-title'},t.title)),
-        h('button',{class:'btn btn-icon',style:'width:28px;height:28px','aria-label':'关闭',title:'关闭',onclick:closeDetailPanel},'✕'))),
+        h('button',{class:'btn btn-icon',id:'detail-close',style:'width:28px;height:28px','aria-label':'关闭',title:'关闭',onclick:closeDetailPanel},'✕'))),
     h('div',{class:'dp-body'},
       sec('状态', h('span',{class:'dp-tag',style:`color:${meta.color}`},meta.label),
         h('span',{class:'dp-tag'},`阶段：${phaseLabel(S.dash.run.phase)}`)),
@@ -95,7 +129,7 @@ function openTaskDetail(taskId){
               else { t.status='review'; toast('info','人工处理',t.id+' 标记为人工处理'); }
               renderDashboard();
             }},'人工处理'),
-            h('button',{class:'btn btn-sm btn-primary',onclick:()=>toast('info','恢复运行','从 '+t.id+' 恢复')},'从此恢复')))));
+            h('button',{class:'btn btn-sm',type:'button',disabled:true,title:'后端暂不支持从指定任务恢复；请使用运行状态条的「恢复」'},'从此恢复')))));
   renderAgents();
 }
 function openAgentDetail(roleId){
@@ -106,7 +140,7 @@ function openAgentDetail(roleId){
   openDetailPanel(h('div',{style:'display:flex;flex-direction:column;height:100%'},
     h('div',{class:'dp-head'},h('div',{class:'dp-title-row'},
       h('div',{},h('div',{class:'mono',style:'color:var(--text-ter);font-size:12px'},'AGENT'),h('div',{class:'dp-title'},rm.full)),
-      h('button',{class:'btn btn-icon',style:'width:28px;height:28px','aria-label':'关闭',title:'关闭',onclick:closeDetailPanel},'✕'))),
+      h('button',{class:'btn btn-icon',id:'detail-close',style:'width:28px;height:28px','aria-label':'关闭',title:'关闭',onclick:closeDetailPanel},'✕'))),
     h('div',{class:'dp-body'},
       sec('状态',h('span',{class:'dp-tag'},agentStatusLabel(a.status)),h('span',{class:'dp-tag'},a.model)),
       sec('当前任务',h('div',{class:'dp-text'},a.task)),
@@ -123,8 +157,8 @@ function openAgentDetail(roleId){
             h('span',{style:`margin-left:auto;font-size:11px;color:${m.color}`},m.label));}))
         :h('div',{class:'dp-text dim'},'暂无任务'))),
     h('div',{class:'dp-actions'},
-      h('button',{class:'btn btn-sm',onclick:()=>toast('info','查看事件',rm.full+' 的事件')},'查看事件'),
-      h('button',{class:'btn btn-sm',onclick:()=>toast('info','查看产物',rm.full+' 的产物')},'查看产物'))));
+      h('button',{class:'btn btn-sm',type:'button',onclick:()=>{ closeDetailPanel(); document.querySelector('[data-nav="events"]')?.click(); }},'查看事件'),
+      h('button',{class:'btn btn-sm',type:'button',onclick:()=>{ closeDetailPanel(); document.querySelector('[data-nav="artifacts"]')?.click(); }},'查看产物'))));
   renderAgents();
 }
 function phaseLabel(p){ return {planning:'规划',execution:'执行',delivery:'交付'}[p]||p; }

@@ -13,7 +13,7 @@ import { MODES, MODE_ORDER, currentMode, setMode } from '../../lib/mode.js';
 import { closeModal, showModal } from '../../ui/modal.js';
 import { toast } from '../../ui/toast.js';
 
-import { switchRun } from '../runs/index.js';
+import { waitForStartedRun } from './run-launch.js';
 function openNewRunModal(opts = {}){
   // 记忆上次的模式选择；首次默认**真实模式**——Mock 产物是固定 Todo 夹具，与目标无关
   const saved = localStorage.getItem('agentcrew:nrMock');
@@ -33,10 +33,11 @@ function openNewRunModal(opts = {}){
       h('div',{class:'nr-row'},
         h('label',{class:'nr-label',for:'nr-goal'},'项目目标'),
         h('textarea',{id:'nr-goal',class:'nr-textarea',rows:3,
+          'aria-describedby':'nr-goal-error',
           placeholder:'例如：开发一个短链接生成服务，含 REST API、缓存与部署文档'}),
         h('div',{id:'nr-demo-hint',class:'nr-demo-hint',style:'display:none'},
           'Demo 模式：使用内置示例目标，无需手动输入'),
-        h('div',{id:'nr-goal-error',class:'nr-field-error'})),
+        h('div',{id:'nr-goal-error',class:'nr-field-error',role:'alert'})),
 
       // 模型选择
       h('div',{class:'nr-row',id:'nr-model-area'},
@@ -99,9 +100,11 @@ function openNewRunModal(opts = {}){
         const useDemo=$('#nr-demo').checked;
         // 行内校验（不用 toast，避免轰炸）
         goalEl.classList.remove('input-error');
+        goalEl.setAttribute('aria-invalid', 'false');
         const errBox=$('#nr-goal-error'); if(errBox) errBox.textContent='';
         if(!useDemo && !goal){
           goalEl.classList.add('input-error');
+          goalEl.setAttribute('aria-invalid', 'true');
           if(errBox) errBox.textContent='请输入项目目标，或勾选 Demo 目标';
           goalEl.focus();
           return;
@@ -123,12 +126,13 @@ function openNewRunModal(opts = {}){
         try {
           localStorage.setItem('agentcrew:nrMock', mockOn ? '1' : '0');
           // C-6：快照必须在 startRun **之前**取——spawn 返回时 CLI 可能已经建好
-          // run 目录，事后取快照会把新 run 算进 before，轮询 60s 恒找不到。
+          // run 目录，事后取快照会把新 run 算进 before。
           let before = new Set();
+          const previousDir = S.watchDir;
           try {
             before = new Set(((await window.studio.listRuns())||[]).map(x=>x.dir));
-          } catch { /* 列表读不到：退化为「不判重」，下面仍能找到 fresh */ }
-          await window.studio.startRun({
+          } catch { /* 列表读不到：退化为「不判重」，仍可由 proc:run-dir 精确定位 */ }
+          const started = await window.studio.startRun({
             goal: useDemo ? '' : goal,
             demo: useDemo,
             mock: mockOn,
@@ -142,17 +146,15 @@ function openNewRunModal(opts = {}){
           });
           closeModal();
           toast('success','已启动', mockOn ? 'Mock 运行已提交…' : '真实模型运行已提交，耗时数分钟…');
-          // 轮询等 CLI 创建出**新的** run 目录再切换（不能取 runs[0]——可能是别的运行）
-          let switched = false;
-          for(let i=0;i<120;i++){
-            await new Promise(res=>setTimeout(res,500));
-            try {
-              const fresh = ((await window.studio.listRuns())||[]).find(x=>!before.has(x.dir));
-              if(fresh){ await switchRun(fresh.dir); switched = true; break; }
-            } catch {}
-          }
-          // 60s 都没等到新目录时给一句明确反馈，别让用户对着静默的旧看板等。
-          if(!switched) toast('info','已启动','未检测到新的 run 目录，请在运行列表中手动切换');
+          // 主进程发现目录后会发 proc:run-dir；低频扫描仅作为事件丢失时的兜底。
+          waitForStartedRun({
+            key: started && started.key,
+            before,
+            previousDir,
+          }).then(result => {
+            if (result.timedOut) toast('info','已启动','未检测到新的 run 目录，请在运行列表中手动切换');
+            else if (result.error) toast('error','切换失败', String(result.error.message || result.error));
+          });
         } catch(e) {
           startBtn.disabled=false; startBtn.textContent='启动';
           toast('error','启动失败', String(e.message||e));
@@ -172,6 +174,7 @@ function openNewRunModal(opts = {}){
   // 输入时自动清除目标错误态
   $('#nr-goal').addEventListener('input',()=>{
     $('#nr-goal').classList.remove('input-error');
+    $('#nr-goal').setAttribute('aria-invalid', 'false');
     const eb=$('#nr-goal-error'); if(eb) eb.textContent='';
   });
   // 执行模式提示：随选择更新说明文案
@@ -206,6 +209,7 @@ function openNewRunModal(opts = {}){
     const row = $('#nr-recent-row'); if(!row) return;
     let goals = [];
     try { goals = (await window.studio.recentGoals()) || []; } catch {}
+    if (!row.isConnected) return;
     goals = Array.isArray(goals) ? goals.filter(g => g && String(g).trim()) : [];
     if(!goals.length){ row.remove(); return; }
     const sel = $('#nr-recent-goal');
@@ -257,22 +261,25 @@ function openNewRunModal(opts = {}){
     if (c) return c;
     return (nrProvider.value && nrModel.value) ? `${nrProvider.value}:${nrModel.value}` : '';
   };
+  let modelRequestSeq = 0;
   const refreshNrModels = async (providerKey) => {
-    nrModel.innerHTML = '<option value="">选择模型…</option>';
+    const seq = ++modelRequestSeq;
+    const target = nrModel;
+    target.innerHTML = '<option value="">选择模型…</option>';
     updateNrPreview();
     if (!providerKey) return;
-    // 先放内置 suggested_models，保证立即可选
     const builtin = findProvider(providerKey);
-    ((builtin && builtin.suggested_models) || []).forEach(m => nrModel.appendChild(h('option', { value: m }, m)));
-    // 异步拉后端模型列表，成功则替换（失败保留内置）
+    ((builtin && builtin.suggested_models) || []).forEach(m => target.appendChild(h('option', { value: m }, m)));
     try {
       const data = await apiFetch(`/providers/${encodeURIComponent(providerKey)}/models`);
+      // 快速切换 Provider 时旧请求可能后返回；代次或节点失效就丢弃。
+      if (seq !== modelRequestSeq || !target.isConnected) return;
       const models = (data && data.models) || [];
       if (models.length) {
-        nrModel.innerHTML = '<option value="">选择模型…</option>';
+        target.innerHTML = '<option value="">选择模型…</option>';
         models.forEach(m => {
           const id = typeof m === 'string' ? m : (m.id || m.name || '');
-          if (id) nrModel.appendChild(h('option', { value: id }, id));
+          if (id) target.appendChild(h('option', { value: id }, id));
         });
       }
     } catch (e) { console.log('[apiFetch] models fallback:', e.message); }
@@ -283,12 +290,14 @@ function openNewRunModal(opts = {}){
   updateNrPreview();
   // 异步拉后端 provider 列表（失败保留内置）
   (async () => {
+    const target = nrProvider;
     try {
       const data = await apiFetch('/providers');
+      if (!target.isConnected) return;
       const list = (data && data.providers) || [];
       if (list.length) {
-        nrProvider.innerHTML = '<option value="">自动（设置默认）</option>';
-        list.forEach(p => nrProvider.appendChild(h('option', { value: p.name }, p.name)));
+        target.innerHTML = '<option value="">自动（设置默认）</option>';
+        list.forEach(p => target.appendChild(h('option', { value: p.name }, p.name)));
       }
     } catch (e) { console.log('[apiFetch] providers fallback:', e.message); }
   })();

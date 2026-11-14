@@ -193,7 +193,7 @@ text.edge-weight { fill: var(--text-ter); }
 }
 
 /* ---- 窄屏降级列表 ---- */
-.dag-list-fallback { display: flex; flex-direction: column; gap: var(--sp-1); }
+.dag-list-fallback { display: none; flex-direction: column; gap: var(--sp-1); }
 .dag-group-title { margin: var(--sp-2) 0 2px; font-size: var(--fs-xs); font-weight: 500; color: var(--text-ter); }
 .dag-task-row {
   display: flex; align-items: center; gap: var(--sp-2);
