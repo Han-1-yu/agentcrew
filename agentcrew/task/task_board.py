@@ -266,6 +266,57 @@ class TaskBoard:
             self._on_change(new_task, change)
         return new_task
 
+    def reset_for_rewind(
+        self,
+        task_id: str,
+        *,
+        reason: str = "rewind",
+        description: str | None = None,
+        acceptance_criteria: Sequence[str] | None = None,
+    ) -> Task:
+        """R62：把任意状态的任务显式重置回 ``PENDING``（时间旅行用）。
+
+        终态（``SUCCEEDED`` / ``FAILED`` / ``SKIPPED`` …）在 10 态契约里**没有**
+        回 ``PENDING`` 的出边，而「从某一步重做」必然要跨过这条边。与
+        :meth:`reset_failed` 同类：绕过状态机，但合成一条带 ``reason`` 的
+        ``StatusChange`` 让这次绕过在历史里可见（``from_status`` 是真实的前一
+        状态，不是伪造的）。
+
+        **运行时字段一并清空**：``attempts`` / ``rework_count`` 归零（重做是一
+        次新的预算，否则回滚后第一次派发就会撞上「额度已用完」），``result``
+        清空（下游的条件边要按新结果重判），``reviews`` 清空（旧裁决不属于这次
+        重做）。``status_history`` 保留并追加——历史只增不减。
+
+        ``description`` / ``acceptance_criteria`` 给定时整体替换（回滚时可以
+        把新指令写进任务契约）；缺省则原样保留。
+        """
+        task = self._tasks[task_id]
+        now = datetime.now()
+        change = StatusChange(
+            from_status=task.status,
+            to_status=TaskStatus.PENDING,
+            reason=reason,
+            at=now,
+        )
+        updates: dict[str, Any] = {
+            "status": TaskStatus.PENDING,
+            "attempts": 0,
+            "rework_count": 0,
+            "result": None,
+            "reviews": [],
+            "updated_at": now,
+            "status_history": [*task.status_history, change],
+        }
+        if description is not None:
+            updates["description"] = description
+        if acceptance_criteria is not None:
+            updates["acceptance_criteria"] = list(acceptance_criteria)
+        new_task = task.model_copy(update=updates)
+        self._tasks[task_id] = new_task
+        if self._on_change is not None:
+            self._on_change(new_task, change)
+        return new_task
+
     # ---- 重算与派发 ----
 
     def refresh(self) -> int:

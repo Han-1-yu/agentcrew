@@ -61,7 +61,7 @@
 | # | 事项 | 决策需要回答的问题 |
 | --- | --- | --- |
 | D1 | C9 A2A 互操作 | 目标是接哪个 A2A 生态？（LF v1.0 协议已有巨头背书） |
-| D2 | C10 对话式入口 + run 中途引导 | Studio 对话页要从「只读展示」（R43）升级为「对话即入口」吗？ |
+| D2 | C10 对话式入口 + run 中途引导 | Studio 对话页要从「只读展示」（R43）升级为「对话即入口」吗？**R62 已补「事后回滚」**（`rewind`：回滚到某任务并重跑，CLI + `POST /runs/{id}/rewind`）；**运行中实时引导**（pause → 改指令 → continue）仍未做，等产品决策 |
 | D3 | C13 SDK 生态 | 需要哪种语言的 SDK？（TypeScript / Go / 异步 Python） |
 | D4 | C14 容量与横向扩展 | 预期并发量级？多实例共享 `output_dir` 的方案（NFS vs 对象存储）选型 |
 | D5 | 评测口径两处（2026-11-13 实测暴露） | ①~~文档类 `must_contain` 逐字匹配~~：✅ 已按「最优方案」处置——hint 改「逐字包含」、门槛不放宽（R58，`PROJECT-STATE.md` §3.72）；②~~驳回类用例如何区分「门禁拒绝」与「规划期失败」~~：✅ 已加 check kind `rejected_by_gate`（`stage: plan|gate|any` + `reason_contains`），只认 `plan_rejected` / `gate_result(verdict=reject)` 证据，`run` 级 error 或非 failed 状态一律判失败；两条驳回 case 已改用该断言并用离线 regrade 验证 2/2 PASS（§3.74） |

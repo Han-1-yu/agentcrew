@@ -98,6 +98,7 @@ def test_store_reloads_when_file_changes(tmp_path):
     ("DELETE", "/runs/R-1", "runs:admin"),
     ("POST", "/runs/R-1/approvals", "approvals:write"),
     ("POST", "/runs/R-1/agents", "runs:admin"),
+    ("POST", "/runs/R-1/rewind", "runs:write"),
     ("GET", "/keys", "keys:read"),
     ("POST", "/keys", "keys:write"),
     ("GET", "/tools", "tools:read"),

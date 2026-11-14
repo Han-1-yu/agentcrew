@@ -521,6 +521,53 @@ paths:
                 $ref: '#/components/schemas/Error'
 
   ##########################################################################
+  # run-rewind（R62 时间旅行）
+  ##########################################################################
+  /runs/{run_id}/rewind:
+    post:
+      tags: [run-actions]
+      summary: 回滚到某个任务并重跑（时间旅行）
+      description: >
+        纯文件维护操作：把目标任务、其全部传递下游与交付任务 `T-FINAL` 重置为
+        `pending`，旧产物先快照到 `history/rewind-NNN/` 再移除，run 置回
+        `interrupted`。不触发模型调用；调用方随后 `POST .../resume` 从该点重跑。
+        `instruction` 非空时写入目标任务的任务契约（描述 + 验收标准），让执行体
+        与 G2 评审都能看到新要求。`dry_run=true` 只计算影响集、不写盘。
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RewindRequest'
+      responses:
+        '200':
+          description: 回滚完成（或 dry-run 影响集）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RewindResponse'
+        '400':
+          description: 任务不在板上 / run 状态不允许回滚 / body 非法
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: run 正在运行中，或另一个进程持有该 run 的 resume 锁
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: server 未配置 settings，无法回滚
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  ##########################################################################
   # run-model
   ##########################################################################
   /runs/{run_id}/model:
@@ -1556,6 +1603,49 @@ components:
         status:
           type: string
           enum: [running]
+
+    RewindRequest:
+      type: object
+      required: [task]
+      properties:
+        task:
+          type: string
+          description: 从哪个任务开始重做（该任务与其全部下游、T-FINAL 一并重置）
+          example: T-002
+        instruction:
+          type: string
+          default: ""
+          description: 重做时要额外满足的要求（写入目标任务描述与验收标准）
+        dry_run: { type: boolean, default: false }
+
+    RewindResponse:
+      type: object
+      required:
+        [run_id, target, affected, discarded_artifacts, status_before,
+         status_after, dry_run]
+      properties:
+        run_id: { type: string }
+        target:
+          type: string
+          description: 回滚起点任务
+        affected:
+          type: array
+          items: { type: string }
+          description: 被重置的任务 id（含目标、全部下游与 T-FINAL）
+        snapshot_dir:
+          type: string
+          description: 旧产物快照目录（相对 run 目录）；dry-run 为 null
+        discarded_artifacts:
+          type: integer
+          description: 从 artifacts/ 移除（dry-run 时是「将被移除」）的产物数
+        status_before:
+          type: string
+          enum: [completed, failed, interrupted, cancelled, planned]
+        status_after:
+          type: string
+          description: 回滚后的 run 状态；dry-run 与 status_before 相同
+        instruction: { type: string }
+        dry_run: { type: boolean }
 
     DeleteRunResponse:
       type: object

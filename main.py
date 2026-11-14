@@ -66,6 +66,7 @@ from agentcrew.crew.crew import (
     RunCancelled,
     build_catalog,
 )
+from agentcrew.crew.rewind import rewind_run
 from agentcrew.gate.cli_prompter import CliPrompter
 from agentcrew.gate.deferred import DeferredPrompter
 from agentcrew.gate.gatekeeper import NullPrompter, Prompter
@@ -196,7 +197,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(
         dest="command",
-        metavar="{run,resume,status,approvals,approve,roles,agents,switch,"
+        metavar="{run,resume,rewind,status,approvals,approve,roles,agents,switch,"
                 "clean,cancel,delete,serve,doctor,diff,schedule}")
 
     run = sub.add_parser("run", help="执行一次完整 run（规划 → 执行 → 交付）")
@@ -215,6 +216,20 @@ def build_parser() -> argparse.ArgumentParser:
     resume.add_argument(
         "--force", action="store_true", help="配置快照与当前配置不一致时仍继续")
     _add_run_flags(resume)
+
+    rewind = sub.add_parser(
+        "rewind", help="R62：回滚到某个任务并重跑（时间旅行）")
+    rewind.add_argument("run_id", help="run 目录名")
+    rewind.add_argument(
+        "--task", required=True, metavar="ID",
+        help="从哪个任务开始重做（该任务与其全部下游、T-FINAL 一并重置）")
+    rewind.add_argument(
+        "--instruction", default="", metavar="TEXT",
+        help="重做时要额外满足的要求（写入该任务的描述与验收标准，G2 会据此评审）")
+    rewind.add_argument(
+        "--dry-run", action="store_true", help="只计算影响集，不写盘")
+    rewind.add_argument("--json", action="store_true", help="输出机器可读 JSON")
+    rewind.add_argument("--output-dir", metavar="DIR", help="run 输出根目录")
 
     approvals = sub.add_parser(
         "approvals", help="R4：列出一个 run 的审批单（含待裁决）")
@@ -859,6 +874,62 @@ def _cmd_resume(args: argparse.Namespace) -> int:
         # 退出并给出可读消息，好过让用户对着 traceback 猜。
         hook.stop()
         return _fail(f"resume 失败（run 目录与清单/配置不一致）：{exc}")
+
+
+def _cmd_rewind(args: argparse.Namespace) -> int:
+    """R62：回滚到指定任务并重跑（时间旅行）。
+
+    纯文件维护操作，不烧模型调用：把目标任务与其下游重置为 ``PENDING``、
+    旧产物先快照再移除、run 置回 ``interrupted``；之后用既有的 ``resume``
+    从该点重跑。``--dry-run`` 只打印影响集。
+    """
+    try:
+        settings = _settings_from(args)
+        run_dir = _run_dir(settings, args.run_id)
+    except (OSError, ValueError) as exc:
+        return _fail(f"无法定位 run {args.run_id}：{exc}")
+    try:
+        result = rewind_run(
+            run_dir,
+            target=args.task,
+            instruction=args.instruction,
+            settings=settings,
+            dry_run=args.dry_run,
+        )
+    except ResumeLockError as exc:
+        return _fail(f"rewind 冲突：{exc}")
+    except (OSError, RuntimeError, ValueError) as exc:
+        return _fail(f"rewind 失败：{exc}")
+    if args.json:
+        print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2))
+        return EXIT_CODES["ok"]
+
+    console = Console()
+    affected = "、".join(result.affected)
+    if result.dry_run:
+        _out(
+            console,
+            f"[dry-run] run {result.run_id} 回滚到 {result.target}："
+            f"将重置 {len(result.affected)} 个任务（{affected}），"
+            f"移除 {result.discarded_artifacts} 个旧产物（本次未写盘）",
+        )
+        return EXIT_CODES["ok"]
+    _out(
+        console,
+        f"已回滚 run {result.run_id} 到 {result.target}："
+        f"{result.status_before} → {result.status_after}",
+    )
+    _out(console, f"重置任务 {len(result.affected)} 个：{affected}")
+    if result.instruction:
+        _out(console, f"新指令已写入 {result.target} 的任务契约：{result.instruction}")
+    if result.snapshot_dir:
+        _out(
+            console,
+            f"旧产物 {result.discarded_artifacts} 个已快照到 "
+            f"{Path(result.snapshot_dir).relative_to(run_dir).as_posix()}",
+        )
+    _out(console, f"下一步：python main.py resume {result.run_id}   # 从该任务重跑")
+    return EXIT_CODES["ok"]
 
 
 def _drive(
@@ -2658,6 +2729,7 @@ def _cmd_config_import(args: argparse.Namespace) -> int:
 _HANDLERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "run": _cmd_run,
     "resume": _cmd_resume,
+    "rewind": _cmd_rewind,
     "status": _cmd_status,
     "approvals": _cmd_approvals,
     "approve": _cmd_approve,

@@ -11,6 +11,7 @@ SSE 是标准 HTTP 长连接，单向推送足够覆盖「运行状态实时更�
 - ``GET /runs`` → 列出全部 run（盘上记录 + 内存中运行中的实时状态）
 - ``POST /runs/{run_id}/cancel`` → 软取消运行中的 run（202）
 - ``POST /runs/{run_id}/resume`` → 从 checkpoint 恢复 run 并后台执行（202）
+- ``POST /runs/{run_id}/rewind`` → 回滚到某个任务并重跑（R62 时间旅行，200）
 - ``GET /runs/{run_id}/status`` → 运行状态（任务统计）
 - ``GET /runs/{run_id}/ledger?event=&limit=&offset=`` → Ledger 事件分页查询（P2-9）
 - ``GET /runs/{run_id}/stats`` → 事件分布 / LLM 用量 / 任务成功率（P2-9）
@@ -178,6 +179,7 @@ API_ROUTES: tuple[tuple[str, str], ...] = (
     ("GET", "/runs/{run_id}/stats"),
     ("POST", "/runs/{run_id}/cancel"),
     ("POST", "/runs/{run_id}/resume"),
+    ("POST", "/runs/{run_id}/rewind"),
     ("GET", "/runs/{run_id}/model"),
     ("PUT", "/runs/{run_id}/model"),
     ("GET", "/runs/{run_id}/events"),
@@ -833,6 +835,9 @@ class ApiServer:
             if action == "resume":
                 await self._resume_run(run_id, writer)
                 return
+            if action == "rewind":
+                await self._rewind_run(run_id, body, writer)
+                return
             if action == "approvals":
                 await self._decide_approval(run_id, body, writer)
                 return
@@ -1382,6 +1387,77 @@ class ApiServer:
         cancel()
         await self._send_json(
             writer, 202, {"run_id": run_id, "cancelled": True})
+
+    async def _rewind_run(
+        self, run_id: str, body: bytes, writer: asyncio.StreamWriter,
+    ) -> None:
+        """``POST /runs/{id}/rewind``：时间旅行（回滚到某任务并重跑，200）。
+
+        纯文件维护操作，不进 run 槽位、不触发模型调用：重置目标任务与其下游、
+        快照旧产物、把 run 置回 ``interrupted``；调用方随后 ``POST .../resume``
+        从该点重跑。``dry_run`` 只算影响集、不写盘。
+        """
+        if await self._deny_if_run_hidden(run_id, writer):
+            return
+        from agentcrew.runtime.checkpoint import _validated_run_id
+        from agentcrew.runtime.lifecycle import ResumeLockError
+
+        try:
+            _validated_run_id(run_id)
+        except ValueError as exc:
+            await self._send_json(writer, 400, {"error": str(exc)})
+            return
+        if run_id in self.active_crews:
+            await self._send_json(
+                writer, 409, {"error": "run 正在运行中，请先 cancel 再回滚"})
+            return
+        if self._settings is None:
+            await self._send_json(
+                writer, 503, {"error": "server 未配置 settings，无法回滚"})
+            return
+        try:
+            data = json.loads(body.decode("utf-8")) if body else {}
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            await self._send_json(writer, 400, {"error": "invalid JSON"})
+            return
+        if not isinstance(data, dict):
+            await self._send_json(
+                writer, 400, {"error": "body 必须是 JSON 对象"})
+            return
+        target = data.get("task")
+        if not isinstance(target, str) or not target.strip():
+            await self._send_json(
+                writer, 400, {"error": "task 必填（要从哪个任务开始重做）"})
+            return
+        instruction = data.get("instruction", "")
+        if not isinstance(instruction, str):
+            await self._send_json(
+                writer, 400, {"error": "instruction 必须是字符串"})
+            return
+        from agentcrew.crew.rewind import rewind_run
+
+        try:
+            result = await asyncio.to_thread(
+                rewind_run,
+                self._settings.output_dir / run_id,
+                target=target.strip(),
+                instruction=instruction,
+                settings=self._settings,
+                dry_run=bool(data.get("dry_run", False)),
+            )
+        except ResumeLockError as exc:
+            await self._send_json(writer, 409, {"error": str(exc)})
+            return
+        except RuntimeError as exc:
+            await self._send_json(
+                writer, 409, {"error": f"回滚冲突：{exc}"})
+            return
+        except (OSError, ValueError) as exc:
+            await self._send_json(
+                writer, 400, {"error": f"回滚失败：{exc}"})
+            return
+
+        await self._send_json(writer, 200, result.as_dict())
 
     async def _resume_run(self, run_id: str, writer: asyncio.StreamWriter) -> None:
         """``POST /runs/{id}/resume``：从 checkpoint 恢复 run 并后台执行（202）。"""

@@ -382,6 +382,9 @@ _ROUTE_SCOPES: tuple[tuple[str, str, str], ...] = (
     ("POST", r"^/runs/[^/]+/approvals$", SCOPE_APPROVALS_WRITE),
     ("POST", r"^/runs/[^/]+/cancel$", SCOPE_RUNS_WRITE),
     ("POST", r"^/runs/[^/]+/resume$", SCOPE_RUNS_WRITE),
+    # R62：rewind 会改任务状态与产物清单（删产物、重置终态任务），与 resume
+    # 同属"写 run"，漏登记会退化成"登录即可用"（required_scope 返回 None）。
+    ("POST", r"^/runs/[^/]+/rewind$", SCOPE_RUNS_WRITE),
     ("POST", r"^/runs/[^/]+/events$", SCOPE_RUNS_WRITE),
     ("POST", r"^/runs/[^/]+/agents$", SCOPE_RUNS_ADMIN),
     # B-21：GET 版此前漏登记 → required_scope 返回 None → Principal.allows(None)

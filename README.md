@@ -127,6 +127,9 @@ python main.py run --demo
   值守就加 `--auto`。
 - 想看实时看板直接运行；想关掉看板（CI 友好）加 `--no-live`。
 
+> **第一次用 / 想要一份按步骤的教程**：见 [docs/TUTORIAL.md](docs/TUTORIAL.md)
+> ——从安装自检、离线跑通、接真实模型，到人工卡点、工具链、异构执行体、对外服务。
+>
 > **部署到服务器 / 常驻服务 / 排障**：见 [docs/OPERATIONS.md](docs/OPERATIONS.md)
 > ——真实端口与认证、systemd / 反代示例、配置三通道与生产必配、日志与备份、
 > 扩容边界、监控告警、升级步骤和上线前检查清单。
@@ -257,6 +260,7 @@ examples/samples/<name>/
 |---|---|---|
 | `python main.py run` | 执行一次完整 run（规划 → 执行 → 交付） | `--goal TEXT` 与 `--demo` 二选一；`--mock`；`--image PATH`（C4 多模态，可重复最多 4 张）；`--auto`；`--gate both\|plan\|delivery\|none`；`--max-concurrency N`；`--default-model ALIAS`；`--output-dir DIR`；`--context-budget N`；`--no-live` |
 | `python main.py resume <run_id>` | 续跑一个中断或未完成的 run | `--force`（配置快照不一致时仍继续）；以及 `run` 的全部配置参数 |
+| `python main.py rewind <run_id>` | R62：时间旅行——把 run 回滚到某任务之前（该任务 + 全部下游 + `T-FINAL` 重置为 `pending`，旧产物先快照再移除），再 `resume` 从该点重跑 | `--task ID`（必填）；`--instruction TEXT`（重做要求写进任务契约，G2 据此评审）；`--dry-run`（只算影响集、不写盘）；`--json`；`--output-dir DIR` |
 | `python main.py status <run_id>` | 打印 run 记录、统计、任务看板与待审批条数 | `--output-dir DIR` |
 | `python main.py approvals <run_id>` | R4：列出该 run 的持久化人工审批单 | `--output-dir DIR` |
 | `python main.py approve <run_id> <approval_id>` | R4：在另一个进程里写裁决（之后 `resume` 继续） | `--decision ACTION`；`--task-ids ID...`（rework）；`--by NAME`；`--output-dir DIR` |
@@ -283,6 +287,15 @@ examples/samples/<name>/
   退出（退出码 0）；用 `approvals` / `approve` 裁决后 `resume` 回到**原卡点**继续。
   这与 `INTERRUPTED` 的 resume（直接重入执行、跳过规划与计划卡点）是两条不同路径。
   审批挂起的 run 受 `clean --protect-running` 与 `delete_run` 保护。
+- R62：`rewind` 是**维护操作**——不调模型、不动审批单、不发 webhook。它先把
+  `tasks.delta.jsonl` 合并回 `tasks.json`（不清掉的话 `resume` 会把回滚前的快照
+  叠回来），再把受影响任务的旧产物复制到 `history/rewind-NNN/`（同目录 `rewind.json`
+  记影响集、旧任务快照与逐文件 sha256），从 `artifacts/` 与清单里移除，然后把这些
+  任务重置为 `PENDING`（`attempts` / `rework_count` 归零、`result` / `reviews` 清空、
+  `status_history` 追加一条 `reason="rewind"` 的跃迁），run 置回 `INTERRUPTED` 并记
+  一条 `run_rewound` 审计事件。之后 `resume` 从该点重跑，上游已成功的任务与产物原样
+  保留。只接受已停下来的 run（`running` / `awaiting_approval` 直接拒绝），并与
+  `resume` 共用同一把跨进程锁。
 - `clean` 的删除范围被限制在 `--output-dir` 之下，`--dry-run` 与真删共用同一套
   边界校验。
 - `doctor` 打印一份健康报告：Python 版本、核心依赖可导入性、已配置 provider 的

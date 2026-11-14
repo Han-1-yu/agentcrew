@@ -1,6 +1,6 @@
 # AgentCrew 项目状态
 
-> **最后更新：2026-11-13** · 本文是仓库**唯一状态源**。
+> **最后更新：2026-11-14** · 本文是仓库**唯一状态源**。
 > 历次交接文档、验收/审查/测试报告、一次性工作提示词已在本日汇总并入本文后删除，
 > 原文备份见 `.workbuddy/archive/reports-2026-11-02/`（git 亦可通过历史恢复）。
 
@@ -8,11 +8,11 @@
 
 ## 0. 一句话现状
 
-**当前代码基线：R59–R61 已提交并推送（`c9cc47c`）+ §3.83 真机缺陷修复（`c9c4a60`），两个提交的 CI 均七 job 全绿。自动化回归与静态检查通过；云主机回环验收实例仍在运行。** 最近一次全量 **3354 passed / 0 failed / 6 skipped / 0 error**（174 文件 / 87 批次 / 508.7s），跑器报告 6 个批次在进程崩溃后重试恢复，并输出 3 项「首次失败、重试通过」——已人工核对均为环境负载所致（`serve` 子进程 `0xC0000005`、`rich` 源码瞬时读取损坏、webhook spool 用例；两项隔离复跑全过），非代码回归。真实模型评测与 Studio 分项数字保留为历史实测证据，本次未逐项重跑；当前 CI 的 Studio job 为 success。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道；R19 给主管审核开了独立、不阻塞的 `suggestions` 建议通道；R20 补上单步/断点调试——每个任务派发前可挂起裁决，第二档功能项全部闭环；R21 给 API 契约装上守卫，openapi.yaml 与代码路由双向锁死、不再漏端点；R22 补上 resume 状态白名单与 MCP 管道显式关闭；R23 产出 2501 用例的模块/场景覆盖矩阵（`docs/TEST-REPORT.md`），验收报告遗留的最后一项小项闭环；R24 补上工具管理页与单工具试跑；R25 把共享 API Key 升级为多用户 RBAC（密钥/角色/作用域/归属/审计）；R26 补上拖拽式可视化编排（画布 + YAML 双向 + 图校验）；R27 给检索加向量通道（混合打分 + 磁盘缓存 + 本地退化）；R28 打通「画布 → run」直通规划；R29 让实体记忆也走向量混合（不加列、不迁移）；R30 给审批单加等待窗口与过期告警；R31 给条件边补否定/兜底写法；R32 把控制台 UI 重构成令牌化 + 明暗主题 + 侧栏布局；R33 把单层主管复核扩成可配的多级链；R34 修好本机测试环境（崩溃隔离跑器，一条命令出可信结论）；R50 按差距报告 69 条完成上线前加固——8 项 P0 全关、时钟容错让"前跳误杀/回拨死锁"不再可能、审批与预算的并发边界收口、`/metrics` 补齐可观测入口、Studio 断线可自愈（明细见 `docs/REMEDIATION-STATUS.md`）。R51 按能力路线第一批补上三根支柱的关键缺口：**能查**（`web_search`，四提供方、默认关、密钥只走环境变量）、**敢跑**（可插拔执行后端，默认 `local` 行为逐字不变，`docker` 可选：禁网/非 root/资源上限/只挂 run 目录，缺 docker 即报错）、**跑得出结论**（`run_tests` + G1 执行校验，失败并入既有返工通道），并把评测做成 mock/真实双轨（`eval --live` + 23 条真实小目标 + 夜间脚本）。R52 补上互操作与无人值守：**C7** 暴露为 MCP server（`mcp-serve`，5 个工具全走 HTTP API 复用 RBAC/审计）、**C6 第一步**借现成浏览器 MCP（配置模板 + 读优先白名单，零开发）、**C8** 入站 Webhook 触发（`POST /webhooks/trigger`，HMAC 或 API Key 两条认证路径，来源进 ledger）。R53 补上多模态输入（**C4**）：`run --image` / `POST /runs` 的 `images`（内联 base64，最多 4 张），provider 能力位 `supports_vision`（默认关）决定是否真发图，不支持时降级纯文本并落 `vision_unsupported`（降级可见），图片落盘留证。R54 补上文档 RAG（**C5**）：`knowledge/docs/` 下的团队手册/规范增量摄取分块，按相关性注入 PM 规划提示词与每个任务的上下文（复用 R11/R27 检索资产），`docs list/search` 管理入口。能力路线第二批至此全部落地。
+**当前代码基线：R59–R61 已提交并推送（`c9cc47c`）+ §3.83 真机缺陷修复（`c9c4a60`），两个提交的 CI 均七 job 全绿；R62（时间旅行 `rewind`）在工作区、未提交。** 最近一次全量 **3373 passed / 0 failed / 6 skipped / 0 error**（175 文件 / 88 批次 / 439.8s），跑器报告 2 个批次进程崩溃后重试恢复、2 项「首次失败、重试通过」（`test_exec_verify` 隔离复跑 10/10 + 单例 1/1 全过，判为环境负载与同仓并发测试争用，非回归）。真实模型评测与 Studio 分项数字保留为历史实测证据，本次未逐项重跑；当前 CI 的 Studio job 为 success。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道；R19 给主管审核开了独立、不阻塞的 `suggestions` 建议通道；R20 补上单步/断点调试——每个任务派发前可挂起裁决，第二档功能项全部闭环；R21 给 API 契约装上守卫，openapi.yaml 与代码路由双向锁死、不再漏端点；R22 补上 resume 状态白名单与 MCP 管道显式关闭；R23 产出 2501 用例的模块/场景覆盖矩阵（`docs/TEST-REPORT.md`），验收报告遗留的最后一项小项闭环；R24 补上工具管理页与单工具试跑；R25 把共享 API Key 升级为多用户 RBAC（密钥/角色/作用域/归属/审计）；R26 补上拖拽式可视化编排（画布 + YAML 双向 + 图校验）；R27 给检索加向量通道（混合打分 + 磁盘缓存 + 本地退化）；R28 打通「画布 → run」直通规划；R29 让实体记忆也走向量混合（不加列、不迁移）；R30 给审批单加等待窗口与过期告警；R31 给条件边补否定/兜底写法；R32 把控制台 UI 重构成令牌化 + 明暗主题 + 侧栏布局；R33 把单层主管复核扩成可配的多级链；R34 修好本机测试环境（崩溃隔离跑器，一条命令出可信结论）；R50 按差距报告 69 条完成上线前加固——8 项 P0 全关、时钟容错让"前跳误杀/回拨死锁"不再可能、审批与预算的并发边界收口、`/metrics` 补齐可观测入口、Studio 断线可自愈（明细见 `docs/REMEDIATION-STATUS.md`）。R51 按能力路线第一批补上三根支柱的关键缺口：**能查**（`web_search`，四提供方、默认关、密钥只走环境变量）、**敢跑**（可插拔执行后端，默认 `local` 行为逐字不变，`docker` 可选：禁网/非 root/资源上限/只挂 run 目录，缺 docker 即报错）、**跑得出结论**（`run_tests` + G1 执行校验，失败并入既有返工通道），并把评测做成 mock/真实双轨（`eval --live` + 23 条真实小目标 + 夜间脚本）。R52 补上互操作与无人值守：**C7** 暴露为 MCP server（`mcp-serve`，5 个工具全走 HTTP API 复用 RBAC/审计）、**C6 第一步**借现成浏览器 MCP（配置模板 + 读优先白名单，零开发）、**C8** 入站 Webhook 触发（`POST /webhooks/trigger`，HMAC 或 API Key 两条认证路径，来源进 ledger）。R53 补上多模态输入（**C4**）：`run --image` / `POST /runs` 的 `images`（内联 base64，最多 4 张），provider 能力位 `supports_vision`（默认关）决定是否真发图，不支持时降级纯文本并落 `vision_unsupported`（降级可见），图片落盘留证。R54 补上文档 RAG（**C5**）：`knowledge/docs/` 下的团队手册/规范增量摄取分块，按相关性注入 PM 规划提示词与每个任务的上下文（复用 R11/R27 检索资产），`docs list/search` 管理入口。能力路线第二批至此全部落地。
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | R59–R61 最新全量 **3354 passed / 0 failed / 6 skipped / 0 error**（174 文件 / 87 批次 / 508.7s，`scripts/test.py --batch 2 --retries 4 --retry-failed 3 --keep-pycache`）。跑器报告 6 个批次在进程崩溃后重试恢复；3 项「首次失败、重试通过」已人工核对为环境负载（见 §3.83 末段）；6 个 skip 沿用跑器结果，其中 4 个 docker 真容器用例由 CI 覆盖 |
+| 全量测试 | R62 工作区最新全量 **3373 passed / 0 failed / 6 skipped / 0 error**（175 文件 / 88 批次 / 439.8s，`scripts/test.py --batch 2 --retries 4 --retry-failed 3 --keep-pycache`）。跑器报告 2 个批次在进程崩溃后重试恢复；2 项「首次失败、重试通过」（`test_exec_verify`）已隔离复跑 10/10 + 1/1 全过，判为环境负载；6 个 skip 沿用跑器结果，其中 4 个 docker 真容器用例由 CI 覆盖 |
 | 静态检查 | R59–R61 工作区重跑 `ruff check agentcrew/ main.py tests/`：**All checks passed**；`mypy agentcrew/`：**142 文件零错误** |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
@@ -2423,6 +2423,61 @@ mock 的 70 字节被 G1 判「为空文件」——这是契约判据正确生�
 （174 文件 / 87 批次 / 508.7s）。跑器标 3 项「首次失败、重试通过」，已人工核对均为环境：
 `test_sdk` 端到端（`serve` 子进程 `0xC0000005`）、`rich` 源码瞬时语法损坏、
 `test_webhook_spool` 端到端；前两项隔离复跑 2/2、webhook 1/1 全过，非回归。
+
+### 3.84 R62：run 时间旅行（回滚到任意任务并重跑）（2026-11-14）
+
+**起因**：对标主流 Agent 产品——Claude Code 的 `/rewind`、LangGraph 的 time travel、
+Devin 的 replan 都允许「不改整条历史、只从某一步重来」。AgentCrew 此前只有 `resume`：
+它把**中断**的 run 接着跑完，失败任务仍然失败、已成功的产物无法在保留上游成果的前提下
+重做；想改一个中间任务的交付，只能整个 run 从头再跑（重花全部 token）。本轮补上这一层，
+其余不动（不碰调度、不碰状态机的合法边集合）。
+
+| 改动 | 说明 |
+| --- | --- |
+| `agentcrew/crew/rewind.py`（新增） | `affected_task_ids`：影响集 = 依赖图传递后代 ∪ `parent_id` 子任务（运行时动态委派不进 DAG）∪ `T-FINAL`；`rewind_run`：状态守卫 → `apply_deltas` → 影响集 → 快照 → 删产物 → 重置 → 落盘 → 审计；`dry_run` 只读不算写 |
+| `agentcrew/task/task_board.py` | 新增 `reset_for_rewind`：**第二处**显式绕过状态机（第一处 `reset_failed`），补 `reason="rewind"` 的 `StatusChange`；`attempts`/`rework_count` 归零、`result`/`reviews` 清空、`status_history` 只增 |
+| `main.py` | `rewind <run_id> --task ID [--instruction TEXT] [--dry-run] [--json]`，退出码与其它维护命令同表 |
+| `agentcrew/api/server.py` | `POST /runs/{run_id}/rewind`（与 CLI 同一实现）：running→409、body 非法/任务不存在→400、无 settings→503、锁冲突→409 |
+| `agentcrew/api/rbac.py` | 补登记 `POST /runs/{id}/rewind → runs:write`：漏登记会落到「登录即可用」（`required_scope` 返回 `None`），等于拿到只读主体的密钥就能改 run 状态与产物清单 |
+| `artifacts/contracts/openapi.yaml` | 新路径 + `RewindRequest`/`RewindResponse`；`test_api_contract` 双向比对 + 真服务逐条探测 |
+| `tests/test_rewind.py`（新增） | 17 例：影响集三形态与未知 id、只重置子树、快照逐字节 sha256、清单/磁盘一致性、`interrupted` 与 `run_rewound`、dry-run 零写盘、delta 陷阱、指令契约、rewind→resume 端到端、三种拒绝路径、CLI 接线、HTTP 端点两例 |
+| `README.md` / `docs/TUTORIAL.md` §4.4 | 命令速查一行 + 行为说明一段 + 教程一节（先看影响集、再真回滚、后 resume） |
+
+**四条不变量**（写在模块 docstring 里，也是用例的判据）：
+
+1. **不改状态机**：终态回 `PENDING` 没有合法边，与 `reset_failed` 同样显式绕过，但历史里
+   必须留下真实 `from_status` 与 `reason` —— 绕过要可见，不能伪装成正常跃迁。
+2. **先快照后删除**：旧产物先复制到 `history/rewind-NNN/`（同目录 `rewind.json` 记影响集、
+   旧任务快照与逐文件 sha256），复制失败就清掉半成品；此时 checkpoint 一个字都没改。
+   （删除阶段遇到 `OSError` 如实抛出、不吞：任务状态与 `run.json` 尚未改写，重试即可。）
+3. **不猜下游**：动态子任务只挂 `parent_id`、不进依赖图，漏掉它就会出现「父任务重做了、
+   子任务还拿着旧结果」的脏状态。
+4. **不吃旧增量**：`tasks.delta.jsonl` 里可能留着回滚前的任务快照，`resume` 会把它叠回
+   `tasks.json` 之上、把刚重置的状态盖回去；动手前先 `apply_deltas()` 合并清空（专项用例
+   直接伪造一份陈旧 delta 钉住这条）。
+
+**语义边界**：只接受已停下来的 run（`running` / `awaiting_approval` 拒绝，提示先
+`cancel` / 先裁决）；与 `resume` 共用同一把跨进程锁；不调模型、不发 webhook、不动审批单；
+`--instruction` 同时写入目标任务描述与验收标准（G2 据此评审），只作用于目标任务。
+
+**验证**：新增 17 例全过；受影响面回归 **245 passed**（task_board / state_machine /
+architecture / cli / checkpoint / incremental_checkpoint / resume_consistency /
+end_to_end_mock / dynamic_subtasks / static_checks）；`test_api_contract` 合跑 **95 passed**；
+`ruff check` 改动文件 **All checks passed**；`mypy` 改动 3 模块 **零错误**；`test_rbac`
+新增 `POST /runs/R-1/rewind → runs:write` 用例通过（漏登记会让写端点退化成「登录即可用」）；
+全量 **3373 passed / 0 failed / 6 skipped / 0 error**（175 文件 / 88 批次 / 439.8s）。真机冒烟
+（`linear` 样例）：completed → `rewind --task T-002`（影响 4 任务 / 移除 5 个产物 / 快照
+5+1 文件 / run 置 `interrupted`）→ `resume` 重新 completed，产物集合与首次一致、任务契约
+里保留新指令。
+
+**边界（不包装成已验）**：① Studio 前端入口未做——工作区正有一批未提交的 V6-FE 重构，
+此时改动 Studio 会撞车，留待下一轮；② 回滚后 `attempts` 归零意味着「重做」有完整预算，
+若反复回滚同一任务会重复消耗预算，暂不做总额度审计；③ 全量回归已按上表口径跑完，
+两项「首次失败、重试通过」隔离复跑全过；④ 并发会话的证据仅来自「同机两个测试跑器同时运行」
+（`test_exec_verify` 在争用下偶发、隔离即过），不构成代码缺陷。
+
+**未提交**：本轮改动留在工作区（`git status` 可见），未 commit、未 push；Studio 的一批
+V6-FE 改动不属于本轮，未纳入。
 
 ---
 
