@@ -8,19 +8,19 @@
 
 ## 0. 一句话现状
 
-**当前代码基线：R59–R61 已提交并推送（`c9cc47c` / `c9c4a60`，CI 七 job 全绿）；R62（时间旅行 `rewind`）与 Studio V6-FE 前端重构 + 桌面启动器已提交（`ebb9895` / `8c6e411` / `b712113`）、**未推送**。** 最近一次全量 **3374 passed / 0 failed / 6 skipped / 0 error**（175 文件 / 88 批次 / 488.8s），本轮零崩溃重试、零「首次失败、重试通过」；`ruff` **All checks passed**、`mypy` **143 文件零错误**；Studio 本机实跑 `check` **76 模块 / 43 分片**、`test:unit` **22/22**、`e2e` **32/32**、`selftest` **16/16**。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道；R19 给主管审核开了独立、不阻塞的 `suggestions` 建议通道；R20 补上单步/断点调试——每个任务派发前可挂起裁决，第二档功能项全部闭环；R21 给 API 契约装上守卫，openapi.yaml 与代码路由双向锁死、不再漏端点；R22 补上 resume 状态白名单与 MCP 管道显式关闭；R23 产出 2501 用例的模块/场景覆盖矩阵（`docs/TEST-REPORT.md`），验收报告遗留的最后一项小项闭环；R24 补上工具管理页与单工具试跑；R25 把共享 API Key 升级为多用户 RBAC（密钥/角色/作用域/归属/审计）；R26 补上拖拽式可视化编排（画布 + YAML 双向 + 图校验）；R27 给检索加向量通道（混合打分 + 磁盘缓存 + 本地退化）；R28 打通「画布 → run」直通规划；R29 让实体记忆也走向量混合（不加列、不迁移）；R30 给审批单加等待窗口与过期告警；R31 给条件边补否定/兜底写法；R32 把控制台 UI 重构成令牌化 + 明暗主题 + 侧栏布局；R33 把单层主管复核扩成可配的多级链；R34 修好本机测试环境（崩溃隔离跑器，一条命令出可信结论）；R50 按差距报告 69 条完成上线前加固——8 项 P0 全关、时钟容错让"前跳误杀/回拨死锁"不再可能、审批与预算的并发边界收口、`/metrics` 补齐可观测入口、Studio 断线可自愈（明细见 `docs/REMEDIATION-STATUS.md`）。R51 按能力路线第一批补上三根支柱的关键缺口：**能查**（`web_search`，四提供方、默认关、密钥只走环境变量）、**敢跑**（可插拔执行后端，默认 `local` 行为逐字不变，`docker` 可选：禁网/非 root/资源上限/只挂 run 目录，缺 docker 即报错）、**跑得出结论**（`run_tests` + G1 执行校验，失败并入既有返工通道），并把评测做成 mock/真实双轨（`eval --live` + 23 条真实小目标 + 夜间脚本）。R52 补上互操作与无人值守：**C7** 暴露为 MCP server（`mcp-serve`，5 个工具全走 HTTP API 复用 RBAC/审计）、**C6 第一步**借现成浏览器 MCP（配置模板 + 读优先白名单，零开发）、**C8** 入站 Webhook 触发（`POST /webhooks/trigger`，HMAC 或 API Key 两条认证路径，来源进 ledger）。R53 补上多模态输入（**C4**）：`run --image` / `POST /runs` 的 `images`（内联 base64，最多 4 张），provider 能力位 `supports_vision`（默认关）决定是否真发图，不支持时降级纯文本并落 `vision_unsupported`（降级可见），图片落盘留证。R54 补上文档 RAG（**C5**）：`knowledge/docs/` 下的团队手册/规范增量摄取分块，按相关性注入 PM 规划提示词与每个任务的上下文（复用 R11/R27 检索资产），`docs list/search` 管理入口。能力路线第二批至此全部落地。
+**当前代码基线：R59–R61（`c9cc47c` / `c9c4a60`，CI 七 job 全绿）、R62 与 Studio/桌面批（`ebb9895` / `8c6e411` / `b712113`，连同两笔状态回填推到 `67aeda4`）、C10 run 中途指引（`5cdeea8`）均在 `origin/master`。** 最近一次全量 **3399 passed / 0 failed / 6 skipped / 0 error**（176 文件 / 88 批次 / 420.9s，C10 合入后 Windows 本机实跑），零崩溃重试、零「首次失败、重试通过」；`ruff` **All checks passed**、`mypy` **144 文件零错误**；Studio 数字沿用 R62 批本机实测（`check` **76 模块 / 43 分片**、`test:unit` **22/22**、`e2e` **32/32**、`selftest` **16/16**，C10 未触碰前端）。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道；R19 给主管审核开了独立、不阻塞的 `suggestions` 建议通道；R20 补上单步/断点调试——每个任务派发前可挂起裁决，第二档功能项全部闭环；R21 给 API 契约装上守卫，openapi.yaml 与代码路由双向锁死、不再漏端点；R22 补上 resume 状态白名单与 MCP 管道显式关闭；R23 产出 2501 用例的模块/场景覆盖矩阵（`docs/TEST-REPORT.md`），验收报告遗留的最后一项小项闭环；R24 补上工具管理页与单工具试跑；R25 把共享 API Key 升级为多用户 RBAC（密钥/角色/作用域/归属/审计）；R26 补上拖拽式可视化编排（画布 + YAML 双向 + 图校验）；R27 给检索加向量通道（混合打分 + 磁盘缓存 + 本地退化）；R28 打通「画布 → run」直通规划；R29 让实体记忆也走向量混合（不加列、不迁移）；R30 给审批单加等待窗口与过期告警；R31 给条件边补否定/兜底写法；R32 把控制台 UI 重构成令牌化 + 明暗主题 + 侧栏布局；R33 把单层主管复核扩成可配的多级链；R34 修好本机测试环境（崩溃隔离跑器，一条命令出可信结论）；R50 按差距报告 69 条完成上线前加固——8 项 P0 全关、时钟容错让"前跳误杀/回拨死锁"不再可能、审批与预算的并发边界收口、`/metrics` 补齐可观测入口、Studio 断线可自愈（明细见 `docs/REMEDIATION-STATUS.md`）。R51 按能力路线第一批补上三根支柱的关键缺口：**能查**（`web_search`，四提供方、默认关、密钥只走环境变量）、**敢跑**（可插拔执行后端，默认 `local` 行为逐字不变，`docker` 可选：禁网/非 root/资源上限/只挂 run 目录，缺 docker 即报错）、**跑得出结论**（`run_tests` + G1 执行校验，失败并入既有返工通道），并把评测做成 mock/真实双轨（`eval --live` + 23 条真实小目标 + 夜间脚本）。R52 补上互操作与无人值守：**C7** 暴露为 MCP server（`mcp-serve`，5 个工具全走 HTTP API 复用 RBAC/审计）、**C6 第一步**借现成浏览器 MCP（配置模板 + 读优先白名单，零开发）、**C8** 入站 Webhook 触发（`POST /webhooks/trigger`，HMAC 或 API Key 两条认证路径，来源进 ledger）。R53 补上多模态输入（**C4**）：`run --image` / `POST /runs` 的 `images`（内联 base64，最多 4 张），provider 能力位 `supports_vision`（默认关）决定是否真发图，不支持时降级纯文本并落 `vision_unsupported`（降级可见），图片落盘留证。R54 补上文档 RAG（**C5**）：`knowledge/docs/` 下的团队手册/规范增量摄取分块，按相关性注入 PM 规划提示词与每个任务的上下文（复用 R11/R27 检索资产），`docs list/search` 管理入口。能力路线第二批至此全部落地。
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | R62 + Studio/桌面批 最新全量 **3374 passed / 0 failed / 6 skipped / 0 error**（175 文件 / 88 批次 / 488.8s，`scripts/test.py --batch 2 --retries 4 --retry-failed 3 --keep-pycache`）。本轮**零崩溃重试、零「首次失败重试通过」**；6 个 skip 沿用跑器结果，其中 4 个 docker 真容器用例由 CI 覆盖。此前一次同树全量为 3373 passed / 439.8s（2 批次崩溃重试 + 2 项 `test_exec_verify` 首败重试过，隔离复跑 10/10 全过，判为同仓并发争用） |
-| 静态检查 | R62 + Studio/桌面批 工作区重跑 `ruff check agentcrew/ main.py tests/`：**All checks passed**；`mypy agentcrew/`：**143 文件零错误** |
+| 全量测试 | C10 合入后最新全量 **3399 passed / 0 failed / 6 skipped / 0 error**（176 文件 / 88 批次 / 420.9s，Windows 本机 `scripts/test.py --batch 2 --retries 4 --retry-failed 3 --keep-pycache`），本轮零崩溃重试、零「首败重试过」。C10 分支在云主机（Linux / Python 3.12.11）另跑一次 `pytest -q`：**3285 passed / 4 skipped / 0 failed**（233.3s，当时树在 R62 之前）。6 个 skip 沿用跑器结果，其中 4 个 docker 真容器用例由 CI 覆盖 |
+| 静态检查 | C10 合入后重跑 `ruff check agentcrew/ main.py tests/`：**All checks passed**；`mypy agentcrew/`：**144 文件零错误**（Windows / Python 3.12.16）；云主机同口径复跑 ruff 全绿、mypy 140 文件零错误（当时树在 R62 之前） |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
 | Studio | `npm run check` **76** 模块 / **43** 样式分片通过、`test:unit` **22/22**、electron `e2e` **32/32**、`selftest` **16/16**（2026-11-14 本机实跑，见 §3.85） |
 | 上线自检 | 本机可验 **9 项全通过**（doctor / 离线冒烟 / REST 认证 200·401 / `/metrics` / 无密钥退 3 / `clean` 干跑 / Studio 三连 / ruff+mypy）；目标机 10 项判据见 `docs/DEPLOY-CHECK-2026-11-13.md` |
 | 收尾 | 交付说明见 **`docs/CLOSURE-2026-11-13.md`**；B 类外部环境项 **5/5 全部闭环**；云主机真实部署验收 10 项中 **7 项闭环**（TLS/SSE、告警规则、日志、密钥、成本、webhook、备份），仅剩独立数据盘与两项 Docker 依赖（§3.77、`docs/DEPLOYMENT-VM-2026-11-13.md`） |
-| Git | `c9c4a60`（R61 真机修复）与 `c9cc47c`（R59–R61）均已推送到 `origin/master`，CI run **43453359080** / **43449592343** 的 **7 个 job 全部 success**（Python 3.10/3.11/3.12/3.13、Windows、Studio、Docker 真隔离）；`ebb9895`（R62）/ `8c6e411`（Studio V6-FE）/ `b712113`（桌面启动器）已提交、**未推送**，CI 需推送后才会有结论。验收报告 `docs/ACCEPTANCE-2026-11-12.md`；真实模型评测历史证据为 23 条中 22 通过（`bench/eval-live-2026-11-13.md`，本次未重跑真实模型评测） |
+| Git | `c9c4a60`（R61 真机修复）与 `c9cc47c`（R59–R61）均已推送到 `origin/master`，CI run **43453359080** / **43449592343** 的 **7 个 job 全部 success**（Python 3.10/3.11/3.12/3.13、Windows、Studio、Docker 真隔离）；`ebb9895`（R62）/ `8c6e411`（Studio V6-FE）/ `b712113`（桌面启动器）连同两笔状态回填已于 2026-11-14 推送到 `origin/master`（`92d3854..67aeda4`）；C10 `5cdeea8` 随后推送，CI 结论以推送后的 run 为准。验收报告 `docs/ACCEPTANCE-2026-11-12.md`；真实模型评测历史证据为 23 条中 22 通过（`bench/eval-live-2026-11-13.md`，本次未重跑真实模型评测） |
 | 角色 | 8 个内置岗位角色 + 执行体（Agent Profile）可多绑 |
 
 ```bash
@@ -2517,7 +2517,52 @@ end_to_end_mock / dynamic_subtasks / static_checks）；`test_api_contract` 合�
 Windows 上验过（macOS/Linux 的路径分支按代码写、未实跑）。
 
 **提交状态**：Studio 批 `8c6e411`（31 文件 / +904 −464）、桌面启动器 `b712113`（3 文件），
-均**未推送**。
+连同两笔状态回填 `b23d0c7` / `67aeda4` 已于 2026-11-14 推送到 `origin/master`（`92d3854..67aeda4`）。
+
+### 3.86 C10 切片一：run 中途指引（CLI + API，默认关）（2026-11-14）
+
+**起因**：一场 run 开跑后，人此前只有「看」和「取消」两个动作。发现方向错了（「改用绿色
+主题」「别动旧接口」），只能等它跑完再重来——中途补一句话这条通道不存在。这是能力
+对标里最后一块「运行时可控」的缺口。
+
+| 层 | 落地 |
+| --- | --- |
+| 存储 | `runtime/guidance.py::GuidanceStore`：`<run_dir>/guidance.jsonl` 追加写 + 归并读（一行一条 `add` / `consume` op，改字段不重写整份文件）；落盘前过 `utils.logger.redact`（词表来自 `Settings.secret_values()`），0600；坏行跳过、写失败抛 `OSError` 由调用方降级 |
+| at-most-once | `consume(ids)` 只对仍未吸收的 id 追加行，已消费返回 0；`Crew` 侧「整批 id 全部标记成功才注入」，被别的任务抢先消费时本次不注入 |
+| 上下文 | `ContextPack.guidance`（默认空）；`ContextBus` 在级 1 之后、级 2 之前吸收，**不占 token 预算**；`render_pack` 有指引才多一段（排在「本任务」后、上游摘要前，交付物契约仍压末尾吃近因效应） |
+| 引擎 | `Crew._guidance_provider`：主 ContextBus 构造与任务级 ContextBus 克隆**两处**都接；存储绑 `run.checkpoint.run_dir`，跨进程 resume 同样生效，`consumed_at` 已落盘的不二次注入 |
+| 通道 | `guidance_enabled` / `max_guidance_items` / `max_guidance_chars` 走 env + YAML；`GET/POST /runs/{id}/guidance`（`runs:read` / `runs:admin`，空文本 400、终态 409、待吸收塞满 429）；`main.py guide <run_id> "…"` 子命令 + `status` 的待吸收行 |
+| 契约 | `openapi.yaml` 两条端点 + `API_ROUTES` 清单（契约守卫自动比对并逐条探测）；`event-types.md` 补 `guidance_added` / `guidance_injected` / `guidance_consumed` |
+
+**四条边界**：① **只在派发前吸收**——不打断在跑任务、不改调度顺序、不新增调度分支；
+② **默认关闭零差异**——`guidance_enabled=false` 时 provider 为 `None`，`build()` 不进新
+分支、`render_pack` 不加段，关闭态上下文与提示词逐字节不变（两条用例钉住）；
+③ **一条指引只喂一个任务**——被吃掉的落 `consumed_at`，重启不重放；
+④ **密钥不进盘**——`runtime` 层不 import `config`，脱敏词表由 `Crew` 传入（分层护栏不变）。
+
+**验证**（2026-11-14，Windows 本机 + 云主机双跑）：
+
+- 新增 `tests/test_run_guidance.py` **21 例**全过：存储层 8（顺序 / 幂等 at-most-once /
+  未知 id / 空文本 / 脱敏 / 坏行 / 截断标记 / limit）、上下文 3（默认空 / 吸收 / provider
+  抛异常降级为空）、渲染 2（关闭态无段 / 开启态插入且**其余部分逐字节不变**）、Crew 3
+  （关闭时 `None` / 消费一次并记事件 / 截断事件）、HTTP 5（POST·GET 往返 / 空文本 400 /
+  未知 run 404 / 终态 409 / 塞满 429）；
+- `test_api_contract.py` + `test_architecture.py` **106 例**全过（2 条新路由被契约守卫自动纳入）；
+- Windows 全量 **3399 passed / 0 failed / 6 skipped / 0 error**（176 文件 / 88 批次 / 420.9s）；
+  `ruff` **All checks passed**、`mypy` **144 文件零错误**；
+- 云主机（Linux / 3.12.11）同口径：全量 **3285 passed / 4 skipped / 0 failed**（233.3s）、
+  ruff 全绿、mypy 140 文件零错误；
+- `linear` 离线样例实跑 **5/5 成功**（0 返工 / 0 阻塞 / 0 跳过，12 次 LLM 调用）。
+
+**刻意未做（切片二）**：Studio 指引输入入口（当前只有 CLI 与 REST）· 指引定向到指定任务
+（现在是「下一个派发的任务」吃）· 指引撤回/过期 · 长会话的指引历史压缩。
+
+**合并过程**：C10 分支原基于 `fd455ca`（R59 之前），先 rebase 到 `67aeda4`——四个重叠文件
+（`api/server.py` / `openapi.yaml` / `main.py` / `api/rbac.py`）**零冲突**，随后 `--ff-only`
+合入 master（`5cdeea8`）。
+
+> 环境备注：Windows 上直接 `pytest` 仍会撞已知的断言重写 `0xC0000005`（本次跑到 31 个点
+> 崩溃），改用 `scripts/test.py`（崩溃隔离跑器）一条命令通过；云主机侧 Linux 无此问题。
 
 ---
 
