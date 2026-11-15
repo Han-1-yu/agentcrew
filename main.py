@@ -448,6 +448,14 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument(
         "--api-key", metavar="KEY",
         help="E-3：快速设置单个 API Key（等价 admin 角色；与 AGENTCREW_API_KEYS 合并）")
+    # C14：队列模式——API 只入队、不本地执行；worker 在别处（可多机）消费。
+    serve.add_argument(
+        "--queue-dir", metavar="DIR", default=None,
+        help="C14：启用队列模式（API 只入队，不本地跑 run）；"
+             "默认 <output_dir>/_queue，多机时指向共享卷")
+    serve.add_argument(
+        "--lease-seconds", type=float, default=60.0,
+        help="C14：worker 租约秒数（worker 侧同样参数；API 只用于建队列）")
 
     doctor = sub.add_parser(
         "doctor", help="诊断配置 / 环境 / 依赖 / Provider 连通性，输出健康报告")
@@ -499,6 +507,28 @@ def build_parser() -> argparse.ArgumentParser:
     p_mcp.add_argument("--api-key", default=None, metavar="KEY",
                        help="调用 API 用的密钥（默认读 AGENTCREW_MCP_API_KEY，"
                             "再退到 AGENTCREW_API_KEY）；密钥不落盘")
+    # C14：分布式执行 worker——从文件系统队列领取 run，多进程/多机水平扩展。
+    # 队列与产物放同一块共享卷即可跨机，不需要 Redis / RabbitMQ。
+    p_worker = sub.add_parser(
+        "worker", help="C14：从共享队列领取 run 并执行（可多进程/多机）")
+    p_worker.add_argument("--queue-dir", default=None, metavar="DIR",
+                          help="队列根目录（默认 <output_dir>/_queue）")
+    p_worker.add_argument("--output-dir", default=None, metavar="DIR",
+                          help="产物目录（默认配置值；多机时指向共享卷）")
+    p_worker.add_argument("--concurrency", type=int, default=4,
+                          help="并发 run 数（默认 4）")
+    p_worker.add_argument("--lease-seconds", type=float, default=60.0,
+                          help="租约秒数（默认 60；崩溃后约这么久被回收）")
+    p_worker.add_argument("--poll-seconds", type=float, default=2.0,
+                          help="空闲轮询间隔（默认 2 秒）")
+    p_worker.add_argument("--once", action="store_true",
+                          help="处理完当前队列即退出（烟测/CI）")
+    p_worker.add_argument("--mock", action="store_true",
+                          help="强制 mock provider（离线压测，无需 API Key）")
+    p_worker.add_argument("--auto", action="store_true",
+                          help="等价 gate=none：允许无人值守跑完（gate 含人工"
+                               "卡点时默认拒绝启动）")
+
     export_p = config_sub.add_parser("export", help="导出当前合并配置为 YAML")
     export_p.add_argument("--output", "-o", metavar="FILE",
                           help="写入文件而非 stdout")
@@ -1375,6 +1405,105 @@ def _cmd_mcp_serve(args: argparse.Namespace) -> int:
         )
     bridge = ApiBridge(base_url=args.api_url, api_key=api_key)
     return run_stdio(bridge, _sys.stdin, _sys.stdout)
+
+
+def _cmd_worker(args: argparse.Namespace) -> int:
+    """C14：分布式执行 worker——从共享队列领 run，可多进程/多机水平扩展。
+
+    队列是文件系统目录（见 :mod:`agentcrew.runtime.queue`），所以「多机」只需要
+    把 ``--queue-dir`` 与 ``--output-dir`` 放在同一块共享卷上（NFS 等），不需要
+    Redis / RabbitMQ。``--once`` 用于烟测与 CI（处理完当前队列即退出）。
+    """
+    import asyncio
+    from pathlib import Path
+
+    from agentcrew.runtime.queue import RunQueue, make_worker_id
+
+    overrides: dict[str, Any] = {}
+    if args.mock:
+        overrides["mock"] = True
+    if args.output_dir:
+        overrides["output_dir"] = Path(args.output_dir)
+    try:
+        settings = Settings.load(**overrides)
+    except (OSError, ValueError) as exc:
+        return _fail(f"配置错误：{exc}")
+    # worker 是无人值守进程：gate 含人工卡点时不可能有人来批，绝不能在后台
+    # 静默换成 NullPrompter（那是「闸门看起来还在、实际放行」）。要么显式
+    # --auto（等价 gate=none），要么把配置改成 plan/delivery。
+    if "both" in str(settings.gate):
+        if not args.auto:
+            return _fail(
+                "worker 无人值守，但配置 gate='both' 含人工卡点："
+                "请加 --auto（等价 gate=none），或改成 gate=plan/delivery")
+        settings = settings.model_copy(update={"gate": "none"})
+    queue = RunQueue(
+        Path(args.queue_dir) if args.queue_dir
+        else settings.output_dir / "_queue",
+        lease_seconds=args.lease_seconds,
+    )
+    return asyncio.run(_worker_loop(settings, queue, args, make_worker_id()))
+
+
+async def _worker_loop(settings: Any, queue: Any, args: argparse.Namespace,
+                       worker_id: str) -> int:
+    """领取 → 跑 → 收尾的主循环；失败只记在队列项上，不拖死 worker。"""
+    import asyncio
+
+    from agentcrew.crew.crew import Crew
+
+    sem = asyncio.Semaphore(max(1, args.concurrency))
+    running: set[asyncio.Task[Any]] = set()
+
+    async def handle(item: Any) -> None:
+        crew = Crew(settings)
+        task = asyncio.create_task(crew.run(item.goal, run_id=item.run_id))
+        # 心跳与「等任务结束」分开：早先直接 sleep(lease/3)，任务跑完还要等满
+        # 20 秒才收尾，队列吞吐被拖低四倍。这里等的是 task 本身，心跳只在
+        # 超时未完成时做。
+        interval = max(1.0, min(args.lease_seconds / 3, 5.0))
+        try:
+            while True:
+                done, _ = await asyncio.wait({task}, timeout=interval)
+                if done:
+                    break
+                if queue.cancel_requested(item.run_id):
+                    crew.cancel()
+                if not queue.heartbeat(item.run_id, worker_id):
+                    # 租约被别人接管（或已过期被回收）：立刻停，别写坏别人的 run。
+                    crew.cancel()
+                    break
+            record = await task
+            status = str(getattr(record.status, "value", record.status))
+            queue.complete(item.run_id, status=status, worker_id=worker_id)
+        except asyncio.CancelledError:
+            crew.cancel()
+            raise
+        except Exception as exc:  # noqa: BLE001 —— 单个 run 失败不能拖死 worker
+            queue.fail(
+                item.run_id, error=f"{type(exc).__name__}: {exc}",
+                worker_id=worker_id)
+
+    while True:
+        await sem.acquire()
+        item = queue.claim(worker_id)
+        if item is None:
+            sem.release()
+            if args.once and not running:
+                break
+            await asyncio.sleep(max(0.2, args.poll_seconds))
+            continue
+        task = asyncio.create_task(handle(item))
+        running.add(task)
+
+        def _finished(done: asyncio.Task[Any]) -> None:
+            running.discard(done)
+            sem.release()
+
+        task.add_done_callback(_finished)
+    if running:
+        await asyncio.gather(*running, return_exceptions=True)
+    return 0
 
 
 def _cmd_tools(args: argparse.Namespace) -> int:
@@ -2300,11 +2429,18 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         # A4/A5：构造 ModelFactory 供 /providers 健康查询与 /test 测速。
         from agentcrew.models.factory import ModelFactory
         model_factory = ModelFactory(settings)
+        queue = None
+        if getattr(args, "queue_dir", None):
+            from agentcrew.runtime.queue import RunQueue
+
+            queue = RunQueue(
+                Path(args.queue_dir), lease_seconds=args.lease_seconds)
+            print(f"C14 队列模式：API 只入队，worker 消费 {queue.root}")
         server = ApiServer(
             host=args.host, port=args.port, output_dir=settings.output_dir,
             settings=settings,
             auth=auth, rate_limiter=rate_limiter,
-            model_factory=model_factory,
+            model_factory=model_factory, queue=queue,
         )
         try:
             await server.start()
@@ -2873,6 +3009,7 @@ _HANDLERS: dict[str, Callable[[argparse.Namespace], int]] = {
     "cancel": _cmd_cancel,
     "delete": _cmd_delete,
     "serve": _cmd_serve,
+    "worker": _cmd_worker,
     "doctor": _cmd_doctor,
     "diff": _cmd_diff,
     "providers": _cmd_providers,

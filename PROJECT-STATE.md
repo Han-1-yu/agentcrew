@@ -8,11 +8,11 @@
 
 ## 0. 一句话现状
 
-**当前代码基线：R59–R61（`c9cc47c` / `c9c4a60`，CI 七 job 全绿）、R62 与 Studio/桌面批（`ebb9895` / `8c6e411` / `b712113`，连同两笔状态回填推到 `67aeda4`）、C10 切片一（`5cdeea8`）均在 `origin/master`；**C10 切片二 + Studio 指引 / rewind 入口**是 2026-11-15 本轮工作（§3.87）。** 最近一次全量 **3482 passed / 0 failed / 6 skipped / 0 error**（183 文件 / 92 批次 / 485.5s，C14 基线后 Windows 本机实跑），零崩溃重试、零「首次失败、重试通过」；`ruff` **All checks passed**、`mypy` **144 文件零错误**；Studio 本轮实跑：`check` **80 模块 / 44 分片**、`test:unit` **37/37**、`verify:api` **13/13**、electron `e2e` **32/32**、`selftest` **16/16**（首次 15/16 是后台全量回归并发导致 OS python 进程计数误判，隔离复跑 16/16）。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道；R19 给主管审核开了独立、不阻塞的 `suggestions` 建议通道；R20 补上单步/断点调试——每个任务派发前可挂起裁决，第二档功能项全部闭环；R21 给 API 契约装上守卫，openapi.yaml 与代码路由双向锁死、不再漏端点；R22 补上 resume 状态白名单与 MCP 管道显式关闭；R23 产出 2501 用例的模块/场景覆盖矩阵（`docs/TEST-REPORT.md`），验收报告遗留的最后一项小项闭环；R24 补上工具管理页与单工具试跑；R25 把共享 API Key 升级为多用户 RBAC（密钥/角色/作用域/归属/审计）；R26 补上拖拽式可视化编排（画布 + YAML 双向 + 图校验）；R27 给检索加向量通道（混合打分 + 磁盘缓存 + 本地退化）；R28 打通「画布 → run」直通规划；R29 让实体记忆也走向量混合（不加列、不迁移）；R30 给审批单加等待窗口与过期告警；R31 给条件边补否定/兜底写法；R32 把控制台 UI 重构成令牌化 + 明暗主题 + 侧栏布局；R33 把单层主管复核扩成可配的多级链；R34 修好本机测试环境（崩溃隔离跑器，一条命令出可信结论）；R50 按差距报告 69 条完成上线前加固——8 项 P0 全关、时钟容错让"前跳误杀/回拨死锁"不再可能、审批与预算的并发边界收口、`/metrics` 补齐可观测入口、Studio 断线可自愈（明细见 `docs/REMEDIATION-STATUS.md`）。R51 按能力路线第一批补上三根支柱的关键缺口：**能查**（`web_search`，四提供方、默认关、密钥只走环境变量）、**敢跑**（可插拔执行后端，默认 `local` 行为逐字不变，`docker` 可选：禁网/非 root/资源上限/只挂 run 目录，缺 docker 即报错）、**跑得出结论**（`run_tests` + G1 执行校验，失败并入既有返工通道），并把评测做成 mock/真实双轨（`eval --live` + 23 条真实小目标 + 夜间脚本）。R52 补上互操作与无人值守：**C7** 暴露为 MCP server（`mcp-serve`，5 个工具全走 HTTP API 复用 RBAC/审计）、**C6 第一步**借现成浏览器 MCP（配置模板 + 读优先白名单，零开发）、**C8** 入站 Webhook 触发（`POST /webhooks/trigger`，HMAC 或 API Key 两条认证路径，来源进 ledger）。R53 补上多模态输入（**C4**）：`run --image` / `POST /runs` 的 `images`（内联 base64，最多 4 张），provider 能力位 `supports_vision`（默认关）决定是否真发图，不支持时降级纯文本并落 `vision_unsupported`（降级可见），图片落盘留证。R54 补上文档 RAG（**C5**）：`knowledge/docs/` 下的团队手册/规范增量摄取分块，按相关性注入 PM 规划提示词与每个任务的上下文（复用 R11/R27 检索资产），`docs list/search` 管理入口。能力路线第二批至此全部落地。
+**当前代码基线：R59–R61（`c9cc47c` / `c9c4a60`，CI 七 job 全绿）、R62 与 Studio/桌面批（`ebb9895` / `8c6e411` / `b712113`，连同两笔状态回填推到 `67aeda4`）、C10 切片一（`5cdeea8`）均在 `origin/master`；**C10 切片二 + Studio 指引 / rewind 入口**是 2026-11-15 本轮工作（§3.87）。** 最近一次全量 **3500 passed / 0 failed / 6 skipped / 0 error**（186 文件 / 93 批次 / 473.4s，C14 分布式后 Windows 本机实跑），零崩溃重试、零「首次失败、重试通过」；`ruff` **All checks passed**、`mypy` **144 文件零错误**；Studio 本轮实跑：`check` **80 模块 / 44 分片**、`test:unit` **37/37**、`verify:api` **13/13**、electron `e2e` **32/32**、`selftest` **16/16**（首次 15/16 是后台全量回归并发导致 OS python 进程计数误判，隔离复跑 16/16）。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道；R19 给主管审核开了独立、不阻塞的 `suggestions` 建议通道；R20 补上单步/断点调试——每个任务派发前可挂起裁决，第二档功能项全部闭环；R21 给 API 契约装上守卫，openapi.yaml 与代码路由双向锁死、不再漏端点；R22 补上 resume 状态白名单与 MCP 管道显式关闭；R23 产出 2501 用例的模块/场景覆盖矩阵（`docs/TEST-REPORT.md`），验收报告遗留的最后一项小项闭环；R24 补上工具管理页与单工具试跑；R25 把共享 API Key 升级为多用户 RBAC（密钥/角色/作用域/归属/审计）；R26 补上拖拽式可视化编排（画布 + YAML 双向 + 图校验）；R27 给检索加向量通道（混合打分 + 磁盘缓存 + 本地退化）；R28 打通「画布 → run」直通规划；R29 让实体记忆也走向量混合（不加列、不迁移）；R30 给审批单加等待窗口与过期告警；R31 给条件边补否定/兜底写法；R32 把控制台 UI 重构成令牌化 + 明暗主题 + 侧栏布局；R33 把单层主管复核扩成可配的多级链；R34 修好本机测试环境（崩溃隔离跑器，一条命令出可信结论）；R50 按差距报告 69 条完成上线前加固——8 项 P0 全关、时钟容错让"前跳误杀/回拨死锁"不再可能、审批与预算的并发边界收口、`/metrics` 补齐可观测入口、Studio 断线可自愈（明细见 `docs/REMEDIATION-STATUS.md`）。R51 按能力路线第一批补上三根支柱的关键缺口：**能查**（`web_search`，四提供方、默认关、密钥只走环境变量）、**敢跑**（可插拔执行后端，默认 `local` 行为逐字不变，`docker` 可选：禁网/非 root/资源上限/只挂 run 目录，缺 docker 即报错）、**跑得出结论**（`run_tests` + G1 执行校验，失败并入既有返工通道），并把评测做成 mock/真实双轨（`eval --live` + 23 条真实小目标 + 夜间脚本）。R52 补上互操作与无人值守：**C7** 暴露为 MCP server（`mcp-serve`，5 个工具全走 HTTP API 复用 RBAC/审计）、**C6 第一步**借现成浏览器 MCP（配置模板 + 读优先白名单，零开发）、**C8** 入站 Webhook 触发（`POST /webhooks/trigger`，HMAC 或 API Key 两条认证路径，来源进 ledger）。R53 补上多模态输入（**C4**）：`run --image` / `POST /runs` 的 `images`（内联 base64，最多 4 张），provider 能力位 `supports_vision`（默认关）决定是否真发图，不支持时降级纯文本并落 `vision_unsupported`（降级可见），图片落盘留证。R54 补上文档 RAG（**C5**）：`knowledge/docs/` 下的团队手册/规范增量摄取分块，按相关性注入 PM 规划提示词与每个任务的上下文（复用 R11/R27 检索资产），`docs list/search` 管理入口。能力路线第二批至此全部落地。
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | C14 基线后最新全量 **3482 passed / 0 failed / 6 skipped / 0 error**（183 文件 / 92 批次 / 485.5s，Windows 本机 `scripts/test.py --batch 2 --retries 4 --retry-failed 3 --keep-pycache`），本轮零崩溃重试、零「首败重试过」。C10 分支在云主机（Linux / Python 3.12.11）另跑一次 `pytest -q`：**3285 passed / 4 skipped / 0 failed**（233.3s，当时树在 R62 之前）。6 个 skip 沿用跑器结果，其中 4 个 docker 真容器用例由 CI 覆盖 |
+| 全量测试 | C14 分布式后最新全量 **3500 passed / 0 failed / 6 skipped / 0 error**（186 文件 / 93 批次 / 473.4s，Windows 本机 `scripts/test.py --batch 2 --retries 4 --retry-failed 3 --keep-pycache`），本轮零崩溃重试、零「首败重试过」。C10 分支在云主机（Linux / Python 3.12.11）另跑一次 `pytest -q`：**3285 passed / 4 skipped / 0 failed**（233.3s，当时树在 R62 之前）。6 个 skip 沿用跑器结果，其中 4 个 docker 真容器用例由 CI 覆盖 |
 | 静态检查 | 切片二后重跑 `ruff check agentcrew/ main.py tests/`：**All checks passed**；`mypy agentcrew/`：**144 文件零错误**（Windows / Python 3.12.16）；云主机同口径复跑 ruff 全绿、mypy 140 文件零错误（当时树在 R62 之前） |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
@@ -2886,6 +2886,67 @@ env 合并 / 浏览器模板形状）、`test_mcp_loopback.py` 4 例（回环 7 
 
 ---
 
+### 3.94 C14 第二阶段：分布式执行（文件队列 + 多 worker，2026-11-16 凌晨）
+
+**起因**：用户要求「按最强的量级做」。§3.93 的基线表明单进程 60ms 延迟下 2 并发就
+饱和（约 32 run/分）——要再上一个量级，只能把**执行算力**从 HTTP 进程里拆出去。
+
+**架构（不引 Redis / RabbitMQ）**：`agentcrew/runtime/queue.py` 是一个文件系统队列，
+目录即状态：`pending` / `claims` / `running` / `done` / `failed` / `cancel`。三条不变量：
+
+1. **领取原子**：`claims/<id>.json` 用 `O_CREAT|O_EXCL` 创建，两个 worker 同抢只有一个
+   成功。不依赖 `rename` 的覆盖语义（POSIX 静默覆盖、Windows 报错，正是跨平台 bug 源）。
+2. **崩溃可回收**：worker 定期续租；租约过期且 `running` 仍在 → 移回 `pending`。
+   语义是**至少一次**，所以 `Crew.run` 必须能按同一个 run_id 重跑。
+3. **状态可读**：`done` / `failed` 是终态快照，API 与运维脚本直接读文件，不需要连队列进程。
+
+| 项 | 落地 |
+|---|---|
+| `Crew.run` | 加 `run_id` 关键字：分布式下由 API 预生成，worker 必须沿用同一 id（否则客户端拿到的 id 与盘上对不上）。缺省仍由 checkpoint 生成，与改造前逐字一致 |
+| 队列 | `enqueue` / `claim` / `heartbeat` / `complete` / `fail` / `requeue_stale` / `request_cancel` / `get` / `stats`；写入一律「同目录临时文件 + `os.replace`」 |
+| worker | `main.py worker --queue-dir --output-dir --concurrency --lease-seconds --once --auto --mock`：`asyncio.Semaphore` 控并发，`asyncio.wait` 等任务结束（心跳独立，见下），取消标记 → `Crew.cancel()` |
+| API 入队模式 | `serve --queue-dir`：`POST /runs` 只入队并 202 `{status:"queued"}`，不占本地槽位；`/status` 在 `run.json` 出现前按队列状态回答（不会「刚拿 202 就 404」）；`/cancel` 对队列 run 写取消标记 |
+| 无人值守闸门 | worker 遇到 `gate="both"` 直接拒绝启动：后台不能静默把人工卡点换成 `NullPrompter`（那是「闸门还在、实际放行」）。要么显式 `--auto`（等价 `gate=none`），要么改 `gate=plan/delivery` |
+
+**两个实测出来的硬问题（都已修）**：
+
+1. **worker 心跳把吞吐拖低 4 倍**：第一版在 `while not task.done()` 里
+   `sleep(lease/3)=20s`，任务 2 秒就跑完、却要等满 20 秒才收尾。改成
+   `asyncio.wait({task}, timeout=interval)`——等的是任务本身，心跳只在超时未完成时做。
+   1 worker 吞吐从 6.6 → 29.3 run/分。
+2. **经验库并发写让 8 个 run 崩掉**：8 worker 实测 `Experience` 校验失败
+   （`Invalid JSON: trailing characters`）——多个进程同时 append `experiences.jsonl`，
+   读方撞上半行。修法两层（`agentcrew/knowledge/jsonl.py`）：写侧「独立锁文件 +
+   单次 `os.write`」，读侧**坏行跳过**。锁文件不锁数据文件本身——Windows 上对已加
+   区域锁的数据文件再 `open(O_WRONLY)` 会直接 `PermissionError`（也实测了）。
+
+**扩展曲线**（`bench/queue-2026-11-16.md`，24 run/档、worker 内并发 2、mock 60ms）：
+
+| worker 数 | 完成 | 墙钟 | 吞吐/分 | 相对 1 worker |
+|---|---|---|---|---|
+| 1 | 24/24 | 52.0 s | 27.69 | 1.0× |
+| 2 | 24/24 | 29.3 s | 49.23 | 1.78× |
+| 4 | 24/24 | 18.8 s | 76.76 | 2.77× |
+| 8 | 24/24 | 13.6 s | **105.84** | 3.82× |
+
+对比 §3.93 的单进程 inline（约 32 run/分），8 worker 是 **3.3×**；未完全线性（CPU
+核数与磁盘竞争），但「加进程/加机器」这条路已经通了。
+
+**边界**：至少一次语义（重跑会覆盖终态记录，比丢任务好）；NFS 的锁语义取决于挂载
+参数，所以读宽容是必须的第二层；队列不做优先级/去重/延迟重试；`/runs` 列表只读盘，
+pending 中的 run 不会出现在列表里。
+
+**验证**：新增 18 例——`tests/test_run_queue.py` 11 例（原子领取、4 线程抢 12 个任务无
+重复、租约回收、心跳越权、越权收尾、取消标记、统计）、`tests/test_api_queue.py` 4 例
+（入队、status 回落、取消标记、完成态）、`tests/test_jsonl_concurrency.py` 3 例
+（8 线程 / 4 进程并发写 160 / 120 条完整可读、半行跳过）。`ruff`、`mypy` 全绿；
+全量回归 **3500 passed / 0 failed / 6 skipped / 0 error**（186 文件 / 93 批次 /
+473.4s，较上一批 +18 例 = 本批新增用例数）。端到端另做了一次真实 CLI 验证：
+`enqueue` → `main.py worker --once --auto --mock` → `done/R-cap-1.json` 为
+`completed`，run 目录有 `run.json` / `artifacts` / `ledger.jsonl`。
+
+---
+
 ## 4. 历史报告汇总（已并入本文，原文归档）
 
 | 报告 | 时间 | 核心结论 | 现状 |
@@ -3139,8 +3200,12 @@ env 合并 / 浏览器模板形状）、`test_mcp_loopback.py` 4 例（回环 7 
 
 | 顺序 | 事项 | 性质 | 恢复方式 / 前置 |
 |---|---|---|---|
-| 1 | 是否上多进程 / 多机（C14 第二阶段） | 需产品输入：目标并发量级 | 基线见 §3.93：60ms 延迟下 2 并发就饱和（约 32 run/分）、CPU 0.5、RSS +1MB/run；先把「目标 run/分 + 可接受尾延迟」定下来，再选任务队列 / 远程 worker 与 `output_dir` 共享方案（NFS vs 对象存储） |
-| 2 | Windows 本机 Python 断言重写偶发崩溃（`0xC0000005`） | 环境问题，非项目代码 | **不主动排期**：全量回归统一用 `python scripts/test.py`（崩溃隔离跑器），见 §6；等环境更新自愈 |
+| 1 | Windows 本机 Python 断言重写偶发崩溃（`0xC0000005`） | 环境问题，非项目代码 | **不主动排期**：全量回归统一用 `python scripts/test.py`（崩溃隔离跑器），见 §6；等环境更新自愈 |
+
+**本批（C14 第二阶段）已闭环**：文件系统队列 + 多 worker（`main.py worker`）+
+`serve --queue-dir` 入队模式 + 经验库并发写修复。8 worker 实测 105.84 run/分
+（单 worker 3.82×，单进程 inline 3.3×）。部署侧只剩一件运维约定：多机时
+`--queue-dir` 与 `--output-dir` 必须指向同一块共享卷（NFS），且卷要支持文件锁。
 
 **本批（C14 基线）已闭环**：单进程多 run 并发基线（`scripts/bench_capacity.py` +
 `bench/capacity-2026-11-16.md` + 200ms 对照），给出槽位、吞吐、CPU、RSS 的可复跑数字；

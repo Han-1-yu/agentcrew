@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
@@ -23,7 +24,10 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict
 
 from agentcrew.knowledge.embeddings import cosine
+from agentcrew.knowledge.jsonl import append_line, read_lines
 from agentcrew.knowledge.retrieval import BM25Index
+
+_logger = logging.getLogger(__name__)
 
 
 class Experience(BaseModel):
@@ -59,21 +63,28 @@ class ExperienceStore:
 
     def add(self, experience: Experience) -> None:
         """追加一条经验到 JSONL；父目录不存在时自动创建。"""
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        line = experience.model_dump_json() + "\n"
-        with open(self._path, "a", encoding="utf-8") as handle:
-            handle.write(line)
+        # C14：多 worker 并发写——跨进程锁 + 单次 write，见 knowledge.jsonl。
+        append_line(self._path, experience.model_dump_json())
 
     def all(self) -> list[Experience]:
-        """返回全部经验（按落盘顺序）；文件不存在视为空库。"""
+        """返回全部经验（按落盘顺序）；文件不存在视为空库，坏行跳过。
+
+        读取必须宽容：并发写下的半行会让 ``model_validate_json`` 抛错，
+        但一条坏记录不该把整个 run 崩掉（8 worker 实测过这个事故）。
+        """
         if not self._path.is_file():
             return []
         out: list[Experience] = []
-        with open(self._path, encoding="utf-8") as handle:
-            for line in handle:
-                stripped = line.strip()
-                if stripped:
-                    out.append(Experience.model_validate_json(stripped))
+        skipped = 0
+        for stripped in read_lines(self._path):
+            try:
+                out.append(Experience.model_validate_json(stripped))
+            except ValueError:
+                skipped += 1
+        if skipped:
+            _logger.warning(
+                "经验库跳过 %d 条坏记录（并发写入或历史损坏）：%s",
+                skipped, self._path)
         return out
 
     def query(

@@ -272,6 +272,7 @@ examples/samples/<name>/
 | `python main.py doctor` | 诊断配置 / 环境 / 依赖 / Provider 连通性，输出健康报告 | `--config PATH`（指定 agentcrew.yaml）；`--output-dir DIR`；`--json`（机器可读） |
 | `python main.py diff <a> <b>` | 对比两个 run 的配置 / 任务 / 产物 / 事件统计差异 | `--output-dir DIR`；`--json`（机器可读） |
 | `python main.py mcp-serve` | C7/C9：以 MCP server（stdio）暴露编排能力（派活/看状态/裁决审批/取产物），供 Claude Desktop / Cursor 调用 | `--api-url URL`；`--api-key KEY`（默认读 `AGENTCREW_MCP_API_KEY`） |
+| `python main.py worker` | C14：从共享队列领取 run 并执行（可多进程/多机水平扩展） | `--queue-dir` / `--output-dir` / `--concurrency` / `--auto` / `--once` |
 | `python main.py docs <list\|search>` | C5：团队文档 RAG——列出已索引文档 / 检索演示（`knowledge/docs/` 下的手册与规范会注入规划与执行上下文） | `search QUERY --limit N`；`--output-dir DIR` |
 | `python main.py eval <dataset>` | P2-5 / C11：跑评测集，用产物断言给出 `pass@1` / `pass^k` | `--repeat K`（每 case 跑 K 次）；`--live`（真实模型）；`--max-cost USD`（硬上限）；`--json`；`--output-dir DIR`（留账） |
 
@@ -2573,6 +2574,30 @@ POST，量并发槽位（`AGENTCREW_MAX_CONCURRENT_RUNS`，默认 8）是否生�
 与 RSS。2026-11-16 的基线结论：60ms 延迟下吞吐 2 并发就饱和（约 32 run/分），
 200ms 延迟下 4 并发仍有 2.17×——瓶颈是事件循环里的同步段，不是模型等待；详见
 [`PROJECT-STATE.md` §3.93](PROJECT-STATE.md) 与 `bench/capacity-2026-11-16.md`。
+
+### 分布式执行（C14）
+
+单进程到顶后，把「执行算力」从 HTTP 进程里拆出去：API 只入队，worker 多进程/多机
+消费同一个**文件系统队列**（不引 Redis / RabbitMQ）。队列与产物放同一块共享卷即可
+跨机。
+
+```bash
+# API：只入队，不本地跑
+python main.py serve --queue-dir /shared/agentcrew/_queue
+
+# worker：可起 N 个进程（甚至 N 台机器）
+python main.py worker --queue-dir /shared/agentcrew/_queue \
+    --output-dir /shared/agentcrew --concurrency 2 --auto
+
+# 烟测：处理完当前队列即退出
+python main.py worker --queue-dir ./output/_queue --once --auto --mock
+```
+
+队列状态即目录：`pending` / `running` / `done` / `failed`（`claims` 是租约，
+`cancel` 是取消标记）。领取用 `O_CREAT|O_EXCL` 原子抢占，worker 崩溃后租约过期自动
+回收（**至少一次**语义，`Crew.run` 按同一 run_id 重跑）。8 worker × 并发 2 实测
+**105.84 run/分**（单 worker 3.82×，单进程 inline 3.3×），见
+`bench/queue-2026-11-16.md` 与 [`PROJECT-STATE.md` §3.94](PROJECT-STATE.md)。
 
 **并发基准**测的是**引擎调度**，不是模型速度：离线模式下给每次 LLM 调用注入固定
 延迟（默认 200ms，真实调用常在 1–3 秒，已是保守取值），然后从 ledger 的

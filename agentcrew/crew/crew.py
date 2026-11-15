@@ -693,8 +693,13 @@ class Crew:
             crew._resume_checkpoint = resumed_at
         return crew
 
-    async def run(self, goal: str) -> RunRecord:
-        """跑完整流程（规划 → 执行 → 交付），返回落盘的 :class:`RunRecord`。"""
+    async def run(self, goal: str, *, run_id: str | None = None) -> RunRecord:
+        """跑完整流程（规划 → 执行 → 交付），返回落盘的 :class:`RunRecord`。
+
+        ``run_id``（C14）：分布式队列里由 API 侧预生成，worker 必须沿用同一个
+        id，否则客户端拿到的 id 与盘上的 run 对不上。缺省仍由 checkpoint 生成，
+        与改造前逐字一致。
+        """
         self._begin()
         lock: ResumeLock | None = None
         try:
@@ -702,6 +707,7 @@ class Crew:
                 self._settings.output_dir,
                 project_goal=goal,
                 config_snapshot=self._settings.config_snapshot(),
+                run_id=run_id,
             )
             # A-6：``run`` 与 ``resume`` 一样占进程锁——此前只有 resume 占锁，
             # 而 run 首跑阶段的 checkpoint 写入窗口同样不能与另一个进程的

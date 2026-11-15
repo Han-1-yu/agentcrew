@@ -1,0 +1,52 @@
+{
+  "day": "2026-11-16",
+  "runs": 24,
+  "concurrency": 2,
+  "latency_ms": 60,
+  "rows": [
+    {
+      "enqueued": 24,
+      "completed": 24,
+      "failed": 0,
+      "unfinished": 0,
+      "wall_s": 52.0,
+      "throughput_per_min": 27.69,
+      "workers": 1,
+      "concurrency": 2,
+      "latency_ms": 60
+    },
+    {
+      "enqueued": 24,
+      "completed": 24,
+      "failed": 0,
+      "unfinished": 0,
+      "wall_s": 29.25,
+      "throughput_per_min": 49.23,
+      "workers": 2,
+      "concurrency": 2,
+      "latency_ms": 60
+    },
+    {
+      "enqueued": 24,
+      "completed": 24,
+      "failed": 0,
+      "unfinished": 0,
+      "wall_s": 18.76,
+      "throughput_per_min": 76.76,
+      "workers": 4,
+      "concurrency": 2,
+      "latency_ms": 60
+    },
+    {
+      "enqueued": 24,
+      "completed": 24,
+      "failed": 0,
+      "unfinished": 0,
+      "wall_s": 13.61,
+      "throughput_per_min": 105.84,
+      "workers": 8,
+      "concurrency": 2,
+      "latency_ms": 60
+    }
+  ]
+}

@@ -31,6 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from agentcrew.knowledge.embeddings import cosine
 from agentcrew.knowledge.experience import Experience
+from agentcrew.knowledge.jsonl import append_line, read_lines
 
 _logger = logging.getLogger(__name__)
 
@@ -173,25 +174,17 @@ class EntityMemoryStore:
     def append(self, records: Sequence[EntityRecord]) -> None:
         if not records:
             return
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self._path, "a", encoding="utf-8") as handle:
-            for record in records:
-                handle.write(record.model_dump_json() + "\n")
+        # C14：多 worker 并发写——跨进程锁 + 单次 write；一条记录被拆开会污染
+        # 整个库（读方只能跳过），所以不能走 Python 的缓冲写入。
+        payload = "".join(record.model_dump_json() + "\n" for record in records)
+        append_line(self._path, payload)
 
     def all(self) -> list[EntityRecord]:
         """读取并按名字归并；文件不存在 / 坏行 → 空库 / 跳过。"""
         if not self._path.is_file():
             return []
         merged: dict[str, EntityRecord] = {}
-        try:
-            lines = self._path.read_text(encoding="utf-8").splitlines()
-        except OSError as exc:
-            _logger.warning("实体记忆库无法读取，按空库处理 %s: %s", self._path, exc)
-            return []
-        for line in lines:
-            stripped = line.strip()
-            if not stripped:
-                continue
+        for stripped in read_lines(self._path):
             try:
                 record = EntityRecord.model_validate_json(stripped)
             except ValueError:

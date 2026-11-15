@@ -245,6 +245,7 @@ class ApiServer:
         auth: APIKeyAuth | None = None,
         rate_limiter: RateLimiter | None = None,
         model_factory: Any | None = None,
+        queue: Any | None = None,
     ) -> None:
         """``settings`` / ``crew_factory`` 只服务于 P1-5 的创建/恢复端点。
 
@@ -285,6 +286,9 @@ class ApiServer:
         self._run_tasks: dict[str, asyncio.Task[None]] = {}
         #: A5：可选 ModelFactory，用于 /providers 健康查询与 /test 测速。
         self._model_factory = model_factory
+        #: C14：共享任务队列。非空时 ``POST /runs`` 只入队（202 queued），
+        #: 由 ``main.py worker`` 在多进程/多机上消费；空 = 本进程内直接跑。
+        self._queue = queue
         #: A5：模型发现结果缓存（provider → (timestamp, models) 或 (timestamp, error)）。
         self._discovery_cache: dict[str, tuple[float, Any]] = {}
         # 2026-11 并发加固：同时存活的 run 数上限。每个 crew 自带 LLM 信号量，
@@ -666,6 +670,21 @@ class ApiServer:
                 # /stats 都能从磁盘读，唯独 /status 回 404，看板点开历史 run
                 # 永远停在 pending。这里按同一份 run.json / tasks.json 回落。
                 disk = self._disk_status(run_id)
+                if disk is None and self._queue is not None:
+                    item = self._queue.get(run_id)
+                    if item is not None:
+                        # worker 还没建 run.json：先按队列状态回答，客户端拿到的
+                        # 202 立刻可查，不会 404。
+                        await self._send_json(writer, 200, {
+                            "run_id": run_id,
+                            "goal": item.goal,
+                            "status": ("queued" if item.status == "pending"
+                                       else item.status),
+                            "task_count": 0,
+                            "tasks": {},
+                            "from_queue": True,
+                        })
+                        return
                 if disk is None:
                     await self._send_json(writer, 404, {"error": "run not found"})
                     return
@@ -1172,6 +1191,28 @@ class ApiServer:
             await self._send_json(
                 writer, 400, {"error": f"images 不合法：{exc}"})
             return
+        # C14：队列模式——API 不再本地跑，只落一条 pending 并立刻 202。
+        # 这样「HTTP 入口」与「执行算力」解耦：worker 可以多进程、多机，
+        # 只要 queue 与 output_dir 在同一块共享卷上。
+        if self._queue is not None:
+            from agentcrew.runtime.queue import QueueError
+            from agentcrew.utils.clock import utc_now
+            from agentcrew.utils.files import slugify_run_id
+
+            run_id = slugify_run_id(utc_now())
+            try:
+                self._queue.enqueue(
+                    goal=goal, options=dict(options), images=images,
+                    run_id=run_id)
+            except (QueueError, OSError) as exc:
+                await self._send_json(
+                    writer, 503, {"error": f"入队失败：{exc}"})
+                return
+            await self._send_json(
+                writer, 202,
+                {"run_id": run_id, "status": "queued", "queued": True})
+            return
+
         try:
             crew = self._build_crew(goal, options, images)
         except (ValueError, TypeError) as exc:
@@ -1629,6 +1670,16 @@ class ApiServer:
         if await self._deny_if_run_hidden(run_id, writer):
             return
         crew = self.active_crews.get(run_id)
+        if crew is None and self._queue is not None:
+            # C14：队列里的 run 不在本进程的 active_crews 里——写取消标记，
+            # worker 下一轮心跳时看到并调用 Crew.cancel()。
+            item = self._queue.get(run_id)
+            if item is not None and item.status in ("pending", "running"):
+                self._queue.request_cancel(run_id)
+                await self._send_json(
+                    writer, 202,
+                    {"run_id": run_id, "cancelled": True, "queued": True})
+                return
         if crew is None:
             await self._send_json(
                 writer, 404,
