@@ -106,6 +106,15 @@ function explainGuidanceError(err) {
   return String(detail || '未知错误，请查看后端日志。');
 }
 
+/** 列表内容签名：轮询只在真的变了才重绘，保留输入框焦点与滚动位置。 */
+function guidanceSignature(payload, now = Date.now()) {
+  const normalized = normalizeGuidance(payload, now);
+  return normalized.items.map(item => [
+    item.id, item.status, item.consumed_at || '',
+    item.withdrawn_at || '', item.text,
+  ].join(':')).join('|');
+}
+
 /** 显示用：定向 / 过期信息合成一句短描述。 */
 function guidanceMeta(item) {
   const bits = [];
@@ -122,6 +131,7 @@ export {
   currentRunId,
   explainGuidanceError,
   guidanceMeta,
+  guidanceSignature,
   guidanceTaskOptions,
   isExpired,
   normalizeGuidance,

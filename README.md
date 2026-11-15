@@ -307,6 +307,10 @@ examples/samples/<name>/
   resume 不重放（at-most-once）。`guidance_enabled` 默认关闭：关闭态上下文包与提示词
   逐字节不变。只接受 `running` / `awaiting_approval` 的 run（终态 409），待吸收队列
   满了返回 429。
+- C10 切片三（2026-11-15）：Studio 门禁页指引列表每 4 秒自动回显吸纳 / 撤回 / 过期状态
+  （内容签名不变就不重绘，不打断输入焦点；切页自动停表）；run **终态封版时**若
+  `guidance.jsonl` 超过 50 行会自动压成一行 snapshot（失败只记 warning，不改 run 结局）；
+  Studio 侧边栏新增「回滚重跑」独立页，与任务详情弹窗共用 dry-run 预览 → rewind → resume 流程。
 - C10 切片二：一句指引可以**定向**（`--target T-003` / REST `target`，未定向仍按
   「下一个派发的任务」）、**设过期**（`--expires-in` / REST `expires_in_seconds` 或
   `expires_at`，到点后读时即排除、不重写盘）、**撤回未吸收项**

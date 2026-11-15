@@ -6,6 +6,7 @@ import {
   currentRunId,
   explainGuidanceError,
   guidanceMeta,
+  guidanceSignature,
   guidanceTaskOptions,
   isExpired,
   normalizeGuidance,
@@ -83,6 +84,26 @@ test('过期判定与 meta 文案', () => {
   const meta = guidanceMeta({ target: 'T-2', expires_at: 'x', author: 'ops' });
   assert.match(meta, /定向 T-2/);
   assert.match(meta, /by ops/);
+});
+
+test('guidanceSignature 只在内容真的变了才变', () => {
+  const payload = () => ({
+    run_id: 'R1', pending: 1,
+    items: [{ id: 'a', ts: 't', text: '改绿色', status: 'pending', consumed_at: null }],
+  });
+  const same = guidanceSignature(payload());
+  assert.equal(guidanceSignature(payload()), same);
+  assert.equal(same.includes('a:pending'), true);
+
+  const consumed = payload();
+  consumed.items[0].status = 'consumed';
+  consumed.items[0].consumed_at = '2026-11-15T00:00:00Z';
+  assert.notEqual(guidanceSignature(consumed), same, '被引擎吸收必须触发重绘');
+
+  const added = payload();
+  added.items.push({ id: 'b', text: '第二条', status: 'pending' });
+  assert.notEqual(guidanceSignature(added), same, '新增指引必须触发重绘');
+  assert.equal(guidanceSignature(null), '');
 });
 
 test('错误码翻译成可操作文案', () => {

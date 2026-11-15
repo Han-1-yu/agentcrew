@@ -17,6 +17,7 @@ import { renderProvidersPage } from '../features/providers/index.js';
 import { renderSettingsPage } from '../features/settings/index.js';
 import { renderSchedulesPage } from '../features/schedules/index.js';
 import { renderProfilesPage } from '../features/profiles/index.js';
+import { renderRewindPage } from '../features/rewind/page.js';
 function switchNav(key){
   S.nav=key;
   // 让上一版页面的异步续体失效：页面 render 里捕获 S.navToken，await 之后
@@ -67,6 +68,7 @@ function switchNav(key){
   if(key==='tasks'){ renderPlanPage(ph); return; }
   if(key==='agents'){ renderAgentsPage(ph); return; }
   if(key==='gates'){ renderGatesPage(ph); return; }
+  if(key==='rewind'){ renderRewindPage(ph); return; }
   if(key==='providers'){ renderProvidersPage(ph); return; }
   if(key==='schedules'){ renderSchedulesPage(ph); return; }
   if(key==='profiles'){ renderProfilesPage(ph); return; }

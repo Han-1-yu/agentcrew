@@ -76,7 +76,7 @@ Electron userData 目录的 `settings.json`，可在「设置」里手动修改�
 
 ```bash
 npm run check        # 结构护栏：分层、导入完整性、单文件体量、入口收敛（秒级，无需 GUI）
-npm run e2e          # 端到端：9 页导航 / 详情 / 运行切换 / 新建运行 / 成本 / 供应商全链路（28 项）
+npm run e2e          # 端到端：13 页导航（含回滚重跑）/ 详情 / 运行切换 / 新建运行 / 成本 / 供应商全链路（32 项）
 npm run selftest     # 真实 UI 驱动一次 --mock 运行：列表 → 看板 → 事件 → 产物 → 设置 → 启动/取消（16 项）
 npm run verify:api          # 后端 API 代理：认证头 + SSE 帧 + C10 指引/R62 rewind 的 REST 路径（13 项，无需 GUI / 无需真后端）
 npm run verify:transitions  # 状态切换：演示→真实运行 / 快速连点切 run / 单通道纪律（11 项）
@@ -91,10 +91,15 @@ npm run visual              # 视觉回归：把 e2e 的 16 张截图与本机�
 Electron 会退化成纯 Node 并在 `main.js` 报 `app.getPath undefined`——先清掉该变量再跑任何 Electron 脚本。
 
 **C10 指引 / R62 回滚（2026-11-15）**：门禁页顶部是「运行中指引」区块（发指引、定向到任务、
-设过期、撤回未吸收项、终态压缩历史），任务详情里的「从此恢复」是 rewind 弹窗（先 dry-run 预览
-影响集，确认后才 rewind + resume）。两者都走 REST：需要 `apiBaseUrl` 与 `runs:admin`（指引）
-/ `runs:write`（回滚）作用域；没连后端时只显示空态，不会伪造动作。可测逻辑抽在
-`src/lib/guidance.js` / `src/lib/rewind.js`，单测在 `tests/guidance.test.mjs` / `rewind.test.mjs`。
+设过期、撤回未吸收项、终态压缩历史），列表每 4 秒按内容签名差异自动回显（切页停表、标签页
+隐藏时跳过，不重绘就不打断输入焦点）。侧边栏第 8 项是「回滚重跑」独立页，任务详情里的
+「从此恢复」是同一套流程的弹窗版——两者都先 dry-run 预览影响集，确认后才 rewind + resume。
+全部走 REST：需要 `apiBaseUrl` 与 `runs:admin`（指引）/ `runs:write`（回滚）作用域；没连
+后端时只显示空态，不会伪造动作。可测逻辑抽在 `src/lib/guidance.js` / `src/lib/rewind.js`，
+单测在 `tests/guidance.test.mjs` / `rewind.test.mjs`。
+
+导航页由 12 增至 **13**（新增 `rewind`），`e2e.js` / `selftest.js` 的 pages 数组同步；
+数字键仍是 1-9（`boot.js` 的 pages 未改），新页用侧边栏点击进入。
 
 **连接后端 serve**：在「设置 → 连接」填 API 地址，并保存 `serve` 的 API Key（R36 起认证默认强制开启，
 没有 Key 的请求一律 401）。Key 用系统安全存储加密后只放主进程，不进 `settings.json`、不回显。

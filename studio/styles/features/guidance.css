@@ -1,6 +1,9 @@
 /* C10 中途指引区块 + R62 回滚弹窗（复用全局令牌，明暗主题自适应） */
 .guidance-section { padding: 4px 20px 16px; }
 .guidance-section .page-head { margin-bottom: 10px; }
+.guidance-live { font-size: var(--fs-xs); color: var(--success-text);
+  background: var(--success-bg-chip); border-radius: var(--r-sm);
+  padding: 2px 8px; margin-left: auto; }
 .guidance-form { background: var(--bg-panel); border: 0.5px solid var(--border-weak);
   border-radius: var(--r-sm); padding: 12px; }
 .guidance-input, .rewind-input { width: 100%; box-sizing: border-box; resize: vertical;
@@ -37,3 +40,17 @@
 .rewind-impact { font-size: var(--fs-sm); color: var(--text-sub); line-height: 1.6;
   background: var(--bg-subtle); border-radius: var(--r-xs); padding: 8px 10px; }
 .rewind-error { font-size: var(--fs-sm); color: var(--error); line-height: 1.6; }
+
+/* R62 独立页：与弹窗共用表单样式，这里只补页面级排版 */
+.rewind-page { padding: 4px 20px 20px; display: flex; flex-direction: column;
+  gap: 12px; max-width: 900px; }
+.rewind-page .rewind-form { background: var(--bg-panel);
+  border: 0.5px solid var(--border-weak); border-radius: var(--r-sm); padding: 16px; }
+.rewind-page .rewind-input { min-height: 64px; }
+.rewind-page .rewind-select { max-width: 100%; }
+.rewind-page .modal-actions { justify-content: flex-start; }
+.rewind-page-note { font-size: var(--fs-sm); color: var(--text-sub); line-height: 1.6;
+  background: var(--bg-subtle); border-radius: var(--r-xs); padding: 10px 12px; }
+.rewind-page-help { font-size: var(--fs-xs); color: var(--text-ter); line-height: 1.7;
+  border-top: 0.5px solid var(--border-weak); padding-top: 10px; }
+.rewind-page .rewind-result { min-height: 24px; }

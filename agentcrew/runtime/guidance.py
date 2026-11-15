@@ -59,6 +59,10 @@ EMPTY_TEXT_ERROR = "指引文本不能为空"
 #: 压缩时保留的最近「已终结」记录条数（消费 / 撤回 / 过期）。
 COMPACT_KEEP_RECENT = 20
 
+#: 终态封版时自动压缩的行数阈值。低于它时重写文件的收益不抵一次磁盘 IO；
+#: 超过它说明这场 run 有过反复指引/撤回，值得在收尾时归并成一行 snapshot。
+AUTO_COMPACT_LINE_THRESHOLD = 50
+
 #: 定向任务 id 的长度上限（只是防止把一整段提示词塞进 target）。
 MAX_TARGET_CHARS = 120
 

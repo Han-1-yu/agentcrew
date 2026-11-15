@@ -8,16 +8,16 @@
 
 ## 0. 一句话现状
 
-**当前代码基线：R59–R61（`c9cc47c` / `c9c4a60`，CI 七 job 全绿）、R62 与 Studio/桌面批（`ebb9895` / `8c6e411` / `b712113`，连同两笔状态回填推到 `67aeda4`）、C10 切片一（`5cdeea8`）均在 `origin/master`；**C10 切片二 + Studio 指引 / rewind 入口**是 2026-11-15 本轮工作（§3.87）。** 最近一次全量 **3442 passed / 0 failed / 6 skipped / 0 error**（178 文件 / 89 批次 / 504.5s，Webhook C3/C4 后 Windows 本机实跑），零崩溃重试、零「首次失败、重试通过」；`ruff` **All checks passed**、`mypy` **144 文件零错误**；Studio 本轮实跑：`check` **80 模块 / 44 分片**、`test:unit` **37/37**、`verify:api` **13/13**、electron `e2e` **32/32**、`selftest` **16/16**（首次 15/16 是后台全量回归并发导致 OS python 进程计数误判，隔离复跑 16/16）。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道；R19 给主管审核开了独立、不阻塞的 `suggestions` 建议通道；R20 补上单步/断点调试——每个任务派发前可挂起裁决，第二档功能项全部闭环；R21 给 API 契约装上守卫，openapi.yaml 与代码路由双向锁死、不再漏端点；R22 补上 resume 状态白名单与 MCP 管道显式关闭；R23 产出 2501 用例的模块/场景覆盖矩阵（`docs/TEST-REPORT.md`），验收报告遗留的最后一项小项闭环；R24 补上工具管理页与单工具试跑；R25 把共享 API Key 升级为多用户 RBAC（密钥/角色/作用域/归属/审计）；R26 补上拖拽式可视化编排（画布 + YAML 双向 + 图校验）；R27 给检索加向量通道（混合打分 + 磁盘缓存 + 本地退化）；R28 打通「画布 → run」直通规划；R29 让实体记忆也走向量混合（不加列、不迁移）；R30 给审批单加等待窗口与过期告警；R31 给条件边补否定/兜底写法；R32 把控制台 UI 重构成令牌化 + 明暗主题 + 侧栏布局；R33 把单层主管复核扩成可配的多级链；R34 修好本机测试环境（崩溃隔离跑器，一条命令出可信结论）；R50 按差距报告 69 条完成上线前加固——8 项 P0 全关、时钟容错让"前跳误杀/回拨死锁"不再可能、审批与预算的并发边界收口、`/metrics` 补齐可观测入口、Studio 断线可自愈（明细见 `docs/REMEDIATION-STATUS.md`）。R51 按能力路线第一批补上三根支柱的关键缺口：**能查**（`web_search`，四提供方、默认关、密钥只走环境变量）、**敢跑**（可插拔执行后端，默认 `local` 行为逐字不变，`docker` 可选：禁网/非 root/资源上限/只挂 run 目录，缺 docker 即报错）、**跑得出结论**（`run_tests` + G1 执行校验，失败并入既有返工通道），并把评测做成 mock/真实双轨（`eval --live` + 23 条真实小目标 + 夜间脚本）。R52 补上互操作与无人值守：**C7** 暴露为 MCP server（`mcp-serve`，5 个工具全走 HTTP API 复用 RBAC/审计）、**C6 第一步**借现成浏览器 MCP（配置模板 + 读优先白名单，零开发）、**C8** 入站 Webhook 触发（`POST /webhooks/trigger`，HMAC 或 API Key 两条认证路径，来源进 ledger）。R53 补上多模态输入（**C4**）：`run --image` / `POST /runs` 的 `images`（内联 base64，最多 4 张），provider 能力位 `supports_vision`（默认关）决定是否真发图，不支持时降级纯文本并落 `vision_unsupported`（降级可见），图片落盘留证。R54 补上文档 RAG（**C5**）：`knowledge/docs/` 下的团队手册/规范增量摄取分块，按相关性注入 PM 规划提示词与每个任务的上下文（复用 R11/R27 检索资产），`docs list/search` 管理入口。能力路线第二批至此全部落地。
+**当前代码基线：R59–R61（`c9cc47c` / `c9c4a60`，CI 七 job 全绿）、R62 与 Studio/桌面批（`ebb9895` / `8c6e411` / `b712113`，连同两笔状态回填推到 `67aeda4`）、C10 切片一（`5cdeea8`）均在 `origin/master`；**C10 切片二 + Studio 指引 / rewind 入口**是 2026-11-15 本轮工作（§3.87）。** 最近一次全量 **3449 passed / 0 failed / 6 skipped / 0 error**（179 文件 / 90 批次 / 497.4s，C10 切片三后 Windows 本机实跑），零崩溃重试、零「首次失败、重试通过」；`ruff` **All checks passed**、`mypy` **144 文件零错误**；Studio 本轮实跑：`check` **80 模块 / 44 分片**、`test:unit` **37/37**、`verify:api` **13/13**、electron `e2e` **32/32**、`selftest` **16/16**（首次 15/16 是后台全量回归并发导致 OS python 进程计数误判，隔离复跑 16/16）。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道；R19 给主管审核开了独立、不阻塞的 `suggestions` 建议通道；R20 补上单步/断点调试——每个任务派发前可挂起裁决，第二档功能项全部闭环；R21 给 API 契约装上守卫，openapi.yaml 与代码路由双向锁死、不再漏端点；R22 补上 resume 状态白名单与 MCP 管道显式关闭；R23 产出 2501 用例的模块/场景覆盖矩阵（`docs/TEST-REPORT.md`），验收报告遗留的最后一项小项闭环；R24 补上工具管理页与单工具试跑；R25 把共享 API Key 升级为多用户 RBAC（密钥/角色/作用域/归属/审计）；R26 补上拖拽式可视化编排（画布 + YAML 双向 + 图校验）；R27 给检索加向量通道（混合打分 + 磁盘缓存 + 本地退化）；R28 打通「画布 → run」直通规划；R29 让实体记忆也走向量混合（不加列、不迁移）；R30 给审批单加等待窗口与过期告警；R31 给条件边补否定/兜底写法；R32 把控制台 UI 重构成令牌化 + 明暗主题 + 侧栏布局；R33 把单层主管复核扩成可配的多级链；R34 修好本机测试环境（崩溃隔离跑器，一条命令出可信结论）；R50 按差距报告 69 条完成上线前加固——8 项 P0 全关、时钟容错让"前跳误杀/回拨死锁"不再可能、审批与预算的并发边界收口、`/metrics` 补齐可观测入口、Studio 断线可自愈（明细见 `docs/REMEDIATION-STATUS.md`）。R51 按能力路线第一批补上三根支柱的关键缺口：**能查**（`web_search`，四提供方、默认关、密钥只走环境变量）、**敢跑**（可插拔执行后端，默认 `local` 行为逐字不变，`docker` 可选：禁网/非 root/资源上限/只挂 run 目录，缺 docker 即报错）、**跑得出结论**（`run_tests` + G1 执行校验，失败并入既有返工通道），并把评测做成 mock/真实双轨（`eval --live` + 23 条真实小目标 + 夜间脚本）。R52 补上互操作与无人值守：**C7** 暴露为 MCP server（`mcp-serve`，5 个工具全走 HTTP API 复用 RBAC/审计）、**C6 第一步**借现成浏览器 MCP（配置模板 + 读优先白名单，零开发）、**C8** 入站 Webhook 触发（`POST /webhooks/trigger`，HMAC 或 API Key 两条认证路径，来源进 ledger）。R53 补上多模态输入（**C4**）：`run --image` / `POST /runs` 的 `images`（内联 base64，最多 4 张），provider 能力位 `supports_vision`（默认关）决定是否真发图，不支持时降级纯文本并落 `vision_unsupported`（降级可见），图片落盘留证。R54 补上文档 RAG（**C5**）：`knowledge/docs/` 下的团队手册/规范增量摄取分块，按相关性注入 PM 规划提示词与每个任务的上下文（复用 R11/R27 检索资产），`docs list/search` 管理入口。能力路线第二批至此全部落地。
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | Webhook C3/C4 后最新全量 **3442 passed / 0 failed / 6 skipped / 0 error**（178 文件 / 89 批次 / 504.5s，Windows 本机 `scripts/test.py --batch 2 --retries 4 --retry-failed 3 --keep-pycache`），本轮零崩溃重试、零「首败重试过」。C10 分支在云主机（Linux / Python 3.12.11）另跑一次 `pytest -q`：**3285 passed / 4 skipped / 0 failed**（233.3s，当时树在 R62 之前）。6 个 skip 沿用跑器结果，其中 4 个 docker 真容器用例由 CI 覆盖 |
+| 全量测试 | C10 切片三后最新全量 **3449 passed / 0 failed / 6 skipped / 0 error**（179 文件 / 90 批次 / 497.4s，Windows 本机 `scripts/test.py --batch 2 --retries 4 --retry-failed 3 --keep-pycache`），本轮零崩溃重试、零「首败重试过」。C10 分支在云主机（Linux / Python 3.12.11）另跑一次 `pytest -q`：**3285 passed / 4 skipped / 0 failed**（233.3s，当时树在 R62 之前）。6 个 skip 沿用跑器结果，其中 4 个 docker 真容器用例由 CI 覆盖 |
 | 静态检查 | 切片二后重跑 `ruff check agentcrew/ main.py tests/`：**All checks passed**；`mypy agentcrew/`：**144 文件零错误**（Windows / Python 3.12.16）；云主机同口径复跑 ruff 全绿、mypy 140 文件零错误（当时树在 R62 之前） |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
-| Studio | `npm run check` **80** 模块 / **44** 样式分片、`test:unit` **37/37**、`verify:api` **13/13**、electron `e2e` **32/32**、`selftest` **16/16**（2026-11-15 本机实跑，见 §3.87；首次 15/16 系全量回归并发造成的进程计数误判，隔离复跑全过） |
+| Studio | `npm run check` **81** 模块 / **44** 样式分片、`test:unit` **38/38**、`verify:api` **13/13**、electron `e2e` **32/32**（13 页导航）、`selftest` **16/16**（2026-11-15 切片三后本机实跑，见 §3.89） |
 | 上线自检 | 本机可验 **9 项全通过**（doctor / 离线冒烟 / REST 认证 200·401 / `/metrics` / 无密钥退 3 / `clean` 干跑 / Studio 三连 / ruff+mypy）；目标机 10 项判据见 `docs/DEPLOY-CHECK-2026-11-13.md` |
 | 收尾 | 交付说明见 **`docs/CLOSURE-2026-11-13.md`**；B 类外部环境项 **5/5 全部闭环**；云主机真实部署验收 10 项中 **7 项闭环**（TLS/SSE、告警规则、日志、密钥、成本、webhook、备份），仅剩独立数据盘与两项 Docker 依赖（§3.77、`docs/DEPLOYMENT-VM-2026-11-13.md`） |
 | Git | `c9c4a60`（R61 真机修复）与 `c9cc47c`（R59–R61）均已推送到 `origin/master`，CI run **43453359080** / **43449592343** 的 **7 个 job 全部 success**（Python 3.10/3.11/3.12/3.13、Windows、Studio、Docker 真隔离）；`ebb9895`（R62）/ `8c6e411`（Studio V6-FE）/ `b712113`（桌面启动器）连同两笔状态回填已于 2026-11-14 推送到 `origin/master`（`92d3854..67aeda4`）；C10 `5cdeea8` 与状态回填 `d76d2ef` 同批推送，**2026-11-15 复核 CI run `43608513108`（head = `d76d2ef`）的 7 个 job 逐一 success**（Python 3.10/3.11/3.12/3.13、Windows·uv、Studio·Node 20、Sandbox·docker 真隔离），`Sync main` run `43608513094` success；上一批 `67aeda4` 的 run `43607497931` 亦 success。验收报告 `docs/ACCEPTANCE-2026-11-12.md`；真实模型评测历史证据为 23 条中 22 通过（`bench/eval-live-2026-11-13.md`，本次未重跑真实模型评测）。**2026-11-15 本轮两笔提交 `5e9bc70`（实现，26 文件 / +1866 −119）/ `bedb7e7`（状态回填）已推送到 `origin/master`**（`d76d2ef..bedb7e7`，`origin/main` 同哈希）；对应 CI run **`43712615843`** 结论 `success`、7 个 job 逐一 success，`Sync main` `43712615752` success |
@@ -2693,6 +2693,44 @@ Node.js 20 actions 被强制跑在 Node 24、ubuntu-latest 将迁到 Ubuntu 26�
 
 ---
 
+### 3.89 C10 切片三：实时回显 / 终态自动压缩 / rewind 独立页（2026-11-15 晚）
+
+**起因**：§7.1 重排后排在第 ① 位的「C10/Studio 体验增强」，即 §3.87「刻意未做」里的
+三项——Studio 指引流式回显、终态后自动压缩、rewind 独立页。纯本机、无产品决策依赖，
+上下文最热，本批一次做完。
+
+| 项 | 落地 |
+|---|---|
+| 实时回显 | `studio/src/lib/guidance.js` 新增 `guidanceSignature(payload)`（id / status / consumed_at / withdrawn_at / text 的拼接签名）；门禁页 `features/guidance/index.js` 每 4 秒拉一次 `GET /guidance`，**只在签名变化时重绘列表**，输入框焦点与滚动位置不受影响。页面可见时轮询、`box.isConnected` 为假即清表、标签页隐藏时跳过本轮。读失败在轮询模式静默（不覆盖已有列表），手动刷新 / 提交 / 撤回 / 压缩仍走强制刷新 |
+| 终态自动压缩 | `runtime/guidance.py` 加 `AUTO_COMPACT_LINE_THRESHOLD=50`；`Crew._finalize` 在 `_close_webhook()` 之后、`run.ledger.close()` 之前调 `_maybe_compact_guidance(run)`：无 `guidance.jsonl` 直接返回（封版热路径零磁盘 IO）、行数不超阈值不动、超了才 `compact()` 并 emit `guidance_compacted(auto=true)`。失败只记 warning，**绝不改写已封好的 run 结局或触发二次封版** |
+| rewind 独立页 | `studio/src/features/rewind/page.js` 新增第 13 个导航页：选起点任务 → dry-run 预览影响集 → 确认后 rewind + 自动 resume。与任务详情弹窗共用 `postRewind` / `postResume`（从 `features/rewind/index.js` 导出）与 `lib/rewind.js` 纯函数。同步 `index.html` 导航、`router.js` 分支、`e2e.js` / `selftest.js` 的 pages 数组（12 → 13 页）；**数字键仍 1-9**（`boot.js` 未改） |
+| 契约 / 文档 | `event-types.md` 的 `guidance_compacted` 补自动压缩触发路径与 `auto` 字段；README / studio README / guidance spec §9 同步 |
+
+**三条边界**：
+
+1. **轮询不是 SSE**：`guidance_*` 事件多数只进 ledger、写入端点根本不发事件，SSE 通道
+   覆盖不了「新增指引」。低频轮询是唯一对所有入口（REST / CLI / 其他进程）都成立的
+   兜底；不谎称流式推送。
+2. **自动压缩只在封版后**：`compact()` 用 `os.replace`，运行中多进程追加写会写到旧
+   inode。终态时没有并发写者才安全；手动压缩端点仍保留给终态 run。
+3. **独立页不复制状态机**：页面只做控制面 UI，dry-run / rewind / resume 全走已有 REST，
+   不直接改 `run.json` / `tasks.json`；running 状态由后端 409 拒绝，页面只提前提示。
+
+**验证**：`tests/test_guidance_auto_compact.py` 新增 7 例（零副作用 / 小历史不动 / 大历史
+压缩且保留活跃项 / 幂等 / 压缩失败不外抛 / snapshot 保留切片二字段 / **run 夹具缺
+`run_dir` 不外抛**）；Studio `guidanceSignature` 新增 1 例单测。`ruff check .` 与
+`mypy agentcrew/` 全绿；Studio `check` **81 模块 / 44 分片**、`test:unit` **38/38**、
+`verify:api` **13/13**、electron `e2e` **32/32**（13 页导航）、`selftest` **16/16**。
+
+**全量回归抓到并修掉一个真回归**：首轮 `3447 passed / 1 failed`——
+`test_finalize_is_idempotent` 用的 `SimpleNamespace` 夹具没有 `run_dir`，新加的自动压缩
+把 `AttributeError` 抛回了封版路径。修法不是改夹具，而是让辅助设施用 `getattr` 容忍
+不完整的 run 形状（拿不到 `run_dir` 就当「没开过指引」直接返回），并补一条用例钉住。
+修复后全量重跑 **3449 passed / 0 failed / 6 skipped / 0 error**（179 文件 /
+90 批次 / 497.4s，较上一批 +7 例，零崩溃重试、零「首败重试过」），见 §0。
+
+---
+
 ## 4. 历史报告汇总（已并入本文，原文归档）
 
 | 报告 | 时间 | 核心结论 | 现状 |
@@ -2942,18 +2980,20 @@ Node.js 20 actions 被强制跑在 Node 24、ubuntu-latest 将迁到 Ubuntu 26�
 > `docs/DEPLOY-CHECK-2026-11-13.md` §4 与 `docs/DEPLOYMENT-VM-2026-11-13.md`，
 > 需要时再查，不占用本机排期。
 
-按 **ROI + 依赖顺序**重排（上一批刚闭环 Webhook 旧账，见 §3.88）：
+按 **ROI + 依赖顺序**重排（上一批闭环 Webhook 旧账见 §3.88，本批闭环 C10 切片三见 §3.89）：
 
 | 顺序 | 事项 | 性质 | 恢复方式 / 前置 |
 |---|---|---|---|
-| 1 | **C10 / Studio 体验增强**：指引流式回显、终态后自动压缩、rewind 独立页 | 纯本机、无决策依赖，上下文最热 → 下一批首选 | 沿用 `src/features/guidance` / `rewind` 与 `SSE` 通道；见 §3.87「刻意未做」 |
-| 2 | 真语义 embedding 端点接入 | 需外部 API / 产品选型（配置已就绪） | 定提供方与维度，接上后重跑 `scripts/rag_hitrate.py` 486 条对照；离线可用 mock 通道先钉接口 |
-| 3 | C9 A2A 生态 / C13 SDK 语言 / C14 容量与横向扩展 | P2 产品决策 | 见 `docs/REMAINING-2026-11-13.md` D 类，需明确生态、语言与并发量级 |
-| 4 | Windows 本机 Python 断言重写偶发崩溃（`0xC0000005`） | 环境问题，非项目代码 | **不主动排期**：全量回归统一用 `python scripts/test.py`（崩溃隔离跑器），见 §6；等环境更新自愈 |
+| 1 | 真语义 embedding 端点接入 | 需外部 API / 产品选型（配置已就绪） | 定提供方与维度，接上后重跑 `scripts/rag_hitrate.py` 486 条对照；离线可用 mock 通道先钉接口 |
+| 2 | C9 A2A 生态 / C13 SDK 语言 / C14 容量与横向扩展 | P2 产品决策 | 见 `docs/REMAINING-2026-11-13.md` D 类，需明确生态、语言与并发量级 |
+| 3 | Windows 本机 Python 断言重写偶发崩溃（`0xC0000005`） | 环境问题，非项目代码 | **不主动排期**：全量回归统一用 `python scripts/test.py`（崩溃隔离跑器），见 §6；等环境更新自愈 |
 
-**本批已闭环、移出清单**：Webhook 事件级表达式过滤（C4）· 补投 delivery 落盘去重（C3，
+**本批（切片三）已闭环、移出清单**：Studio 指引实时回显（4 秒轮询 + 签名差异重绘）·
+终态封版自动压缩指引历史（`guidance_compacted(auto=true)`）· rewind 独立导航页（13 页）。
+
+**上一批已闭环**：Webhook 事件级表达式过滤（C4）· 补投 delivery 落盘去重（C3，
 仍为 at-least-once，接收端幂等头仍是最终防线）· D-16 写盘注入一致性用例（**复核发现
-`tests/test_finalize_atomicity.py` 5 例早已覆盖，台账过期，本次更正而非重复造用例**）。
+`tests/test_finalize_atomicity.py` 5 例早已覆盖，台账过期，更正而非重复造用例**）。
 
 **已全部闭环、不要再排期**：DeepSeek 充值评测（23 条 / 22 通过）· B 类外部环境 5 项 ·
 CI 7 job 矩阵 · 真实模型多模态 · MCP / 浏览器互通 · RAG 命中率对照 · C10 切片一与

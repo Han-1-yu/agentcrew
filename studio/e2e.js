@@ -45,8 +45,8 @@ function run(win) {
     check('1. 应用启动且侧边栏导航就绪', booted);
     await sleep(1500);
 
-    // ── 2. 12 页导航 ──
-    const pages = ['conversation', 'dashboard', 'tasks', 'dag', 'agents', 'profiles', 'gates', 'artifacts', 'events', 'providers', 'schedules', 'settings'];
+    // ── 2. 13 页导航（含 R62 回滚重跑）──
+    const pages = ['conversation', 'dashboard', 'tasks', 'dag', 'agents', 'profiles', 'gates', 'rewind', 'artifacts', 'events', 'providers', 'schedules', 'settings'];
     const pageResults = {};
     for (const page of pages) {
       await js(`document.querySelector('.nav-item[data-nav="${page}"]')?.click()`);
@@ -55,7 +55,7 @@ function run(win) {
       pageResults[page] = visible;
     }
     const allPagesOk = pages.every(p => pageResults[p]);
-    check('2. 12 页导航全部可切换且 active 状态正确', allPagesOk, JSON.stringify(pageResults));
+    check('2. 13 页导航全部可切换且 active 状态正确', allPagesOk, JSON.stringify(pageResults));
     // F3 防回归：每个 nav-item 都有可见文字
     const navTextOk = await js(`Array.from(document.querySelectorAll('.nav-item')).every(b => b.textContent.trim().length > 0)`);
     check('2b. 侧边栏每个导航按钮含可见文字', !!navTextOk);

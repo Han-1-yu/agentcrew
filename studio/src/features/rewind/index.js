@@ -29,6 +29,15 @@ async function postRewind(rid, task, instruction, dryRun) {
   return normalizeRewindResult(payload);
 }
 
+/** rewind 把 run 置回 interrupted，必须再 resume 才会真正重跑。 */
+async function postResume(rid) {
+  return apiFetch(`/runs/${encodeURIComponent(rid)}/resume`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  });
+}
+
 /** 从任务详情 / 运行面板打开回滚弹窗；taskId 为空时取任务板第一项。 */
 function openRewindDialog(taskId) {
   const base = S.settings && S.settings.apiBaseUrl;
@@ -64,11 +73,7 @@ function openRewindDialog(taskId) {
           rid, taskSelect.value, instruction.value, false);
         if (needsResume(result)) {
           try {
-            await apiFetch(`/runs/${encodeURIComponent(rid)}/resume`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: '{}',
-            });
+            await postResume(rid);
             toast('success', '已回滚并重跑', rewindImpactText(result));
           } catch (err) {
             toast('info', '已回滚，请手动恢复',
@@ -120,4 +125,4 @@ function openRewindDialog(taskId) {
   showModal(box);
 }
 
-export { openRewindDialog };
+export { openRewindDialog, postResume, postRewind };

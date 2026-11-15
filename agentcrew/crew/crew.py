@@ -85,7 +85,11 @@ from agentcrew.runtime.checkpoint import (
     is_stale_running,
     repair_statuses,
 )
-from agentcrew.runtime.guidance import GuidanceStore
+from agentcrew.runtime.guidance import (
+    AUTO_COMPACT_LINE_THRESHOLD,
+    GUIDANCE_FILE,
+    GuidanceStore,
+)
 from agentcrew.runtime.ledger import Ledger
 from agentcrew.runtime.lifecycle import (
     LIVENESS_STALE_AFTER,
@@ -2523,8 +2527,41 @@ class Crew:
         # R12：先排空 Webhook 队列（run_paused / run_finished 可能就是最后一条
         # 通知），再关 ledger——顺序反了的话 sink 会往已关闭的 ledger 里写。
         self._close_webhook()
+        # C10 切片三：终态之后没有并发写者，此时压缩指引历史是安全的。
+        # 放在 ledger.close() 之前，压缩结果还能记一条审计事件。
+        self._maybe_compact_guidance(run)
         run.ledger.close()
         return record
+
+    def _maybe_compact_guidance(self, run: _Run) -> None:
+        """终态封版后把 guidance.jsonl 压成一行 snapshot（失败只留 warning）。
+
+        **零副作用前提**：绝大多数 run 根本不写指引文件，``is_file()`` 直接返回，
+        封版热路径一行磁盘 IO 都不增加。只有行数超过
+        ``AUTO_COMPACT_LINE_THRESHOLD`` 才动手——那说明这场 run 有过反复指引 /
+        撤回，值得在收尾归并。压缩是辅助设施：任何失败都不得改写已经封好的
+        run 结局，也不得让 ``_finalize`` 抛出去触发兜底分支二次封版。
+        """
+        # 封版路径上的 run 对象在库层 / 测试夹具里形状不总是完整（例如只带
+        # record 与 ledger 的 SimpleNamespace）。辅助设施必须容忍这一点：拿不到
+        # run_dir 就当「这场 run 没开过指引」，绝不能把 AttributeError 抛回封版。
+        checkpoint = getattr(run, "checkpoint", None)
+        run_dir = getattr(checkpoint, "run_dir", None)
+        if run_dir is None:
+            return
+        path = Path(run_dir) / GUIDANCE_FILE
+        if not path.is_file():
+            return
+        try:
+            lines = sum(
+                1 for line in path.read_text(encoding="utf-8").splitlines()
+                if line.strip())
+            if lines <= AUTO_COMPACT_LINE_THRESHOLD:
+                return
+            result = GuidanceStore(run_dir).compact()
+            run.ledger.emit("guidance_compacted", auto=True, **result)
+        except (OSError, ValueError, RuntimeError, TypeError) as exc:
+            _logger.warning("指引历史自动压缩失败（不影响 run 结局）：%s", exc)
 
     def _write_stall_report(self, run: _Run, report: str) -> Path:
         """停滞诊断落 ``diagnostics/stall-report.md``（spec §7.4/§13.1）。"""

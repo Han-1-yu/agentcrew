@@ -98,10 +98,14 @@
   控制面写进该 run 的 ledger。
 - **data**：`id`（string）。写 ledger 失败不影响撤回结果（控制面动作已完成）。
 
-### `guidance_compacted`（C10 切片二）
-- **触发时机**：`POST /runs/{id}/guidance/compact` 把历史压成一行 snapshot 后。
-- **data**：`before_lines` / `after_lines` / `kept` / `removed`（均为 int）。
-- **边界**：只在终态 run 触发；运行中的压缩请求返回 409，不发事件。
+### `guidance_compacted`（C10 切片二 / 三）
+- **触发时机**：两条路径。① `POST /runs/{id}/guidance/compact` 手动压缩后（API 控制面写入）；
+  ② `Crew._finalize` 在**终态封版**时检测到 `guidance.jsonl` 行数超过
+  `AUTO_COMPACT_LINE_THRESHOLD`（默认 50）自动压缩后（C10 切片三，`auto=true`）。
+- **data**：`before_lines` / `after_lines` / `kept` / `removed`（均为 int）；自动压缩另带
+  `auto: true`。
+- **边界**：只在终态 run 触发；运行中的压缩请求返回 409，不发事件。自动压缩失败只记
+  warning，不改 run 结局、不触发二次封版；没有指引文件的 run 零副作用。
 
 ### `peer_dialogue_enabled`（R5）
 - **触发时机**：`Crew._start()` 在 `peer_dialogue_enabled` 打开时构造并下发 `PeerRouter` 后发一次（默认关闭时不发）。
