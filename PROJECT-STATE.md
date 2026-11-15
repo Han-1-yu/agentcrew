@@ -2620,6 +2620,12 @@ D2 把「运行中实时引导」列为待产品决策，并明确「Studio 输�
   16/16 通过。未改任何测试代码来绕过它。
 - CLI 四种模式（`guide` 追加 / `--target` + `--expires-in` / `--withdraw` / `--compact`）
   另用临时 run 目录逐条冒烟通过；契约守卫与 RBAC 守卫的电子证据见 §0「Git」行。
+- **真实 serve 进程端到端**（本批后续新增 `scripts/smoke_guidance.py`）：起一个只绑回环、
+  显式关闭认证的 `main.py serve`，再由**另一个进程**跑 `guide` 写指引，验证跨进程追加写、
+  定向 / 过期字段回读、撤回与配额释放、运行中压缩 409 / 终态压缩 200、rewind dry-run
+  影响集、文件真落盘，共 **10/10 通过**（`python scripts/smoke_guidance.py` 一条命令复跑，
+  自动选空闲端口、临时目录自动回收）。这是继 pytest 进程内 `ApiServer` 与 Studio 假后端
+  之后的**第三条证据链**，补上「多进程 + 真实落盘」这一层；脚本不进全量回归。
 
 **刻意未做**：指引优先级仲裁 / 触发重规划或改 DAG（会动确定性边界）· 撤回**已吸收**
 的指引（已进模型上下文，撤不回来）· 指引撤回的跨进程事件去重 · 运行中自动压缩 ·
@@ -2638,7 +2644,12 @@ Studio 的架构分层检查与单元测试全部在 CI 重跑通过——**这�
 Node.js 20 actions 被强制跑在 Node 24、ubuntu-latest 将迁到 Ubuntu 26（平台预告）。
 
 本段 CI 结论回填是**纯文档提交**，推送后会另触发一次 CI；按项目惯例不再递归回填
-那一笔的结论，以 GitHub Actions 页面为准。
+那一笔的结论，以 GitHub Actions 页面为准。该批 run `43713402264`（head `851fe93`）
+已于 2026-11-15 复核为 `success`、7 job 全绿，`Sync main` `43713402270` success。
+
+**收束**：后续只再补一笔「真机 serve 冒烟脚本 + 证据回填」（`scripts/smoke_guidance.py`）。
+它触发的 CI 结论同样以 GitHub Actions 页面为准，**到此不再产生新的状态回填提交**，
+避免「回填 → 推送 → CI → 再回填」的无限链。
 
 ---
 

@@ -275,6 +275,10 @@ examples/samples/<name>/
 | `python main.py docs <list\|search>` | C5：团队文档 RAG——列出已索引文档 / 检索演示（`knowledge/docs/` 下的手册与规范会注入规划与执行上下文） | `search QUERY --limit N`；`--output-dir DIR` |
 | `python main.py eval <dataset>` | P2-5 / C11：跑评测集，用产物断言给出 `pass@1` / `pass^k` | `--repeat K`（每 case 跑 K 次）；`--live`（真实模型）；`--max-cost USD`（硬上限）；`--json`；`--output-dir DIR`（留账） |
 
+另有一条**真实进程集成冒烟**（不属于全量回归）：`python scripts/smoke_guidance.py`
+会临时起一个只绑回环的 `main.py serve`，在另一个进程跑 `guide`，验证 C10 指引的
+跨进程追加写 / 撤回 / 压缩与 R62 rewind dry-run 共 10 项，自动选端口并回收临时目录。
+
 行为说明：
 
 - `--auto` 等价于 `--gate none`；`--auto` 与 `--gate` 同时给出时 `--auto` 胜出。
