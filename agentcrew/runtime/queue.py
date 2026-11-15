@@ -234,7 +234,16 @@ class RunQueue:
         for claim_path in (self.root / "claims").glob("*.json"):
             claim = _read_json(claim_path)
             if claim is None:
-                claim_path.unlink(missing_ok=True)
+                # 可能是另一个 worker 刚 O_EXCL 创建、还没来得及写内容的空文件。
+                # 立刻删会把它的 claim 偷走 —— 两个 worker 就会同时领到同一个
+                # 任务（4 线程抢 12 个任务的测试里表现为 13 条）。只清理「存在
+                # 时间已超过一个租约」的坏文件。
+                try:
+                    age = now - claim_path.stat().st_mtime
+                except OSError:
+                    continue
+                if age > self.lease_seconds:
+                    claim_path.unlink(missing_ok=True)
                 continue
             if float(claim.get("lease_until") or 0.0) > now:
                 continue
