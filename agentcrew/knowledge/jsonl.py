@@ -16,9 +16,11 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 __all__ = ["append_line", "read_lines"]
 
@@ -26,29 +28,55 @@ __all__ = ["append_line", "read_lines"]
 @contextmanager
 def _exclusive(fd: int) -> Iterator[None]:
     """对 fd 加排它锁；平台不支持锁时退化为「单次写」（读宽容兜底）。"""
+    releaser: Callable[[], None] | None = None
     try:
         if os.name == "nt":  # pragma: no cover - 只在 Windows 上走到
             import msvcrt
 
+            # 模块级 Any 别名：mypy 在 Linux 上跑时 msvcrt 存根没有这些成员，
+            # 反过来 fcntl 在 Windows 存根里也没有。Any 让两支在两端都通过，
+            # 又不必逐平台写 type: ignore（ruff 的 B009 还会把 getattr 改回去）。
+            mod: Any = msvcrt
             os.lseek(fd, 0, os.SEEK_SET)
-            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
-            try:
-                yield
-            finally:
+            # 必须用非阻塞重试：LK_LOCK 等不到锁会直接抛 OSError，退化成无锁
+            # 写就会在高并发下产生半行（4 进程实测偶发）。宁可等 10 秒。
+            deadline = time.monotonic() + 10.0
+            while True:
+                try:
+                    mod.locking(fd, mod.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise
+                    time.sleep(0.005)
+
+            def _release_nt() -> None:
                 os.lseek(fd, 0, os.SEEK_SET)
-                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                mod.locking(fd, mod.LK_UNLCK, 1)
+
+            releaser = _release_nt
         else:  # pragma: no cover - POSIX
             import fcntl
 
-            # Windows 的类型存根里没有 fcntl 的成员，这一支只在 POSIX 走到。
-            fcntl.flock(fd, fcntl.LOCK_EX)  # type: ignore[attr-defined]
-            try:
-                yield
-            finally:
-                fcntl.flock(fd, fcntl.LOCK_UN)  # type: ignore[attr-defined]
+            posix: Any = fcntl
+            posix.flock(fd, posix.LOCK_EX)
+
+            def _release_posix() -> None:
+                posix.flock(fd, posix.LOCK_UN)
+
+            releaser = _release_posix
     except (ImportError, OSError):
-        # 某些文件系统不支持锁：不阻塞写入，靠单次 write + 读宽容兜底。
+        # 文件系统不支持锁（或 10 秒仍拿不到）：不阻塞写入，读宽容兜底。
         yield
+        return
+    try:
+        yield
+    finally:
+        if releaser is not None:
+            try:
+                releaser()
+            except OSError:
+                pass
 
 
 def append_line(path: Path, line: str) -> None:
