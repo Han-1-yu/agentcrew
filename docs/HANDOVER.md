@@ -11,12 +11,20 @@
 
 | 项 | 值 |
 |---|---|
-| 已提交 | **R50 已提交**（`e4add0f`，191 文件 / +13045 −1802；随后 `3919a83` 清理误提交的临时日志）。工作区干净，本地领先 `origin/master` 2 个提交，**未推送** |
-| 测试 | R50 后全量 **3115 passed / 2 skipped / 0 failed**（3117 collected；`scripts/test.py` 一次跑出，含 D-14 时间戳迁移） |
-| 静态检查 | `ruff check agentcrew/ tests/ sdk/` 全绿 · `mypy agentcrew/` 保持零错误 |
-| Studio | 架构检查 73 模块 / 42 分片通过、`test:unit` 18 passed |
+| 已提交 | **`c1a7ea7`**（2026-11-16 收尾）。`HEAD` == `origin/main` == `origin/master`，工作区干净 |
+| 测试 | 全量 **3500 passed / 0 failed / 6 skipped / 0 error**（186 文件 / 93 批次 / 473.4s） |
+| 静态检查 | `ruff check .` 全绿 · `mypy agentcrew/` 146 文件零错误 |
+| Studio / SDK | Studio `test:unit` + 架构检查通过；`sdk/typescript` 12 例 `node --test`（独立 CI job） |
 | 离线样例 | `todo` 9/9 · `linear` 5/5 · `hierarchy` 7/7，全部 `completed` |
-| 一句话定位 | 8 角色多 Agent 编排器：规划 → 执行 → 三层门禁 → 交付；可完全离线（mock）跑通 |
+| 容量 | 单进程约 32 run/分（mock 60ms）；8 worker × 并发 2 = 105.84 run/分 |
+| 一句话定位 | 8 角色多 Agent 编排器：规划 → 执行 → 三层门禁 → 交付；可完全离线（mock）跑通，可横向加 worker |
+
+**最新一轮（2026-11-16）**：MCP 双向闭环（7 个工具，含产物读取）+ Node SDK +
+单进程容量基线 + 文件队列 / 多 worker 分布式执行。细节见
+[`docs/CLOSURE-2026-11-16.md`](CLOSURE-2026-11-16.md) 与
+[`PROJECT-STATE.md`](../PROJECT-STATE.md) §3.91–§3.94。
+
+**R50（历史）**：
 
 **R50 做了什么**（交接时先看这两份，不必回读全部 176 个 diff）：
 
@@ -28,12 +36,10 @@
 `runtime/lifecycle.py`（心跳/锁/僵尸收敛全部改走 `elapsed_since`）、`api/server.py`
 （`on_event` 的空 id 与注册表上界、`_send_json` 改实例方法用于指标计数）。
 
-**接手第一件事**：跑一次三套样例确认环境（§5.1）。**第一档、第二档功能项与
-全部小项均已闭环**（R17–R23：心跳收敛 / resume 锁、CI 检查链、限流窗口通道、
-主管建议通道、单步断点调试、API 契约守卫、resume 白名单 + MCP 管道关闭、
-测试覆盖矩阵、工具管理页与试跑、多用户 RBAC、可视化编排、向量检索、画布起跑、审批超时），提交已推送到远端（CI 四版本矩阵全绿）；
-下一轮只剩 §7.4 的整块工程（多用户 RBAC / 拖拽画布 / 向量检索），
-需要先定范围；工具管理页与试跑已由 R24 闭环。
+**接手第一件事**：跑一次三套样例确认环境（§5.1）。**代码侧没有待办项**：功能项、
+MCP 双向、SDK、容量基线与分布式两阶段均已闭环，提交已推送到远端（CI 8 个 job 全绿）。
+可选方向（队列后端抽象 / 真实 provider 压测 / 队列优先级）见
+`CLOSURE-2026-11-16.md` §五，按需再定范围。
 
 ---
 
