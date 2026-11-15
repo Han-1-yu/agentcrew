@@ -51,7 +51,11 @@ _TERMINAL_STATUSES = frozenset({
     "completed", "failed", "cancelled", "interrupted",
 })
 
-_MAX_POLL_SECONDS = 3600.0
+#: 单次 ``wait_for_run`` 的硬上限。**必须小于 MCP 客户端的 RPC 超时（30s）**：
+#: stdio 主循环是单线程串行的，一次 wait 卡多久，期间的 ping / status / approve
+#: 就全都没响应。官方 TS SDK 默认 60s 单请求超时，3600s 的等待会让客户端先超时、
+#: 服务端还卡在轮询里。25s 留 5s 余量，未结束时返回 ``timed_out`` 让客户端再调一次。
+_MAX_POLL_SECONDS = 25.0
 _POLL_INTERVAL = 2.0
 
 
@@ -153,8 +157,9 @@ class ApiBridge:
         self, run_id: str, timeout_seconds: float = 600.0,
     ) -> dict[str, Any]:
         """轮询到终态或超时（MCP 客户端大多是同步对话流，轮询比 SSE 简单可靠）。"""
-        deadline = time.monotonic() + min(max(timeout_seconds, 1.0),
-                                          _MAX_POLL_SECONDS)
+        budget = min(max(float(timeout_seconds), 1.0), _MAX_POLL_SECONDS)
+        started = time.monotonic()
+        deadline = started + budget
         last: dict[str, Any] = {}
         while True:
             last = self.run_status(run_id)
@@ -163,8 +168,16 @@ class ApiBridge:
                     state == "AWAITING_APPROVAL" or state == "awaiting_approval"):
                 return last
             if time.monotonic() >= deadline:
-                return {**last, "timed_out": True,
-                        "note": f"等待 {timeout_seconds:g}s 未到终态，可稍后再查"}
+                waited = round(time.monotonic() - started, 1)
+                return {
+                    **last,
+                    "timed_out": True,
+                    "waited_seconds": waited,
+                    "note": f"等待 {waited:g}s 未到终态",
+                    # 明确告诉模型下一步怎么走：只说「超时」会被当成失败放弃。
+                    "hint": "run 仍在运行：请再次调用 agentcrew_wait_for_run，"
+                            "或先用 agentcrew_run_status 查看进度",
+                }
             time.sleep(_POLL_INTERVAL)
 
 
@@ -228,11 +241,14 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     ),
     _tool(
         "agentcrew_wait_for_run",
-        "阻塞等待一次 run 到终态（completed/failed/cancelled/interrupted）或超时。",
+        "等待一次 run 到终态（completed/failed/cancelled/interrupted）或单次等待上限。"
+        "单次最多等 25 秒（小于 MCP 客户端 30 秒 RPC 超时）；若返回 timed_out=true，"
+        "说明 run 仍在跑，请再次调用本工具或改用 agentcrew_run_status 查看进度。",
         {
             "run_id": {"type": "string", "description": "run ID"},
             "timeout_seconds": {
-                "type": "number", "description": "最长等待秒数，默认 600",
+                "type": "number",
+                "description": "本次等待预算（秒），会被 25 秒硬上限截断；默认 600",
             },
         },
         ["run_id"],

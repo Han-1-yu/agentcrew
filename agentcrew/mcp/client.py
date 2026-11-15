@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import Any
 
 from agentcrew.mcp.tool import MCPTool, MCPToolResult
@@ -78,15 +79,35 @@ class MCPClient:
     def from_config(cls, server_config: dict[str, Any]) -> MCPClient:
         """按 ``mcp_servers`` 配置构造客户端，``transport`` 字段选通道。
 
-        - ``stdio``（默认）：``command`` + 可选 ``env``；
+        - ``stdio``（默认）：``command`` + 可选 ``args`` / ``env``；
         - ``sse`` / ``http``：``url`` + 可选 ``headers``。
+
+        ``command`` 同时接受两种写法：列表 ``["npx", "-y", "..."]``，或字符串
+        ``"npx"`` + ``args: ["-y", "..."]``。此前只接受列表、``args`` 被静默丢弃，
+        仓库自带的浏览器模板（``command: npx`` + ``args``）按原样抄进去 100% 启动
+        失败——入站半边的可用性底线，不能靠文档提醒用户改写。
         """
         transport_type = str(server_config.get("transport", "stdio")).lower()
         if transport_type == "stdio":
-            command = server_config.get("command")
-            if not command:
+            raw_command = server_config.get("command")
+            if not raw_command:
                 raise MCPError("stdio 传输需要 command 字段")
-            return cls(list(command), env=server_config.get("env"))
+            if isinstance(raw_command, (list, tuple)):
+                command = [str(item) for item in raw_command]
+            else:
+                command = [str(raw_command)]
+            extra = server_config.get("args")
+            if isinstance(extra, (list, tuple)):
+                command.extend(str(item) for item in extra)
+            configured_env = server_config.get("env")
+            env = None
+            if isinstance(configured_env, dict):
+                # 与进程环境合并而不是整体替换：替换会丢掉 PATH / SYSTEMROOT，
+                # Windows 上子进程直接起不来。合并只发生在连接时，配置快照
+                # （以及 run.json 的脱敏结果）仍是用户写的原始值。
+                env = {**os.environ,
+                       **{str(k): str(v) for k, v in configured_env.items()}}
+            return cls(command, env=env)
         if transport_type == "sse":
             url = server_config.get("url")
             if not url:

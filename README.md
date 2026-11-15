@@ -1983,11 +1983,22 @@ tools_enabled: true          # MCP 工具也是工具，没有注册表就无处
 mcp_servers:
   fs:
     command: [npx, "-y", "@modelcontextprotocol/server-filesystem", /tmp]
+  # C9：command 也接受字符串 + args（仓库自带浏览器模板就是这种写法）
+  playwright:
+    command: npx
+    args: ["@playwright/mcp@latest"]
+    env: {PLAYWRIGHT_BROWSERS_PATH: "0"}   # 与进程环境合并，不覆盖 PATH
   api:
     transport: sse
     url: https://mcp.example/sse
     headers: {Authorization: "Bearer …"}
 ```
+
+C9 修掉了一个「文档写了却不生效」的 bug：`from_config` 此前只接受 `command` 列表，
+`args` 被静默丢弃，`command: npx` 会被拆成 `['n','p','x']` 导致子进程起不来；现在
+字符串 + `args` 拼接、`env` 与 `os.environ` 合并（不丢 `PATH` / `SYSTEMROOT`）。
+入站半边还补了回环测试（`tests/test_mcp_loopback.py`：本仓 client ↔ 本仓
+`main.py mcp-serve`），协议漂移与 stdout 污染会在 CI 里变红。
 
 `tools_enabled: false`（默认）时一个子进程都不起、一次网络都不发。
 

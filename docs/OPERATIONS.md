@@ -74,8 +74,11 @@ python main.py doctor --json
 | 作为库调用 | `from agentcrew.crew.crew import Crew` | 二次集成 |
 | MCP **客户端** | 配置 `mcp_servers` | 连别人的 MCP 服务器取工具 |
 
-> 方向别搞反：`agentcrew/mcp` 是客户端，**本项目不是 MCP server**，不能被别的 Agent
-> 反向调用。要被外部系统驱动，用 HTTP API 或 CLI。
+> 方向别搞反：`agentcrew/mcp` 既是客户端（`mcp_servers` 连别人的 server），也是
+> **MCP server**（`python main.py mcp-serve`，stdio，供 Claude Desktop / Cursor 反向
+> 调用 5 个工具）。此前的「本项目不是 MCP server」是 C7 之前的表述，已过期；
+> 两条方向互不影响，也都有测试（`tests/test_mcp_client.py` 与
+> `tests/test_mcp_loopback.py`）。要被外部系统以 HTTP 驱动，仍用 HTTP API。
 >
 > R16 的官方 SDK（`sdk/`）不是第六种运行形态，它只是 `serve` 的客户端：服务仍按
 > 上表五种之一部署，SDK 装在调用方那一侧。

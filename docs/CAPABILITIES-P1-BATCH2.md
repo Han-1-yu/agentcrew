@@ -20,7 +20,7 @@
 | `agentcrew_run_status` | `GET /runs/{id}/status` | 查状态 |
 | `agentcrew_list_approvals` | `GET /runs/{id}/approvals` | 列审批单 |
 | `agentcrew_approve` | `POST /runs/{id}/approvals` | 裁决（decision 形状同 HTTP API） |
-| `agentcrew_wait_for_run` | 轮询 status | 等到终态或超时 |
+| `agentcrew_wait_for_run` | 轮询 status | 等到终态或单次上限；**单次最多 25s**（小于 MCP 客户端 30s RPC 超时），未结束时返回 `timed_out=true` + `hint`，请再次调用 |
 
 ### 1.2 设计边界（关键）
 
