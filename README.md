@@ -2561,10 +2561,18 @@ python -m pytest -q
 `bench/`（`report.md` / `stability.md` 可读，`results.json` / `stability.json` 可机读）。
 
 ```bash
-python scripts/bench.py                       # 并发 1/2/4/8，各 3 次
+python scripts/bench.py                       # 单 run 内任务并发：1/2/4/8，各 3 次
 python scripts/bench.py --levels 1,4,8 --real # 额外做一次真实 provider 探测
+python scripts/bench_capacity.py              # 单进程多 run 并发：1/2/4/8/10，各 3 轮
+python scripts/bench_capacity.py --latency-ms 200 --levels 1,2,4 --label latency200
 python scripts/soak.py                        # 连续 20 次 run + 2 类故障注入
 ```
+
+**容量基线**（C14）测的是**多 run 并发**：起真实 `ApiServer`（mock、零费用），并发发
+POST，量并发槽位（`AGENTCREW_MAX_CONCURRENT_RUNS`，默认 8）是否生效、吞吐、CPU 占比
+与 RSS。2026-11-16 的基线结论：60ms 延迟下吞吐 2 并发就饱和（约 32 run/分），
+200ms 延迟下 4 并发仍有 2.17×——瓶颈是事件循环里的同步段，不是模型等待；详见
+[`PROJECT-STATE.md` §3.93](PROJECT-STATE.md) 与 `bench/capacity-2026-11-16.md`。
 
 **并发基准**测的是**引擎调度**，不是模型速度：离线模式下给每次 LLM 调用注入固定
 延迟（默认 200ms，真实调用常在 1–3 秒，已是保守取值），然后从 ledger 的
