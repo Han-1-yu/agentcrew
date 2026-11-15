@@ -20,7 +20,7 @@
 | Studio | `npm run check` **80** 模块 / **44** 样式分片、`test:unit` **37/37**、`verify:api` **13/13**、electron `e2e` **32/32**、`selftest` **16/16**（2026-11-15 本机实跑，见 §3.87；首次 15/16 系全量回归并发造成的进程计数误判，隔离复跑全过） |
 | 上线自检 | 本机可验 **9 项全通过**（doctor / 离线冒烟 / REST 认证 200·401 / `/metrics` / 无密钥退 3 / `clean` 干跑 / Studio 三连 / ruff+mypy）；目标机 10 项判据见 `docs/DEPLOY-CHECK-2026-11-13.md` |
 | 收尾 | 交付说明见 **`docs/CLOSURE-2026-11-13.md`**；B 类外部环境项 **5/5 全部闭环**；云主机真实部署验收 10 项中 **7 项闭环**（TLS/SSE、告警规则、日志、密钥、成本、webhook、备份），仅剩独立数据盘与两项 Docker 依赖（§3.77、`docs/DEPLOYMENT-VM-2026-11-13.md`） |
-| Git | `c9c4a60`（R61 真机修复）与 `c9cc47c`（R59–R61）均已推送到 `origin/master`，CI run **43453359080** / **43449592343** 的 **7 个 job 全部 success**（Python 3.10/3.11/3.12/3.13、Windows、Studio、Docker 真隔离）；`ebb9895`（R62）/ `8c6e411`（Studio V6-FE）/ `b712113`（桌面启动器）连同两笔状态回填已于 2026-11-14 推送到 `origin/master`（`92d3854..67aeda4`）；C10 `5cdeea8` 与状态回填 `d76d2ef` 同批推送，**2026-11-15 复核 CI run `43608513108`（head = `d76d2ef`）的 7 个 job 逐一 success**（Python 3.10/3.11/3.12/3.13、Windows·uv、Studio·Node 20、Sandbox·docker 真隔离），`Sync main` run `43608513094` success；上一批 `67aeda4` 的 run `43607497931` 亦 success。验收报告 `docs/ACCEPTANCE-2026-11-12.md`；真实模型评测历史证据为 23 条中 22 通过（`bench/eval-live-2026-11-13.md`，本次未重跑真实模型评测） |
+| Git | `c9c4a60`（R61 真机修复）与 `c9cc47c`（R59–R61）均已推送到 `origin/master`，CI run **43453359080** / **43449592343** 的 **7 个 job 全部 success**（Python 3.10/3.11/3.12/3.13、Windows、Studio、Docker 真隔离）；`ebb9895`（R62）/ `8c6e411`（Studio V6-FE）/ `b712113`（桌面启动器）连同两笔状态回填已于 2026-11-14 推送到 `origin/master`（`92d3854..67aeda4`）；C10 `5cdeea8` 与状态回填 `d76d2ef` 同批推送，**2026-11-15 复核 CI run `43608513108`（head = `d76d2ef`）的 7 个 job 逐一 success**（Python 3.10/3.11/3.12/3.13、Windows·uv、Studio·Node 20、Sandbox·docker 真隔离），`Sync main` run `43608513094` success；上一批 `67aeda4` 的 run `43607497931` 亦 success。验收报告 `docs/ACCEPTANCE-2026-11-12.md`；真实模型评测历史证据为 23 条中 22 通过（`bench/eval-live-2026-11-13.md`，本次未重跑真实模型评测）。**2026-11-15 本轮 C10 切片二实现提交 `5e9bc70`（26 文件 / +1866 −119）为本地提交、未推送**，`origin/master` 仍是 `d76d2ef`；推送后需另查该笔 CI |
 | 角色 | 8 个内置岗位角色 + 执行体（Agent Profile）可多绑 |
 
 ```bash
@@ -2625,6 +2625,11 @@ D2 把「运行中实时引导」列为待产品决策，并明确「Studio 输�
 的指引（已进模型上下文，撤不回来）· 指引撤回的跨进程事件去重 · 运行中自动压缩 ·
 rewind 独立导航页（当前从任务详情弹窗进入）· Studio 指引的流式回显（当前手动刷新）。
 压缩只在终态 / 手动触发，是并发安全约束，不是功能缺失。
+
+**提交状态**：实现提交 `5e9bc70`（26 文件 / +1866 −119，含 7 个新文件），本段状态回填另起一笔
+`docs(state)`；两笔均**只在本地 master**，未推送到 `origin/master`（仍为 `d76d2ef`）。
+因此 §0 的 CI 七 job 全绿是 `d76d2ef` 的证据，**不是本轮的**；推送后须另查新 run，
+不要拿旧 run 冒充新提交的 CI。工作区在同一时刻保持干净。
 
 ---
 
