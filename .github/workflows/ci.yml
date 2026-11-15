@@ -146,3 +146,22 @@ jobs:
 
       - name: 单元测试
         run: npm run test:unit
+
+  # C13：Node / TypeScript SDK。零运行时依赖、无需构建，所以不用 npm install，
+  # 直接 node --test；与 Studio job 分开，SDK 的失败不会掩盖前端问题。
+  sdk-node:
+    name: "SDK · Node 20"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/typescript
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: 单元测试（零依赖）
+        run: node --test tests/*.test.mjs

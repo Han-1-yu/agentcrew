@@ -2811,6 +2811,36 @@ env 合并 / 浏览器模板形状）、`test_mcp_loopback.py` 4 例（回环 7 
 
 ---
 
+### 3.92 C13：TypeScript / Node SDK（2026-11-15 晚）
+
+**起因**：§7.1 顺序 ① 的 C13，用户已定先做 TypeScript / Node。
+
+| 项 | 落地 |
+|---|---|
+| 包结构 | 新建 `sdk/typescript/`：`package.json`（ESM、`exports`、`types`、`engines.node>=18`、**零 dependencies**）+ `src/index.js`（可直接运行，无需构建）+ `src/index.d.ts`（手写类型）+ `README.md` + `examples/basic.mjs` |
+| 能力 | 运行：`health` / `listRuns` / `createRun` / `getStatus` / `getStats` / `getLedger`；控制：`cancelRun` / `resumeRun` / `rewindRun`（`dryRun` → `dry_run`）/ `waitForRun`；审批：`listApprovals` / `decideApproval`（`request_id` + `decision`）；指引：`getGuidance` / `addGuidance` / `withdrawGuidance` / `compactGuidance`；产物：`listArtifacts` / `readArtifact`（`max_bytes`）；事件：`iterEvents` 逐帧解析 SSE 命名帧并跳过 `: ping` |
+| 错误分型 | 非 2xx 抛 `AgentCrewError`（`status` / `code` / `body`）；网络错误 `status=0` + `code="network_error"`；`204` 返回 `null` |
+| 超时 | 默认 30s（`AbortController` + `AbortSignal` 链式取消）；SSE 长连接单独关掉超时 |
+| CI | `ci.yml` 新增独立 job `SDK · Node 20`：零依赖、不 `npm install`，直接 `node --test tests/*.test.mjs` |
+| 测试 | `tests/client.test.mjs` 12 例（真实本地 `http` 服务）：请求头/路径/body、404 与网络错误分型、artifact query 编码、轮询到终态、超时返回 `timedOut`、`awaiting_approval` 提前返回、SSE 命名帧与注释帧、204、审批字段、`dry_run` 翻译、`parseSseFrame` 边界 |
+
+**四条边界**：
+
+1. **不发布 npm**：`private: true`，从仓库本地安装（`npm install ../agentcrew/sdk/typescript`）。
+   真要发包需要定 scope、license 与发布流程，另议。
+2. **不构建**：`src/index.js` 就是产物，`.d.ts` 手写。换 `tsc` 会把 Node 依赖装进
+   每个想用 SDK 的项目，与「零依赖」冲突。
+3. **不自动重试**：`waitForRun` 的轮询除外。重试策略（哪些状态可重、退避多少）应由
+   调用方按业务决定；SDK 只做一次请求 + 明确错误。
+4. **SSE 不自动重连**：`iterEvents` 在流结束时正常退出，断线由调用方重连并自行去重
+   （服务端事件无全局序号，盲目重连可能重复）。
+
+**验证**：`node --test tests/*.test.mjs` **12/12**；`node --check` 与
+`npm pack --dry-run` 通过（只打包 `src` + README）。Python 侧未改代码，全量与 CI
+结论见 §0。
+
+---
+
 ## 4. 历史报告汇总（已并入本文，原文归档）
 
 | 报告 | 时间 | 核心结论 | 现状 |
@@ -3064,11 +3094,13 @@ env 合并 / 浏览器模板形状）、`test_mcp_loopback.py` 4 例（回环 7 
 
 | 顺序 | 事项 | 性质 | 恢复方式 / 前置 |
 |---|---|---|---|
-| 1 | C13 TypeScript / Node SDK | 已定语言，本仓可做 | 薄封装（REST + 类型）+ 示例；复用 Studio 的 API 客户端语义 |
-| 2 | C14 压测基线 | 已定口径（先压测再定架构） | 量单进程多 run 的并发上限、瓶颈在 LLM 还是本地调度；产出 `bench/` 报告与阈值 |
-| 3 | Windows 本机 Python 断言重写偶发崩溃（`0xC0000005`） | 环境问题，非项目代码 | **不主动排期**：全量回归统一用 `python scripts/test.py`（崩溃隔离跑器），见 §6；等环境更新自愈 |
+| 1 | C14 压测基线 | 已定口径（先压测再定架构） | 量单进程多 run 的并发上限、瓶颈在 LLM 还是本地调度；产出 `bench/` 报告与阈值 |
+| 2 | Windows 本机 Python 断言重写偶发崩溃（`0xC0000005`） | 环境问题，非项目代码 | **不主动排期**：全量回归统一用 `python scripts/test.py`（崩溃隔离跑器），见 §6；等环境更新自愈 |
 
-**本批（C9，两批合并）已闭环**：MCP 入站配置契约（字符串 `command` + `args`、`env` 合并）·
+**本批（C13）已闭环**：TypeScript / Node SDK（`sdk/typescript`，零依赖 ESM、
+手写 d.ts、12 例 `node --test`、独立 CI job）。
+
+**上一批（C9，两批合并）已闭环**：MCP 入站配置契约（字符串 `command` + `args`、`env` 合并）·
 `wait_for_run` 单次上限 25s + `timed_out` / `hint` · 本仓 client↔server 回环测试 ·
 **产物读取（`GET /runs/{id}/artifacts` + 2 个 MCP 工具，工具数 5 → 7）** ·
 **协议版本在支持集合内回显** · `OPERATIONS.md` 过期表述更正。

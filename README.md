@@ -2719,6 +2719,27 @@ with AgentCrewClient("http://127.0.0.1:8765", api_key="…") as client:
 完整方法表、异常层次、已知限制与两个示例见 [`sdk/README.md`](sdk/README.md)。
 认证与反代配置见 [`docs/OPERATIONS.md`](docs/OPERATIONS.md) §2.2。
 
+### Node / TypeScript（C13）
+
+[`sdk/typescript/`](sdk/typescript/README.md) 是并列的**零依赖 ESM 客户端**：不构建、
+不引任何 `dependencies`，只用全局 `fetch`（Node 18+），`src/index.d.ts` 手写类型。
+覆盖运行/控制（含 `rewindRun`）/审批/指引/产物与 SSE 事件流，错误统一抛
+`AgentCrewError`（`status=0` 表示网络错误，与 4xx 区分）。
+
+```js
+import { AgentCrewClient } from "agentcrew-sdk";
+
+const client = new AgentCrewClient({
+  baseUrl: "http://127.0.0.1:8765", apiKey: process.env.AGENTCREW_API_KEY,
+});
+const run = await client.createRun("做一个 Todo 应用", { mock: true });
+const done = await client.waitForRun(run.run_id, { timeoutMs: 120_000 });
+const { artifacts } = await client.listArtifacts(run.run_id);
+```
+
+`npm install ../agentcrew/sdk/typescript`，或直接把 `src/index.js` 加进项目；
+测试 `node --test tests/*.test.mjs`，CI 有独立的 `SDK · Node 20` job。
+
 ---
 
 ## R17 run 生命周期加固：心跳 / 僵尸收敛 / resume 锁

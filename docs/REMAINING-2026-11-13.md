@@ -71,7 +71,7 @@
 | --- | --- | --- |
 | D1 | C9 A2A 互操作 | ✅ **已决策并由第一批落地（2026-11-15）**：复用 MCP 双向打通（不另起 LF A2A 协议）。首批完成入站配置契约（字符串 `command` + `args`、`env` 合并）、`wait_for_run` 单次 25s 上限、本仓 client↔server 回环测试，见 `PROJECT-STATE.md` §3.91。**两步已全部收尾（2026-11-15）**：产物读取 `GET /runs/{id}/artifacts` + `agentcrew_list_artifacts` / `agentcrew_read_artifact`（工具 5 → 7，openapi / RBAC / 断言同批改）；`initialize` 在 `{2024-11-05, 2025-03-26, 2025-06-18}` 内回显客户端版本。C9 闭环，见 §3.91 |
 | D2 | ~~C10 对话式入口 + run 中途引导~~ | ✅ **已闭环（2026-11-15）**：切片一的 CLI / REST 中途指引 + 切片二的定向 / 过期 / 撤回 / 历史压缩 + Studio 指引输入入口均已落盘；R62 `rewind` 也补上 Studio「从此恢复」弹窗。**仍待产品决策**的只剩「对话页是否升级为对话即入口」与指引流式回显（见 §7.1） |
-| D3 | C13 SDK 生态 | 需要哪种语言的 SDK？（TypeScript / Go / 异步 Python） |
+| D3 | C13 SDK 生态 | ✅ **已决策并落地（2026-11-15）**：先做 TypeScript / Node。`sdk/typescript/` 为零依赖 ESM 客户端（无构建、手写 d.ts），覆盖运行/控制/审批/指引/产物/SSE，12 例 `node --test` + 独立 CI job；见 `PROJECT-STATE.md` §3.92。Go 与异步 Python 未做，按需再议 |
 | D4 | C14 容量与横向扩展 | 预期并发量级？多实例共享 `output_dir` 的方案（NFS vs 对象存储）选型 |
 | D5 | 评测口径两处（2026-11-13 实测暴露） | ①~~文档类 `must_contain` 逐字匹配~~：✅ 已按「最优方案」处置——hint 改「逐字包含」、门槛不放宽（R58，`PROJECT-STATE.md` §3.72）；②~~驳回类用例如何区分「门禁拒绝」与「规划期失败」~~：✅ 已加 check kind `rejected_by_gate`（`stage: plan|gate|any` + `reason_contains`），只认 `plan_rejected` / `gate_result(verdict=reject)` 证据，`run` 级 error 或非 failed 状态一律判失败；两条驳回 case 已改用该断言并用离线 regrade 验证 2/2 PASS（§3.74） |
 

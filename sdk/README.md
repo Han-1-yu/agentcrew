@@ -1,5 +1,8 @@
 # AgentCrew Python SDK
 
+> 另有 Node / TypeScript 版：[`sdk/typescript/`](typescript/README.md)（C13，零依赖
+> ESM，无需构建，覆盖运行/审批/指引/产物与 SSE）。
+
 给外部系统调用 AgentCrew HTTP API 用的**零依赖同步客户端**。契约来源是仓库里的
 [`artifacts/contracts/openapi.yaml`](../artifacts/contracts/openapi.yaml)（由
 `agentcrew/api/server.py` 逆向得到，端点与返回字段都以代码为准）。
