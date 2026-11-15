@@ -558,7 +558,9 @@
   | `targets[].events` | string[] | 是 | 订阅的事件名（空数组 = 不限；`["*"]` = 全推）。 |
   | `targets[].signed` | boolean | 是 | 该接收端是否配了签名密钥。 |
   | `targets[].only_failures` | boolean | 是 | 是否只推坏消息。 |
+  | `targets[].filter` | string | 是 | C4：事件级等值过滤表达式（空串 = 不过滤）。 |
   | `spool_enabled` | boolean | 否 | R15：本次 run 是否启用了持久化重放队列（由 `Crew._start` 传入 spool 目录）。库层直接构造分发器时为 `false`。 |
+  | `dedup_enabled` | boolean | 否 | C3：本次 run 是否启用了补投去重表（与 spool 同批由 `Crew._start` 传入）。 |
 
 > R14 把 `webhook_enabled` 的 data 从扁平字段改成了 `targets` 数组——多接收端下
 > 扁平结构无法表达「哪个地址订了哪些事件」。消费方按数组遍历即可。
@@ -578,12 +580,19 @@
 - **触发时机**：重试耗尽仍失败，或收尾时队列没排空（`error="shutdown_timeout"`）。
 - **data**：`webhook_event`、`delivery`、`attempts`、`target`、`error`；补投相关记录另带 `replayed=true`。
   `error` 取值：`HTTP 500` / `URLError: …` / `shutdown_timeout` /
-  `replay_target_missing`（配置里的地址已变，旧记录被丢弃）/ `replay_discarded: expired|max_attempts|corrupt|bad_shape`。
+  `replay_target_missing`（配置里的地址已变，旧记录被丢弃）/ `replay_discarded: expired|max_attempts|corrupt|bad_shape` /
+  `replay_duplicate`（C3：去重表显示这条「事件 × 接收端」已成功投过，删残留、不再 POST）。
 
 > R15 起「失败」不等于「丢了」：记录仍在 `<output_dir>/_webhook_spool/` 里，下一次
 > 启用 Webhook 的 run 会按原 `delivery` / `timestamp` 补投，成功才删文件。语义是
 > **at-least-once**——多进程同时补投可能重复到达，接收方必须用
 > `X-AgentCrew-Delivery` 幂等。spool 文件不含 URL 与密钥，只存 URL 的短哈希。
+>
+> C3 补了**补投入口去重**：投递成功后在 `<output_dir>/_webhook_delivered/deliveries.jsonl`
+> 追加一行 `(delivery, target_key, ts)`，补投时命中即跳过（记 `replay_duplicate`）。
+> 它消除「多进程同时扫到同一 spool 文件」的双投，但**不改变 at-least-once 语义**：
+> 两个进程都在追加前就 POST 成功时仍可能重复到达，幂等头仍是最终防线。
+> 去重表独立目录 + `.jsonl`，不进 spool 的 `*.json` 命名空间，24h 老化、不存 URL/密钥/payload。
 
 > 这三条只描述「通知有没有发出去」，不影响 run 结局：投递失败不会让任务失败，也不会改退出码。
 

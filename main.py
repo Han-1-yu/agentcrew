@@ -2668,6 +2668,9 @@ def _cmd_config_export(args: argparse.Namespace) -> int:
                 snap["webhook_timeout_seconds"])
         if snap.get("webhook_max_retries") not in (None, 2):
             export_doc["webhook_max_retries"] = int(snap["webhook_max_retries"])
+        # C4：过滤表达式只在非默认时导出（默认导出文档保持不变）。
+        if snap.get("webhook_filter"):
+            export_doc["webhook_filter"] = str(snap["webhook_filter"])
     # R18：限流三参数补齐配置通道，只在偏离默认时导出（默认导出文档保持不变）。
     if snap.get("api_rate_limit_enabled"):
         export_doc["api_rate_limit_enabled"] = True
@@ -2814,6 +2817,7 @@ def _cmd_config_import(args: argparse.Namespace) -> int:
         "role_fallback", "max_supervisor_reassignments",  # R10 自动重派
         "webhook_url", "webhook_secret", "webhook_events",  # R12 出站 Webhook
         "webhook_timeout_seconds", "webhook_max_retries",
+        "webhook_filter",                             # C4 事件级过滤
         "webhooks",                                   # R14 多接收端
         "api_rate_limit_enabled", "api_rate_limit_max",  # R18 限流配置通道
         "api_rate_limit_window",

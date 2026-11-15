@@ -120,6 +120,7 @@ _ENV_TO_FIELD: dict[str, str] = {
     "AGENTCREW_WEBHOOK_URL": "webhook_url",
     "AGENTCREW_WEBHOOK_SECRET": "webhook_secret",
     "AGENTCREW_WEBHOOK_TRIGGER_SECRET": "webhook_trigger_secret",
+    "AGENTCREW_WEBHOOK_FILTER": "webhook_filter",
     "AGENTCREW_DOCS_RAG_ENABLED": "docs_rag_enabled",
     "AGENTCREW_DOCS_RAG_LIMIT": "docs_rag_limit",
     "AGENTCREW_DOCS_RAG_VECTOR_WEIGHT": "docs_rag_vector_weight",
@@ -172,7 +173,7 @@ _YAML_SCALAR_KEYS = (
     "max_supervisor_reassignments",
     "webhook_url", "webhook_secret", "webhook_trigger_secret",
     "webhook_events", "webhook_timeout_seconds",
-    "webhook_max_retries", "webhooks",
+    "webhook_max_retries", "webhook_filter", "webhooks",
     # E-3：限流三参数此前只有 env 通道，YAML 里写会被静默忽略（R18 补齐）。
     "api_rate_limit_enabled", "api_rate_limit_max", "api_rate_limit_window",
     # P0-4：可信代理网段（限流/审计的 XFF 解析只在 peer 可信时进行）。
@@ -453,6 +454,7 @@ def _yaml_values(
                 "events": [str(e) for e in (item.get("events") or [])
                            if str(e).strip()],
                 "only_failures": bool(item.get("only_failures", False)),
+                "filter": str(item.get("filter") or ""),
             })
         values["webhooks"] = normalized_targets
     role_fallback = data.get("role_fallback")
@@ -1283,6 +1285,20 @@ class Settings(BaseModel):
 
     B-7：上限 30s（校验在 ``_validate_webhook_timeout`` 里，保留中文错误消息）。
     """
+    webhook_filter: str = ""
+    """C4：单接收端的事件级等值过滤（默认空 = 不过滤，行为与 R14 逐字一致）。
+
+    语法是逗号分隔的 ``key=value`` 全 AND，例如 ``status=failed``、
+    ``event=run_finished,status=failed``、``task_id=T-002``；``event=`` 匹配事件名，
+    ``key.sub=`` 走点分路径，``value=*`` 只要求该键存在。**没有** eval / 正则 /
+    比较运算符——配置不是代码执行面；写错的表达式保守判「不匹配」，宁可少发。
+    多接收端请在 ``webhooks[]`` 每条里各写 ``filter``。
+
+    边界：明细事件（``gate_result`` / ``task_finished`` …）目前只走 SSE、不进
+    Webhook 流（见 ``Crew._make_ledger_observer``），所以过滤表达式作用于已订阅的
+    run 级事件；想按任务/门禁过滤需先把那些事件接入 Webhook（量级风险，另立项）。
+    环境变量 ``AGENTCREW_WEBHOOK_FILTER``，YAML 顶层 ``webhook_filter``。
+    """
     webhook_max_retries: int = 2
     """R12：投递失败的重试次数（默认 2，指数退避上限 2 秒）。
 
@@ -1294,7 +1310,7 @@ class Settings(BaseModel):
     webhooks: list[dict[str, Any]] = Field(default_factory=list)
     """R14：多接收端配置（``webhooks`` YAML 段）。**非空时旧的单接收端字段被忽略。**
 
-    每条形状：``{name, url, secret, events, only_failures}``，只有 ``url`` 必填。
+    每条形状：``{name, url, secret, events, only_failures, filter}``，只有 ``url`` 必填。
     ``events`` 为空 = 不限事件；``only_failures: true`` 再叠一层「只推坏消息」——
     两个条件是**与**关系，所以「Slack 只收失败、内部系统全收」配成两条即可。
 

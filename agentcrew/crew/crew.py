@@ -95,6 +95,7 @@ from agentcrew.runtime.lifecycle import (
 )
 from agentcrew.runtime.superstep import SuperStepJournal
 from agentcrew.runtime.webhook import (
+    DEDUP_DIR_NAME,
     SPOOL_DIR_NAME,
     WebhookConfig,
     WebhookDispatcher,
@@ -788,8 +789,11 @@ class Crew:
         # R15：spool 放在 output_dir 下、所有 run 共用一个目录——挂起/崩溃遗留的
         # 通知由下一次启用 Webhook 的 run 补投；_run_dirs 只认含 run.json 的目录，
         # 所以 clean / delete_run 不会碰它。
+        # C3：去重表与 spool 平级放在 output_dir 下（独立目录，不进 *.json 命名空间）。
         self._webhook = self._build_webhook(
-            ledger, spool_dir=checkpoint.run_dir.parent / SPOOL_DIR_NAME)
+            ledger,
+            spool_dir=checkpoint.run_dir.parent / SPOOL_DIR_NAME,
+            dedup_dir=checkpoint.run_dir.parent / DEDUP_DIR_NAME)
         # C4：把附带图片落盘到 run 目录（输入证据，随 run 保留），并记一条
         # ``images_attached``——「模型这次能看到图」必须能从审计读出来。
         self._persist_images(checkpoint.run_dir, ledger)
@@ -1714,7 +1718,8 @@ class Crew:
         return observer
 
     def _build_webhook(
-        self, ledger: Ledger, *, spool_dir: Path | None = None
+        self, ledger: Ledger, *, spool_dir: Path | None = None,
+        dedup_dir: Path | None = None,
     ) -> WebhookDispatcher | None:
         """按配置构造分发器；URL 为空时返回 ``None``（默认关闭）。
 
@@ -1732,6 +1737,8 @@ class Crew:
             events=tuple(self._settings.webhook_events),
             timeout_seconds=self._settings.webhook_timeout_seconds,
             max_retries=self._settings.webhook_max_retries,
+            # C4：单接收端的事件级过滤（多接收端在每条 target 里各配 filter）。
+            filter=self._settings.webhook_filter,
             # R14：多接收端。``webhooks`` 非空时 ``WebhookConfig.resolved()`` 以它
             # 为准，旧的单接收端字段自动让位（避免同一地址被推两遍）。
             targets=tuple(
@@ -1742,6 +1749,7 @@ class Crew:
                     events=tuple(
                         str(item) for item in (raw.get("events") or [])),
                     only_failures=bool(raw.get("only_failures", False)),
+                    filter=str(raw.get("filter") or ""),
                 )
                 for raw in self._settings.webhooks
                 if str(raw.get("url") or "").strip()
@@ -1750,6 +1758,7 @@ class Crew:
         dispatcher = WebhookDispatcher(
             config, sink=self._webhook_sink(ledger),
             spool_dir=spool_dir,
+            dedup_dir=dedup_dir,
             # R15：payload 落盘前按同一套密钥表脱敏，不绕过 Ledger 的防护。
             secrets=tuple(self._settings.secret_values()),
         )
@@ -1763,10 +1772,12 @@ class Crew:
                     "events": list(target.events),
                     "signed": bool(target.secret),
                     "only_failures": target.only_failures,
+                    "filter": target.filter,
                 }
                 for target in config.resolved()
             ],
             spool_enabled=spool_dir is not None,
+            dedup_enabled=dedup_dir is not None,
         )
         return dispatcher
 

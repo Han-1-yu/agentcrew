@@ -44,6 +44,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import os
 import queue
 import threading
@@ -68,6 +69,8 @@ SIGNATURE_HEADER = "X-AgentCrew-Signature"
 
 #: run 结束时等待队列排空的上限：通知不该让收尾多等。
 DEFAULT_CLOSE_TIMEOUT = 5.0
+
+_logger = logging.getLogger(__name__)
 
 #: 重试退避的上限；到顶后不再增长，避免 2^n 把收尾拖长。
 _MAX_BACKOFF_SECONDS = 2.0
@@ -108,6 +111,13 @@ SPOOL_MAX_AGE_SECONDS = 24 * 3600.0
 SPOOL_MAX_ATTEMPTS = 5
 _SPOOL_SUFFIX = ".json"
 
+#: C3（2026-11-15）：已成功投递的 ``(delivery, target_key)`` 追加表。
+#: 刻意独立目录 + ``.jsonl`` 后缀：``WebhookSpool.load()`` 只 glob ``*.json``，
+#: 混进同一个目录会被当成待投记录，既改文件数断言又可能重复投递。
+DEDUP_DIR_NAME = "_webhook_delivered"
+DEDUP_FILE_NAME = "deliveries.jsonl"
+DEDUP_MAX_AGE_SECONDS = 24 * 3600.0
+
 
 def _is_failure(event: str, payload: dict[str, Any]) -> bool:
     """这条事件是不是「坏消息」。
@@ -118,6 +128,50 @@ def _is_failure(event: str, payload: dict[str, Any]) -> bool:
     if event in _FAILURE_EVENTS:
         return True
     return str(payload.get("status") or "").lower() in _FAILURE_STATUSES
+
+
+def _dig(value: Any, keys: list[str]) -> Any:
+    """点分路径取值；缺键 / 类型不对返回 ``None``（过滤不该抛异常）。"""
+    current = value
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+        if current is None:
+            return None
+    return current
+
+
+def match_filter(
+    expr: str, event: str, payload: dict[str, Any] | None = None,
+) -> bool:
+    """C4：事件级等值过滤——逗号分隔的 ``key=value`` 全 AND，零求值器。
+
+    * ``event=run_finished,status=failed``：只推「跑失败的结束通知」；
+    * ``task_id=T-002``：只推某个任务的事件；``key.sub=value`` 走点分路径；
+    * ``value=*`` 表示「该键存在」；空表达式 = **不过滤**（默认行为逐字不变）。
+
+    刻意不用 ``eval`` / 正则 / 比较运算符：过滤表达式来自配置而不是模型，但仍
+    不该给配置一个代码执行面。语法错、键缺失、值不等一律判「不匹配」——
+    通知宁可少发，不能因为一句写错的表达式把全量事件外推。
+    """
+    if not expr or not expr.strip():
+        return True
+    view: dict[str, Any] = {"event": event}
+    view.update(payload or {})
+    for clause in expr.split(","):
+        key, sep, want = clause.strip().partition("=")
+        key, want = key.strip(), want.strip()
+        if not sep or not key or not want:
+            return False
+        got = _dig(view, key.split("."))
+        if got is None:
+            return False
+        if want == "*":
+            continue
+        if str(got) != want:
+            return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -133,11 +187,16 @@ class WebhookTarget:
     secret: str = ""
     events: tuple[str, ...] = ()
     only_failures: bool = False
+    #: C4：事件级等值过滤（空串 = 不过滤，见 :func:`match_filter`）。
+    filter: str = ""
 
     def matches(self, event: str, payload: dict[str, Any]) -> bool:
         if self.events and "*" not in self.events and event not in self.events:
             return False
         if self.only_failures and not _is_failure(event, payload):
+            return False
+        # 短路：空表达式不进任何新分支，默认配置的布尔结果与改造前逐字一致。
+        if self.filter and not match_filter(self.filter, event, payload):
             return False
         return True
 
@@ -159,6 +218,8 @@ class WebhookConfig:
     timeout_seconds: float = 5.0
     max_retries: int = 2
     only_failures: bool = False
+    #: C4：单接收端的过滤表达式；多接收端时按每条 ``WebhookTarget.filter`` 配。
+    filter: str = ""
     targets: tuple[WebhookTarget, ...] = ()
 
     def __post_init__(self) -> None:
@@ -185,7 +246,8 @@ class WebhookConfig:
         if self.url:
             return (WebhookTarget(
                 name="default", url=self.url, secret=self.secret,
-                events=self.events, only_failures=self.only_failures),)
+                events=self.events, only_failures=self.only_failures,
+                filter=self.filter),)
         return ()
 
     @property
@@ -381,6 +443,89 @@ class WebhookSpool:
         return pending, discarded
 
 
+class DeliveryDedup:
+    """C3：已成功投递的 ``(delivery, target_key)`` 追加表。
+
+    R15 的 spool 是 at-least-once：两个进程同时 ``load()`` 到同一份待投文件、
+    都 POST 成功、再各自 ``remove()``（后者 unlink 抛 OSError 被吞），对端已经
+    收了两次。本表在**投递成功之后、删 spool 文件之前**追加一行，补投时发现
+    「这一对已经投过」就直接删文件、不再发请求。
+
+    与 spool 同族：追加写不重写（多进程不会互相覆盖）、坏行跳过、24h 老化、
+    进程内锁。只记 delivery / target_key / ts，**不记 URL、密钥、payload**。
+    独立目录 + ``.jsonl`` 后缀，绝不落进 ``WebhookSpool`` 的 ``*.json`` 命名空间。
+
+    边界：这是**补投入口去重**，不是跨进程原子认领——两个进程若都在 mark 之前
+    就 POST 成功，对端仍可能收两次，所以 ``X-AgentCrew-Delivery`` 幂等头依然是
+    最终防线。要 exactly-once 需要给 spool 加 claim 锁，另作立项。
+    """
+
+    def __init__(self, dedup_dir: Path | str) -> None:
+        self._path = Path(dedup_dir) / DEDUP_FILE_NAME
+        self._seen: set[tuple[str, str]] = set()
+        self._lock = threading.Lock()
+        self._load()
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    @staticmethod
+    def key(record: PendingDelivery) -> tuple[str, str]:
+        # delivery 在同一次事件的所有接收端之间共享，键必须带上 target_key，
+        # 否则「A 端已投、B 端未投」的正常补投会被误杀。
+        return (record.delivery, record.target_key)
+
+    def seen(self, record: PendingDelivery) -> bool:
+        with self._lock:
+            return self.key(record) in self._seen
+
+    def mark(self, record: PendingDelivery) -> None:
+        """记一笔成功投递；写盘失败只告警，绝不把已成功的投递翻成失败。"""
+        payload = {
+            "delivery": record.delivery,
+            "target_key": record.target_key,
+            "ts": time.time(),
+        }
+        with self._lock:
+            try:
+                self._path.parent.mkdir(parents=True, exist_ok=True)
+                with open(self._path, "a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+                    handle.flush()
+            except OSError as exc:
+                _logger.warning("Webhook 去重表写入失败（投递仍算成功）：%s", exc)
+            self._seen.add(self.key(record))
+
+    def _load(self) -> None:
+        if not self._path.is_file():
+            return
+        cutoff = time.time() - DEDUP_MAX_AGE_SECONDS
+        try:
+            lines = self._path.read_text(encoding="utf-8").splitlines()
+        except OSError as exc:
+            _logger.warning("Webhook 去重表不可读，按空表处理：%s", exc)
+            return
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            try:
+                if float(payload.get("ts") or 0) < cutoff:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            delivery, target_key = payload.get("delivery"), payload.get("target_key")
+            if (isinstance(delivery, str) and isinstance(target_key, str)
+                    and delivery and target_key):
+                self._seen.add((delivery, target_key))
+
+
 @dataclass(frozen=True)
 class _QueueItem:
     """队列里的一个投递单元：一条记录 + 它此刻对应的接收端。"""
@@ -396,7 +541,8 @@ class WebhookDispatcher:
 
     ``sink`` 是投递结果的出口（形如 ``ledger.emit``），只在**主线程**被调用，
     因此 ``sink`` 自身不需要考虑线程安全。``spool_dir`` 给定时启用 R15 的
-    持久化重放；不给定时行为与 R14 逐字一致。
+    持久化重放；不给定时行为与 R14 逐字一致。``dedup_dir`` 给定时启用 C3 的
+    补投去重表；不给定时零文件、零扫描（测试直接构造分发器仍走原路径）。
     """
 
     def __init__(
@@ -405,6 +551,7 @@ class WebhookDispatcher:
         *,
         sink: Callable[[str, dict[str, Any]], None] | None = None,
         spool_dir: Path | str | None = None,
+        dedup_dir: Path | str | None = None,
         secrets: tuple[str, ...] = (),
     ) -> None:
         self._config = config
@@ -416,6 +563,9 @@ class WebhookDispatcher:
         self._spool = (
             WebhookSpool(spool_dir, secrets=tuple(secrets))
             if spool_dir is not None else None
+        )
+        self._dedup = (
+            DeliveryDedup(dedup_dir) if dedup_dir is not None else None
         )
         #: 便于测试与收尾汇总的计数（只在主线程读）。
         self.delivered = 0
@@ -433,6 +583,10 @@ class WebhookDispatcher:
     @property
     def spool_enabled(self) -> bool:
         return self._spool is not None
+
+    @property
+    def dedup_enabled(self) -> bool:
+        return self._dedup is not None
 
     def emit(self, event: str, payload: dict[str, Any]) -> None:
         """把一条事件交给后台投递；未启用 / 不订阅此事件时什么都不做。
@@ -518,6 +672,16 @@ class WebhookDispatcher:
                     "error": "replay_target_missing", "replayed": True,
                 })
                 continue
+            # C3：这条「事件 × 接收端」已经成功投过（常见于多进程同时补投
+            # 同一份 spool 文件）——删残留、记一笔账，绝不再 POST 第二次。
+            if self._dedup is not None and self._dedup.seen(record):
+                self._spool.remove(path)
+                self._record({
+                    "ok": False, "webhook_event": record.event,
+                    "delivery": record.delivery, "attempts": record.attempts,
+                    "error": "replay_duplicate", "replayed": True,
+                })
+                continue
             self._queue.put(_QueueItem(record, target, path, replayed=True))
 
     # ---- 后台线程 ----
@@ -547,6 +711,10 @@ class WebhookDispatcher:
                 if item.replayed:
                     result["replayed"] = True
                 self._record(result)
+                # C3：先记「已投成功」再删 spool。顺序反过来时，删完立刻被杀
+                # 会留下「文件没了、去重表里也没有」的空窗，下次补投无据可依。
+                if self._dedup is not None:
+                    self._dedup.mark(record)
                 if item.path is not None and self._spool is not None:
                     self._spool.remove(item.path)
                 return

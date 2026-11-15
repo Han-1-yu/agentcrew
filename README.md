@@ -1865,6 +1865,16 @@ webhooks:
 | 两个条件同时给 | **与**关系 |
 | `webhooks` 与 `webhook_url` 同时配 | 以 `webhooks` 为准（避免同一地址被推两遍） |
 | 各接收端的 `secret` | 各自独立签名，互不通用 |
+| `filter: "key=value,key2=value2"`（C4） | 事件级等值过滤，全部 AND；`event=` 匹配事件名，`a.b=` 走点分路径，`value=*` 只要求键存在 |
+| `filter` 写错 / 键缺失 | 保守判「不匹配」——宁可少发，不把全量事件外推；无 eval / 正则 / 比较运算符 |
+
+单接收端不必写列表，顶层 `webhook_filter` 即可：`status=failed` 只推失败通知，
+`event=run_finished,status=failed` 只推「跑失败的结束通知」。三个条件（`events` /
+`only_failures` / `filter`）是**与**关系。
+
+**边界**：明细事件（`gate_result` / `task_finished` …）目前只走 SSE、不进 Webhook 流
+（它们的量级会打爆接收端），所以 `filter` 作用于已订阅的 run 级事件；要按任务或门禁
+过滤明细事件需另立项。
 
 投递时每个接收端**独立重试**：一个挂了不影响另一个——它们是独立的接收方，不该因为
 Slack 不通就不推内部系统。同一次事件在所有接收端之间共享 `delivery` id，便于对账。
@@ -1884,10 +1894,17 @@ R12/R14 有个硬边界：收尾最多等 5 秒，进程被强杀或接收端长
 | 重试耗尽 / 连不上 / 进程退出 | 文件留着，下一次启用 Webhook 的 run 启动时自动补投 |
 | 超过 24 小时或累计重放 5 次 | 丢弃并记 `webhook_failed(replay_discarded: …)` |
 | 配置里的接收端地址变了 | 丢弃并记 `webhook_failed(replay_target_missing)`，不把旧事件发到新地址 |
+| 去重表显示这对 `delivery × target` 已成功投过（C3） | 删残留文件、记 `webhook_failed(replay_duplicate)`，不再发第二次 |
 
 补投沿用原来的 `delivery` 与 `timestamp`（签名仍可校验），所以接收端用
-`X-AgentCrew-Delivery` 幂等即可。语义是 **at-least-once**：多个进程同时补投同一份
-spool 时可能重复到达，不要假设「恰好一次」。
+`X-AgentCrew-Delivery` 幂等即可。语义仍是 **at-least-once**，不要假设「恰好一次」。
+
+C3 补了**补投入口去重**：投递成功后在 `<output_dir>/_webhook_delivered/deliveries.jsonl`
+追加一行 `(delivery, target_key, ts)`，24h 老化、只记 id 不记 URL/密钥/payload；独立
+目录 + `.jsonl` 后缀，绝不混进 spool 的 `*.json` 命名空间。它消除「多个进程同时扫到
+同一份 spool 文件、都 POST 成功后才各自删除」造成的双投；但两个进程若都在追加前就
+POST 成功，对端仍可能收两次——**幂等头依然是最终防线**。库层直接构造
+`WebhookDispatcher` 且不传 `dedup_dir` 时保持 R15 行为（零文件、零扫描）。
 
 spool 文件只存 URL 的短哈希（`sha256(url)[:16]`）和脱敏后的 payload，**不存 URL、
 不存密钥**；补投时用当前配置重新解析接收端。`_run_dirs` 只认含 `run.json` 的目录，
@@ -2385,6 +2402,7 @@ models:
 | `AGENTCREW_WEBHOOK_EVENTS` | 五个 run 级节点 | R12：逗号分隔的事件名，`*` = 全推 |
 | `AGENTCREW_WEBHOOK_TIMEOUT_SECONDS` | `5` | R12：单次投递超时 |
 | `AGENTCREW_WEBHOOK_MAX_RETRIES` | `2` | R12：投递失败重试次数 |
+| `AGENTCREW_WEBHOOK_FILTER` | 空 | C4：单接收端的事件级等值过滤（空 = 不过滤） |
 
 > 注意：`OLLAMA_BASE_URL` **不参与端点解析** —— provider 的 `base_url` 只来自
 > 内置预设或 `agentcrew.yaml` 的 `models.providers.<provider>.base_url`。把远程
@@ -2420,6 +2438,7 @@ YAML 只识别以下键；`output_dir` / `mock` / `log_level` 等请用环境变
 | `max_supervisor_reassignments` | R10：换人次数上限，默认 `1` |
 | `webhook_url` / `webhook_secret` | R12：出站 Webhook 地址与签名密钥，默认空（关闭） |
 | `webhook_events` / `webhook_timeout_seconds` / `webhook_max_retries` | R12：推送的事件、超时与重试，默认 5 节点 / 5 秒 / 2 次 |
+| `webhook_filter` | C4：单接收端的事件级等值过滤；`webhooks[]` 每条也可各写 `filter` |
 | `tool_permissions` | R3 生效：角色 → 工具白名单，开启 `tools_enabled` 后由 Crew 下发 |
 | `models.default` | 默认模型别名（等价 `AGENTCREW_DEFAULT_MODEL`） |
 | `models.role_bindings.<role_key>` | 按角色覆盖模型 |

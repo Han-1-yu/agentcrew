@@ -143,6 +143,15 @@ models:
 # webhook_events: [run_finished, run_stalled]
 # webhook_timeout_seconds: 10   # 上限 30
 # webhook_max_retries: 3        # 上限 5
+# C4 事件级等值过滤：逗号分隔 key=value 全 AND，event= 匹配事件名，
+# a.b= 走点分路径，value=* 只要求键存在；空 = 不过滤，写错保守判不匹配。
+# webhook_filter: "event=run_finished,status=failed"
+# 多接收端时也可每条各写 filter（与 events / only_failures 是与关系）：
+# webhooks:
+#   - name: slack
+#     url: https://hooks.example.com/agentcrew
+#     only_failures: true
+#     filter: "status=*"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 8. 只能走环境变量 / .env 的配置（YAML 不读，写了会被忽略）
