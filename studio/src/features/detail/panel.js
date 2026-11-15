@@ -13,6 +13,7 @@ import { toast } from '../../ui/toast.js';
 import { metaCell, renderAgents } from '../dashboard/agents.js';
 import { renderDashboard } from '../dashboard/index.js';
 import { buildTaskAgentControl } from './task-agent.js';
+import { openRewindDialog } from '../rewind/index.js';
 let detailHideTimer = null;
 let detailReturnFocus = null;
 const DETAIL_FOCUSABLE = 'input:not([disabled]), textarea:not([disabled]), select:not([disabled]), button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])';
@@ -112,7 +113,9 @@ function openTaskDetail(taskId){
         t.status==='failed'?h('div',{class:'err'},`✗ ${t.error||'失败'}`):h('div',{},'> done')))),
     h('div',{class:'dp-actions'},
       S.realMode
-        ? h('div',{class:'dp-text dim',style:'font-size:11px'},'重试 / 跳过需通过 CLI 或 API；执行体可在上方「负责 Agent」里设置')
+        ? h('div',{class:'dp-real-actions'},
+            h('div',{class:'dp-text dim',style:'font-size:11px'},'重试 / 跳过需通过 CLI 或 API；执行体可在上方「负责 Agent」里设置'),
+            h('button',{class:'btn btn-sm',type:'button',title:'R62：回滚到该任务并重跑（需连接后端 API）',onclick:()=>openRewindDialog(t.id)},'从此恢复'))
         : h('div',{style:'display:flex;gap:6px;flex-wrap:wrap'},
             h('button',{class:'btn btn-sm',onclick:async()=>{
               if (S.realMode && S.dash.run?.dir) { try { await window.studio.taskAction(S.dash.run.dir, t.id, 'retry'); toast('success','已重试',t.id); } catch(e){ toast('error','重试失败',String(e.message||e)); } }
@@ -129,7 +132,7 @@ function openTaskDetail(taskId){
               else { t.status='review'; toast('info','人工处理',t.id+' 标记为人工处理'); }
               renderDashboard();
             }},'人工处理'),
-            h('button',{class:'btn btn-sm',type:'button',disabled:true,title:'后端暂不支持从指定任务恢复；请使用运行状态条的「恢复」'},'从此恢复')))));
+            h('button',{class:'btn btn-sm',type:'button',title:'R62：回滚到该任务并重跑（需连接后端 API）',onclick:()=>openRewindDialog(t.id)},'从此恢复')))));
   renderAgents();
 }
 function openAgentDetail(roleId){

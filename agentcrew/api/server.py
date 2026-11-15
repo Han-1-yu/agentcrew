@@ -178,6 +178,9 @@ API_ROUTES: tuple[tuple[str, str], ...] = (
     # C10：run 中途指引——对正在跑的 run 说话（写 202 / 读 200）
     ("GET", "/runs/{run_id}/guidance"),
     ("POST", "/runs/{run_id}/guidance"),
+    # C10 切片二：撤回未吸收的指引 / 终态后压缩指引历史
+    ("DELETE", "/runs/{run_id}/guidance/{guidance_id}"),
+    ("POST", "/runs/{run_id}/guidance/compact"),
     ("GET", "/runs/{run_id}/ledger"),
     ("GET", "/runs/{run_id}/stats"),
     ("POST", "/runs/{run_id}/cancel"),
@@ -839,10 +842,15 @@ class ApiServer:
                     "author": item.author,
                     "text": item.text,
                     "consumed_at": item.consumed_at,
+                    "target": item.target,
+                    "expires_at": item.expires_at,
+                    "withdrawn_at": item.withdrawn_at,
+                    "status": item.status(),
                 }
                 for item in items
             ],
-            "pending": sum(1 for item in items if item.consumed_at is None),
+            # C10 切片二：撤回 / 过期不再占「待吸收」额度。
+            "pending": store.pending_count(),
         })
 
     async def _add_guidance(
@@ -850,9 +858,12 @@ class ApiServer:
     ) -> None:
         """C10：对运行中的 run 留言；下次任务派发时被吸收（at-most-once）。
 
-        错误分流：run 不存在 404、终态 409、空文本 400、待吸收已满 429、
-        写盘失败 503。终态 run 的引导**故意**不落盘——API 是控制面，不该给
-        已经结束的 run 伪造「还能纠偏」的错觉；审计用途走 CLI ``guide``。
+        切片二：``target`` 可把指引定向到某个任务（默认「下一个派发的任务」）；
+        ``expires_in_seconds`` / ``expires_at`` 给指引设过期时刻，到点后不再吸收。
+
+        错误分流：run 不存在 404、终态 409、空文本 / 坏定向 / 坏过期时间 400、
+        待吸收已满 429、写盘失败 503。终态 run 的引导**故意**不落盘——API 是
+        控制面，不该给已经结束的 run 伪造「还能纠偏」的错觉；审计用途走 CLI。
         """
         if await self._deny_if_run_hidden(run_id, writer):
             return
@@ -880,6 +891,27 @@ class ApiServer:
         if not isinstance(author, str):
             await self._send_json(writer, 400, {"error": "author 必须是字符串"})
             return
+        target = data.get("target")
+        if target is not None and not isinstance(target, str):
+            await self._send_json(writer, 400, {"error": "target 必须是字符串"})
+            return
+        expires_at = data.get("expires_at")
+        expires_in = data.get("expires_in_seconds")
+        if expires_in is not None:
+            if (isinstance(expires_in, bool) or not isinstance(expires_in, (int, float))
+                    or expires_in <= 0 or expires_in > 86400):
+                await self._send_json(writer, 400, {
+                    "error": "expires_in_seconds 必须是 1..86400 之间的数字"})
+                return
+            from datetime import timedelta
+
+            from agentcrew.utils.clock import utc_now
+            expires_at = (
+                utc_now() + timedelta(seconds=float(expires_in))).isoformat()
+        if expires_at is not None and not isinstance(expires_at, str):
+            await self._send_json(writer, 400, {
+                "error": "expires_at 必须是 ISO 8601 字符串"})
+            return
         try:
             record = CheckpointStore(self._output_dir / rid).load_record()
         except (OSError, ValueError):
@@ -898,7 +930,7 @@ class ApiServer:
             })
             return
         try:
-            item = store.append(text, author)
+            item = store.append(text, author, target=target, expires_at=expires_at)
         except ValueError as exc:
             await self._send_json(writer, 400, {"error": str(exc)})
             return
@@ -906,7 +938,99 @@ class ApiServer:
             await self._send_json(writer, 503, {"error": f"指引写入失败：{exc}"})
             return
         await self._send_json(writer, 202, {
-            "id": item.id, "count": store.pending_count()})
+            "id": item.id,
+            "count": store.pending_count(),
+            "target": item.target,
+            "expires_at": item.expires_at,
+        })
+
+    # ---- C10 切片二：撤回 / 压缩 ----
+
+    @staticmethod
+    def _emit_guidance_event(
+        output_dir: Path, run_id: str, event: str, **data: Any,
+    ) -> None:
+        """给 run 的 ledger 补一条指引审计事件；写失败不影响控制面动作。"""
+        from agentcrew.runtime.ledger import Ledger
+
+        try:
+            Ledger(output_dir / run_id / "ledger.jsonl", run_id=run_id).emit(
+                event, **data)
+        except OSError as exc:  # pragma: no cover —— 磁盘满不该推翻已完成的撤回
+            _logger.warning("指引事件 %s 写入失败：%s", event, exc)
+
+    async def _withdraw_guidance(
+        self, run_id: str, guidance_id: str, writer: asyncio.StreamWriter,
+    ) -> None:
+        """``DELETE /runs/{id}/guidance/{item_id}``：撤回一条**未吸收**的指引。
+
+        已吸收 / 已撤回 / 已过期 / 不存在 → 404（消息不复用裸 ``Not Found``
+        哨兵，契约守卫靠它区分「路由存在」与「未匹配」）。
+        """
+        if await self._deny_if_run_hidden(run_id, writer):
+            return
+        if self._output_dir is None:
+            await self._send_json(writer, 503, {"error": "output_dir 未配置"})
+            return
+        from agentcrew.runtime.checkpoint import _validated_run_id
+        from agentcrew.runtime.guidance import GuidanceStore
+
+        try:
+            rid = _validated_run_id(run_id)
+        except ValueError:
+            await self._send_json(writer, 400, {"error": "非法 run_id"})
+            return
+        store = GuidanceStore(self._output_dir / rid, secrets=self._secret_values())
+        if not store.withdraw(guidance_id):
+            await self._send_json(writer, 404, {
+                "error": f"指引 {guidance_id} 不存在或已被吸收"})
+            return
+        self._emit_guidance_event(
+            self._output_dir, rid, "guidance_withdrawn", id=guidance_id)
+        await self._send_json(writer, 200, {
+            "id": guidance_id, "withdrawn": True,
+            "pending": store.pending_count(),
+        })
+
+    async def _compact_guidance(
+        self, run_id: str, writer: asyncio.StreamWriter,
+    ) -> None:
+        """``POST /runs/{id}/guidance/compact``：把指引历史压成一行快照。
+
+        **只允许终态 run**：``compact()`` 会原子替换 ``guidance.jsonl``，运行中
+        的多进程追加写会写到被替换掉的旧 inode。运行中请用撤回而不是压缩。
+        """
+        if await self._deny_if_run_hidden(run_id, writer):
+            return
+        if self._output_dir is None:
+            await self._send_json(writer, 503, {"error": "output_dir 未配置"})
+            return
+        from agentcrew.runtime.checkpoint import CheckpointStore, _validated_run_id
+        from agentcrew.runtime.guidance import GuidanceStore
+
+        try:
+            rid = _validated_run_id(run_id)
+        except ValueError:
+            await self._send_json(writer, 400, {"error": "非法 run_id"})
+            return
+        try:
+            record = CheckpointStore(self._output_dir / rid).load_record()
+        except (OSError, ValueError):
+            await self._send_json(writer, 404, {"error": "run not found"})
+            return
+        if record.status.value in _GUIDANCE_RUNNABLE:
+            await self._send_json(writer, 409, {
+                "error": "run 仍在运行，压缩会丢并发写入；请先 cancel 或等它结束"})
+            return
+        store = GuidanceStore(self._output_dir / rid, secrets=self._secret_values())
+        try:
+            result = store.compact()
+        except OSError as exc:
+            await self._send_json(writer, 503, {"error": f"指引压缩失败：{exc}"})
+            return
+        self._emit_guidance_event(
+            self._output_dir, rid, "guidance_compacted", **result)
+        await self._send_json(writer, 200, {"run_id": rid, **result})
 
     async def _handle_post(
         self, path: str, query: dict[str, list[str]], body: bytes,
@@ -945,6 +1069,11 @@ class ApiServer:
         if (len(segments) == 5 and segments[0] == "runs"
                 and segments[2] == "tasks" and segments[4] == "agent"):
             await self._task_agent(segments[1], segments[3], body, writer)
+            return
+        # C10 切片二：终态 run 的指引历史压缩（运行中会 409）
+        if (len(segments) == 4 and segments[0] == "runs"
+                and segments[2] == "guidance" and segments[3] == "compact"):
+            await self._compact_guidance(segments[1], writer)
             return
         if len(segments) == 3 and segments[0] == "runs":
             run_id, action = segments[1], segments[2]
@@ -2170,6 +2299,11 @@ class ApiServer:
             return
         if len(segments) == 2 and segments[0] == "flows":
             await self._delete_flow(segments[1], writer)
+            return
+        # C10 切片二：撤回一条尚未被吸收的指引
+        if (len(segments) == 4 and segments[0] == "runs"
+                and segments[2] == "guidance"):
+            await self._withdraw_guidance(segments[1], segments[3], writer)
             return
         if len(segments) != 2 or segments[0] != "runs":
             await self._send_json(writer, 404, {"error": "Not Found"})

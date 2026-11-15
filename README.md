@@ -262,7 +262,7 @@ examples/samples/<name>/
 | `python main.py resume <run_id>` | 续跑一个中断或未完成的 run | `--force`（配置快照不一致时仍继续）；以及 `run` 的全部配置参数 |
 | `python main.py rewind <run_id>` | R62：时间旅行——把 run 回滚到某任务之前（该任务 + 全部下游 + `T-FINAL` 重置为 `pending`，旧产物先快照再移除），再 `resume` 从该点重跑 | `--task ID`（必填）；`--instruction TEXT`（重做要求写进任务契约，G2 据此评审）；`--dry-run`（只算影响集、不写盘）；`--json`；`--output-dir DIR` |
 | `python main.py status <run_id>` | 打印 run 记录、统计、任务看板与待审批条数，并列出尚未被吸收的中途指引 | `--output-dir DIR` |
-| `python main.py guide <run_id> "TEXT"` | C10：给正在跑的 run 留言一句人话约束，引擎在下一次任务派发前吸收（一条只喂一个任务） | `--author NAME`（默认 `cli`，写进留痕）；`--json`；`--output-dir DIR` |
+| `python main.py guide <run_id> "TEXT"` | C10：给正在跑的 run 留言一句人话约束，引擎在下一次任务派发前吸收（一条只喂一个任务）；`--withdraw ID` / `--compact` 时不需 TEXT | `--target TASK_ID`（只喂该任务）；`--expires-in SECONDS`（1..86400）；`--withdraw GUIDANCE_ID`（撤回未吸收项）；`--compact`（终态压缩历史，仅对已停止的 run 使用）；`--author NAME`（默认 `cli`）；`--json`；`--output-dir DIR` |
 | `python main.py approvals <run_id>` | R4：列出该 run 的持久化人工审批单 | `--output-dir DIR` |
 | `python main.py approve <run_id> <approval_id>` | R4：在另一个进程里写裁决（之后 `resume` 继续） | `--decision ACTION`；`--task-ids ID...`（rework）；`--by NAME`；`--output-dir DIR` |
 | `python main.py roles` | 列出 8 个内置角色的职责 / 边界 / 产出 | 无 |
@@ -303,6 +303,16 @@ examples/samples/<name>/
   resume 不重放（at-most-once）。`guidance_enabled` 默认关闭：关闭态上下文包与提示词
   逐字节不变。只接受 `running` / `awaiting_approval` 的 run（终态 409），待吸收队列
   满了返回 429。
+- C10 切片二：一句指引可以**定向**（`--target T-003` / REST `target`，未定向仍按
+  「下一个派发的任务」）、**设过期**（`--expires-in` / REST `expires_in_seconds` 或
+  `expires_at`，到点后读时即排除、不重写盘）、**撤回未吸收项**
+  （`DELETE /runs/{id}/guidance/{guidance_id}` 或 `--withdraw`，留痕不删历史）、
+  **压缩历史**（`POST /runs/{id}/guidance/compact` 或 `--compact`，把归并状态压成一行
+  snapshot，保留全部活跃项 + 最近 20 条已终结项）。压缩会原子替换文件，**只允许
+  终态 run**（REST 对 running 直接 409），运行中请用撤回。`GET` 的每条带 `status`
+  （pending / consumed / withdrawn / expired）与 `target` / `expires_at` / `withdrawn_at`。
+  Studio 门禁页提供同样的输入、定向下拉、过期选择、撤回与压缩按钮；任务详情的
+  「从此恢复」是 R62 rewind 的入口（先 dry-run 预览影响集，确认后 rewind + resume）。
 - `clean` 的删除范围被限制在 `--output-dir` 之下，`--dry-run` 与真删共用同一套
   边界校验。
 - `doctor` 打印一份健康报告：Python 版本、核心依赖可导入性、已配置 provider 的

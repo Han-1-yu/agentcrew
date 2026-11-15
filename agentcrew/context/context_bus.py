@@ -122,7 +122,7 @@ class ContextBus:
         tree_max_entries: int = 300,
         summarizer: Summarizer | None = None,
         docs_retriever: Callable[[str], list[tuple[str, str]]] | None = None,
-        guidance_provider: Callable[[], list[str]] | None = None,
+        guidance_provider: Callable[[str], list[str]] | None = None,
     ) -> None:
         self._goal = goal
         self._board = board
@@ -136,8 +136,10 @@ class ContextBus:
         #: -> [(来源标签, 片段文本)]``，由 Crew 提供（query_sync，见 knowledge.docs）。
         self._docs_retriever = docs_retriever
         #: C10：用户中途指引的读取回调（``None`` = 未启用，``build()`` 零新分支）。
-        #: 由 Crew 提供，闭包内部完成「读 pending → 标记 consumed → 记事件」，
-        #: ContextBus 因此不持有存储、也不认识 run 目录。
+        #: 签名是 ``(task_id) -> list[str]``：切片二起一条指引可以定向到某个任务，
+        #: ContextBus 把「这次给谁组装上下文」如实传下去。闭包内部完成
+        #: 「读 pending → 标记 consumed → 记事件」，ContextBus 因此不持有存储、
+        #: 也不认识 run 目录。
         self._guidance_provider = guidance_provider
         #: task_id → 已压缩的 summary 文本（prefetch_summaries 写入，build 读取）。
         self._summary_cache: dict[str, str] = {}
@@ -172,7 +174,7 @@ class ContextBus:
         guidance: list[str] = []
         if self._guidance_provider is not None:
             try:
-                guidance = list(self._guidance_provider() or [])
+                guidance = list(self._guidance_provider(task.id) or [])
             except Exception as exc:  # noqa: BLE001 —— 指引是辅助设施
                 _logger.warning("指引读取失败，按无指引继续：%s", exc)
                 guidance = []

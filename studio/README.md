@@ -78,14 +78,23 @@ Electron userData 目录的 `settings.json`，可在「设置」里手动修改�
 npm run check        # 结构护栏：分层、导入完整性、单文件体量、入口收敛（秒级，无需 GUI）
 npm run e2e          # 端到端：9 页导航 / 详情 / 运行切换 / 新建运行 / 成本 / 供应商全链路（28 项）
 npm run selftest     # 真实 UI 驱动一次 --mock 运行：列表 → 看板 → 事件 → 产物 → 设置 → 启动/取消（16 项）
-npm run verify:api          # 后端 API 代理：认证头注入 + SSE 命名帧解析（8 项，无需 GUI / 无需真后端）
+npm run verify:api          # 后端 API 代理：认证头 + SSE 帧 + C10 指引/R62 rewind 的 REST 路径（13 项，无需 GUI / 无需真后端）
 npm run verify:transitions  # 状态切换：演示→真实运行 / 快速连点切 run / 单通道纪律（11 项）
 npm run visual              # 视觉回归：把 e2e 的 16 张截图与本机基线比对（版式/配色变了会失败）
 ```
 
 `verify:api` 自带一个要求 Bearer 认证的假后端，覆盖的是**可选的 HTTP API 通道**（e2e / selftest
-都跑在默认的「CLI + 文件监听」路径上，碰不到它）。若宿主环境注入了 `ELECTRON_RUN_AS_NODE=1`，
+都跑在默认的「CLI + 文件监听」路径上，碰不到它）。当前 13 项里，除认证头注入与 SSE 命名帧外，
+还逐条验证 `GET/POST /runs/{id}/guidance`、`DELETE .../guidance/{item_id}`、运行中压缩返回 409、
+`POST /runs/{id}/rewind` 的 dry-run 影响集——调用时必须按 preload 的形状传 `{ path, options }`，
+否则 method / body 会被当成默认值。若宿主环境注入了 `ELECTRON_RUN_AS_NODE=1`，
 Electron 会退化成纯 Node 并在 `main.js` 报 `app.getPath undefined`——先清掉该变量再跑任何 Electron 脚本。
+
+**C10 指引 / R62 回滚（2026-11-15）**：门禁页顶部是「运行中指引」区块（发指引、定向到任务、
+设过期、撤回未吸收项、终态压缩历史），任务详情里的「从此恢复」是 rewind 弹窗（先 dry-run 预览
+影响集，确认后才 rewind + resume）。两者都走 REST：需要 `apiBaseUrl` 与 `runs:admin`（指引）
+/ `runs:write`（回滚）作用域；没连后端时只显示空态，不会伪造动作。可测逻辑抽在
+`src/lib/guidance.js` / `src/lib/rewind.js`，单测在 `tests/guidance.test.mjs` / `rewind.test.mjs`。
 
 **连接后端 serve**：在「设置 → 连接」填 API 地址，并保存 `serve` 的 API Key（R36 起认证默认强制开启，
 没有 Key 的请求一律 401）。Key 用系统安全存储加密后只放主进程，不进 `settings.json`、不回显。

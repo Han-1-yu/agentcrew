@@ -259,10 +259,23 @@ def build_parser() -> argparse.ArgumentParser:
     guide = sub.add_parser(
         "guide", help="C10：给正在跑的 run 留言指引（下次任务派发时吸收）")
     guide.add_argument("run_id", help="run 目录名")
-    guide.add_argument("text", help="一句话指引（如「把登录页改成绿色」）")
+    guide.add_argument(
+        "text", nargs="?", help="一句话指引（如「把登录页改成绿色」）")
     guide.add_argument(
         "--author", default="cli", metavar="NAME",
         help="指引人标识（写进 guidance.jsonl 留痕）")
+    guide.add_argument(
+        "--target", metavar="TASK_ID",
+        help="C10 切片二：只把这条指引喂给指定任务（默认下一个派发的任务）")
+    guide.add_argument(
+        "--expires-in", type=int, metavar="SECONDS",
+        help="C10 切片二：相对过期秒数（1..86400）")
+    guide.add_argument(
+        "--withdraw", metavar="GUIDANCE_ID",
+        help="C10 切片二：撤回一条尚未被吸收的指引（不删除历史）")
+    guide.add_argument(
+        "--compact", action="store_true",
+        help="C10 切片二：压缩指引历史（仅对已停止的 run 使用）")
     guide.add_argument("--json", action="store_true", help="输出机器可读 JSON")
     guide.add_argument("--output-dir", metavar="DIR", help="run 输出根目录")
 
@@ -1177,12 +1190,15 @@ def _cmd_approve(args: argparse.Namespace) -> int:
 
 
 def _cmd_guide(args: argparse.Namespace) -> int:
-    """C10：在另一个进程里对正在跑的 run 说一句话。
+    """C10：在另一个进程里对正在跑的 run 说一句话（切片二：定向 / 过期 / 撤回 / 压缩）。
 
     与 HTTP ``POST /runs/{id}/guidance`` 写同一个 store。CLI **不**校验 run 状态：
     给已结束的 run 留言会落盘但永不吸收（``GET`` / ``status`` 仍可读），这是审计
     用途；限定「只在跑着时才能说」是 API 控制面的口径，不该让终端也失忆。
     是否真的被吸收取决于 ``guidance_enabled``（默认关）。
+
+    ``--compact`` 会原子替换 guidance.jsonl，只应对**已停止**的 run 使用；
+    API 侧在终态才放行，终端不做状态判断由调用方负责。
     """
     try:
         settings = _settings_from(args)
@@ -1190,17 +1206,60 @@ def _cmd_guide(args: argparse.Namespace) -> int:
     except (OSError, ValueError) as exc:
         return _fail(f"无法读取 run {args.run_id}：{exc}")
     store = GuidanceStore(run_dir, secrets=tuple(settings.secret_values()))
+    if args.withdraw:
+        if not store.withdraw(args.withdraw):
+            return _fail(f"指引 {args.withdraw} 不存在或已被吸收")
+        pending = store.pending_count()
+        if args.json:
+            print(json.dumps({"id": args.withdraw, "withdrawn": True,
+                              "pending": pending}, ensure_ascii=False))
+        else:
+            print(f"已撤回指引 {args.withdraw}；待吸收 {pending} 条")
+        return EXIT_CODES["ok"]
+    if args.compact:
+        try:
+            result = store.compact()
+        except OSError as exc:
+            return _fail(f"指引压缩失败：{exc}")
+        if args.json:
+            print(json.dumps({"run_id": args.run_id, **result},
+                             ensure_ascii=False))
+        else:
+            print(f"指引历史已压缩：{result['before_lines']} 行 → "
+                  f"{result['after_lines']} 行（保留 {result['kept']} 条，"
+                  f"清理 {result['removed']} 条）")
+        return EXIT_CODES["ok"]
+    if not args.text:
+        return _fail("请给出指引文本，或用 --withdraw / --compact")
+    expires_at = None
+    if args.expires_in is not None:
+        if args.expires_in <= 0 or args.expires_in > 86400:
+            return _fail("--expires-in 必须是 1..86400 之间的秒数")
+        from datetime import timedelta
+
+        from agentcrew.utils.clock import utc_now
+        expires_at = (
+            utc_now() + timedelta(seconds=args.expires_in)).isoformat()
     try:
-        item = store.append(args.text, args.author)
+        item = store.append(
+            args.text, args.author, target=args.target,
+            expires_at=expires_at)
     except ValueError as exc:
         return _fail(str(exc))
     except OSError as exc:
         return _fail(f"指引写入失败：{exc}")
     pending = store.pending_count()
     if args.json:
-        print(json.dumps({"id": item.id, "pending": pending}, ensure_ascii=False))
+        print(json.dumps({
+            "id": item.id, "pending": pending,
+            "target": item.target, "expires_at": item.expires_at,
+        }, ensure_ascii=False))
         return EXIT_CODES["ok"]
     print(f"已记录指引 {item.id}（run {args.run_id}）")
+    if item.target:
+        print(f"定向到 {item.target}；未派发到该任务前不会被吸收")
+    if item.expires_at:
+        print(f"过期时刻 {item.expires_at}（到点后不再吸收）")
     print(f"待吸收 {pending} 条；引擎在下一次任务派发前读取"
           "（需 guidance_enabled=true）")
     return EXIT_CODES["ok"]

@@ -1,0 +1,39 @@
+/* C10 中途指引区块 + R62 回滚弹窗（复用全局令牌，明暗主题自适应） */
+.guidance-section { padding: 4px 20px 16px; }
+.guidance-section .page-head { margin-bottom: 10px; }
+.guidance-form { background: var(--bg-panel); border: 0.5px solid var(--border-weak);
+  border-radius: var(--r-sm); padding: 12px; }
+.guidance-input, .rewind-input { width: 100%; box-sizing: border-box; resize: vertical;
+  background: var(--bg-subtle); color: var(--text); border: 0.5px solid var(--border-weak);
+  border-radius: var(--r-xs); padding: 8px 10px; font: inherit; font-size: var(--fs-body); }
+.guidance-input:focus, .rewind-input:focus, .guidance-select:focus, .rewind-select:focus {
+  outline: 2px solid var(--accent); outline-offset: 1px; }
+.guidance-form-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.guidance-select, .rewind-select { background: var(--bg-subtle); color: var(--text);
+  border: 0.5px solid var(--border-weak); border-radius: var(--r-xs);
+  padding: 6px 8px; font: inherit; font-size: var(--fs-sm); max-width: 260px; }
+.guidance-actions { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; }
+.guidance-hint { font-size: var(--fs-xs); color: var(--text-ter); margin: 8px 0; line-height: 1.6; }
+.guidance-list { display: flex; flex-direction: column; gap: 8px; }
+.guidance-item { background: var(--bg-panel); border: 0.5px solid var(--border-weak);
+  border-radius: var(--r-sm); padding: 10px 12px; }
+.guidance-item-head { display: flex; align-items: center; gap: 10px; }
+.guidance-id { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-sub); }
+.guidance-status { font-size: var(--fs-xs); padding: 2px 8px; border-radius: var(--r-sm); }
+.guidance-item-head .btn { margin-left: auto; }
+.guidance-pending { background: var(--success-bg-chip); color: var(--success-text); }
+.guidance-consumed { background: var(--bg-subtle); color: var(--text-sub); }
+.guidance-withdrawn, .guidance-expired { background: var(--error-bg-chip); color: var(--error-text); }
+.guidance-text { font-size: var(--fs-body); color: var(--text); margin-top: 6px;
+  white-space: pre-wrap; word-break: break-word; }
+.guidance-meta { font-size: var(--fs-xs); color: var(--text-ter); margin-top: 6px; }
+
+.rewind-dialog { display: flex; flex-direction: column; gap: 10px; }
+.rewind-form { display: flex; flex-direction: column; gap: 6px; }
+.rewind-label { font-size: var(--fs-xs); color: var(--text-ter); }
+.rewind-select { max-width: 100%; }
+.rewind-result { min-height: 20px; }
+.rewind-hint { font-size: var(--fs-xs); color: var(--text-ter); }
+.rewind-impact { font-size: var(--fs-sm); color: var(--text-sub); line-height: 1.6;
+  background: var(--bg-subtle); border-radius: var(--r-xs); padding: 8px 10px; }
+.rewind-error { font-size: var(--fs-sm); color: var(--error); line-height: 1.6; }

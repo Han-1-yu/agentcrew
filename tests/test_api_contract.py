@@ -34,6 +34,7 @@ _NOT_FOUND = "Not Found"
 _PROBE_PATH_VARS = {
     "{run_id}": "R-contract-probe",
     "{task_id}": "T-contract-probe",
+    "{guidance_id}": "GD-contract-probe",
     "{name}": "__no_such_provider__",
 }
 

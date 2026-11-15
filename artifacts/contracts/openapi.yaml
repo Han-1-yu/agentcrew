@@ -362,7 +362,9 @@ paths:
       summary: C10 列出 run 的中途指引（含已吸收）
       description: >
         从 `output_dir/<run_id>/guidance.jsonl` 按 id 归并读取。文件不存在 → 200
-        空列表；服务重启后仍可读。`pending` 是尚未被引擎吸收的条数。run_id 非法 → 400。
+        空列表；服务重启后仍可读。`pending` 是**仍可能被吸收**的条数（已撤回 /
+        已过期不计入）。每条 `status` 为 pending / consumed / withdrawn / expired。
+        run_id 非法 → 400。
       parameters:
         - $ref: '#/components/parameters/RunId'
       responses:
@@ -394,8 +396,10 @@ paths:
       summary: C10 对运行中的 run 留言（下次任务派发时吸收）
       description: >
         写入同一份 guidance.jsonl。引擎在**下一次任务派发前**读取并标记
-        consumed（at-most-once：一条指引只被一个任务吃掉）。run 不存在 → 404；
-        终态（completed / failed / cancelled / interrupted）→ 409；空文本 → 400；
+        consumed（at-most-once：一条指引只被一个任务吃掉）。切片二：`target`
+        把指引定向到某个任务 id（默认「下一个派发的任务」）；`expires_in_seconds`
+        或 `expires_at` 设过期时刻，到点后不再吸收。定向到永不派发的任务会一直
+        pending，建议同时设过期。run 不存在 → 404；终态 → 409；空文本 / 坏字段 → 400；
         待吸收已达 `max_guidance_items` → 429。需 `guidance_enabled=true` 才会被
         吸收（默认关，写入仍可审计）。作用域 `runs:admin`。
       parameters:
@@ -410,6 +414,17 @@ paths:
               properties:
                 text: { type: string }
                 author: { type: string, default: '' }
+                target:
+                  type: string
+                  nullable: true
+                  description: 定向的任务 id；省略 = 下一个派发的任务
+                expires_in_seconds:
+                  type: number
+                  description: 相对过期秒数（1..86400），与 expires_at 二选一
+                expires_at:
+                  type: string
+                  format: date-time
+                  description: ISO 8601 绝对过期时刻；必须晚于当前时刻
       responses:
         '202':
           description: 已落盘（尚未被吸收）
@@ -417,10 +432,12 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [id, count]
+                required: [id, count, target, expires_at]
                 properties:
                   id: { type: string }
                   count: { type: integer }
+                  target: { type: string, nullable: true }
+                  expires_at: { type: string, nullable: true, format: date-time }
         '400':
           description: 空文本 / body 形状非法 / run_id 非法
           content:
@@ -443,6 +460,94 @@ paths:
               schema: { $ref: '#/components/schemas/Error' }
         '503':
           description: 服务端未配置 output_dir / 写盘失败
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /runs/{run_id}/guidance/{guidance_id}:
+    delete:
+      tags: [runs]
+      summary: C10 切片二 撤回一条未吸收的指引
+      description: >
+        追加一条 withdraw 记录（不删历史，审计仍可见「说过又撤了」）。只撤回
+        **仍可能被吸收**的指引：已吸收 / 已撤回 / 已过期 / id 不存在 → 404。
+        撤回会释放 `max_guidance_items` 配额。作用域 `runs:admin`。
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - name: guidance_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 已撤回
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, withdrawn, pending]
+                properties:
+                  id: { type: string }
+                  withdrawn: { type: boolean }
+                  pending: { type: integer }
+        '400':
+          description: run_id 非法
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: 指引不存在或已不可撤回
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '503':
+          description: 服务端未配置 output_dir
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /runs/{run_id}/guidance/compact:
+    post:
+      tags: [runs]
+      summary: C10 切片二 压缩指引历史（仅终态 run）
+      description: >
+        把归并后的状态压成一行 snapshot，保留全部仍可能被吸收的指引 + 最近
+        20 条已终结记录。因为要原子替换 guidance.jsonl，**只允许终态 run**：
+        running / awaiting_approval → 409（多进程追加写会写到旧 inode）。
+        run 不存在 → 404，写盘失败 → 503。作用域 `runs:admin`。
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: 压缩统计
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [run_id, before_lines, after_lines, kept, removed]
+                properties:
+                  run_id: { type: string }
+                  before_lines: { type: integer }
+                  after_lines: { type: integer }
+                  kept: { type: integer }
+                  removed: { type: integer }
+        '400':
+          description: run_id 非法
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: run 不存在
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: run 仍在运行，压缩会丢并发写入
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '503':
+          description: 服务端未配置 output_dir / 压缩失败
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -1564,13 +1669,21 @@ components:
       description: >
         C10 一条 run 中途指引（<run_dir>/guidance.jsonl 按 id 归并后的视图）。
         consumed_at 非空表示已被某个任务吸收（at-most-once，resume 不重放）。
-      required: [id, ts, author, text, consumed_at]
+        切片二：target 定向任务、expires_at 过期时刻、withdrawn_at 撤回时刻、
+        status 是四者归并后的展示状态。
+      required: [id, ts, author, text, consumed_at, target, expires_at, withdrawn_at, status]
       properties:
         id: { type: string, example: GD-20261114T213000-a1b2c3 }
         ts: { type: string, format: date-time }
         author: { type: string }
         text: { type: string }
         consumed_at: { type: string, nullable: true }
+        target: { type: string, nullable: true }
+        expires_at: { type: string, nullable: true, format: date-time }
+        withdrawn_at: { type: string, nullable: true, format: date-time }
+        status:
+          type: string
+          enum: [pending, consumed, withdrawn, expired]
 
     ApprovalRequest:
       type: object

@@ -1,6 +1,7 @@
-"""C10 切片一：run 中途指引（存储 / 上下文 / 提示词 / 装配 / HTTP）。
+"""C10 切片一 + 切片二：run 中途指引（存储 / 上下文 / 提示词 / 装配 / HTTP）。
 
-对应 ``docs/RUN-GUIDANCE-SPEC-2026-11-14.md`` 的验收标准第 1、2、4 条。
+切片一对应 ``docs/RUN-GUIDANCE-SPEC-2026-11-14.md`` 的验收标准第 1、2、4 条；
+切片二覆盖定向 / 过期 / 撤回 / 历史压缩的落盘语义与控制面错误码。
 刻意不在这里跑完整 run：一条指引只该被一个任务吃掉这件事，用
 ``Crew._guidance_provider`` 的闭包直接钉——闭包就是引擎侧唯一的接线点，
 比等三任务调度跑到「恰好 T-002 派发」更确定。
@@ -10,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -26,6 +27,7 @@ from agentcrew.runtime.guidance import EMPTY_TEXT_ERROR, GuidanceStore
 from agentcrew.runtime.ledger import Ledger
 from agentcrew.task.task import Task, TaskStatus
 from agentcrew.task.task_board import TaskBoard
+from agentcrew.utils.clock import utc_now
 
 GUIDANCE_HEADER = "用户中途指引（优先于计划，与交付物契约冲突时先问清楚再改）"
 
@@ -135,12 +137,12 @@ def test_pack_guidance_is_empty_by_default(tmp_path):
 
 def test_build_absorbs_guidance_from_provider(tmp_path):
     bus, _ = mk_bus(tmp_path, [mk_task()],
-                    guidance_provider=lambda: ["改用绿色主题"])
+                    guidance_provider=lambda _task_id: ["改用绿色主题"])
     assert bus.build(mk_task()).guidance == ["改用绿色主题"]
 
 
 def test_provider_exception_degrades_to_empty(tmp_path):
-    def boom() -> list[str]:
+    def boom(_task_id: str) -> list[str]:
         raise RuntimeError("磁盘炸了")
 
     bus, _ = mk_bus(tmp_path, [mk_task()], guidance_provider=boom)
@@ -161,7 +163,9 @@ def test_render_pack_inserts_guidance_and_keeps_rest_byte_identical(tmp_path):
     """打开态只**多一段**：除插入点外逐字节不变，契约段仍在最后。"""
     task = mk_task()
     closed_bus, _ = mk_bus(tmp_path, [task])
-    open_bus, _ = mk_bus(tmp_path, [task], guidance_provider=lambda: ["改用绿色主题"])
+    open_bus, _ = mk_bus(
+        tmp_path, [task],
+        guidance_provider=lambda _task_id: ["改用绿色主题"])
     closed = render_pack(closed_bus.build(task), ())
     opened = render_pack(open_bus.build(task), ())
     block = section(GUIDANCE_HEADER, "- 改用绿色主题")
@@ -195,8 +199,8 @@ def test_crew_provider_consumes_once_and_emits_events(tmp_path):
     crew = Crew(settings)
     take = crew._guidance_provider(mk_fake_run(tmp_path, ledger))
     assert take is not None
-    assert take() == ["先做登录页", "再补错误提示"]
-    assert take() == []                     # at-most-once：第二次没了
+    assert take("T-001") == ["先做登录页", "再补错误提示"]
+    assert take("T-001") == []              # at-most-once：第二次没了
 
     injected = list(ledger.events("guidance_injected"))
     assert len(injected) == 1
@@ -212,7 +216,7 @@ def test_crew_provider_emits_truncated_event(tmp_path):
     GuidanceStore(tmp_path).append("长" * 200)
     take = Crew(settings)._guidance_provider(mk_fake_run(tmp_path, ledger))
     assert take is not None
-    texts = take()
+    texts = take("T-001")
     assert len(texts[0]) <= 40
     truncated = list(ledger.events("guidance_truncated"))
     assert len(truncated) == 1 and truncated[0].data["max_chars"] == 40
@@ -308,3 +312,225 @@ async def test_post_429_when_pending_is_full(guidance_server):
         port, "POST", "/runs/R-c10/guidance",
         json.dumps({"text": "第二条"}).encode())
     assert status == 429, text
+
+
+# ── C10 切片二：定向 / 过期 / 撤回 / 压缩（存储层） ─────────────────────────
+
+
+def test_targeted_item_only_matches_its_task(tmp_path):
+    store = GuidanceStore(tmp_path)
+    global_item = store.append("全局约束")
+    targeted = store.append("只给 T-003", target="T-003")
+    first = store.pending(limit=5, max_chars=400, task_id="T-001")
+    assert [item.id for item in first] == [global_item.id]
+    third = store.pending(limit=5, max_chars=400, task_id="T-003")
+    assert [item.id for item in third] == [global_item.id, targeted.id]
+    # 不过滤时看到全部（切片一的调用口径保持兼容）。
+    assert len(store.pending(limit=5, max_chars=400)) == 2
+    assert store.pending_count() == 2
+
+
+def test_append_rejects_bad_or_past_deadline(tmp_path):
+    store = GuidanceStore(tmp_path)
+    with pytest.raises(ValueError, match="ISO"):
+        store.append("x", expires_at="not-a-date")
+    with pytest.raises(ValueError, match="晚于"):
+        store.append(
+            "x", expires_at=(utc_now() - timedelta(seconds=1)).isoformat())
+
+
+def test_expiry_is_evaluated_at_read_time(tmp_path):
+    """过期是读时判定：不重写盘、不占配额，但仍留在 items() 里可审计。"""
+    store = GuidanceStore(tmp_path)
+    deadline = (utc_now() + timedelta(minutes=5)).isoformat()
+    item = store.append("五分钟后作废", expires_at=deadline)
+    future = datetime.fromisoformat(deadline) + timedelta(seconds=1)
+    assert store.pending(limit=5, max_chars=400, now=future) == []
+    assert [hit.id for hit in store.expired(now=future)] == [item.id]
+    assert item.status(future) == "expired"
+    assert store.items()[0].expires_at == deadline
+    # 当前时刻还没过期，仍能被正常消费。
+    assert store.consume([item.id]) == 1
+
+
+def test_withdraw_releases_quota_and_stays_auditable(tmp_path):
+    store = GuidanceStore(tmp_path)
+    item = store.append("撤回我")
+    assert store.withdraw(item.id) is True
+    assert store.withdraw(item.id) is False          # 幂等
+    assert store.pending_count() == 0
+    assert store.items()[0].status() == "withdrawn"
+    assert store.items()[0].withdrawn_at is not None
+    assert store.consume([item.id]) == 0
+
+
+def test_withdraw_cannot_undo_consumed_or_expired(tmp_path):
+    store = GuidanceStore(tmp_path)
+    consumed = store.append("已经吃掉了")
+    assert store.consume([consumed.id]) == 1
+    assert store.withdraw(consumed.id) is False
+    deadline = (utc_now() + timedelta(seconds=30)).isoformat()
+    soon = store.append("马上过期", expires_at=deadline)
+    assert store.withdraw(soon.id) is True          # 当前时刻仍可撤
+    assert store.items()[1].status() == "withdrawn"
+
+
+def test_compact_keeps_active_items_and_recent_history(tmp_path):
+    store = GuidanceStore(tmp_path)
+    items = [store.append(f"第 {index} 条") for index in range(30)]
+    for item in items[:28]:
+        store.consume([item.id])
+    result = store.compact(keep_recent=3)
+    assert result["before_lines"] > result["after_lines"] == 1
+    assert result["kept"] == 5                    # 2 条活跃 + 3 条最近已消费
+    assert result["removed"] == 25
+    assert [item.text for item in store.pending(limit=10, max_chars=400)] == [
+        "第 28 条", "第 29 条"]
+    fresh = store.append("压缩后再写")
+    assert store.consume([fresh.id]) == 1         # 快照之后仍可继续追加
+
+
+def test_snapshot_preserves_slice_two_fields(tmp_path):
+    store = GuidanceStore(tmp_path)
+    deadline = (utc_now() + timedelta(hours=1)).isoformat()
+    targeted = store.append("定向", target="T-9", expires_at=deadline)
+    withdrawn = store.append("撤回")
+    store.withdraw(withdrawn.id)
+    store.compact()
+    got = {item.id: item for item in store.items()}
+    assert got[targeted.id].target == "T-9"
+    assert got[targeted.id].expires_at == deadline
+    assert got[withdrawn.id].status() == "withdrawn"
+
+
+def test_compact_ignores_bad_snapshot_lines(tmp_path):
+    path = tmp_path / "guidance.jsonl"
+    path.write_text(
+        json.dumps({"op": "snapshot", "items": "不是数组"}) + "\n"
+        + json.dumps({"op": "add", "id": "GD-ok", "ts": "t",
+                      "author": "", "text": "可用"}) + "\n",
+        encoding="utf-8")
+    assert [item.text for item in GuidanceStore(tmp_path).items()] == ["可用"]
+
+
+# ── C10 切片二：引擎接线 ───────────────────────────────────────────────────
+
+
+def test_crew_provider_respects_target_and_emits_expired(tmp_path):
+    ledger = Ledger(tmp_path / "ledger.jsonl", run_id="R-guidance-2")
+    settings = Settings(guidance_enabled=True,
+                        max_guidance_items=5, max_guidance_chars=400)
+    store = GuidanceStore(tmp_path, secrets=tuple(settings.secret_values()))
+    store.append("全局约束")
+    store.append("只给 T-003", target="T-003")
+    # append 拒绝「已经过期」的写入；真机上过期是时间流逝造成的，这里手写一个
+    # 过去时刻的 add 行来复现那个状态（读时判定，不改盘）。
+    with store.path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({
+            "op": "add", "id": "GD-expired", "ts": "t", "author": "",
+            "text": "过期", "expires_at": (
+                utc_now() - timedelta(seconds=1)).isoformat(),
+        }, ensure_ascii=False) + "\n")
+
+    take = Crew(settings)._guidance_provider(mk_fake_run(tmp_path, ledger))
+    assert take is not None
+    assert take("T-001") == ["全局约束"]
+    assert take("T-002") == []
+    assert take("T-003") == ["只给 T-003"]
+
+    expired = list(ledger.events("guidance_expired"))
+    assert len(expired) == 1                    # 同一实例不重复补发
+    assert expired[0].data["ids"] == ["GD-expired"]
+    injected = list(ledger.events("guidance_injected"))
+    assert injected[0].data["task_id"] == "T-001"
+    assert injected[-1].data["targets"] == ["T-003"]
+
+
+# ── C10 切片二：HTTP 控制面 ───────────────────────────────────────────────
+
+
+@pytest.fixture
+async def guidance_roomy_server(tmp_path):
+    output = tmp_path / "output2"
+    CheckpointStore.create(output, project_goal="g",
+                           config_snapshot={}, run_id="R-c10b")
+    settings = Settings(guidance_enabled=True, max_guidance_items=5)
+    srv = ApiServer(port=0, output_dir=output, settings=settings)
+    await srv.start()
+    port = srv._server.sockets[0].getsockname()[1]
+    try:
+        yield output, port
+    finally:
+        await srv.stop()
+
+
+async def test_post_target_and_ttl_roundtrip(guidance_roomy_server):
+    _, port = guidance_roomy_server
+    status, text = await _http(
+        port, "POST", "/runs/R-c10b/guidance",
+        json.dumps({"text": "定向", "target": "T-003",
+                    "expires_in_seconds": 600}).encode())
+    assert status == 202, text
+    payload = json.loads(text)
+    assert payload["target"] == "T-003"
+    assert payload["expires_at"] is not None
+
+    status, text = await _http(port, "GET", "/runs/R-c10b/guidance")
+    listing = json.loads(text)
+    assert listing["pending"] == 1
+    assert listing["items"][0]["status"] == "pending"
+    assert listing["items"][0]["target"] == "T-003"
+    assert listing["items"][0]["withdrawn_at"] is None
+
+
+async def test_post_rejects_bad_expiry_fields(guidance_roomy_server):
+    _, port = guidance_roomy_server
+    for body in ({"text": "x", "expires_in_seconds": 0},
+                 {"text": "x", "expires_at": "昨天"},
+                 {"text": "x", "target": 42}):
+        status, _ = await _http(
+            port, "POST", "/runs/R-c10b/guidance",
+            json.dumps(body).encode())
+        assert status == 400
+
+
+async def test_delete_withdraws_pending_guidance(guidance_roomy_server):
+    _, port = guidance_roomy_server
+    status, text = await _http(
+        port, "POST", "/runs/R-c10b/guidance",
+        json.dumps({"text": "撤回我"}).encode())
+    assert status == 202, text
+    item_id = json.loads(text)["id"]
+    status, text = await _http(
+        port, "DELETE", f"/runs/R-c10b/guidance/{item_id}")
+    assert status == 200, text
+    assert json.loads(text)["pending"] == 0
+    status, text = await _http(port, "GET", "/runs/R-c10b/guidance")
+    listing = json.loads(text)
+    assert listing["pending"] == 0
+    assert listing["items"][0]["status"] == "withdrawn"
+
+
+async def test_delete_unknown_guidance_is_404(guidance_roomy_server):
+    _, port = guidance_roomy_server
+    status, text = await _http(
+        port, "DELETE", "/runs/R-c10b/guidance/GD-nope")
+    assert status == 404
+    assert "Not Found" not in text
+
+
+async def test_compact_requires_terminal_run(guidance_roomy_server):
+    output, port = guidance_roomy_server
+    status, _ = await _http(
+        port, "POST", "/runs/R-c10b/guidance/compact")
+    assert status == 409                        # running：拒绝物理压缩
+    store = CheckpointStore(output / "R-c10b")
+    record = store.load_record().model_copy(update={
+        "status": RunStatus.COMPLETED, "updated_at": datetime.now()})
+    store.save_record(record)
+    status, text = await _http(
+        port, "POST", "/runs/R-c10b/guidance/compact")
+    assert status == 200, text
+    result = json.loads(text)
+    assert result["run_id"] == "R-c10b"
+    assert result["after_lines"] <= 1

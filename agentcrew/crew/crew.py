@@ -1463,13 +1463,17 @@ class Crew:
             clone.add_decision(record)
         return clone
 
-    def _guidance_provider(self, run: _Run) -> Callable[[], list[str]] | None:
+    def _guidance_provider(self, run: _Run) -> Callable[[str], list[str]] | None:
         """C10：把「用户中途指引」接到上下文包组装（派发前吸收，at-most-once）。
 
         关闭（``guidance_enabled=False``，默认）时返回 ``None``——``ContextBus``
         不持有 provider、``build()`` 连新分支都不进、``render_pack`` 不添段，
         关闭态与改造前逐字节一致。开启时返回闭包：读 pending → 标记消费 →
         记事件 → 返回文本。
+
+        切片二：闭包接收 ``task_id``，只取「未定向 + 定向到本任务」的指引；
+        撤回与过期项由存储层在读取时排除，不占配额也不会被注入。过期的 id
+        每个 run 实例只补一次 ``guidance_expired`` 事件（读时判定不重写盘）。
 
         存储绑定 ``run.checkpoint.run_dir``，不依赖内存状态，所以 resume（含
         重新构造 ``Crew`` 的新进程）同样生效；``consumed_at`` 已落盘的指引
@@ -1481,11 +1485,20 @@ class Crew:
             run.checkpoint.run_dir,
             secrets=tuple(self._settings.secret_values()),
         )
+        notified_expired: set[str] = set()
 
-        def _take() -> list[str]:
+        def _take(task_id: str) -> list[str]:
+            expired = store.expired()
+            fresh = [item.id for item in expired
+                     if item.id not in notified_expired]
+            if fresh:
+                notified_expired.update(fresh)
+                run.ledger.emit(
+                    "guidance_expired", ids=fresh, count=len(fresh))
             pending = store.pending(
                 limit=self._settings.max_guidance_items,
                 max_chars=self._settings.max_guidance_chars,
+                task_id=task_id or None,
             )
             if not pending:
                 return []
@@ -1506,6 +1519,8 @@ class Crew:
                 ids=ids,
                 count=consumed,
                 chars=sum(len(text) for text in texts),
+                task_id=task_id,
+                targets=[item.target for item in pending],
             )
             truncated = [item.id for item in pending if item.truncated]
             if truncated:

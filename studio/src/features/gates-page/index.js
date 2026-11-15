@@ -11,6 +11,7 @@ import { toast } from '../../ui/toast.js';
 import { switchNav } from '../../app/router.js';
 
 import { renderApprovalsSection } from './approvals.js';
+import { renderGuidanceSection } from '../guidance/index.js';
 import { acceptGate, gateStatusLabel, rejectGate } from '../dashboard/gates.js';
 function renderGatesPage(container) {
   // 审批后只重渲染本页容器。此前用 container.parentElement（即 <main>），
@@ -23,6 +24,8 @@ function renderGatesPage(container) {
   // R4：人工审批单区块先于门禁卡片。真实模式下走后端 REST；演示模式显示空态，
   // 不伪造审批动作，也不影响下面 gate-full-card 的数量断言。
   renderApprovalsSection(container);
+  // C10 切片二：中途指引与人工审批同属 run 级人工干预，挂在门禁页同一区域。
+  renderGuidanceSection(container);
   const list = h('div', { class: 'gates-full-list' });
   container.appendChild(list);
   const gates = S.dash.gates || [];

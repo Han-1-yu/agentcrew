@@ -71,6 +71,8 @@
   | `ids` | string[] | 是 | 本次被吸收的指引 id（落盘顺序）。 |
   | `count` | int | 是 | 实际吸收条数（= len(ids)）。 |
   | `chars` | int | 是 | 注入文本的总字符数（截断后）。 |
+  | `task_id` | string | 是 | 切片二起：本次派发的任务 id。 |
+  | `targets` | (string\|null)[] | 是 | 切片二起：每条指引的定向目标（null = 未定向）。 |
 - **at-most-once**：同一 id 只会出现在一次 `guidance_injected` 里。并发下若另一个任务
   先抢到，本次既不注入也不发事件（宁可少喂一次，不能让同一条指引被两个任务各吃一遍）。
 - **不碰的东西**：指引是上下文，不是裁决——不进 `fix_hints`、不改状态机、不影响返工额度。
@@ -83,6 +85,23 @@
   |---|---|---|---|
   | `ids` | string[] | 是 | 被截断的指引 id。 |
   | `max_chars` | int | 是 | 生效的字符上限。 |
+
+### `guidance_expired`（C10 切片二）
+- **触发时机**：`Crew._guidance_provider` 在派发前发现「未被吸收但已过 `expires_at`」的
+  指引时，每个 id 在每个 run 实例里补发一次（读时判定，不重写 `guidance.jsonl`）。
+- **data**：`ids`（string[]，本次新发现）、`count`（int）。
+- **语义**：过期项不再进入 `pending`、不占 `max_guidance_items` 配额，`GET` 里状态为
+  `expired`。引擎重启后会再发一次（新实例没发过），这是事件而非落盘状态。
+
+### `guidance_withdrawn`（C10 切片二）
+- **触发时机**：`DELETE /runs/{id}/guidance/{item_id}` 成功撤回一条待吸收指引时，由 API
+  控制面写进该 run 的 ledger。
+- **data**：`id`（string）。写 ledger 失败不影响撤回结果（控制面动作已完成）。
+
+### `guidance_compacted`（C10 切片二）
+- **触发时机**：`POST /runs/{id}/guidance/compact` 把历史压成一行 snapshot 后。
+- **data**：`before_lines` / `after_lines` / `kept` / `removed`（均为 int）。
+- **边界**：只在终态 run 触发；运行中的压缩请求返回 409，不发事件。
 
 ### `peer_dialogue_enabled`（R5）
 - **触发时机**：`Crew._start()` 在 `peer_dialogue_enabled` 打开时构造并下发 `PeerRouter` 后发一次（默认关闭时不发）。
