@@ -463,7 +463,9 @@ python main.py mcp-serve --api-url http://127.0.0.1:8765 --api-key dev-key-123
 }
 ```
 
-暴露 5 个工具（创建 run、查进度、看任务、裁决审批等），全部复用 HTTP API 的 RBAC 与审计。
+暴露 7 个工具（创建 run、查状态、列审批、裁决、等待终态、列产物、读产物），全部复用
+HTTP API 的 RBAC 与审计。`wait_for_run` 单次最多等 25 秒（小于 MCP 客户端 30 秒 RPC
+超时），未结束时返回 `timed_out=true`，再调一次即可。
 
 ### 8.6 出站 Webhook
 

@@ -27,18 +27,35 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import quote, urlencode
 
 __all__ = [
     "ApiBridge",
     "PROTOCOL_VERSION",
     "SERVER_INFO",
+    "SUPPORTED_PROTOCOL_VERSIONS",
     "TOOL_DEFINITIONS",
     "handle_message",
     "run_stdio",
 ]
 
-#: 与 ``agentcrew.mcp.transports`` 客户端声明同一协议版本（对齐即可，不做协商）。
+#: 服务端自身的基线协议版本。
 PROTOCOL_VERSION = "2024-11-05"
+
+#: 能正确解释的协议版本集合。我们只暴露 ``tools``，没有 resources / sampling /
+#: elicitation 这些后续新增能力，所以 ``2025-03-26`` / ``2025-06-18`` 在工具语义上
+#: 向后兼容——可以安全回显客户端版本（MCP 规范推荐服务端这样做）。集合外的版本
+#: 回落到基线，避免对未知语义做承诺。
+SUPPORTED_PROTOCOL_VERSIONS = frozenset({
+    "2024-11-05", "2025-03-26", "2025-06-18",
+})
+
+
+def _negotiate_protocol(requested: Any) -> str:
+    """客户端请求版本在支持集合内就回显，否则回落到基线版本。"""
+    candidate = str(requested or "").strip()
+    return (candidate if candidate in SUPPORTED_PROTOCOL_VERSIONS
+            else PROTOCOL_VERSION)
 
 SERVER_INFO: dict[str, Any] = {
     "name": "agentcrew",
@@ -180,6 +197,27 @@ class ApiBridge:
                 }
             time.sleep(_POLL_INTERVAL)
 
+    # ---- C9：产物读取（把「派活」闭环成「交付」）----
+
+    def list_artifacts(self, run_id: str) -> dict[str, Any]:
+        """列出一个 run 的产物清单。"""
+        status, data = self.request(
+            "GET", f"/runs/{quote(run_id, safe='')}/artifacts")
+        if 200 <= status < 300 and isinstance(data, dict):
+            return data
+        return _error(status, data)
+
+    def read_artifact(
+        self, run_id: str, path: str, max_bytes: int = 200_000,
+    ) -> dict[str, Any]:
+        """读取单个文本产物；``max_bytes`` 由 API 侧截断并回 ``truncated``。"""
+        query = urlencode({"path": path, "max_bytes": max_bytes})
+        status, data = self.request(
+            "GET", f"/runs/{quote(run_id, safe='')}/artifacts?{query}")
+        if 200 <= status < 300 and isinstance(data, dict):
+            return data
+        return _error(status, data)
+
 
 def _error(status: int, data: Any) -> dict[str, Any]:
     message = data.get("error") if isinstance(data, dict) else None
@@ -253,6 +291,30 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
         ["run_id"],
     ),
+    _tool(
+        "agentcrew_list_artifacts",
+        "列出一个 run 的产物清单（路径、类型、字节数、产出任务）。"
+        "派活之后用它查看交付了什么，再配合 agentcrew_read_artifact 取内容。",
+        {"run_id": {"type": "string", "description": "run ID"}},
+        ["run_id"],
+    ),
+    _tool(
+        "agentcrew_read_artifact",
+        "读取一个 run 的单个文本产物。大文件会被 max_bytes 截断，"
+        "返回里 truncated=true 时请调大 max_bytes 或按段读取。",
+        {
+            "run_id": {"type": "string", "description": "run ID"},
+            "path": {
+                "type": "string",
+                "description": "产物相对路径，如 docs/PRD.md（先用 list_artifacts 查）",
+            },
+            "max_bytes": {
+                "type": "number",
+                "description": "最多读取字节数，默认 200000，上限 1000000",
+            },
+        },
+        ["run_id", "path"],
+    ),
 ]
 
 
@@ -294,7 +356,7 @@ def _dispatch(
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     if method == "initialize":
         return {
-            "protocolVersion": PROTOCOL_VERSION,
+            "protocolVersion": _negotiate_protocol(params.get("protocolVersion")),
             "capabilities": {"tools": {}},
             "serverInfo": SERVER_INFO,
         }, None
@@ -353,6 +415,20 @@ def _call_tool(
             timeout = args.get("timeout_seconds", 600.0)
             timeout = float(timeout) if isinstance(timeout, (int, float)) else 600.0
             data = bridge.wait_for_run(run_id, timeout)
+        elif name == "agentcrew_list_artifacts":
+            run_id = str(args.get("run_id") or "")
+            if not run_id:
+                return _text_result("错误：run_id 必填", is_error=True), None
+            data = bridge.list_artifacts(run_id)
+        elif name == "agentcrew_read_artifact":
+            run_id = str(args.get("run_id") or "")
+            path = str(args.get("path") or "")
+            if not run_id or not path:
+                return _text_result(
+                    "错误：run_id 与 path 必填", is_error=True), None
+            raw_limit = args.get("max_bytes", 200_000)
+            limit = int(raw_limit) if isinstance(raw_limit, (int, float)) else 200_000
+            data = bridge.read_artifact(run_id, path, max(1, min(limit, 1_000_000)))
         else:  # pragma: no cover - known 集合已保证
             return _text_result(f"未知工具：{name}", is_error=True), None
     except (urllib.error.URLError, OSError, ValueError) as exc:

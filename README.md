@@ -271,7 +271,7 @@ examples/samples/<name>/
 | `python main.py serve` | 启动 HTTP API + Web UI 面板（V2） | `--host HOST`（默认 127.0.0.1）；`--port PORT`（默认 8765） |
 | `python main.py doctor` | 诊断配置 / 环境 / 依赖 / Provider 连通性，输出健康报告 | `--config PATH`（指定 agentcrew.yaml）；`--output-dir DIR`；`--json`（机器可读） |
 | `python main.py diff <a> <b>` | 对比两个 run 的配置 / 任务 / 产物 / 事件统计差异 | `--output-dir DIR`；`--json`（机器可读） |
-| `python main.py mcp-serve` | C7：以 MCP server（stdio）暴露编排能力（派活/看进度/裁决审批），供 Claude Desktop / Cursor 调用 | `--api-url URL`；`--api-key KEY`（默认读 `AGENTCREW_MCP_API_KEY`） |
+| `python main.py mcp-serve` | C7/C9：以 MCP server（stdio）暴露编排能力（派活/看状态/裁决审批/取产物），供 Claude Desktop / Cursor 调用 | `--api-url URL`；`--api-key KEY`（默认读 `AGENTCREW_MCP_API_KEY`） |
 | `python main.py docs <list\|search>` | C5：团队文档 RAG——列出已索引文档 / 检索演示（`knowledge/docs/` 下的手册与规范会注入规划与执行上下文） | `search QUERY --limit N`；`--output-dir DIR` |
 | `python main.py eval <dataset>` | P2-5 / C11：跑评测集，用产物断言给出 `pass@1` / `pass^k` | `--repeat K`（每 case 跑 K 次）；`--live`（真实模型）；`--max-cost USD`（硬上限）；`--json`；`--output-dir DIR`（留账） |
 
@@ -1999,6 +1999,13 @@ C9 修掉了一个「文档写了却不生效」的 bug：`from_config` 此前�
 字符串 + `args` 拼接、`env` 与 `os.environ` 合并（不丢 `PATH` / `SYSTEMROOT`）。
 入站半边还补了回环测试（`tests/test_mcp_loopback.py`：本仓 client ↔ 本仓
 `main.py mcp-serve`），协议漂移与 stdout 污染会在 CI 里变红。
+
+C9 同时补上了**产物读取**：`agentcrew_list_artifacts` / `agentcrew_read_artifact`
+对应 `GET /runs/{id}/artifacts`（清单 / `?path=` 读单文件，`max_bytes` 默认 200KB、
+上限 1MB，路径经 `safe_relpath` 校验），外部客户端因此能「派活 → 等完 → 取回交付物」。
+`wait_for_run` 单次最多等 25 秒（小于 MCP 客户端 30 秒 RPC 超时），未结束时返回
+`timed_out=true` + `hint`，再调一次即可；`initialize` 也会在支持集合内回显客户端
+协议版本（`2024-11-05` / `2025-03-26` / `2025-06-18`），集合外回落基线。
 
 `tools_enabled: false`（默认）时一个子进程都不起、一次网络都不发。
 

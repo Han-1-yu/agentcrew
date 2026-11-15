@@ -12,7 +12,7 @@
 任何 MCP 客户端（Claude Desktop / Cursor / 任何 stdio MCP host）都能把 AgentCrew
 当一个「同事」调用：给活、看进度、裁决审批。
 
-### 1.1 工具面（5 个）
+### 1.1 工具面（7 个）
 
 | 工具 | 对应 API | 说明 |
 | --- | --- | --- |
@@ -21,6 +21,8 @@
 | `agentcrew_list_approvals` | `GET /runs/{id}/approvals` | 列审批单 |
 | `agentcrew_approve` | `POST /runs/{id}/approvals` | 裁决（decision 形状同 HTTP API） |
 | `agentcrew_wait_for_run` | 轮询 status | 等到终态或单次上限；**单次最多 25s**（小于 MCP 客户端 30s RPC 超时），未结束时返回 `timed_out=true` + `hint`，请再次调用 |
+| `agentcrew_list_artifacts` | `GET /runs/{id}/artifacts` | C9：列产物清单（path / kind / size_bytes / task_id / role） |
+| `agentcrew_read_artifact` | `GET /runs/{id}/artifacts?path=` | C9：读单个文本产物；`max_bytes` 默认 200000、上限 1000000，返回带 `truncated` |
 
 ### 1.2 设计边界（关键）
 

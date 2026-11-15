@@ -41,20 +41,33 @@ def test_initialize_returns_protocol_and_server_info():
     assert resp["result"]["serverInfo"]["name"] == "agentcrew"
 
 
+def test_initialize_echoes_supported_client_version():
+    """M5：支持集合内回显客户端版本，集合外回落基线，不对未知语义做承诺。"""
+    resp = handle_message(
+        ApiBridge("http://x"),
+        _msg("initialize", {"protocolVersion": "2025-06-18"}))
+    assert resp["result"]["protocolVersion"] == "2025-06-18"
+    unknown = handle_message(
+        ApiBridge("http://x"),
+        _msg("initialize", {"protocolVersion": "2099-01-01"}))
+    assert unknown["result"]["protocolVersion"] == PROTOCOL_VERSION
+
+
 def test_notification_returns_none():
     assert handle_message(ApiBridge("http://x"), {
         "jsonrpc": "2.0", "method": "notifications/initialized",
     }) is None
 
 
-def test_tools_list_exposes_five_tools():
+def test_tools_list_exposes_seven_tools():
     resp = handle_message(ApiBridge("http://x"), _msg("tools/list"))
     tools = resp["result"]["tools"]
     names = [tool["name"] for tool in tools]
     assert names == [
         "agentcrew_create_run", "agentcrew_run_status",
         "agentcrew_list_approvals", "agentcrew_approve",
-        "agentcrew_wait_for_run",
+        "agentcrew_wait_for_run", "agentcrew_list_artifacts",
+        "agentcrew_read_artifact",
     ]
     for tool in tools:
         assert tool["inputSchema"]["type"] == "object"
@@ -118,6 +131,24 @@ def test_bridge_converts_http_error_to_readable_error():
     data = ApiBridge("http://api:1", request_fn=fake).create_run("x")
     assert data["error"] == "并发 run 数已达上限"
     assert data["status"] == 429
+
+
+def test_bridge_artifact_tools_build_query():
+    seen: list[tuple] = []
+
+    def fake(method: str, path: str, payload: dict | None):
+        seen.append((method, path))
+        if "?" in path:
+            return 200, {"path": "docs/PRD.md", "content": "# PRD", "truncated": False}
+        return 200, {"run_id": "r1", "count": 0, "artifacts": []}
+
+    bridge = ApiBridge("http://api:1", request_fn=fake)
+    assert bridge.list_artifacts("r1")["count"] == 0
+    bridge.read_artifact("r1", "docs/PRD.md", 1000)
+    assert seen[0] == ("GET", "/runs/r1/artifacts")
+    assert seen[1][1].startswith("/runs/r1/artifacts?")
+    assert "path=docs%2FPRD.md" in seen[1][1]
+    assert "max_bytes=1000" in seen[1][1]
 
 
 def test_wait_for_run_stops_on_terminal_status():

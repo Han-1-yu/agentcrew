@@ -76,7 +76,8 @@ python main.py doctor --json
 
 > 方向别搞反：`agentcrew/mcp` 既是客户端（`mcp_servers` 连别人的 server），也是
 > **MCP server**（`python main.py mcp-serve`，stdio，供 Claude Desktop / Cursor 反向
-> 调用 5 个工具）。此前的「本项目不是 MCP server」是 C7 之前的表述，已过期；
+> 调用 7 个工具：派活 / 看状态 / 列审批 / 裁决 / 等待 / 列产物 / 读产物）。
+> 此前的「本项目不是 MCP server」是 C7 之前的表述，已过期；
 > 两条方向互不影响，也都有测试（`tests/test_mcp_client.py` 与
 > `tests/test_mcp_loopback.py`）。要被外部系统以 HTTP 驱动，仍用 HTTP API。
 >

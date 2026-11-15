@@ -173,6 +173,8 @@ API_ROUTES: tuple[tuple[str, str], ...] = (
     ("POST", "/runs"),
     ("DELETE", "/runs/{run_id}"),
     ("GET", "/runs/{run_id}/status"),
+    # C9：产物读取——外部客户端（MCP）拿回交付物的最后一米
+    ("GET", "/runs/{run_id}/artifacts"),
     ("GET", "/runs/{run_id}/approvals"),
     ("POST", "/runs/{run_id}/approvals"),
     # C10：run 中途指引——对正在跑的 run 说话（写 202 / 读 200）
@@ -643,6 +645,9 @@ class ApiServer:
             run_id, action = segments[1], segments[2]
             if action == "events":
                 await self._handle_sse(run_id, writer)
+                return
+            if action == "artifacts":
+                await self._get_artifacts(run_id, query, writer)
                 return
             if action == "status":
                 if await self._deny_if_run_hidden(run_id, writer):
@@ -2136,6 +2141,80 @@ class ApiServer:
         await self._send_json(writer, 200, {"runs": runs})
 
     # ── P2-9：Ledger 查询与分析 ─────────────────────────────────────────────
+
+    async def _get_artifacts(
+        self,
+        run_id: str,
+        query: dict[str, list[str]],
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        """``GET /runs/{id}/artifacts[?path=&max_bytes=]``：列清单 / 读单个产物。
+
+        不带 ``path`` 返回清单（路径、kind、字节数、产出任务）；带 ``path`` 返回
+        文本内容，``truncated`` 标明是否被 ``max_bytes`` 截断。这是 C9 的最后一米：
+        外部 MCP 客户端此前只能派活与看状态，拿不回交付物。
+        """
+        if await self._deny_if_run_hidden(run_id, writer):
+            return
+        if self._output_dir is None:
+            await self._send_json(writer, 500, {"error": "server 未配置 output_dir"})
+            return
+        from agentcrew.artifacts.store import ArtifactStore
+        from agentcrew.runtime.checkpoint import _validated_run_id
+        from agentcrew.utils.files import UnsafePathError
+
+        try:
+            safe_id = _validated_run_id(run_id)
+        except ValueError:
+            await self._send_json(writer, 404, {"error": "run not found"})
+            return
+        run_dir = self._output_dir / safe_id
+        if not (run_dir / "run.json").is_file():
+            await self._send_json(
+                writer, 404, {"error": f"run {run_id!r} 不存在"})
+            return
+        store = ArtifactStore(run_dir / "artifacts", run_id=safe_id)
+        store.load_manifest()
+        rel = str((query.get("path") or [""])[0]).strip()
+        if not rel:
+            items = [
+                {
+                    "path": record.path,
+                    "kind": getattr(record.kind, "value", record.kind),
+                    "size_bytes": record.size_bytes,
+                    "task_id": record.produced_by_task,
+                    "role": record.produced_by_role,
+                }
+                for record in store.records()
+            ]
+            await self._send_json(writer, 200, {
+                "run_id": safe_id, "count": len(items), "artifacts": items})
+            return
+        try:
+            max_bytes = int(str((query.get("max_bytes") or ["200000"])[0]))
+        except ValueError:
+            max_bytes = 200_000
+        max_bytes = max(1, min(max_bytes, 1_000_000))
+        try:
+            content = store.read(rel, max_bytes=max_bytes)
+        except UnsafePathError:
+            await self._send_json(writer, 400, {"error": "产物路径不合法"})
+            return
+        except FileNotFoundError:
+            await self._send_json(
+                writer, 404, {"error": f"产物 {rel!r} 不存在"})
+            return
+        except (OSError, ValueError) as exc:
+            await self._send_json(
+                writer, 400, {"error": f"产物不可读（{type(exc).__name__}）"})
+            return
+        await self._send_json(writer, 200, {
+            "run_id": safe_id,
+            "path": rel,
+            "content": content,
+            "truncated": len(content.encode("utf-8")) >= max_bytes,
+            "max_bytes": max_bytes,
+        })
 
     async def _get_ledger(
         self,

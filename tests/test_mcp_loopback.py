@@ -25,6 +25,8 @@ TOOL_NAMES = {
     "agentcrew_list_approvals",
     "agentcrew_approve",
     "agentcrew_wait_for_run",
+    "agentcrew_list_artifacts",
+    "agentcrew_read_artifact",
 }
 
 

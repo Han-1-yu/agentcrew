@@ -374,6 +374,7 @@ _ROUTE_SCOPES: tuple[tuple[str, str, str], ...] = (
     ("GET", r"^/runs$", SCOPE_RUNS_READ),
     ("POST", r"^/runs$", SCOPE_RUNS_WRITE),
     ("GET", r"^/runs/[^/]+/status$", SCOPE_RUNS_READ),
+    ("GET", r"^/runs/[^/]+/artifacts$", SCOPE_RUNS_READ),
     ("GET", r"^/runs/[^/]+/events$", SCOPE_RUNS_READ),
     ("GET", r"^/runs/[^/]+/ledger$", SCOPE_RUNS_READ),
     ("GET", r"^/runs/[^/]+/stats$", SCOPE_RUNS_READ),
