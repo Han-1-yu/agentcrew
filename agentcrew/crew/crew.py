@@ -2024,6 +2024,17 @@ class Crew:
         self._docs_vector_weight = self._docs_effective_weight(embedder, ledger)
         ledger.emit("docs_ingested", docs=result.docs, chunks=result.chunks,
                     rebuilt=result.rebuilt, skipped=result.skipped)
+        # C6：真语义通道只在**异步**路径生效（规划期 / 经验库 / 实体记忆）；
+        # 执行期的 ContextBus 回调是同步的，DocStore.query_sync 明确不算语义
+        # 向量。与其让用户以为全链路都用上了，不如把这条限制写进审计。
+        from agentcrew.knowledge.embeddings import is_semantic_embedder
+
+        if is_semantic_embedder(embedder):
+            ledger.emit(
+                "docs_sync_path_bm25_only",
+                reason="context_bus_retriever_is_sync",
+                effective_weight=self._docs_vector_weight,
+            )
 
     def _docs_effective_weight(self, embedder: Any, ledger: Ledger) -> float:
         """C5：这次 run 文档检索**实际**用的向量权重。
@@ -2041,6 +2052,20 @@ class Crew:
                         reason="hash_embedder_is_not_semantic")
             return 0.0
         return weight
+
+    async def _docs_query_async(self, query: str) -> list[Any]:
+        """规划期文档检索：用**生效**权重，而不是配置原值。
+
+        此前这里直接读 ``settings.docs_rag_vector_weight``，绕过了
+        ``_docs_effective_weight`` 的降级——哈希兜底时规划期仍按 0.5 混入非语义
+        向量，与 ``docs_vector_degraded`` 的承诺相反（B5 实测 0.5 反而掉命中率）。
+        抽成方法而不是内联，是为了让「兜底时权重必须是 0」可被单测直接钉住。
+        """
+        if self._docs_store is None or self._settings.docs_rag_limit <= 0:
+            return []
+        return await self._docs_store.query(
+            query, limit=self._settings.docs_rag_limit,
+            vector_weight=self._docs_vector_weight)
 
     def _docs_query_sync(self) -> Any | None:
         """C5：给 ContextBus 的同步检索回调；未启用返回 ``None``（零开销）。"""
@@ -2245,9 +2270,7 @@ class Crew:
                     vector_weight=self._settings.retrieval_vector_weight))
         # C5：团队文档——PM 拆解也要看到手册与规范（默认关，零开销）。
         if self._docs_store is not None and self._settings.docs_rag_limit > 0:
-            hits = await self._docs_store.query(
-                run.goal, limit=self._settings.docs_rag_limit,
-                vector_weight=self._settings.docs_rag_vector_weight)
+            hits = await self._docs_query_async(run.goal)
             if hits:
                 run.ledger.emit(
                     "docs_context_used",

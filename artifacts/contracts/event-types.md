@@ -602,6 +602,35 @@
 
 ---
 
+## 11. 知识检索（C5 / R27 / C6）
+
+### `docs_ingested`
+- **触发时机**：`docs_rag_enabled=true` 且 `<output_dir>/knowledge/docs/` 摄取成功。
+- **data**：`docs` / `chunks` / `rebuilt` / `skipped`（int 或 string[]）。
+
+### `docs_vector_degraded`
+- **触发时机**：`docs_rag_vector_weight > 0`，但实际通道是 `HashEmbedder`（本地兜底，
+  不是语义向量）。此时生效权重被压到 0（纯 BM25）——B5 实测 0.5 反而掉命中率。
+- **data**：`configured_weight` / `effective_weight`（0.0）/ `reason`（`hash_embedder_is_not_semantic`）。
+
+### `docs_sync_path_bm25_only`（C6）
+- **触发时机**：真语义通道生效（`embedding_enabled` + 可解析端点 + 有密钥）时，每次
+  文档摄取成功后发一条。**不是错误**，是把一条能力边界写进审计：
+  规划期检索与经验库 / 实体记忆走异步真语义；执行期 `ContextBus` 的文档回调是同步的，
+  `DocStore.query_sync` 对非哈希通道明确不算向量 → 那一段仍纯 BM25。
+- **data**：`reason`（`context_bus_retriever_is_sync`）/ `effective_weight`。
+- 要彻底消除这条边界需要给 `ContextBus` 加 async retriever（会动确定性装配路径），
+  另立项；在那之前宁可让限制可见，也不谎称全链路语义。
+
+### `embedding_used`
+- **触发时机**：经验库 / 实体记忆的向量成功算出（`embedding_enabled`）。
+- **data**：`embedder`（如 `cached:openai:text-embedding-3-small`）/ `kind`
+  （`experience` / `entity`）/ `documents` / `dim` / `vector_weight`。
+
+### `embedding_fallback`
+- **触发时机**：embedding 调用失败（超时 / 5xx 重试耗尽 / 认证失败），检索退回纯 BM25。
+- **data**：`reason`（错误消息，**不含密钥**）/ `embedder` / `kind`。
+
 ## 事件触发矩阵（真实 demo run `20261006-183534-fa97` 实测）
 
 | 事件 | 次数 |

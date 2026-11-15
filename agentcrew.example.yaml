@@ -51,6 +51,18 @@ docs_rag_enabled: false
 docs_rag_limit: 4
 docs_rag_vector_weight: 0.5
 
+# ── C6：真语义 embedding 端点（默认关）────────────────────────────────────
+# 开启后经验库 / 实体记忆 / 规划期文档检索走真向量；执行期的同步文档回调
+# 仍纯 BM25（会发 docs_sync_path_bm25_only 事件，边界可见，不谎称全链路）。
+# 密钥走 provider 的 *_API_KEY（由 embedding_model 别名解析），这里不写密钥。
+# embedding_base_url 用于 OpenAI 兼容的自建端点（vLLM / 公司网关），留空用预设。
+embedding_enabled: false
+embedding_model: ""            # 如 openai:text-embedding-3-small
+embedding_dim: 0               # 0 = 首次响应推断；维度会进缓存键
+embedding_base_url: ""
+embedding_timeout_seconds: 10
+embedding_batch_size: 32
+
 # ══════════════════════════════════════════════════════════════════════════════
 # 2. 门禁（G1 静态校验 / G2 LLM 评审 / G3 人工卡点）
 # ══════════════════════════════════════════════════════════════════════════════

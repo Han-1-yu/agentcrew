@@ -7,6 +7,13 @@
 **答案（可复现）**：帮倒忙。只有哈希兜底时，向量权重越高命中率越低。已改成
 「哈希兜底 → 实际权重压到 0，并留一条 `docs_vector_degraded` 事件」。
 
+> **2026-11-15 更新（C6）**：真语义端点已接入（`HttpEmbedder`，OpenAI 兼容
+> `/embeddings`），`scripts/rag_hitrate.py` 新增 `--embedding-model` /
+> `--embedding-base-url`，并在检测到语义通道时自动改用异步 `store.query`
+> （`query_sync` 对非哈希通道退化为纯 BM25，会量出假结论）。本文件的 486 条
+> 是 2026-11-13 的语料（32 篇 / 1233 块）；当前 `docs/` 同口径是 37 篇 / 549 条，
+> 复跑真语义对照时必须锁定 commit 并把篇数/条数一起写进报告，否则新旧 hit@1 不可比。
+
 ## 怎么测的
 
 ```bash

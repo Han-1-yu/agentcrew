@@ -7,8 +7,9 @@
 2. **无网络也能跑**：没配 API Key / 端点不可达时用 :class:`HashEmbedder` 兜底
    ——字符 n-gram 哈希到固定维度，**确定、可复现、零成本**，但语义质量明显弱于
    真实 embedding（它只捕捉字面重合，不捕捉近义）。文档与输出都要如实标注。
-3. **不重复计费**：:class:`CachedEmbedder` 按 ``sha256(model + text)`` 落盘缓存
-   （``<output>/_cache/embeddings.jsonl``），同一文本第二次检索不再打网络。
+3. **不重复计费**：:class:`CachedEmbedder` 按 ``sha256(model + dim + text)`` 落盘缓存
+   （``<output>/_cache/embeddings.jsonl``），同一文本第二次检索不再打网络；维度进键
+   是为了防止「哈希 512 维」与「语义 1536 维」复用同一批缓存造成静默全 0 分。
 
 混合打分在 :mod:`agentcrew.knowledge.experience` 里完成：BM25 分归一到 [0,1]
 后与余弦相似度按 ``vector_weight`` 加权；权重 0 = 纯 BM25，1 = 纯向量。
@@ -16,10 +17,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import math
 import re
+import time
+import urllib.error
+import urllib.request
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -30,6 +35,13 @@ CACHE_FILE_NAME = "embeddings.jsonl"
 
 #: 本地退化向量的维度（512 足够让不同文本碰撞率可接受，又不用存太多）。
 HASH_DIM = 512
+
+#: OpenAI 兼容端点的默认地址（用户没配 ``embedding_base_url`` 时用）。
+DEFAULT_EMBEDDING_BASE_URL = "https://api.openai.com/v1"
+
+#: 单批失败的重试上限与退避上限（embedding 比对话调用便宜，但仍不该无限重试）。
+_MAX_EMBEDDING_ATTEMPTS = 3
+_MAX_EMBEDDING_BACKOFF = 2.0
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+|[\u4e00-\u9fff]")
 
@@ -95,7 +107,12 @@ class HashEmbedder:
 
 
 class OpenAIEmbedder:
-    """OpenAI 兼容的 ``/v1/embeddings`` 通道（复用项目已有的 provider 配置）。"""
+    """OpenAI 兼容的 ``/v1/embeddings`` 通道（openai SDK 版，保留给测试替身）。
+
+    生产装配走 :class:`HttpEmbedder`：它不依赖可选包、可控超时与批量，失败分流也
+    更明确。这个类保留是因为既有测试用 ``client=`` 注入假 SDK 响应，且已装 openai
+    的调用方可以继续用。
+    """
 
     def __init__(
         self,
@@ -137,6 +154,118 @@ class OpenAIEmbedder:
         return vectors
 
 
+class HttpEmbedder:
+    """OpenAI 兼容 ``POST {base_url}/embeddings``——裸 urllib，零第三方依赖。
+
+    与 :class:`OpenAIEmbedder`（可选 ``openai`` SDK）的分工：SDK 版留给测试替身与
+    已装 SDK 的调用方；生产装配走这里，因为它可控超时、按 ``batch_size`` 切分、
+    按状态码决定重不重试，且不会因为「没装 openai」让整条检索链路 import 失败。
+
+    失败分流（逐级可观测，错误消息**不含密钥**）：
+
+    * 401 / 402 / 403 与其余 4xx（429 除外）：配置或额度问题，重试无意义，直接抛
+      :class:`EmbeddingError`；
+    * 429 / 5xx / 网络错误 / 超时：有限重试（``max_attempts`` 次，指数退避上限 2s）；
+    * 响应条数不符、维度不一致、JSON 坏形状：立即抛错，不重试（重试只会重复计费）。
+    """
+
+    def __init__(
+        self,
+        *,
+        model: str,
+        api_key: str = "",
+        base_url: str | None = None,
+        dim: int = 0,
+        timeout_seconds: float = 10.0,
+        batch_size: int = 32,
+        max_attempts: int = _MAX_EMBEDDING_ATTEMPTS,
+        opener: Any | None = None,
+    ) -> None:
+        if not model:
+            raise EmbeddingError("embedding 模型名为空")
+        self.model = model
+        self.dim = dim
+        self.name = f"openai:{model}"
+        self._api_key = api_key or ""
+        self._base_url = (base_url or DEFAULT_EMBEDDING_BASE_URL).rstrip("/")
+        self._timeout = max(0.1, float(timeout_seconds or 10.0))
+        self._batch_size = max(1, int(batch_size or 32))
+        self._max_attempts = max(1, int(max_attempts))
+        self._opener = opener or urllib.request.build_opener()
+
+    async def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        vectors: list[list[float]] = []
+        for start in range(0, len(texts), self._batch_size):
+            batch = list(texts[start:start + self._batch_size])
+            vectors.extend(await asyncio.to_thread(self._embed_batch_sync, batch))
+        if vectors and self.dim == 0:
+            self.dim = len(vectors[0])
+        for vector in vectors:
+            if len(vector) != self.dim or not vector:
+                raise EmbeddingError(
+                    f"embedding 维度不符（{self.model}）：期望 {self.dim}，"
+                    f"实际 {len(vector)}")
+        return vectors
+
+    def _embed_batch_sync(self, batch: list[str]) -> list[list[float]]:
+        payload = json.dumps(
+            {"model": self.model, "input": batch},
+            ensure_ascii=False).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        url = f"{self._base_url}/embeddings"
+        last_error = ""
+        for attempt in range(self._max_attempts):
+            request = urllib.request.Request(
+                url, data=payload, headers=headers, method="POST")
+            try:
+                with self._opener.open(request, timeout=self._timeout) as response:
+                    body = response.read().decode("utf-8")
+                return self._parse(body, len(batch))
+            except urllib.error.HTTPError as exc:
+                status = int(exc.code)
+                last_error = f"HTTP {status}"
+                if status != 429 and 400 <= status < 500:
+                    raise EmbeddingError(
+                        f"embedding 调用失败（{self.model}）：{last_error}"
+                    ) from exc
+            except urllib.error.URLError as exc:
+                last_error = f"{type(exc).__name__}: {exc.reason}"
+            except (TimeoutError, OSError) as exc:
+                last_error = f"{type(exc).__name__}: {exc}"
+            except ValueError as exc:
+                raise EmbeddingError(
+                    f"embedding 响应不是合法 JSON（{self.model}）：{exc}"
+                ) from exc
+            if attempt + 1 < self._max_attempts:
+                time.sleep(min(0.3 * (2 ** attempt), _MAX_EMBEDDING_BACKOFF))
+        raise EmbeddingError(
+            f"embedding 调用失败（{self.model}）：{last_error or 'unknown'}")
+
+    def _parse(self, body: str, expected: int) -> list[list[float]]:
+        payload = json.loads(body)
+        items = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(items, list) or len(items) != expected:
+            raise EmbeddingError(
+                f"embedding 返回条数不符：请求 {expected} 条，"
+                f"返回 {len(items) if isinstance(items, list) else '?'} 条")
+        vectors: list[list[float]] = []
+        for item in items:
+            raw = item.get("embedding") if isinstance(item, dict) else None
+            if not isinstance(raw, list) or not raw:
+                raise EmbeddingError(
+                    f"embedding 响应缺少向量（{self.model}）")
+            try:
+                vectors.append([float(value) for value in raw])
+            except (TypeError, ValueError) as exc:
+                raise EmbeddingError(
+                    f"embedding 向量含非数值（{self.model}）") from exc
+        return vectors
+
+
 class CachedEmbedder:
     """包一层磁盘缓存：命中不再调用内层通道（省钱、也让重跑可复现）。"""
 
@@ -145,6 +274,9 @@ class CachedEmbedder:
         self.path = Path(cache_path)
         self.name = f"cached:{inner.name}"
         self.dim = inner.dim
+        #: 键里的维度在构造时固化：同一后端自动推断后仍能命中旧缓存，
+        #: 而用户把 ``embedding_dim`` 从 0 改成显式值时旧缓存作废（保守但正确）。
+        self._key_dim = int(getattr(inner, "dim", 0) or 0)
         self._cache: dict[str, list[float]] | None = None
 
     def _load(self) -> dict[str, list[float]]:
@@ -168,8 +300,11 @@ class CachedEmbedder:
         return cache
 
     def _key(self, text: str) -> str:
+        # 维度必须进键：cosine 在长度不等时静默返回 0（见 cosine 的实现），
+        # 「哈希 512 维」的旧缓存被「语义 1536 维」复用就会得到「不报错、全 0 分」
+        # 的静默退化——正是 B5 那类「看起来测了、其实没测」的事故形态。
         return hashlib.sha256(
-            f"{self._inner.name}\x00{text}".encode()).hexdigest()
+            f"{self._inner.name}|dim={self._key_dim}\x00{text}".encode()).hexdigest()
 
     async def embed(self, texts: Sequence[str]) -> list[list[float]]:
         cache = self._load()
@@ -211,8 +346,17 @@ def build_embedder(
     model, api_key, base_url = target
     if not model:
         return CachedEmbedder(HashEmbedder(), cache_path)
-    inner = OpenAIEmbedder(model=model, api_key=api_key,
-                           base_url=base_url, dim=dim)
+    # 启用真语义通道：裸 urllib + 可控超时 + 批量切分（不依赖可选 openai SDK）。
+    inner = HttpEmbedder(
+        model=model,
+        api_key=api_key,
+        base_url=base_url,
+        dim=dim,
+        timeout_seconds=float(
+            getattr(settings, "embedding_timeout_seconds", 10.0) or 10.0),
+        batch_size=int(
+            getattr(settings, "embedding_batch_size", 32) or 32),
+    )
     return CachedEmbedder(inner, cache_path)
 
 

@@ -2697,6 +2697,13 @@ def _cmd_config_export(args: argparse.Namespace) -> int:
         ("docs_rag_enabled", False),
         ("docs_rag_limit", 4),
         ("docs_rag_vector_weight", 0.5),
+        # C6：真语义 embedding 端点（默认导出文档不变——默认值与字段逐字一致）。
+        ("embedding_enabled", False),
+        ("embedding_model", ""),
+        ("embedding_dim", 0),
+        ("embedding_base_url", ""),
+        ("embedding_timeout_seconds", 10.0),
+        ("embedding_batch_size", 32),
     ):
         value = snap.get(key)
         if value not in (None, default):
@@ -2828,6 +2835,9 @@ def _cmd_config_import(args: argparse.Namespace) -> int:
         "search_timeout_seconds",
         "docs_rag_enabled", "docs_rag_limit",         # R54 C5 文档 RAG
         "docs_rag_vector_weight",
+        "embedding_enabled", "embedding_model",       # C6 真语义 embedding
+        "embedding_dim", "embedding_base_url",
+        "embedding_timeout_seconds", "embedding_batch_size",
     ):
         if key in data:
             existing[key] = data[key]

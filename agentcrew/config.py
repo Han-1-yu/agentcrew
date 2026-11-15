@@ -93,6 +93,9 @@ _ENV_TO_FIELD: dict[str, str] = {
     "AGENTCREW_EMBEDDING_ENABLED": "embedding_enabled",
     "AGENTCREW_EMBEDDING_MODEL": "embedding_model",
     "AGENTCREW_EMBEDDING_DIM": "embedding_dim",
+    "AGENTCREW_EMBEDDING_BASE_URL": "embedding_base_url",
+    "AGENTCREW_EMBEDDING_TIMEOUT_SECONDS": "embedding_timeout_seconds",
+    "AGENTCREW_EMBEDDING_BATCH_SIZE": "embedding_batch_size",
     "AGENTCREW_RETRIEVAL_VECTOR_WEIGHT": "retrieval_vector_weight",
     "AGENTCREW_APPROVAL_MODE": "approval_mode",
     "AGENTCREW_APPROVAL_TIMEOUT_SECONDS": "approval_timeout_seconds",
@@ -156,6 +159,7 @@ _YAML_SCALAR_KEYS = (
     "approval_timeout_seconds",
     # R27：向量检索通道与混合权重。
     "embedding_enabled", "embedding_model", "embedding_dim",
+    "embedding_base_url", "embedding_timeout_seconds", "embedding_batch_size",
     "retrieval_vector_weight",
     # C5：文档 RAG。
     "docs_rag_enabled", "docs_rag_limit", "docs_rag_vector_weight",
@@ -1085,7 +1089,30 @@ class Settings(BaseModel):
     """R27：embedding 模型别名，如 ``"openai:text-embedding-3-small"``；
     空串表示只用本地哈希向量。"""
     embedding_dim: int = 0
-    """R27：向量维度；``0`` = 由第一次响应自动推断（本地退化为 512）。"""
+    """R27：向量维度；``0`` = 由第一次响应自动推断（本地退化为 512）。
+
+    维度会进磁盘缓存键：从 0 改成显式值时旧向量缓存作废（首次全量重算），
+    这是为了不让「哈希 512 维」与「语义 1536 维」共用缓存后静默算成全 0。
+    """
+    embedding_base_url: str = ""
+    """C6：OpenAI 兼容的 embedding 端点根地址（默认空 = 用 provider 预设）。
+
+    例：``https://api.openai.com/v1``、``http://127.0.0.1:8000/v1``。自建 vLLM /
+    公司网关不必为此新增 ``model_providers`` 条目。密钥仍走 provider 的
+    ``*_API_KEY``（由 ``embedding_model`` 别名解析），本字段不承载密钥。
+    环境变量 ``AGENTCREW_EMBEDDING_BASE_URL``。
+    """
+    embedding_timeout_seconds: float = Field(default=10.0, ge=0.1, le=120.0)
+    """C6：单批 embedding 请求超时（默认 10 秒，上限 120）。
+
+    环境变量 ``AGENTCREW_EMBEDDING_TIMEOUT_SECONDS``。
+    """
+    embedding_batch_size: int = Field(default=32, ge=1, le=256)
+    """C6：单次请求最多几条文本（默认 32，上限 256）。
+
+    按批切分既避免大文档一次性超出端点单请求上限，也让失败只重试那一批。
+    环境变量 ``AGENTCREW_EMBEDDING_BATCH_SIZE``。
+    """
     retrieval_vector_weight: float = 0.5
     """R27：混合权重，``0`` = 纯 BM25，``1`` = 纯向量；默认 0.5。
 

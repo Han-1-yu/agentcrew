@@ -1810,6 +1810,9 @@ G2（机器评审）驳回不换人——换人是「谁做得更好」的判断
 
 ### 3. 为什么不是向量检索
 
+> **2026-11-15 更新（C6）**：embedding 通道后来已落地（R27 哈希兜底 → C6 真语义
+> HTTP 端点），本节保留的是 R11 当时为什么先做 BM25 的判断。现状见本文「R27 向量检索」。
+
 全仓没有 embedding 接口。接一个就要新增 provider 方法、网络调用与按量计费，而这个项目
 的红线是「离线可跑、样例不依赖网络」——真做了，离线路径就得降级，等于用一个更弱的
 兜底换一个用不上的能力。
@@ -2384,6 +2387,9 @@ models:
 | `AGENTCREW_WEBHOOK_TRIGGER_SECRET` | 空 | C8：入站 Webhook 触发的 HMAC 密钥；空 = `POST /webhooks/trigger` 关闭（503） |
 | `AGENTCREW_DOCS_RAG_ENABLED` | `false` | C5：文档 RAG——`knowledge/docs/` 下的团队文档（手册/规范）注入规划与执行上下文 |
 | `AGENTCREW_DOCS_RAG_LIMIT` / `_VECTOR_WEIGHT` | `4` / `0.5` | C5：单任务注入片段数上限与混合权重 |
+| `AGENTCREW_EMBEDDING_ENABLED` / `_MODEL` / `_DIM` | `false` / 空 / `0` | R27：向量通道开关、`<provider>:<model>` 别名、维度（0=自动推断） |
+| `AGENTCREW_EMBEDDING_BASE_URL` | 空 | C6：OpenAI 兼容端点根地址（空=用 provider 预设，适配 vLLM / 公司网关） |
+| `AGENTCREW_EMBEDDING_TIMEOUT_SECONDS` / `_BATCH_SIZE` | `10` / `32` | C6：单批超时与批量大小（上限 120s / 256 条） |
 | `AGENTCREW_STREAM` | `false` | P3-3：Agent 走流式 LLM 路径（逐块记 `agent_stream_chunk`；默认关，实时性需要时开） |
 | `AGENTCREW_UNTRUSTED_INPUTS` | `false` | G-1：不可信输入预设——只给只读工具（read_file/list_files/grep），不挂 MCP |
 | `AGENTCREW_OTEL_ENABLED` | `false` | P2-3：每次 run 导出一条 OTel trace（`gen_ai.*` 语义 + OTLP/HTTP JSON，零依赖） |
@@ -2961,7 +2967,10 @@ AGENTCREW_EMBEDDING_ENABLED=true AGENTCREW_EMBEDDING_MODEL=openai:text-embedding
 |---|---|
 | `embedding_enabled` | 总开关（默认 false） |
 | `embedding_model` | `<provider>:<model>` 别名；空串 = 只用本地哈希向量 |
-| `embedding_dim` | 维度，0 = 自动推断（本地退化 512） |
+| `embedding_dim` | 维度，0 = 自动推断（本地退化 512）；维度进缓存键 |
+| `embedding_base_url` | C6：OpenAI 兼容端点根地址（留空用 provider 预设，适配 vLLM / 公司网关） |
+| `embedding_timeout_seconds` | C6：单批请求超时，默认 10 秒（上限 120） |
+| `embedding_batch_size` | C6：单次请求最多几条文本，默认 32（上限 256） |
 | `retrieval_vector_weight` | 混合权重，0 = 纯 BM25，1 = 纯向量，默认 0.5 |
 
 **三条诚实边界**：
@@ -2969,10 +2978,17 @@ AGENTCREW_EMBEDDING_ENABLED=true AGENTCREW_EMBEDDING_MODEL=openai:text-embedding
 1. **没网络也能跑**：缺密钥 / 端点失败时自动降级为**本地哈希向量**（字符
    n-gram 哈希到 512 维、确定性、零成本），但它在输出与事件里都标明
    `cached:hash`——它只捕捉字面重合，不捕捉近义，语义质量明显弱于真实模型；
-2. **不重复计费**：向量按 `sha256(model+text)` 落盘缓存在
-   `<output>/_cache/embeddings.jsonl`，同一文本第二次检索不再打网络；
+2. **不重复计费**：向量按 `sha256(model + dim + text)` 落盘缓存在
+   `<output>/_cache/embeddings.jsonl`，同一文本第二次检索不再打网络；维度进键是为了
+   防止「哈希 512 维」与「语义 1536 维」复用缓存后，`cosine` 因长度不等静默返回 0；
 3. **失败可见**：端点错误降级回纯 BM25 并发 `embedding_fallback` 事件
-   （带原因），不静默假装用了向量。
+   （带原因），不静默假装用了向量；401/402/4xx 不重试，429/5xx/网络错误有限重试。
+
+C6 起真实通道走**裸 urllib**（不依赖可选 `openai` SDK），可控超时、按批切分、
+按状态码分流。还有一条边界必须说清：**执行期的文档注入仍是 BM25**——`ContextBus`
+的检索回调是同步的，`DocStore.query_sync` 对非哈希通道不算向量。开启真语义时
+每次文档摄取会发一条 `docs_sync_path_bm25_only`，把这条限制写进审计；要消除它
+需要给 `ContextBus` 加 async retriever（会动确定性装配路径），另立项。
 
 打分：BM25 分按本批最大值归一到 [0,1]，再与余弦相似度按权重线性加权——
 两种分量级差几个数量级，不归一的话权重参数等于假的。

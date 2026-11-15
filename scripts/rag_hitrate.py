@@ -14,9 +14,16 @@ embedding 端点时会退化成 :class:`HashEmbedder`（字符 n-gram 哈希，�
 
 用法::
 
+    # 本地哈希兜底（离线、零密钥，量的是「字面重合 + BM25」）
     python scripts/rag_hitrate.py --docs-dir docs --limit 5
 
+    # 真语义通道（OpenAI 兼容 /embeddings；key 走 provider 的 *_API_KEY）
+    python scripts/rag_hitrate.py --docs-dir docs \
+        --embedding-model openai:text-embedding-3-small
+
 退出码：跑通 0；语料为空 2。结果表写进 stdout，``--json-out`` 可另存。
+接真语义时**必须走异步 query**（脚本内部按通道类型自动切换）：``query_sync``
+对非哈希通道明确退化为纯 BM25，用它量语义效果会得到「权重 1.0 毫无作用」的假结论。
 """
 
 from __future__ import annotations
@@ -80,12 +87,22 @@ def _rank_of(hits: list, expected: str) -> int:
 
 async def _measure(
     staged: Path, queries: list[tuple[str, str]], *, weight: float, limit: int,
+    embedder=None,
 ) -> dict[str, float]:
-    store = DocStore(staged, embedder=HashEmbedder())
+    from agentcrew.knowledge.embeddings import is_semantic_embedder
+
+    channel = embedder if embedder is not None else HashEmbedder()
+    store = DocStore(staged, embedder=channel)
     summary = await store.ingest()
+    # 真语义通道必须走异步 query：query_sync 对非 Hash 通道明确退化为纯 BM25，
+    # 用它量真语义会得出「权重 1.0 毫无作用」的假结论。
+    use_async = is_semantic_embedder(channel)
     ranks: list[int] = []
     for query, expected in queries:
-        hits = store.query_sync(query, limit=limit, vector_weight=weight)
+        if use_async:
+            hits = await store.query(query, limit=limit, vector_weight=weight)
+        else:
+            hits = store.query_sync(query, limit=limit, vector_weight=weight)
         ranks.append(_rank_of(hits, expected))
     total = len(ranks) or 1
     return {
@@ -117,9 +134,12 @@ async def _run(args: argparse.Namespace) -> int:
             target = staged / path.relative_to(docs_dir)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(path, target)
+        embedder = _make_embedder(args, Path(tmp) / "_cache_root")
+        print(f"向量通道：{embedder.name if embedder else 'hash（本地兜底）'}")
         for weight in weights:
             stats = await _measure(
-                staged, queries, weight=weight, limit=args.limit)
+                staged, queries, weight=weight, limit=args.limit,
+                embedder=embedder)
             row: dict[str, float | str] = {"weight": weight, **stats}
             rows.append(row)
             print(
@@ -135,10 +155,29 @@ async def _run(args: argparse.Namespace) -> int:
             "docs_dir": str(docs_dir),
             "queries": len(queries),
             "limit": args.limit,
+            "embedder": embedder.name if embedder else "hash",
             "rows": rows,
         }, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"JSON 写入 {out}")
     return 0
+
+
+def _make_embedder(args: argparse.Namespace, output_dir: Path):
+    """给了 ``--embedding-model`` 才接真语义通道；否则返回 ``None`` 用哈希兜底。"""
+    if not args.embedding_model:
+        return None
+    from agentcrew.config import Settings
+    from agentcrew.knowledge.embeddings import build_embedder
+    from agentcrew.models.embedding import embedding_target
+
+    settings = Settings.load(
+        embedding_enabled=True,
+        embedding_model=args.embedding_model,
+        embedding_dim=args.embedding_dim,
+        embedding_base_url=args.embedding_base_url,
+    )
+    return build_embedder(
+        settings, output_dir=output_dir, target=embedding_target(settings))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -147,6 +186,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--weights", default="0,0.5,1",
                         help="逗号分隔的混合权重，默认 0,0.5,1")
     parser.add_argument("--limit", type=int, default=5, help="每次检索的条数")
+    parser.add_argument(
+        "--embedding-model", default="",
+        help="真实 embedding 别名（如 openai:text-embedding-3-small）；"
+             "不给则用本地哈希兜底")
+    parser.add_argument(
+        "--embedding-base-url", default="",
+        help="OpenAI 兼容端点根地址（默认用 provider 预设）")
+    parser.add_argument(
+        "--embedding-dim", type=int, default=0,
+        help="向量维度（0 = 由第一次响应推断）")
     parser.add_argument("--json-out", default="", help="把结果写成 JSON")
     args = parser.parse_args(argv)
     return asyncio.run(_run(args))
