@@ -2945,6 +2945,68 @@ pending 中的 run 不会出现在列表里。
 `enqueue` → `main.py worker --once --auto --mock` → `done/R-cap-1.json` 为
 `completed`，run 目录有 `run.json` / `artifacts` / `ledger.jsonl`。
 
+### 3.95 R63：图像类交付物的三个运行时缺陷（真实 run 反查，2026-11-16）
+
+**起因**：用户当天从 Studio 发起的一个真实 run（`output/20261116-184850-52c8`）要求
+「用 `generate_image` 生成 `assets/cover.png`（交付物类型必须是 image）」，而该 run 的
+`config_snapshot` 是 `tools_enabled=false`、`image_provider=""` —— 工具**根本没注册**。
+PM 仍按目标拆出 image 任务并派给 `frontend_dev`，执行体只能写一段「我无法调用
+generate_image、也写不出合法 PNG」的说明，随后把同一路径当子任务再委派，被
+`subtask_conflict` 拒绝，进入自我纠正循环，进程被外部终止。
+
+同一目标用 CLI 复现两次（真实 DeepSeek）：
+
+| 复现 run | 配置 | 修前结果 |
+|---|---|---|
+| `20261116-185437-aa96` | 默认（无工具） | 11 次 LLM、1 failed / 2 blocked，终态 `AgentExecutionError: 缺少必需产物：assets/cover.png`；**终端只显示「最后一次评审：（无评审记录）」** |
+| `20261116-185546-de4b` | `tools_enabled=true` + `image_provider=mock` | `cover.png` 已落盘、G1 静态放行，但 **G2 每轮都 reject**（issue：「未满足验收标准：assets/cover.png 存在且为非空二进制 PNG…」），3 轮返工后 FAILED，共 **38 次 LLM 调用** |
+
+三条缺陷都是「计划能派、评审看不见、报告不说」，彼此独立：
+
+| # | 缺陷 | 位置 | 修复 |
+|---|---|---|---|
+| A | 不可能的交付物照样被规划并派发 | `task/planner.py` | `validate_plan` 新增第 9 条校验 `_check_deliverable_capabilities`：交付物 `kind ∈ BINARY_KINDS` 且本 run 没有对应能力 → 驳回，报错指名任务 id 与路径并写明「需要 `tools_enabled=true` 且配置 `image_provider`」。`image_generation` 形参默认 `None`（跳过校验，与引入前逐字一致） |
+| A' | 能力判定散落各处 | `crew/crew.py` | 新增 `_image_generation_enabled()`：有 override 注册表时以 `override.get("generate_image")` 为准，否则 `tools_enabled and image_provider.strip() and not untrusted_inputs`；三处 `validate_plan` 调用（预设 / 规划循环 / resume 已接受计划）全部传入 |
+| B | G2 对看不见的内容做假评审 | `gate/reviewer.py` | 任务**全部**交付物都是二进制时，短路为 `verdict=approve` + `reviewer="binary:none"` + issue「文本无法核验其内容」，不再调 LLM；混合任务则在 material 里插「## 评审约束」一节，明确**不得**仅因看不见内容判为不满足。G1 契约校验照旧 |
+| C | 报告吞掉执行失败原因 | `crew/report.py` · `runtime/board_view.py` | 新增 `last_exec_error()`，从 `status_history` 倒序取 `retry: ` 前缀的理由（`attempts-exhausted` 是记账用语，不是原因）。`failure_line` 两级回落：有评审 issues → 评审；否则 → 「最后一次执行失败：<error>」；都没有 → 保持原「（无评审记录）」。两个渲染器各留一份 `_EXEC_ERROR_PREFIX`（`runtime` 不得依赖 `crew`） |
+
+**修后真实运行**（同一 goal、同一模型，`output/` 可复核）：
+
+| run | 配置 | 结果 |
+|---|---|---|
+| `20261116-190510-a7ee` / `-7d9a` | 默认（无工具） | 两次 `plan_rejected`（每次都是能力缺失那条），CLI **退出码 2**，终端直说「任务 T1 的交付物 assets/cover.png 类型是 image，但本次运行没有启用图像生成能力…」；不再有任务被派发 |
+| `20261116-190551-f81a` | `tools_enabled=true` + `image_provider=mock` | **completed**，3/3 成功、**9 次 LLM 调用**（修前 38 次）；产物 `cover.png`(70B) / `README.md` / `DELIVERY.md` / `MANIFEST.json`；T1 的 gate_result 为 `static:approve` + `{layer:llm, verdict:approve, reviewer:"binary:none"}` |
+
+**为什么 11-13 的 R61 真机端到端（§3.83）没抓到**：那次跑的是固定流程
+`examples/flows/image-e2e.yaml`，计划由 YAML 给定、**绕过了 PM 规划与能力判定**，也不涉及
+`tools_enabled=false` 的默认配置；G2 能过是因为契约里 `min_bytes=1` 且评审员拿到的是
+「70 字节」这种它判得了的元数据。也就是说 §3.83 验的是「有图时链路通」，本轮的三个缺陷
+都长在「没图 / 只判断内容」这两条边界上——只有按目标自由规划才暴露。
+
+**为什么不让文本 LLM 去评图**：评审员只拿到 `read_for_prompt` 的元数据摘要（二进制不做
+UTF-8 解码，见 11-13 的 UnicodeDecodeError 修复），没有视觉输入。硬让模型「根据元数据
+判断画面是否符合要求」只会稳定产出 reject——那正是修前的现象。**画面质量归 G3 人工闸门**
+与 Studio 产物预览；本层只保证「有文件、非空、可解码」。
+
+**边界**：G2 对纯图像任务降级放行意味着内容层面的自动化把关为零，这是刻意取舍（比
+「永远 reject」诚实）；混合任务只约束评审员别瞎判，不会替它看内容。`image_provider`
+依旧**不在** `api/run_options.py` 白名单里——按 run 打不开图像能力，只能改服务端配置
+（Studio 前端也没有 `tools_enabled` 开关），这是既有的安全边界，本轮不改。
+
+**验证**：新增 10 例——`tests/test_planner.py` 4 例（无能力驳回 / 有能力通过 / 未指定
+不校验 / 文本产物不受影响）、`tests/test_image_artifacts.py` 2 例（全二进制跳过 G2 且
+`reviewer=="binary:none"`；混合任务 material 含「## 评审约束」与「不得仅因看不见内容
+判为不满足」且文本节选仍在）、`tests/test_board_view.py` 4 例（board_view / report 的
+`failure_line` 回落执行错误、有评审问题时优先评审、无证据保持旧文案）。
+`ruff check agentcrew/ tests/ main.py` 全绿，`mypy agentcrew/` 146 文件无错；
+`test_planner + test_image_artifacts + test_board_view` 104 passed，影响面回归批次
+（reviewer / supervisor_review / references / dedup / gatekeeper / image_tool / crew /
+self_correction）**294 passed**。全量 `scripts/test.py` 本轮未跑。
+
+**配置口径已补文档**：`docs/OPERATIONS.md` §3.2 增加 `AGENTCREW_TOOLS_ENABLED` /
+`AGENTCREW_IMAGE_PROVIDER` 两行（明确「两个开关都要开」），§3.3 增加 `generate_image`
+与「产物类型 image 的评审」两条边界——此前整个仓库没有一处文档说明怎么打开出图能力。
+
 ---
 
 ## 4. 历史报告汇总（已并入本文，原文归档）
