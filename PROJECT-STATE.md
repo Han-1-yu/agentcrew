@@ -12,7 +12,7 @@
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | C14 分布式后最新全量 **3500 passed / 0 failed / 6 skipped / 0 error**（186 文件 / 93 批次 / 473.4s，Windows 本机 `scripts/test.py --batch 2 --retries 4 --retry-failed 3 --keep-pycache`），本轮零崩溃重试、零「首败重试过」。C10 分支在云主机（Linux / Python 3.12.11）另跑一次 `pytest -q`：**3285 passed / 4 skipped / 0 failed**（233.3s，当时树在 R62 之前）。6 个 skip 沿用跑器结果，其中 4 个 docker 真容器用例由 CI 覆盖 |
+| 全量测试 | R64 后最新全量 **3524 passed / 0 failed / 6 skipped / 0 error**（187 文件 / 47 批次 / 438.5s，Windows 本机 `scripts/test.py --batch 2 --retries 4 --retry-failed 3 --keep-pycache`），1 个批次崩溃重试（本机 `0xC0000005` 老问题）。C10 分支在云主机（Linux / Python 3.12.11）另跑一次 `pytest -q`：**3285 passed / 4 skipped / 0 failed**（233.3s，当时树在 R62 之前）。6 个 skip 沿用跑器结果，其中 4 个 docker 真容器用例由 CI 覆盖 |
 | 静态检查 | 切片二后重跑 `ruff check agentcrew/ main.py tests/`：**All checks passed**；`mypy agentcrew/`：**144 文件零错误**（Windows / Python 3.12.16）；云主机同口径复跑 ruff 全绿、mypy 140 文件零错误（当时树在 R62 之前） |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
@@ -3006,6 +3006,65 @@ self_correction）**294 passed**。全量 `scripts/test.py` 本轮未跑。
 **配置口径已补文档**：`docs/OPERATIONS.md` §3.2 增加 `AGENTCREW_TOOLS_ENABLED` /
 `AGENTCREW_IMAGE_PROVIDER` 两行（明确「两个开关都要开」），§3.3 增加 `generate_image`
 与「产物类型 image 的评审」两条边界——此前整个仓库没有一处文档说明怎么打开出图能力。
+
+---
+
+### 3.96 R64：运行侧的六处「说得不对」（真实路径实跑，2026-11-16 晚）
+
+**起因**：用户再次要求「寻找并解决运行过程中的问题」。本轮先跑一遍全量基线
+（**3510 passed / 0 failed / 6 skipped**，186 文件 / 545.0s），确认没有回归，再把真实
+使用路径逐条走一遍：4 个 mock 样例、1 次 DeepSeek 真实 run、rewind→resume、
+deferred 审批单、`desktop.py --smoke`、后端 20 个读写端点、以及全部只读 CLI 子命令。
+
+**结论**：没有「一跑就坏」，缺陷全部长在**测试没有断言的地方**——命令崩在没人覆盖的
+参数组合上、时间按错误时区念、提示给出跑不通的下一步、样例名不副实；另有一条**偶发
+崩溃**（F）是全量回归时撞出来的，不是读代码读出来的。
+
+| # | 现象（实跑证据） | 位置 | 修法 |
+|---|---|---|---|
+| A | `approvals <run>` 崩 `TypeError: can't subtract offset-naive and offset-aware datetimes` —— 只要有**带超时的待裁决审批单**就必崩 | `main.py::_cmd_approvals` | R30 的 `expires_at` 是 aware UTC，CLI 却拿 naive `datetime.now()` 相减；改为 `as_aware(expires_at) - utc_now()`，旧 naive 数据按本机时区补齐后再算 |
+| B | `status` / `delete` 把 aware UTC 当本地念：run 目录名 `20261116-192125`，同屏「创建 11:21:25」，东八区**差 8 小时**；Studio 用 `new Date()` 显示本地，于是 CLI 与 Studio 对同一次 run 给出两个时刻 | `main.py`（两处） | `utils/clock.py` 新增 `to_local` / `format_local` / `as_aware`；展示层统一走 `format_local`，落盘与比较仍是 UTC |
+| C | `cancel` 往 `run.json.updated_at` 写 naive 本地时间（D-14 之后该字段是 aware UTC）：同一文件里 `created_at=11:23:06Z`、`updated_at=19:29:05`，看着「更新比创建晚 8 小时」 | `main.py::_cmd_cancel` | 改 `utc_now()`。**根因是守卫没覆盖**：`test_time_migration_guard` 只扫 `agentcrew/`，而 CLI 是唯一在 run 之外改写 `run.json` 的入口 → 扫描范围加上 `main.py`（基线仍为 0） |
+| D | `rewind` 结尾打印「下一步：python main.py resume <id>」，对任何 `--sample` / `--mock` 起出来的 run **必然失败**；照提示补 `--mock` 更糟——配置比对过了，夹具却停在默认目录，`logstat` 的 run 被回放成 Todo 的 `backend/app/*.py`，然后因「产出未在契约中声明的文件」失败（`20261116-192125-76b1` 实测 8m26s 白跑） | `main.py::_cmd_rewind` / `_cmd_resume` | 新增 `_resume_hint`：按 `config_snapshot` 补 `--sample`（同目标多样例时补候选说明）/`--mock`/`--default-model`/`--context-budget`；`resume` 的拒绝文案也从「加 --force」改成一条**可直接执行**的命令 + 歧义说明 |
+| E | 样例 `revision` 自称「首轮复核不通过（演示返工）」，实跑 `20261116-192603-890f` 却是 5/5 通过、**0 返工**、通过率 100% | `models/providers/mock.py` · `gate/reviewer.py` · `examples/samples/revision/reviews.json` | 门禁评审的 mock 回放 `attempt` 恒为 0（避免与角色内复核的 `"<task>@1"` 撞键），于是夹具里那条 `"T-003@1"` 永远命不中，离线回放**没有任何路径**能表达「驳回→返工→通过」。新增 `_Replay.round_no` + `set_purpose(round_no=...)`，门禁评审按 `"<task>@r<轮次>"` 取夹具（无该键时逐字回落到旧行为），样例补 `T-003@r1`（拒）/`T-003@r2`（放行） |
+| F | 4 个进程并发写 `experiences.jsonl` 时**约一半概率**有一个进程在**第一行**就 `PermissionError: [Errno 13]`（`OSError`）崩掉，整个 run 陪葬；`tests/test_jsonl_concurrency.py::test_multi_process_appends_are_intact` 单独重跑 8 次里 5 次红 | `knowledge/jsonl.py` | 根因不是「没拿到锁」（那条路径本来就有 10s 重试），而是 `os.open(lock, O_CREAT\|O_RDWR)` 本身失败：多进程同时抢建同一个刚出现的锁文件时 Windows 回共享冲突。新增 `_open_lock`：2s 内重试，仍打不开就**退化为无锁单次写 + 告警**（与「文件系统不支持锁」同一策略，读侧宽容兜底），绝不让写方抛出去 |
+
+**修后实测**（`output/` 可复核）：
+
+| 场景 | 修前 | 修后 |
+|---|---|---|
+| `approvals 20261116-192306-f65c` | `TypeError` + traceback | `AP-e951f14bb853 plan pending · 剩余 9s` |
+| `status 20261116-192125-76b1` | 创建 `11:21:25`（与目录名差 8h） | 创建 `19:21:25`（与目录名一致） |
+| `cancel` 后 `run.json` | `updated_at` naive，差 8h | 仍是 `+00:00`，两字段同口径 |
+| `rewind` 的下一步 | `resume <id>` → 退出码 3 | `resume <id> --sample linear` + 歧义说明，照抄即可跑通（5/5 成功） |
+| `run --sample revision` | 5/5 通过、0 返工、100% | 5/5 通过、**返工 1 次（T-003）**、**G2 驳回 1**、通过率 92%、14 次 LLM |
+| `pytest tests/test_jsonl_concurrency.py`（连跑 10 次） | 8 次里 5 次红（写方 `PermissionError`） | 10/10 全绿；4 进程 × 30 条压测 5 轮均 120 条完整 |
+
+**真实模型复跑**（同一轮，`20261116-192217-7fae`，DeepSeek）：6 个任务全成功、
+1 次返工（T4）、20 次 LLM、$0.05、2m1s、产物含 `jsonq/`、`tests/`、4 篇文档 —— 用来
+确认 A–E 的改动没有影响正常链路（时间显示与报告数字均正常，无新告警）。
+
+**刻意不做**：
+`resume` 后的「耗时」仍按**首次启动**算（`stats.started_at` 保留），因此
+rewind 后再 resume 会看到把中断时间也算进去的总跨度（实测 8m26s，其中真实执行 1s）。
+改成「本次续跑时长」会丢「整场跨了多久」这个信息，而两行都印又会挤占报告版面 ——
+留作产品决策，不在本轮擅改语义。同理，`linear` 与 `revision` 共享同一句目标、
+`run.json` 里没有样例名字段，所以「这个 run 用哪个样例起的」只能靠目标文本猜；
+`_resume_hint_notes` 选择**把不确定说出来**，而不是随便挑一个装作知道。
+
+**验证**：新增 `tests/test_runtime_time_and_resume.py` 12 例（审批单超时/旧 naive 数据、
+status 本机时区、cancel 落 aware UTC、`_resume_hint` 三种分支、resume 拒绝文案含可执行
+命令、门禁 `@r<n>` 夹具命中与回落、revision 样例真的返工）；`test_jsonl_concurrency.py`
++2 例（锁文件被抢建时重试、永久打不开时退化为无锁写并告警，用假时钟把 2s 窗口压掉）；
+`test_time_migration_guard` 扩到 `main.py`。影响面批次（cli / cli_prompter / rewind /
+samples / mock_provider / mock_fixtures / mock_no_bypass / approval_interfaces /
+approval_timeout / time_migration_guard / jsonl_concurrency / knowledge* + 新文件）
+**194 passed**；全量 `scripts/test.py` **3524 passed / 0 failed / 6 skipped / 0 error**
+（187 文件 / 47 批次 / 438.5s，1 个批次崩溃重试 —— 本机 `0xC0000005` 老问题）；
+`examples/evals/revision.jsonl` 两条
+case 仍 pass@1 100%；`ruff check .` 全绿、`mypy agentcrew/` 146 文件零错误。
+文档：`docs/TUTORIAL.md` 补 `@r<n>` / `@<n>` 两套夹具键的区别（这是唯一一处在用户
+文档里解释「怎么造离线驳回」的地方）；`mock.py` 模块 docstring 同步查找顺序。
 
 ---
 

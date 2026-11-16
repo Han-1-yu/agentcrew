@@ -203,11 +203,13 @@ class Reviewer:
         if len(keys) == 1:
             key = keys[0]
             opinions: list[tuple[str, _Opinion]] = [
-                (key, await self._opinion(key, task, material)),
+                (key, await self._opinion(
+                    key, task, material, round_no=round_no)),
             ]
         else:
             results = await asyncio.gather(
-                *[self._opinion(key, task, material) for key in keys]
+                *[self._opinion(key, task, material, round_no=round_no)
+                  for key in keys]
             )
             # 两边都由 keys 派生，长度必然一致；strict 让不一致当场炸，
             # 而不是悄悄少评一位
@@ -247,7 +249,9 @@ class Reviewer:
 
     # ── 单个评审人 ────────────────────────────────────────────────────────
 
-    async def _opinion(self, reviewer_key: str, task: Task, material: str) -> _Opinion:
+    async def _opinion(
+        self, reviewer_key: str, task: Task, material: str, *, round_no: int = 0,
+    ) -> _Opinion:
         """取一个评审人的有效意见；格式错误重试耗尽后按 ``approve`` 放行。
 
         重试**不修改任务**：评审器故障不是质量驳回，返工额度分文不动
@@ -259,7 +263,8 @@ class Reviewer:
         attempt = 0
         while True:
             attempt += 1
-            verdict = await self._request(alias, reviewer_key, task, messages, spec)
+            verdict = await self._request(
+                alias, reviewer_key, task, messages, spec, round_no=round_no)
             if verdict is not None and not _is_malformed(verdict, task):
                 approved, issues, fix_hints = derive_review(verdict, task)
                 return _Opinion(
@@ -281,6 +286,8 @@ class Reviewer:
         task: Task,
         messages: list[Message],
         spec: RoleSpec,
+        *,
+        round_no: int = 0,
     ) -> ReviewVerdict | None:
         """发一次评审调用；结构化输出彻底失败时返回 ``None``（按格式错误处理）。
 
@@ -296,8 +303,12 @@ class Reviewer:
             # ``attempt=0``：门禁评审**不分轮次**。用 0 而不是默认的 1，是为了
             # 避开角色内复核的按轮次夹具（``"T-003@1"``）——两者都在 attempt=1
             # 时，门禁会误读"第 1 轮修订前"的裁决，把好产物驳回。
+            # ``round_no``：门禁的「第几轮」另走一条键（``"T-003@r2"``），
+            # 这样夹具能表达「首轮驳回、修订后放行」，又不会和角色内复核的
+            # ``"T-003@1"``（attempt 维度）互相串味。
             set_purpose(provider, _REVIEW_PURPOSE, role=reviewer_key,
-                        task_id=task.id, attempt=0)
+                        task_id=task.id, attempt=0,
+                        round_no=round_no or None)
         # 门禁评审不是"某个执行体在干活"，但它的花费必须可归因，否则
         # ``llm.by_profile`` 里会出现一大坨 ``unknown``（实测 7 次里有 6 次是它）。
         # 用 ``gate:<评审角色>`` 作为合成 profile：既区别于执行体，也能看出是哪个

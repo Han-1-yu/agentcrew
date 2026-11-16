@@ -3,8 +3,9 @@
 回放规则：
 
 - ``plan`` → ``fixtures_dir/plan_todo.json`` 的**原始文本**
-- ``review`` → ``fixtures_dir/reviews.json`` 的 ``data[task_id]``；无该键时用
-  ``data["_default"]``
+- ``review`` → ``fixtures_dir/reviews.json``：``data["<task>@r<轮次>"]``（仅门禁
+  评审，轮次由 ``set_purpose(round_no=...)`` 传入）→ ``data["<task>@<attempt>"]``
+  （角色内复核）→ ``data["<task>"]`` → ``data["_default"]``
 - ``execute``（默认）→ ``fixtures_dir/responses/<task_id>/attempt-<attempt>.md``；
   缺失时回退到 ``attempt-1.md``（**并上报**，这是真实替换）；若连 ``attempt-1.md``
   都没有、但存在其他 ``attempt-*.md``，取编号最小者（spec §16.1 的「任何尝试都
@@ -56,16 +57,22 @@ _ATTEMPT_RE = re.compile(r"attempt-(\d+)\.md\Z")
 
 @dataclass(frozen=True)
 class _Replay:
-    """一次回放的查找键：purpose / role / task_id / attempt。
+    """一次回放的查找键：purpose / role / task_id / attempt / round_no。
 
-    不可变值对象：上下文切换时整体替换，读到的四元组永远自洽（不会出现
+    不可变值对象：上下文切换时整体替换，读到的五元组永远自洽（不会出现
     「新 task_id + 旧 attempt」这种半步状态）。
+
+    ``round_no`` 只服务于**门禁评审**（G2）：门禁的 ``attempt`` 固定为 0，
+    它需要另一条通道表达「第几轮驳回」（``"T-003@r1"`` / ``"T-003@r2"``），
+    否则「首轮驳回、修订后放行」在离线回放里无法表达。其余 purpose 传
+    ``None``，查找行为与引入前逐字一致。
     """
 
     purpose: str
     role: str | None
     task_id: str | None
     attempt: int
+    round_no: int | None = None
 
 
 class MockFixtureMissing(RuntimeError):
@@ -197,14 +204,20 @@ class MockProvider(BaseProvider):
             data = json.loads(path.read_text(encoding="utf-8"))
             entry = None
             if replay.task_id is not None:
-                # 按**复核轮次**取夹具：``"T-003@2"`` 表示该任务的第 2 次复核。
-                # 没有这一层，"第 1 轮不满足、修订后第 2 轮满足"的收敛路径在离线
-                # 回放里根本无法表达——所有轮次都会拿到同一份裁决，要么永远通过，
-                # 要么改到轮数用尽也不收敛。
-                # 只在夹具显式提供带轮次的键时生效，老夹具行为逐字不变。
-                entry = data.get(f"{replay.task_id}@{replay.attempt}")
+                # 门禁评审（round_no）先查 ``"T-003@r2"``：门禁的 attempt 恒为 0，
+                # 没有这一层就表达不出「首轮驳回、修订后放行」。只在夹具显式提供
+                # 带 ``@r<n>`` 的键时生效，老夹具行为逐字不变。
+                if replay.round_no is not None:
+                    entry = data.get(f"{replay.task_id}@r{replay.round_no}")
                 if entry is None:
-                    entry = data.get(replay.task_id)
+                    # 按**复核轮次**取夹具：``"T-003@2"`` 表示该任务的第 2 次复核。
+                    # 没有这一层，"第 1 轮不满足、修订后第 2 轮满足"的收敛路径在离线
+                    # 回放里根本无法表达——所有轮次都会拿到同一份裁决，要么永远通过，
+                    # 要么改到轮数用尽也不收敛。
+                    # 只在夹具显式提供带轮次的键时生效，老夹具行为逐字不变。
+                    entry = data.get(f"{replay.task_id}@{replay.attempt}")
+                    if entry is None:
+                        entry = data.get(replay.task_id)
             if entry is None:
                 entry = data.get("_default")
             if entry is not None:
@@ -273,14 +286,17 @@ def set_purpose(
     role: str | None = None,
     task_id: str | None = None,
     attempt: int = 1,
+    round_no: int | None = None,
 ) -> None:
     """设置 mock 回放上下文（Agent/调度层在每次调用前调用）。
 
     未传的 ``role`` / ``task_id`` 会被重置为 ``None``，``attempt`` 默认 1。
+    ``round_no`` 只有门禁评审会传（见 :class:`_Replay`）。
 
     写入的是 **contextvar**（C1）：同一个 Provider 实例被并发任务共用，写入
     实例字段会被别人的调用覆盖，因此上下文只作用于**当前 asyncio 任务**，
     ``complete()`` 在同一个任务里读到的必然是这次调用自己设置的那一份。
     """
     provider.set_replay(_Replay(
-        purpose=purpose, role=role, task_id=task_id, attempt=attempt))
+        purpose=purpose, role=role, task_id=task_id, attempt=attempt,
+        round_no=round_no))

@@ -9,6 +9,10 @@ ReviewRecord / ApprovalRequest / Ledger 六个模型，并同步改掉所有「�
 **这个测试的作用**：把当前的落盘点钉成一份**只减不增**的清单。新增一处
 `x.updated_at = datetime.now()` 会让它失败，迁移掉一处则可以把期望值调小。
 这样「时间统一」这件长期工作不会在赶功能时被悄悄回退。
+
+R64 起扫描范围**包含 `main.py`**：CLI 是唯一在 run 之外改写 `run.json` 的入口
+（`cancel`），此前不在扫描范围内，于是它的 `updated_at = datetime.now()` 一直
+没被发现——实跑里表现为同一个 `run.json` 内「创建是 UTC、更新是本地」。
 """
 
 from __future__ import annotations
@@ -16,7 +20,14 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-_PACKAGE = Path(__file__).resolve().parents[1] / "agentcrew"
+_ROOT = Path(__file__).resolve().parents[1]
+_PACKAGE = _ROOT / "agentcrew"
+
+#: 包外但**同样会写落盘时间**的入口：CLI 是唯一在 run 之外改写 ``run.json`` 的
+#: 地方（``cancel``），长期不在扫描范围内 —— 于是它用 ``datetime.now()`` 写
+#: ``updated_at`` 一直没被发现（R64 实跑抓到：同一文件里 created_at 是 UTC、
+#: updated_at 是本地时间，东八区看着「更新比创建晚 8 小时」）。
+_CLI_ENTRY = _ROOT / "main.py"
 
 #: 落盘时间字段的赋值模式：``x.updated_at = datetime.now()`` 与 ``created_at=datetime.now()`` 两种写法。
 _WRITE_PATTERN = re.compile(
@@ -45,10 +56,14 @@ _ALLOWED_FILES = frozenset({
 
 def _scan() -> dict[str, list[tuple[int, str]]]:
     found: dict[str, list[tuple[int, str]]] = {}
+    targets: list[tuple[Path, str]] = []
     for path in _PACKAGE.rglob("*.py"):
         rel = path.relative_to(_PACKAGE).as_posix()
-        if rel not in _ALLOWED_FILES:
-            continue
+        if rel in _ALLOWED_FILES:
+            targets.append((path, rel))
+    if _CLI_ENTRY.is_file():
+        targets.append((_CLI_ENTRY, "main.py"))
+    for path, rel in targets:
         hits = [
             (lineno, line.strip())
             for lineno, line in enumerate(
@@ -60,9 +75,22 @@ def _scan() -> dict[str, list[tuple[int, str]]]:
     return found
 
 
+def _scanned_files() -> set[str]:
+    """当前扫描范围（相对路径）。守卫有效性断言用它，避免「改了范围却没人测」。"""
+    names = {
+        path.relative_to(_PACKAGE).as_posix()
+        for path in _PACKAGE.rglob("*.py")
+        if path.relative_to(_PACKAGE).as_posix() in _ALLOWED_FILES
+    }
+    if _CLI_ENTRY.is_file():
+        names.add("main.py")
+    return names
+
+
 def test_naive_timestamp_writes_do_not_grow():
     """落盘点不得超过基线。新增时间字段时请用 ``clock.utc_now()``。"""
     found = _scan()
+    assert "main.py" in _scanned_files(), "CLI 入口必须进扫描范围（cancel 就在这里）"
     total = sum(len(v) for v in found.values())
     detail = "\n".join(
         f"  {rel}: {len(hits)} 处 → " + "; ".join(f"L{n}" for n, _ in hits)

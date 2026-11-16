@@ -85,6 +85,50 @@ def is_clock_skew(stamp: datetime | None, *, now: datetime | None = None) -> boo
     return (moment - stamp) < -CLOCK_SKEW_TOLERANCE
 
 
+def as_aware(stamp: datetime | None) -> datetime | None:
+    """补齐时区：aware 原样返回，naive 旧数据按**本机时区**补齐；空值返回 ``None``。
+
+    与 :func:`parse_stamp` 同口径。任何「拿落盘时间去和 ``now`` 相减」的地方都该
+    先过它——D-14 之后同一个字段可能既有 aware UTC（新写）又有 naive 本地（旧数据），
+    直接相减会抛 ``TypeError: can't subtract offset-naive and offset-aware``。
+    """
+    if stamp is None:
+        return None
+    if stamp.tzinfo is None:
+        return stamp.astimezone()
+    return stamp
+
+
+def to_local(stamp: datetime | None) -> datetime | None:
+    """把落盘时间转成**本机时区**的 aware ``datetime``；缺失返回 ``None``。
+
+    D-14 把落盘时间统一成 aware UTC 之后，任何直接 ``{dt:%H:%M}`` 的打印都会
+    把 UTC 当本地时间念给用户看——东八区就差 8 小时。而同一个 run 的目录名
+    （``20261116-192125-xxxx``）仍是本地时间，于是同一屏上「目录名 19:21、创建
+    11:21」自相矛盾。
+
+    naive 的旧数据不做换算：它本来就是 ``datetime.now()`` 写的本机时间，只能
+    按本机时区理解（与 :func:`parse_stamp` 同口径）。
+    """
+    moment = as_aware(stamp)
+    return None if moment is None else moment.astimezone()
+
+
+def format_local(
+    stamp: datetime | None,
+    fmt: str = "%Y-%m-%d %H:%M:%S",
+    fallback: str = "—",
+) -> str:
+    """给人看的时间串：先转本机时区再格式化，``None`` 用 ``fallback``。
+
+    只用于**展示**。落盘与比较一律保持 UTC（见模块 docstring）。
+    """
+    moment = to_local(stamp)
+    if moment is None:
+        return fallback
+    return moment.strftime(fmt)
+
+
 def seconds_between(start: datetime | None, end: datetime | None = None) -> float:
     """``start → end`` 之间经过的秒数；不可判定时返回 ``0.0``。
 

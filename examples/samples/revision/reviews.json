@@ -121,5 +121,49 @@
       "顺手补一个 --json 输出"
     ],
     "score": 0.42
+  },
+  "T-003@r1": {
+    "judgements": [
+      {
+        "criterion_index": 0,
+        "satisfied": false,
+        "evidence": "core.py 里没有统计函数入口，只有参数解析"
+      },
+      {
+        "criterion_index": 1,
+        "satisfied": true,
+        "evidence": "parse_line 对任何格式不符的行返回 None，analyze 计入 skipped 并继续"
+      },
+      {
+        "criterion_index": 2,
+        "satisfied": true,
+        "evidence": "返回字典含 status 分布与 percentile 计算的 p50 / p95"
+      }
+    ],
+    "suggestions": [
+      "顺手补一个 --json 输出"
+    ],
+    "score": 0.42
+  },
+  "T-003@r2": {
+    "judgements": [
+      {
+        "criterion_index": 0,
+        "satisfied": true,
+        "evidence": "core.py 的 analyze 接受行列表并返回统计字典"
+      },
+      {
+        "criterion_index": 1,
+        "satisfied": true,
+        "evidence": "parse_line 对任何格式不符的行返回 None，analyze 计入 skipped 并继续"
+      },
+      {
+        "criterion_index": 2,
+        "satisfied": true,
+        "evidence": "返回字典含 status 分布与 percentile 计算的 p50 / p95"
+      }
+    ],
+    "suggestions": [],
+    "score": 0.91
   }
 }

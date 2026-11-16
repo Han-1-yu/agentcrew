@@ -86,6 +86,7 @@ from agentcrew.runtime.checkpoint import (
 from agentcrew.runtime.guidance import GuidanceStore
 from agentcrew.runtime.ledger import Ledger, LedgerEvent
 from agentcrew.runtime.lifecycle import ResumeLockError, reconcile_stale_runs
+from agentcrew.utils.clock import as_aware, format_local, parse_stamp, utc_now
 from agentcrew.utils.logger import setup_logging
 from examples.todo_web_project import PROJECT_GOAL
 
@@ -890,7 +891,14 @@ def _cmd_resume(args: argparse.Namespace) -> int:
         print("配置已变动，resume 的结果与首次运行不可比：", file=sys.stderr)
         for line in differences:
             print(f"  {line}", file=sys.stderr)
-        print("确认无误请加 --force 重试。", file=sys.stderr)
+        # 用户真正要的是「怎么续跑」：给出补开关后的完整命令，而不只是 --force。
+        print(
+            "补上与首次运行一致的开关后再试（确认可以换个配置跑时加 --force）：",
+            file=sys.stderr,
+        )
+        print(f"  {_resume_hint(record, settings)}", file=sys.stderr)
+        for note in _resume_hint_notes(record):
+            print(f"  {note}", file=sys.stderr)
         return EXIT_CODES["config"]
     try:
         # 与 run 同一条目录：续跑时的计划编辑校验也要认得自定义角色。
@@ -943,6 +951,10 @@ def _cmd_rewind(args: argparse.Namespace) -> int:
     except (OSError, ValueError) as exc:
         return _fail(f"无法定位 run {args.run_id}：{exc}")
     try:
+        record = CheckpointStore(run_dir).load_record()
+    except (OSError, ValueError) as exc:
+        return _fail(f"无法读取 run {args.run_id}：{exc}")
+    try:
         result = rewind_run(
             run_dir,
             target=args.task,
@@ -982,7 +994,9 @@ def _cmd_rewind(args: argparse.Namespace) -> int:
             f"旧产物 {result.discarded_artifacts} 个已快照到 "
             f"{Path(result.snapshot_dir).relative_to(run_dir).as_posix()}",
         )
-    _out(console, f"下一步：python main.py resume {result.run_id}   # 从该任务重跑")
+    _out(console, f"下一步：{_resume_hint(record, settings)}   # 从该任务重跑")
+    for note in _resume_hint_notes(record):
+        _out(console, f"  {note}")
     return EXIT_CODES["ok"]
 
 
@@ -1098,8 +1112,8 @@ def _cmd_status(args: argparse.Namespace) -> int:
     _out(console, f"状态    {record.status.value}")
     _out(
         console,
-        f"创建    {record.created_at:%Y-%m-%d %H:%M:%S}"
-        f"    更新    {record.updated_at:%Y-%m-%d %H:%M:%S}",
+        f"创建    {format_local(record.created_at)}"
+        f"    更新    {format_local(record.updated_at)}",
     )
     _out(
         console,
@@ -1185,11 +1199,14 @@ def _cmd_approvals(args: argparse.Namespace) -> int:
         action = item.decision.get("action") or "-"
         suffix = ""
         if item.status == "pending" and item.expires_at is not None:
-            remaining = int((item.expires_at - datetime.now()).total_seconds())
+            # R30 的超时是 aware UTC；旧审批单可能是 naive 本地 —— 直接和
+            # ``datetime.now()`` 相减会 TypeError（CLI 整条命令打崩）。
+            deadline = as_aware(item.expires_at)
+            remaining = int((deadline - utc_now()).total_seconds())
             suffix = (f"  · 剩余 {remaining}s" if remaining > 0
                       else "  · 已超时（下次 status 会标记 expired）")
         elif item.status == "expired" and item.expires_at is not None:
-            suffix = f"  · 超时于 {item.expires_at.isoformat(timespec='seconds')}"
+            suffix = f"  · 超时于 {format_local(item.expires_at)}"
         _out(
             console,
             f"{item.id}  {item.checkpoint:<9} {item.status:<9} "
@@ -1267,7 +1284,6 @@ def _cmd_guide(args: argparse.Namespace) -> int:
             return _fail("--expires-in 必须是 1..86400 之间的秒数")
         from datetime import timedelta
 
-        from agentcrew.utils.clock import utc_now
         expires_at = (
             utc_now() + timedelta(seconds=args.expires_in)).isoformat()
     try:
@@ -1289,7 +1305,9 @@ def _cmd_guide(args: argparse.Namespace) -> int:
     if item.target:
         print(f"定向到 {item.target}；未派发到该任务前不会被吸收")
     if item.expires_at:
-        print(f"过期时刻 {item.expires_at}（到点后不再吸收）")
+        # 指引的 expires_at 是**字符串**（aware UTC，同 D-14）：先解析再按本机时区
+        # 显示，否则用户读到的是一串带 +00:00 的 UTC 时刻。
+        print(f"过期时刻 {format_local(parse_stamp(item.expires_at))}（到点后不再吸收）")
     print(f"待吸收 {pending} 条；引擎在下一次任务派发前读取"
           "（需 guidance_enabled=true）")
     return EXIT_CODES["ok"]
@@ -2260,7 +2278,11 @@ def _cmd_cancel(args: argparse.Namespace) -> int:
         _out(Console(), f"run {record.run_id} 已结束（{record.status.value}），无需取消。")
         return EXIT_CODES["ok"]
     record.status = RunStatus.CANCELLED
-    record.updated_at = datetime.now()
+    # D-14：run.json 的时间一律 aware UTC。这里曾写 ``datetime.now()``（naive 本地），
+    # 结果同一个文件里 created_at 是 UTC、updated_at 是本地时间，东八区看上去
+    # 「更新比创建晚 8 小时」；任何 ``updated_at - created_at`` 的读者还会直接抛
+    # TypeError。cancel 是唯一一条在 run 之外改写这个字段的路径，最容易漏。
+    record.updated_at = utc_now()
     checkpoint.save_record(record)
     _out(
         Console(),
@@ -2300,8 +2322,8 @@ def _cmd_delete(args: argparse.Namespace) -> int:
     _out(console, f"状态    {record.status.value}")
     _out(
         console,
-        f"创建    {record.created_at:%Y-%m-%d %H:%M:%S}"
-        f"    更新    {record.updated_at:%Y-%m-%d %H:%M:%S}",
+        f"创建    {format_local(record.created_at)}"
+        f"    更新    {format_local(record.updated_at)}",
     )
     _out(console, f"产物    {artifact_size:,} 字节    目录    {run_dir}")
 
@@ -3176,6 +3198,75 @@ def _config_diff(snapshot: dict[str, Any], settings: Settings) -> list[str]:
 def _redacted(value: Any) -> Any:
     """映射值先抹掉疑似密钥再比较/打印；其余类型原样返回。"""
     return redact_overrides(value) if isinstance(value, dict) else value
+
+
+#: 差异键 → 能把 ``resume`` 拉回首次运行状态的 CLI 开关（``{value}`` 取快照里的值）。
+#: 只列**真的存在开关**的键：``role_bindings`` / ``provider_overrides`` 只能改配置
+#: 文件，硬编一条命令只会让人白敲一遍。
+_RESUME_FLAG_TEMPLATES: dict[str, str] = {
+    "default_model": "--default-model {value}",
+    "context_budget_tokens": "--context-budget {value}",
+}
+
+
+def _sample_names_for(goal: str) -> list[str]:
+    """目标文本与哪些预设样例逐字一致（按登记顺序）；无匹配返回空列表。
+
+    样例 run 的夹具目录是进程内状态（``DEFAULT_FIXTURES_DIR``），不写进
+    ``run.json``。所以「续跑一个样例 run」必须重新 ``--sample``：只加 ``--mock``
+    能让配置比对通过，夹具却停在默认目录，回放出来的产物属于另一个项目
+    （实测：logstat 的 run 被回放成 Todo 的 ``backend/app/*.py``，然后因
+    「产出未在契约中声明的文件」失败）。
+
+    返回**列表**而不是单个名字：``linear`` 与 ``revision`` 是同一句目标、同一份
+    计划与产物，只有评审夹具不同——单看 ``run.json`` 无法分辨当时用的是哪个，
+    调用方必须把这份不确定说出来，不能假装知道。
+    """
+    try:
+        from examples.samples import SAMPLES
+    except ImportError:      # 发行包可能不含 examples/
+        return []
+    return [spec.name for spec in SAMPLES.values() if spec.goal == goal]
+
+
+def _resume_hint_notes(record: RunRecord) -> list[str]:
+    """续跑提示里那些「命令本身说不清」的补充说明（无则空列表）。"""
+    snapshot = record.config_snapshot or {}
+    if not snapshot.get("mock"):
+        return []
+    names = _sample_names_for(record.project_goal)
+    if len(names) < 2:
+        return []
+    return [
+        "目标与多个样例一致（" + "、".join(names) + "）：它们共享同一句目标，"
+        "只有评审夹具不同，请按首次运行所选的那个填 --sample。"
+    ]
+
+
+def _resume_hint(record: RunRecord, settings: Settings) -> str:
+    """「照这条命令敲就能续跑」的命令串（补齐快照里与当前配置不同的开关）。
+
+    ``resume`` 的拒绝文案过去只说「加 --force」——那等于劝用户放弃可比性；而
+    正确动作往往是「带上一模一样的开关」。两个调用方：``resume`` 的失败提示与
+    ``rewind`` 结尾的「下一步」。后者尤其重要：它过去打印一条裸命令，对任何
+    ``--sample`` / ``--mock`` 起出来的 run 都是**必然失败**的下一步。
+    """
+    snapshot = record.config_snapshot or {}
+    flags: list[str] = []
+    if snapshot.get("mock"):
+        samples = _sample_names_for(record.project_goal)
+        # ``--sample`` 自带 ``--mock``，两者同时给反而重复。多个样例同目标时取
+        # 第一个（能跑通），不确定性由 :func:`_resume_hint_notes` 单独说。
+        flags.append(f"--sample {samples[0]}" if samples else "--mock")
+    current = settings.config_snapshot()
+    for key, template in _RESUME_FLAG_TEMPLATES.items():
+        value = snapshot.get(key)
+        if value in (None, ""):
+            continue
+        if _redacted(value) != _redacted(current.get(key)):
+            flags.append(template.format(value=value))
+    command = f"python main.py resume {record.run_id}"
+    return f"{command} {' '.join(flags)}" if flags else command
 
 
 def _run_dir(settings: Settings, run_id: str) -> Path:

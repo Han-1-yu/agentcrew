@@ -13,7 +13,9 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
+from agentcrew.knowledge import jsonl as jsonl_mod
 from agentcrew.knowledge.experience import Experience, ExperienceStore
+from agentcrew.knowledge.jsonl import append_line, read_lines
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -73,7 +75,9 @@ def test_multi_process_appends_are_intact():
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from agentcrew.knowledge import jsonl as jsonl_mod
 from agentcrew.knowledge.experience import Experience, ExperienceStore
+from agentcrew.knowledge.jsonl import append_line, read_lines
 
 store = ExperienceStore(Path(sys.argv[1]))
 tag = sys.argv[2]
@@ -96,3 +100,61 @@ for index in range(30):
         assert len({item.id for item in items}) == 120
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+def test_lock_file_open_race_is_retried(tmp_path, monkeypatch):
+    """4 进程抢建同一个锁文件时 Windows 会抛 PermissionError —— 必须重试。
+
+    实跑复现（R64）：4 个进程并发写 ``experiences.jsonl``，约一半概率有一个进程
+    **在第一行**就 ``PermissionError: [Errno 13]`` 崩掉，整个 run 陪葬。根因不是
+    「没拿到锁」（那条路径本来就有重试），而是 ``os.open(O_CREAT)`` 本身失败，
+    发生在进锁之前。
+    """
+    target = tmp_path / "e.jsonl"
+    real_open = jsonl_mod.os.open
+    attempts = {"lock": 0}
+
+    def flaky(path, flags, mode=0o777, **kwargs):  # noqa: ANN001
+        if str(path).endswith(".lock"):
+            attempts["lock"] += 1
+            if attempts["lock"] <= 2:
+                raise PermissionError(13, "Permission denied", str(path))
+        return real_open(path, flags, mode, **kwargs)
+
+    monkeypatch.setattr(jsonl_mod.os, "open", flaky)
+    append_line(target, '{"id": "E-1"}')
+    assert attempts["lock"] == 3, "前两次失败应当被重试，第三次成功"
+    assert [line for line in read_lines(target)] == ['{"id": "E-1"}']
+
+
+def test_lock_file_open_permanently_denied_degrades(tmp_path, monkeypatch, caplog):
+    """一直打不开锁文件时：退回无锁单次写 + 警告，绝不把 run 崩掉。"""
+    target = tmp_path / "e.jsonl"
+    real_open = jsonl_mod.os.open
+
+    def denied(path, flags, mode=0o777, **kwargs):  # noqa: ANN001
+        if str(path).endswith(".lock"):
+            raise PermissionError(13, "Permission denied", str(path))
+        return real_open(path, flags, mode, **kwargs)
+
+    class _FastClock:
+        """让 2 秒的重试窗口在测试里瞬间过去（只替换 jsonl 模块里的 time）。"""
+
+        def __init__(self) -> None:
+            self._now = 0.0
+
+        def monotonic(self) -> float:
+            self._now += 1.0
+            return self._now
+
+        @staticmethod
+        def sleep(_seconds: float) -> None:
+            return None
+
+    monkeypatch.setattr(jsonl_mod.os, "open", denied)
+    monkeypatch.setattr(jsonl_mod, "time", _FastClock())
+    with caplog.at_level("WARNING", logger="agentcrew.knowledge.jsonl"):
+        append_line(target, '{"id": "E-2"}')
+
+    assert [line for line in read_lines(target)] == ['{"id": "E-2"}']
+    assert any("退回无锁追加" in record.message for record in caplog.records)
