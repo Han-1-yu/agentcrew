@@ -28,9 +28,15 @@ __all__ = [
     "failure_line",
     "format_duration",
     "format_tokens",
+    "last_exec_error",
     "review_line",
     "rework_line",
 ]
+
+#: 调度器写在 ``status_history`` 里的执行错误前缀（与
+#: ``crew.scheduler._RETRY_REASON_PREFIX`` 同值；两侧都是模块私有常量，为避免
+#: 报告层反向依赖调度器而各自保留一份）。
+_EXEC_ERROR_PREFIX = "retry: "
 
 
 def delivery_summary(record: RunRecord, *, board: TaskBoard, artifacts_dir: Path) -> str:
@@ -133,12 +139,37 @@ def elapsed_line(record: RunRecord) -> str:
 
 
 def failure_line(task: Task) -> str:
-    """一行失败任务：``T-011 标题  FAILED  最后一次评审：…``。"""
+    """一行失败任务：``T-011 标题  FAILED  最后一次评审：…`` 或 ``… 最后一次执行失败：…``。
+
+    R63：执行错误（``AgentExecutionError``：缺产物、超时、provider 异常）**不产生
+    评审记录**，过去只落在 ledger 与状态跃迁理由里 —— 报告于是只写「最后一次评审：
+    （无评审记录）」，操作者看不到真正原因。本机实跑里「缺少必需产物：assets/cover.png」
+    就是这样被完全吞掉的。有评审问题时仍以评审为准；没有时才回落到执行错误文本。
+    """
     last = task.reviews[-1] if task.reviews else None
-    if last is None:
-        detail = "（无评审记录）"
-    elif last.issues:
-        detail = "；".join(last.issues)
+    if last is not None and last.issues:
+        prefix, detail = "最后一次评审", "；".join(last.issues)
     else:
-        detail = "（无具体问题）"
-    return f"{task.id} {task.title}  {task.status.value.upper()}  最后一次评审：{detail}"
+        error = last_exec_error(task)
+        if error:
+            prefix, detail = "最后一次执行失败", error
+        else:
+            prefix = "最后一次评审"
+            detail = "（无评审记录）" if last is None else "（无具体问题）"
+    return f"{task.id} {task.title}  {task.status.value.upper()}  {prefix}：{detail}"
+
+
+def last_exec_error(task: Task) -> str:
+    """最近一次**执行**失败的错误文本（取自 ``status_history`` 的 ``retry: …`` 理由）。
+
+    调度器把每次执行错误写进 ``running → ready`` 的跃迁理由（下一次派发时还会回灌
+    给模型）；落盘的 ``tasks.json`` 与终端报告都只认这条，ledger 之外没有第二份。
+    最后一条 ``attempts-exhausted`` 是记账用语，不是原因，因此只认前缀。
+    """
+    for change in reversed(task.status_history):
+        reason = change.reason or ""
+        if reason.startswith(_EXEC_ERROR_PREFIX):
+            text = reason[len(_EXEC_ERROR_PREFIX):].strip()
+            if text:
+                return text
+    return ""

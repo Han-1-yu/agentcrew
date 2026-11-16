@@ -162,6 +162,44 @@ def test_reviewer_excerpt_uses_metadata_for_image(tmp_path):
     assert "二进制产物 image" in joined and "cover.png" in joined
 
 
+# ── G2 对不可读产物不做假评审（R63）────────────────────────────────────────
+#
+# 2026-11-16 本机实跑：generate_image 已落盘 cover.png、G1 按尺寸放行，但 G2 只能
+# 拿到「[二进制产物 image：…，70 字节]」这一行元数据，于是每轮都判「未满足验收标准」，
+# 返工额度烧光后任务 FAILED、下游 BLOCKED（一次 run 38 次 LLM 调用）。
+
+def test_g2_skips_when_every_deliverable_is_binary(tmp_path):
+    import asyncio
+
+    store, ledger = _store(tmp_path)
+    task = _image_task()
+    store.commit_bytes("cover.png", _PNG, spec=task.deliverables[0], task=task)
+    reviewer = _gatekeeper(tmp_path, store, ledger)._reviewer
+    record = asyncio.run(reviewer.review(task, round_no=1))
+    assert record.verdict == "approve"
+    assert any("二进制" in issue for issue in record.issues)
+    assert record.reviewer == "binary:none"
+
+
+def test_g2_material_flags_binary_artifact_in_mixed_task(tmp_path):
+    """混合任务（图 + 文本）：文本照评，二进制内容明确标注「不可核验」。"""
+    store, ledger = _store(tmp_path)
+    image = ArtifactSpec(path="cover.png", kind="image", description="封面")
+    text = ArtifactSpec(path="README.md", kind="markdown", description="说明")
+    task = Task(id="T-3", title="t", description="d", role="backend_dev",
+                acceptance_criteria=["README 说明项目", "cover.png 画面符合要求"],
+                deliverables=[image, text])
+    store.commit_bytes("cover.png", _PNG, spec=image, task=task)
+    store.commit("README.md", "# 说明\n正文", spec=text, task=task)
+    reviewer = _gatekeeper(tmp_path, store, ledger)._reviewer
+    material = reviewer._render_material(task, 1)
+    assert "## 评审约束" in material
+    assert "cover.png" in material
+    assert "不得仅因看不见内容判为不满足" in material
+    # 文本产物仍进正文节选（没有被「约束」一节顶掉）
+    assert "# 说明" in material
+
+
 # ── BaseAgent 二进制桥（非 agentic 也适用）─────────────────────────────────
 
 def _agent(tmp_path) -> BaseAgent:

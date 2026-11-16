@@ -78,6 +78,11 @@ _STATUS_LABEL: dict[str, str] = {
     "skipped": "已跳过",
 }
 
+#: 调度器写在 ``status_history`` 里的执行错误前缀（与
+#: ``crew.scheduler._RETRY_REASON_PREFIX`` 同值；``runtime`` 层不反向依赖
+#: ``crew``，因此各自保留一份常量）。
+_EXEC_ERROR_PREFIX = "retry: "
+
 #: spec §14.1 事件表内、看板认得的全部事件名。表外事件（``llm_retry`` /
 #: ``task_notes`` / ``mock_fallback`` …）静默忽略：看板是只读消费者，
 #: 生产者增加事件名不应让看板抛错。
@@ -478,13 +483,29 @@ class BoardView:
     @staticmethod
     def _failure_line(task: Task) -> str:
         last = task.reviews[-1] if task.reviews else None
-        if last is None:
-            detail = "（无评审记录）"
-        elif last.issues:
-            detail = "；".join(last.issues)
+        if last is not None and last.issues:
+            prefix, detail = "最后一次评审", "；".join(last.issues)
         else:
-            detail = "（最后一次评审无问题记录）"
+            # R63：执行错误不产生评审记录；与 crew/report.py 同一条回落规则，
+            # 否则「实跑为什么失败」只存在于 ledger 里。
+            error = _last_exec_error(task)
+            if error:
+                prefix, detail = "最后一次执行失败", error
+            else:
+                prefix = "最后一次评审"
+                detail = "（无评审记录）" if last is None else "（最后一次评审无问题记录）"
         return (
             f"{task.id} {task.title}  [{task.status.value}]  "
-            f"最后一次评审：{detail}"
+            f"{prefix}：{detail}"
         )
+
+
+def _last_exec_error(task: Task) -> str:
+    """最近一次执行失败的文本（``status_history`` 里的 ``retry: …`` 理由）。"""
+    for change in reversed(task.status_history):
+        reason = change.reason or ""
+        if reason.startswith(_EXEC_ERROR_PREFIX):
+            text = reason[len(_EXEC_ERROR_PREFIX):].strip()
+            if text:
+                return text
+    return ""

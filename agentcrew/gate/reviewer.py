@@ -38,6 +38,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Literal, cast
 
+from agentcrew.artifacts.spec import BINARY_KINDS
 from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.config import Settings
 from agentcrew.gate.verdict import ReviewVerdict, derive_review
@@ -72,6 +73,24 @@ _NO_REVIEWER_KEY = "none"
 
 #: 评审器重试耗尽仍是格式错误时的放行说明（spec §10.2）。
 _FORMAT_ERROR_ISSUE = "评审器返回格式错误，已放行"
+
+#: 任务只有二进制产物时的放行说明（R63）。
+#:
+#: 背景（2026-11-16 本机实跑）：``generate_image`` 已成功落盘 ``assets/cover.png``、
+#: G1 也按尺寸放行，但 G2 只能用「[二进制产物 image：…，N 字节；内容不注入文本上下文]」
+#: 这一行元数据评审。验收标准写的是「画面内容符合要求：扁平插画风、橘猫在敲代码」，
+#: 评审员拿不到任何可用证据，只能逐条判不满足 —— 返工额度烧光、任务 FAILED、
+#: 下游全部 BLOCKED（一次 run 因此烧了 38 次 LLM 调用）。让文本模型「评一张它看不见
+#: 的图」本身就是冒充能力：这里显式跳过，把可核验的部分留给 G1 与人工交付卡点。
+_BINARY_ONLY_ISSUE = "任务只有二进制产物（文本无法核验其内容），跳过 LLM 评审"
+_BINARY_ONLY_KEY = "binary:none"
+
+#: 含二进制产物时附在评审材料里的约束（混合任务：文本产物照评，二进制内容不判）。
+_BINARY_REVIEW_RULE = (
+    "本任务含二进制产物（内容不可文本核验）：{paths}。"
+    "凡依赖其画面/音轨内容的标准，evidence 写「二进制内容不可核验」即可，"
+    "**不得仅因看不见内容判为不满足**；存在性、字节数、类型这些事实照常核对。"
+)
 
 #: 产物节选被预算截断时附加在正文后的说明。
 _TRUNCATION_NOTE = "（内容超出节选预算，已截断）"
@@ -161,6 +180,15 @@ class Reviewer:
         # P2-5：gate_config.g2_reviewers 限制评审人数（取前 N，保持目录顺序）。
         if self.max_reviewers is not None:
             keys = list(keys[:self.max_reviewers])
+        # R63：全部交付物都是二进制（image）时没有可文本核验的材料。对着
+        # 「内容不注入文本上下文」的一行元数据硬评，只会稳定产出「未满足验收标准」
+        # —— 那不是评审，是冒充能力。显式跳过并留下可追溯的说明。
+        if _is_binary_only(task):
+            return self._finish(
+                task, round_no,
+                verdict="approve", score=None,
+                issues=[_BINARY_ONLY_ISSUE], fix_hints=[],
+                reviewer=_BINARY_ONLY_KEY, layer=layer)
         if not keys:
             return self._finish(
                 task, round_no,
@@ -319,10 +347,25 @@ class Reviewer:
         parts += ["", "## 返工历史", *self._render_history(task), "", "## 产物内容"]
         own_blocks = self._render_artifacts(task)
         parts += own_blocks
+        binaries = self._binary_paths(task)
+        if binaries:
+            parts += [
+                "",
+                "## 评审约束",
+                "- " + _BINARY_REVIEW_RULE.format(paths="、".join(binaries)),
+            ]
         references = self._render_references(task, own_blocks)
         if references:
             parts += ["", *references]
         return "\n".join(parts)
+
+    def _binary_paths(self, task: Task) -> list[str]:
+        """本任务已落盘的二进制产物路径（混合任务时进「评审约束」一节）。"""
+        produced = {record.path for record in self._store.by_task(task.id)}
+        return [
+            spec.path for spec in task.deliverables
+            if spec.kind in BINARY_KINDS and spec.path in produced
+        ]
 
     @staticmethod
     def _render_history(task: Task) -> list[str]:
@@ -564,6 +607,16 @@ def _deduplicate_tracked(issues: list[str]) -> tuple[list[str], list[str]]:
         else:
             kept.append(issue)
     return kept, removed
+
+
+def _is_binary_only(task: Task) -> bool:
+    """任务声明的**全部**交付物都是二进制类型（没有任何可文本核验的材料）。
+
+    空交付物不算：那是「没有产物可评」，与「产物不可读」是两回事，仍走常规
+    评审路径（G1 已先报缺失）。
+    """
+    return bool(task.deliverables) and all(
+        spec.kind in BINARY_KINDS for spec in task.deliverables)
 
 
 def _build_messages(spec: RoleSpec, material: str) -> list[Message]:

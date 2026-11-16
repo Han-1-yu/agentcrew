@@ -517,3 +517,38 @@ def test_reference_window_is_narrow(catalog):
     t = _task("T1", ["按规范编写使用文档"], [_py("a.py")])
     with pytest.raises(PlanValidationError):
         validate_plan([t], catalog)
+
+
+# ── R63：交付物类型必须有对应能力 ──────────────────────────────────────────
+#
+# 2026-11-16 本机实跑：目标要求「用 generate_image 生成 assets/cover.png」，但该 run
+# ``tools_enabled=false``、``image_provider`` 为空——工具根本没注册，PM 仍照目标派了
+# 一个 image 任务，烧掉 9 次 LLM 调用才 FAILED。规划期就该把这份计划打回。
+
+def _img(path):
+    return ArtifactSpec(path=path, kind="image", description="d")
+
+
+def test_image_deliverable_rejected_without_capability(catalog):
+    t = _task("T1", ["assets/cover.png 是有效 PNG"], [_img("assets/cover.png")])
+    with pytest.raises(PlanValidationError) as ei:
+        validate_plan([t], catalog, image_generation=False)
+    joined = "\n".join(ei.value.errors)
+    assert "assets/cover.png" in joined and "image" in joined
+    assert "tools_enabled" in joined and "image_provider" in joined
+
+
+def test_image_deliverable_passes_when_capability_on(catalog):
+    t = _task("T1", ["assets/cover.png 是有效 PNG"], [_img("assets/cover.png")])
+    validate_plan([t], catalog, image_generation=True)   # 不抛 = 接受
+
+
+def test_image_capability_not_checked_when_unspecified(catalog):
+    """``None``（调用方没给能力位）与引入前逐字一致：不产生新错误。"""
+    t = _task("T1", ["assets/cover.png 是有效 PNG"], [_img("assets/cover.png")])
+    validate_plan([t], catalog)
+
+
+def test_text_deliverable_unaffected_by_missing_image_capability(catalog):
+    t = _task("T1", ["README 说明功能"], [_md("README.md")])
+    validate_plan([t], catalog, image_generation=False)  # 文本产物不依赖图像能力

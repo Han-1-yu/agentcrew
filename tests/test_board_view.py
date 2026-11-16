@@ -6,7 +6,7 @@ from rich.console import Console
 from agentcrew.runtime.board_view import STATUS_STYLE, BoardView
 from agentcrew.runtime.checkpoint import RunRecord, RunStatus
 from agentcrew.runtime.ledger import LedgerEvent
-from agentcrew.task.task import RunStats, Task
+from agentcrew.task.task import RunStats, StatusChange, Task
 from agentcrew.task.task import TaskStatus as S
 from agentcrew.task.task_board import TaskBoard
 
@@ -228,4 +228,58 @@ def test_print_report_still_prints_when_live_disabled(capsys):
     BoardView("R", "g", enabled=False).print_report(
         rec, TaskBoard([mk("A", S.SUCCEEDED)]), artifacts_dir=Path("/tmp/art"))
     assert "运行报告" in capsys.readouterr().out
+
+
+# ── R63：失败原因必须出现在报告里 ──────────────────────────────────────────
+#
+# 2026-11-16 本机实跑：T1 因「缺少必需产物：assets/cover.png」失败，报告却只写
+# 「最后一次评审：（无评审记录）」——执行错误不产生评审记录，原因被完全吞掉。
+
+def _failed_task() -> Task:
+    now = datetime.now()
+    return Task(
+        id="T-9", title="任务T-9", description="d", role="backend_dev",
+        acceptance_criteria=["a"], deliverables=[], status=S.FAILED,
+        status_history=[
+            StatusChange(from_status=S.RUNNING, to_status=S.READY,
+                         reason="retry: 缺少必需产物：assets/cover.png", at=now),
+            StatusChange(from_status=S.READY, to_status=S.FAILED,
+                         reason="attempts-exhausted", at=now),
+        ])
+
+
+def test_failure_line_reports_exec_error_in_board_view():
+    line = BoardView._failure_line(_failed_task())
+    assert "最后一次执行失败" in line
+    assert "缺少必需产物：assets/cover.png" in line
+
+
+def test_failure_line_reports_exec_error_in_run_report():
+    from agentcrew.crew.report import failure_line
+
+    line = failure_line(_failed_task())
+    assert "最后一次执行失败" in line
+    assert "缺少必需产物：assets/cover.png" in line
+
+
+def test_failure_line_prefers_review_issues_over_exec_error():
+    """有评审问题时仍以评审为准（执行错误只是无评审时的回落）。"""
+    from agentcrew.crew.report import failure_line
+    from agentcrew.task.task import ReviewRecord
+
+    task = _failed_task()
+    task.reviews = [ReviewRecord(
+        task_id="T-9", round=1, layer="static", verdict="reject", score=None,
+        issues=["产物仅含占位内容"], fix_hints=[], reviewer="static:contract",
+        created_at=datetime.now())]
+    line = failure_line(task)
+    assert "最后一次评审：产物仅含占位内容" in line
+    assert "执行失败" not in line
+
+
+def test_failure_line_without_any_evidence_keeps_old_wording():
+    task = mk("T-8", S.FAILED)
+    assert "最后一次评审：（无评审记录）" in BoardView._failure_line(task)
+    from agentcrew.crew.report import failure_line
+    assert "最后一次评审：（无评审记录）" in failure_line(task)
 

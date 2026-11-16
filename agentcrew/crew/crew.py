@@ -1091,7 +1091,10 @@ class Crew:
         try:
             tasks = with_final_task(
                 to_tasks(PlanOutput(tasks=list(self._preset_tasks))))
-            validate_plan(tasks, self._catalog, profiles=self._settings.agent_profiles)
+            validate_plan(
+                tasks, self._catalog,
+                profiles=self._settings.agent_profiles,
+                image_generation=self._image_generation_enabled())
         except PlanValidationError as exc:
             errors = list(exc.errors)
             run.ledger.emit("plan_rejected", attempt=1, errors=errors,
@@ -1157,7 +1160,10 @@ class Crew:
                 else:
                     plan = await pm.decompose(run.goal, feedback=feedback)
                 tasks = with_final_task(to_tasks(plan))
-                validate_plan(tasks, self._catalog, profiles=self._settings.agent_profiles)
+                validate_plan(
+                    tasks, self._catalog,
+                    profiles=self._settings.agent_profiles,
+                    image_generation=self._image_generation_enabled())
             except PlanValidationError as exc:
                 errors = list(exc.errors)
                 feedback = tuple(errors)
@@ -1178,7 +1184,10 @@ class Crew:
         """G3 编辑结果：重新追加 T-FINAL 并重跑 §7.2 校验（spec §10.3）。"""
         try:
             tasks = with_final_task(edited)
-            validate_plan(tasks, self._catalog, profiles=self._settings.agent_profiles)
+            validate_plan(
+                tasks, self._catalog,
+                profiles=self._settings.agent_profiles,
+                image_generation=self._image_generation_enabled())
         except PlanValidationError as exc:
             raise PlanFailedError(exc.errors) from exc
         return tasks
@@ -2227,6 +2236,27 @@ class Crew:
                 if self._settings.code_exec_enabled else ""),
         )
         return registry
+
+    def _image_generation_enabled(self) -> bool:
+        """本次 run 是否真的能产出 ``image`` 交付物（规划期能力预检用）。
+
+        判据与 :meth:`_build_tool_registry` 保持**同一条**：``tools_enabled``
+        打开、``image_provider`` 已配置、且没有进入「不可信输入」只读预设。
+        库层注入了工具注册表（override）时以注册表里是否真有 ``generate_image``
+        为准——那是测试/嵌入方自己装配的能力，不该被配置字段骗过去。
+
+        这张图只能由工具产出（文本协议写不出合法 PNG），所以「注册表里没有
+        ``generate_image``」等价于「本次 run 做不出 image 交付物」。
+        """
+        override = self._tool_registry_override
+        if override is not None:
+            return override.get("generate_image") is not None
+        settings = self._settings
+        return bool(
+            settings.tools_enabled
+            and settings.image_provider.strip()
+            and not settings.untrusted_inputs
+        )
 
     async def _prepare_knowledge_context(self, run: _Run) -> str:
         """P3-7 + R3 + R27：规划前检索历史经验与实体记忆，拼成 PM 的 ``context_hint``。

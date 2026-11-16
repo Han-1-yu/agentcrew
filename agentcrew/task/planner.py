@@ -17,7 +17,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from agentcrew.artifacts.spec import ArtifactSpec
+from agentcrew.artifacts.spec import BINARY_KINDS, ArtifactSpec
 from agentcrew.roles.binding import AgentProfile
 from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.task.conditions import normalize_condition
@@ -142,11 +142,12 @@ def validate_plan(
     catalog: RoleCatalog,
     *,
     profiles: Mapping[str, AgentProfile] | None = None,
+    image_generation: bool | None = None,
 ) -> None:
     """按 spec §7.2 校验拆解方案；任一条不过则抛 :class:`PlanValidationError`。
 
     收集全部错误后一次性抛出，消息为中文且指名具体的任务 id / 角色 / 路径，
-    便于直接回灌 PM。8 条校验：
+    便于直接回灌 PM。9 条校验：
 
     0. 计划非空（``_EMPTY_PLAN_ERROR``）：空列表过去**通过**，于是
        ``with_final_task`` 只追加一个 ``T-FINAL``，run 交出一个只有
@@ -159,9 +160,12 @@ def validate_plan(
     6. 路径安全 —— 已由 ``ArtifactSpec`` 的 validator 保证，此处不重复；
     7. ``acceptance_criteria`` 非空；
     8. 要求文档的验收标准必须有对应的文档类交付物（见
-       :func:`_check_criteria_have_deliverables`）。
+       :func:`_check_criteria_have_deliverables`）；
+    9. 交付物类型必须有对应能力（见 :func:`_check_deliverable_capabilities`）。
 
     ``tasks`` 为 ``Sequence`` 而非 ``list``：Task 25/31 会传入元组或切片。
+    ``image_generation`` 为 ``None``（调用方没给能力位）时跳过第 9 条校验，
+    与引入前逐字一致。
     """
     errors: list[str] = []
     if not _drafts(tasks):
@@ -175,8 +179,41 @@ def validate_plan(
     errors.extend(_check_acceptance_criteria(tasks))
     errors.extend(_check_criteria_have_deliverables(tasks))
     errors.extend(_check_condition_edges(tasks))
+    if image_generation is not None:
+        errors.extend(_check_deliverable_capabilities(tasks, image_generation))
     if errors:
         raise PlanValidationError(errors)
+
+
+def _check_deliverable_capabilities(
+    tasks: Sequence[Task], image_generation: bool
+) -> list[str]:
+    """校验 9（R63）：交付物类型必须真的能由本 run 的能力产出。
+
+    背景（2026-11-16 本机实跑）：目标明确要求「用 generate_image 生成 assets/cover.png」，
+    但该 run 的 ``tools_enabled=false`` 且 ``image_provider`` 为空——``generate_image``
+    根本没注册。PM 仍照目标派了一个 ``kind="image"`` 的任务，执行体只能写出「我做不到」
+    的说明，随后烧掉 ``max_self_corrections`` × ``max_attempts`` 共 9 次 LLM 调用才
+    ``FAILED``，失败原因还只留在 ledger 里。
+
+    图像是**只有工具能产出**的二进制类型（文本协议写不出合法 PNG），因此在规划期就把
+    「环境没有这个能力」当成计划缺陷回灌给 PM 重拆：要么换成文本交付物，要么让调用方
+    先开 ``tools_enabled`` + ``image_provider``。这条只在 ``image_generation`` 明确为
+    ``False`` 时生效，``None``（未提供能力位）与 ``True`` 都不产生新错误。
+    """
+    if image_generation:
+        return []
+    return [
+        (
+            f"任务 {task.id} 的交付物 {spec.path} 类型是 {spec.kind}，"
+            "但本次运行没有启用图像生成能力（generate_image 未注册：需要 "
+            "tools_enabled=true 且配置 image_provider）；请改为可文本交付的产物，"
+            "或先开启图像生成能力后重新规划"
+        )
+        for task in _drafts(tasks)
+        for spec in task.deliverables
+        if spec.kind in BINARY_KINDS
+    ]
 
 
 def _check_condition_edges(tasks: Sequence[Task]) -> list[str]:

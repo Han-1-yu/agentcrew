@@ -316,6 +316,8 @@ python main.py config import /etc/agentcrew/new.yaml
 | `AGENTCREW_SANDBOX_BACKEND` | `local` | 真要跑模型代码时设 `docker` | `local` 无网络/资源隔离；`docker` 禁网、非 root、cap 全丢、资源上限、只挂 run 目录（C2） |
 | `AGENTCREW_SANDBOX_IMAGE` | `python:3.12-slim` | 自建镜像（带 pytest） | `run_tests` 需要镜像里有 pytest，否则会明确失败 |
 | `AGENTCREW_SEARCH_PROVIDER` | 空 | 需要调研能力时设 `tavily` / `brave` | 空 = 不注册 `web_search`；密钥只在环境变量（`TAVILY_API_KEY` / `BRAVE_API_KEY`） |
+| `AGENTCREW_TOOLS_ENABLED` | `false` | 需要执行体调工具时设 `true` | 关掉时 run 内工具表为空：`generate_image`、`web_search`、`run_python` 一概不可用（各自还有独立开关） |
+| `AGENTCREW_IMAGE_PROVIDER` | 空 | 需要出图时设 `ark`（豆包 Seedream）或 `openai` | 空 = 不注册 `generate_image`。**两个开关都要开**：`tools_enabled=true` + 本项非空。密钥 `ARK_API_KEY` / `OPENAI_API_KEY`（或通用 `AGENTCREW_IMAGE_API_KEY`）。`mock` 只用于端到端演练，产出固定 1×1 PNG |
 | `AGENTCREW_OTEL_ENABLED` | `false` | 有 collector 时开 | 每次 run 导出一条 OTel trace（OTLP/HTTP JSON，零依赖），见 §5.5 |
 | `AGENTCREW_OTEL_ENDPOINT` | `http://127.0.0.1:4318` | collector 地址 | 不带 `/v1/traces` 后缀；导出失败只记 warning，不影响 run |
 | `AGENTCREW_OTEL_CAPTURE_CONTENT` | `false` | 保持 `false` | 是否采集 prompt / completion 文本（含源码与用户数据，**默认不采**） |
@@ -350,7 +352,8 @@ G-2 配置即 RCE、G-9 `run_python` 无隔离这三条，是部署方必须自�
 | `run_tests`（C3） | 与 `run_python` **同一开关**（`code_exec_enabled`）与**同一后端**。只接受 `path` / `timeout`，不接受任意 pytest 参数（否则 `--rootdir=` 能绕过路径边界）；路径走 `resolve_in_workdir`；不写 `.pytest_cache`；输出保留尾部并标注省略量 |
 | G1 执行校验（C3） | `gate_config.exec_verify: true`（默认关）。静态校验放行后，把该任务产物铺进 `<run_dir>/verify/<task_id>/` 跑它自己的 pytest；失败并入 G1 issue 走既有返工通道；无测试文件记 `skipped`；mock 通道显式跳过并记 `g1_exec_check_skipped` |
 | `web_search`（C1） | `search_provider` 为空时**不注册**。端点固定为公网 https、不跟随重定向；结果按 URL 去重并逐个过 `validate_fetch_url`（内网 IP / `file://` / 带凭据一律丢弃）；输出上限 8000 字符；密钥只从环境变量读 |
-| `mcp-serve`（C7） | MCP server（stdio）把编排能力暴露给 Claude Desktop / Cursor 类客户端；**每个工具调用都走本机 HTTP API**——RBAC / 限流 / 审计由 API 侧执行，客户端拿到什么角色的 key 就只能做什么。不产生第二条权限语义 |
+| `generate_image`（R61） | `tools_enabled=true` **且** `image_provider` 非空才注册；`untrusted_inputs=true` 时不下发（与只读预设一致）。端点写死公网 https、不跟随重定向；单图响应上限 10 MiB；落盘路径过 `safe_relpath` 且限定 run 工作区。可选 `ark`（火山方舟 Seedream）/ `openai`（`gpt-image-1`）/ `mock`（固定 PNG，仅演练）。**规划期能力预检**（R63）：计划里有 `kind=image` 交付物而本 run 不具备该能力时，`validate_plan` 直接驳回并指名任务与路径，不再派给执行体后徒劳返工 |
+| 产物类型 `image` 的评审（R63） | G1 仍按契约查（存在 / 非空 / 可解码头）。G2 文本评审员**看不见画面内容**：任务只有二进制产物时直接降级放行，`reviewer="binary:none"`、issue 写明「文本无法核验其内容」；混合任务则插入「## 评审约束」一节，明确不得仅因看不见而判不满足。画面是否符合要求交给 G3 人工闸门与产物预览 |
 | `POST /webhooks/trigger`（C8） | 入站触发：HMAC（复用 R12 签名语义，时间戳 ±300s 防重放）**或** API Key 两条认证路径；未配 `webhook_trigger_secret` 时带签名的请求回 503、无凭证请求照常 401；触发主体只有 `runs:write`，来源以 `run_triggered` 进 run ledger |
 | 工具试跑 | `POST /tools/{name}/test` 与 `main.py tool` 与 run 内注册表同一口径：`code_exec_enabled=false` 时 `run_python` 不在清单里，也跑不了——调试入口不是绕过开关的后门 |
 | 工具 guardrails | `agentcrew.yaml` 的 `tool_guards:` 段按正则/长度在**工具执行前**拦截（`phase: input`）或在**结果回灌前**遮掉泄漏（`phase: output`）。`block` 的工具一次都不执行，原因回灌给模型；命中记 `tool_guard_triggered`。规则在配置加载期校验（正则写错、action 拼错、缺 `pattern`/`max_length` 都直接退 3） |
