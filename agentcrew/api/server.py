@@ -142,12 +142,35 @@ class EventBus:
 _BODY_READ_TIMEOUT = 1.0
 
 
-def _clamp_int(
-    raw: str, *, default: int, minimum: int, maximum: int | None = None,
+def _query_int(
+    query: dict[str, list[str]], name: str, *, default: int,
+    minimum: int, maximum: int | None = None,
 ) -> int:
-    """把查询参数里的整数读出来；非法 / 缺失用 ``default``，压到 ``[minimum, maximum]``。"""
-    return http_transport.clamp_int(
-        raw, default=default, minimum=minimum, maximum=maximum)
+    """对外查询参数的**严格**整数解析：非法即 ``ValueError``（调用方回 400）。
+
+    与 ``http_transport.clamp_int`` 的分工：后者是「配置容错」语义——环境变量
+    写错就退回默认值；而 HTTP 查询参数写错必须让调用方知道。2026-11-18 审计
+    P2-3：``GET /runs/{id}/events?limit=abc``、``limit=-1``、``offset=-5``、
+    ``limit=99999999999999999999`` 全部返回 200 并按默认值处理，客户端永远
+    发现不了自己写错了，与全站「非法输入 400」的口径不一致。
+
+    ``limit`` 超过上界同样报错而不是静默截断：静默截断会让分页脚本以为
+    「拿到的就是全部」。
+    """
+    values = query.get(name) or []
+    raw = values[0] if values else None
+    if raw is None or raw == "":
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"{name} 必须是整数（收到 {raw!r}）") from None
+    if value < minimum:
+        raise ValueError(f"{name} 必须 >= {minimum}（收到 {value}）")
+    if maximum is not None and value > maximum:
+        raise ValueError(f"{name} 必须 <= {maximum}（收到 {value}）")
+    return value
 
 
 def _env_int(name: str, default: int) -> int:
@@ -561,7 +584,7 @@ class ApiServer:
         别人的 run_id。返回 ``True`` 表示已拒绝（调用方 return）。
         """
         principal = current_principal()
-        if principal.can_see_run(self._run_owner_name(run_id)):
+        if principal.can_see_run(self._run_owner_name(run_id), run_id):
             return False
         self._record_security("api_forbidden", {
             "path": f"/runs/{run_id}", "principal": principal.name,
@@ -2161,7 +2184,7 @@ class ApiServer:
         runs: list[dict[str, Any]] = []
         if self._output_dir is not None and self._output_dir.is_dir():
             for rid in CheckpointStore.list_runs(self._output_dir):
-                if not principal.can_see_run(self._run_owner_name(rid)):
+                if not principal.can_see_run(self._run_owner_name(rid), rid):
                     continue
                 try:
                     record = CheckpointStore(
@@ -2177,7 +2200,7 @@ class ApiServer:
                 })
         # 运行中的 crew 以实时状态覆盖盘上记录（run 可能已被取消/收尾）。
         for rid in self.active_crews:
-            if not principal.can_see_run(self._run_owner_name(rid)):
+            if not principal.can_see_run(self._run_owner_name(rid), rid):
                 continue
             existing = next((r for r in runs if r["run_id"] == rid), None)
             if existing is not None:
@@ -2294,11 +2317,11 @@ class ApiServer:
                 return
             event = query.get("event", [None])[0] or None
             # B-8：limit 设上界（1000），offset 无上界但 query_events 流式跳过
-            # 不会物化整份文件。
-            limit = _clamp_int(
-                query.get("limit", ["100"])[0], default=100, minimum=1,
-                maximum=1000)
-            offset = _clamp_int(query.get("offset", ["0"])[0], default=0, minimum=0)
+            # 不会物化整份文件。P2-3：分页参数改成严格解析——非法值 400，
+            # 不再静默按默认值跑出一份「看起来正常」的结果。
+            limit = _query_int(query, "limit", default=100, minimum=1,
+                               maximum=1000)
+            offset = _query_int(query, "offset", default=0, minimum=0)
             # 2026-11 事件循环保护：ledger 查询会物化/遍历整个 JSONL 文件
             # （同步 IO），下放线程池，避免大 run 的读请求卡住事件循环。
             # 串行而非 gather：gather 在其中一个 to_thread 抛异常时不取消兄弟

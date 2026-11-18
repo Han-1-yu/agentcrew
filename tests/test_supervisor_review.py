@@ -553,7 +553,7 @@ def test_status_shows_supervisor_suggestions(tmp_path):
     result = subprocess.run(
         [sys.executable, "main.py", "status", "R-status"],
         cwd=root, env=env, capture_output=True, text=True,
-        timeout=60, errors="replace",
+        timeout=60, encoding="utf-8", errors="replace",
     )
 
     assert result.returncode == 0, result.stdout + result.stderr

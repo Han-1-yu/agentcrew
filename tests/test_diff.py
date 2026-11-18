@@ -202,9 +202,14 @@ def test_diff_cli_json(tmp_path, monkeypatch, capsys):
     assert code == 0
 
 
-def test_diff_missing_run_exits_1(tmp_path, monkeypatch, capsys):
+def test_diff_missing_run_exits_3(tmp_path, monkeypatch, capsys):
+    """P2-4：run 不存在是输入错误（3），与 status / delete / rewind 一致。
+
+    旧实现返回 1（``failed``），按退出码分诊的脚本会把「run_id 打错」当成
+    「run 执行失败」。
+    """
     monkeypatch.setenv("AGENTCREW_OUTPUT_DIR", str(tmp_path / "o"))
     _make_run(tmp_path / "o", "run-a")
     code = cli.main(["diff", "run-a", "no-such-run"])
-    assert code == EXIT_CODES["failed"] == 1
+    assert code == EXIT_CODES["config"] == 3
     assert "no-such-run" in capsys.readouterr().err

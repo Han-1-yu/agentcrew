@@ -81,6 +81,53 @@ class TestApiServer:
             await server.stop()
 
     @pytest.mark.asyncio
+    async def test_events_endpoint_rejects_invalid_pagination(self, tmp_path):
+        """P2-3：``limit`` / ``offset`` 非法值必须 400，不能静默按默认值返回 200。
+
+        旧实现四个探针（``limit=abc`` / ``limit=-1`` / ``offset=-5`` /
+        ``limit=99999999999999999999``）全部 200，客户端永远不知道自己写错了。
+        """
+        from agentcrew.runtime.ledger import Ledger
+
+        out = tmp_path / "out"
+        run_dir = out / "R-1"
+        run_dir.mkdir(parents=True)
+        Ledger(run_dir / "ledger.jsonl", run_id="R-1").emit("step", i=1)
+
+        server = ApiServer(port=0, output_dir=out)
+        await server.start()
+        try:
+            port = server._server.sockets[0].getsockname()[1]
+            for query_string, field in (
+                ("limit=abc", "limit"),
+                ("limit=-1", "limit"),
+                ("limit=99999999999999999999", "limit"),
+                ("offset=-5", "offset"),
+            ):
+                reader, writer = await asyncio.open_connection("127.0.0.1", port)
+                writer.write(
+                    f"GET /runs/R-1/ledger?{query_string} HTTP/1.1\r\n"
+                    "Host: localhost\r\n\r\n".encode())
+                await writer.drain()
+                response = await reader.read(8192)
+                writer.close()
+                await writer.wait_closed()
+                text = response.decode()
+                assert "400 Bad Request" in text, f"{query_string} 未被拒绝：{text[:200]}"
+                assert field in text
+            # 合法分页仍正常
+            reader, writer = await asyncio.open_connection("127.0.0.1", port)
+            writer.write(b"GET /runs/R-1/ledger?limit=1&offset=0 HTTP/1.1\r\n"
+                         b"Host: localhost\r\n\r\n")
+            await writer.drain()
+            response = await reader.read(8192)
+            writer.close()
+            await writer.wait_closed()
+            assert "200 OK" in response.decode()
+        finally:
+            await server.stop()
+
+    @pytest.mark.asyncio
     async def test_status_endpoint_after_event(self):
         server = ApiServer(port=0)
         await server.start()

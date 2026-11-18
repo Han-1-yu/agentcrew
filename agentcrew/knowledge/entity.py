@@ -32,6 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from agentcrew.knowledge.embeddings import cosine
 from agentcrew.knowledge.experience import Experience
 from agentcrew.knowledge.jsonl import append_line, read_lines
+from agentcrew.utils.clock import utc_now
 
 _logger = logging.getLogger(__name__)
 
@@ -142,7 +143,10 @@ def entities_from_experience(
     )
     text = " ".join(part for part in parts if part)
     context = (experience.solution_summary or experience.task_description)[:160]
-    now = datetime.now()
+    # D-14：落盘时间一律 aware UTC。旧实现的 ``datetime.now()`` 经局部变量
+    # ``now`` 中转后写进 ``updated_at``，`test_time_migration_guard` 的正则
+    # 只认字面 ``updated_at=datetime.now()``，于是这处长期无人发现。
+    now = utc_now()
     return [
         EntityRecord(
             name=name,
@@ -154,6 +158,20 @@ def entities_from_experience(
         )
         for name, kind in extract_entities(text, max_entities=max_entities)
     ]
+
+
+def _as_aware(record: EntityRecord) -> EntityRecord:
+    """把旧记录里的 naive 本地时间按本机时区补齐（与 ``clock.parse_stamp`` 同口径）。
+
+    D-14 之前 ``entities.jsonl`` 写的是 naive 本地时间，新记录是 aware UTC。
+    两者混在同一张表里直接比较会抛 ``TypeError``（naive 与 aware 不可比较），
+    而 ``all()`` 的归并正是靠 ``updated_at`` 取「最近一次上下文」。写入严、
+    读取宽：这里补齐即可，不必回写历史行。
+    """
+    stamp = record.updated_at
+    if stamp.tzinfo is not None:
+        return record
+    return record.model_copy(update={"updated_at": stamp.astimezone()})
 
 
 class EntityMemoryStore:
@@ -190,6 +208,7 @@ class EntityMemoryStore:
             except ValueError:
                 _logger.warning("跳过结构未知的实体记忆行 %s", self._path)
                 continue
+            record = _as_aware(record)
             key = record.name.casefold()
             existing = merged.get(key)
             if existing is None:

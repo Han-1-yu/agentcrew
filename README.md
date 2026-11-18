@@ -333,7 +333,8 @@ examples/samples/<name>/
   产物（按路径与字节数判 added / removed / modified）、ledger 事件计数与 LLM
   用量、最终状态与汇总统计。只读，不改动任何 run。`--json` 输出结构化差异。
   退出码：两个 run 都存在 → 0（差异大小不影响退出码，diff 是信息性命令）；任一
-  run 不存在 → 1。
+  run 不存在 → 3（与 `status` / `delete` / `rewind` 的「run 不存在」同一口径）；
+  run 存在但读不出来（`run.json` 损坏）→ 1。
 
 退出码（`agentcrew/crew/crew.py::EXIT_CODES`，对应 spec §7.4）：
 
@@ -796,7 +797,9 @@ Ledger 此前只被终端看板 / 状态命令消费，现在 REST 也能直接�
 
 - `GET /runs/{id}/ledger?event=&limit=&offset=` — 分页查询 `output/<run_id>/ledger.jsonl`
   中的事件，返回 `{"events": [...], "total": <过滤后总数>}`；`event` 按事件名过滤，
-  `limit`（默认 100）/ `offset` 分页
+  `limit`（默认 100，取值 1–1000）/ `offset`（默认 0，不小于 0）分页。**非法分页参数
+  一律 400**（`limit=abc` / `limit=-1` / 超上界 / `offset=-5`），不再静默按默认值返回
+  一份「看起来正常」的结果
 - `GET /runs/{id}/stats` — 统计分析：`event_counts` 各事件类型计数；`llm` 从
   `llm_call` 事件聚合调用数 / prompt / completion / 总 token / 估算成本（USD）；
   `tasks` 为 `task_finished / task_started` 成功率（无 `task_started` 时为 `null`，
@@ -2622,19 +2625,26 @@ G1 连续驳回（期望失败被隔离在该任务与其下游，其余任务�
 V1 的功能边界如下，请在使用前明确知悉。这些限制不是「以后再说」的注脚，
 而是会影响你对产物的信任方式的硬约束：
 
-1. **不执行生成的代码**。G1 只做静态校验（产物存在、大小、`.py` 可 `ast.parse()`、
-   `.json` / `.yaml` / `.toml` 可解析、`must_contain` 符号齐全、HTML/CSS/JS 非纯
-   占位符），**不运行产物测试、不启动服务**。因此产物「可运行」是由人工按
-   「离线演示」一节的 uvicorn 步骤验收确认的，不是平台自动保证的。这既是安全边界
-   （不在宿主上跑生成的代码），也是 V1 的复杂度边界。
+1. **默认不执行生成的代码**。G1 默认只做静态校验（产物存在、大小、`.py` 可
+   `ast.parse()`、`.json` / `.yaml` / `.toml` 可解析、`must_contain` 符号齐全、
+   HTML/CSS/JS 非纯占位符），**不运行产物测试、不启动服务**。可选的执行校验档
+   `gate_config.exec_verify=true`（C3）会在静态检查放行后，把任务自己交付的
+   `test_*.py` 铺进 `<run_dir>/verify/<task_id>/` 并用 pytest 跑一遍；它与
+   `run_python` / `run_tests` 共用 `sandbox_backend=local|docker`，选 docker 而
+   环境缺 docker 时装配期直接报错，不会静默退回「在宿主上跑模型写的测试」。
+   该档**默认关闭**（时间成本真实存在，测试本身也可能是错的）；未启用时产物
+   「可运行」仍由人工按「离线演示」一节的 uvicorn 步骤验收确认，不是平台自动保证。
 2. **Token 估算为启发式**。上下文预算判定使用字符启发式估算 token 数，与真实
    tokenizer 存在偏差；成本统计以 API 返回的 usage 为准，未知模型按 0 计但照样
    记录 token 数。预算是软约束方向上的工程近似，不是精确计量。
 3. **文心一言仅支持千帆 v2 的 API Key 模式**。旧版 `access_token` 鉴权不在支持范围；
    并且千帆 v2 不支持 `json_schema` / `json_object`，结构化输出走提示词约束 +
    围栏提取 + 修复循环（见「模型绑定」）。
-4. **单进程**。调度器是单进程 asyncio，不支持多机分布式执行；并发上限由
-   `max_concurrency` 控制。
+4. **默认内联单进程；单个 run 内部不拆分布式**。默认调度器是单进程 asyncio，
+   并发上限由 `max_concurrency` 控制。C14 提供多 worker 分布式执行：API 用
+   `--queue-dir` 只入队，`python main.py worker` 多进程/多机消费共享文件系统
+   队列（至少一次语义，同一 run_id 重跑，见「分布式执行（C14）」）；但一个 run
+   内的任务调度仍在单个 worker 进程内完成，不是把一个 run 拆到多机。
 5. **mock 产物不是模型生成的**。`--mock` 的产物来自 `examples/fixtures/` 中手写的
    预置回复，用于离线演示编排流程与支撑 hermetic 测试，**不代表模型能力**；
    真实生成能力需要 `--goal` + 真实 API Key 验证。

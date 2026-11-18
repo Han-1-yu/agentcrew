@@ -257,6 +257,37 @@ async def test_run_visibility_is_owner_scoped(rbac_server):
     assert len(data["runs"]) == 3
 
 
+async def test_run_id_whitelist_grants_access_to_that_run(rbac_server):
+    """P1：``run_ids`` 必须按 run id 比对，不能拿身份名去比 run id。
+
+    旧实现 ``owner in self.run_ids`` 把两个维度混在一起，按 run 授权的 key
+    永远看不到目标 run（列表与 /status 一律 404）。
+    """
+    tmp, port = rbac_server["tmp"], rbac_server["port"]
+    target = "20260101-000020-aaaa"
+    other = "20260101-000021-bbbb"
+    await _make_run_dir(tmp, target, owner="bob")
+    await _make_run_dir(tmp, other, owner="alice")
+
+    status, data = await _request(
+        port, "POST", "/keys",
+        {"name": "auditor", "role": "viewer", "run_ids": [target]},
+        key=rbac_server["admin"][1])
+    assert status == 201
+    key = data["key"]
+
+    status, data = await _request(port, "GET", "/runs", key=key)
+    assert status == 200
+    assert {item["run_id"] for item in data["runs"]} == {target}
+
+    status, _ = await _request(
+        port, "GET", f"/runs/{target}/status", key=key)
+    assert status == 200
+    status, _ = await _request(
+        port, "GET", f"/runs/{other}/status", key=key)
+    assert status == 404          # 白名单之外仍按不可见处理
+
+
 def test_write_owner_marks_run_then_visibility_applies(tmp_path):
     """write_owner 落盘 owner.json；非 admin 立刻按归属可见。"""
     from agentcrew.api.rbac import write_owner
@@ -321,6 +352,11 @@ def test_principal_can_see_run_matrix():
     assert viewer_own.can_see_run(None) is False
     scoped = Principal(name="a", role="viewer", scopes=ROLE_SCOPES["viewer"],
                        run_ids=frozenset({"20260101-000000-x"}))
-    assert scoped.can_see_run("20260101-000000-x") is True
+    # P1：白名单按 run_id 生效，而不是拿身份名去比 run_id
+    assert scoped.can_see_run("someone-else", "20260101-000000-x") is True
+    assert scoped.can_see_run(None, "20260101-000000-x") is True
+    assert scoped.can_see_run("someone-else", "20260101-000000-y") is False
+    assert scoped.can_see_run("a") is True            # 自己的 run 仍然可见
     admin = Principal(name="r", role="admin", scopes=ALL_SCOPES)
     assert admin.can_see_run(None) is True
+    assert admin.can_see_run(None, "any-run") is True

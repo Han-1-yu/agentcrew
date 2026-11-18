@@ -11,20 +11,28 @@
 
 | 项 | 值 |
 |---|---|
-| 已提交 | R63 / R64（2026-11-16 晚）。`HEAD` 领先 `origin/master` 3 个提交（推送与 CI 由提交人决定） |
-| 测试 | 全量 **3524 passed / 0 failed / 6 skipped / 0 error**（187 文件 / 47 批次 / 438.5s） |
+| 已提交 | 本轮 R65（2026-11-18）；上一批 R63 / R64（2026-11-16 晚）。`HEAD` 领先 `origin/master`（推送与 CI 由提交人决定） |
+| 测试 | 全量 **3546 passed / 0 failed / 6 skipped / 0 error**（189 文件 / 95 批次 / 509.5s，零崩溃重试） |
 | 静态检查 | `ruff check .` 全绿 · `mypy agentcrew/` 146 文件零错误 |
 | Studio / SDK | Studio `test:unit` + 架构检查通过；`sdk/typescript` 12 例 `node --test`（独立 CI job） |
 | 离线样例 | `todo` 9/9 · `linear` 5/5 · `hierarchy` 7/7，全部 `completed` |
 | 容量 | 单进程约 32 run/分（mock 60ms）；8 worker × 并发 2 = 105.84 run/分 |
 | 一句话定位 | 8 角色多 Agent 编排器：规划 → 执行 → 三层门禁 → 交付；可完全离线（mock）跑通，可横向加 worker |
 
-**最新两轮（2026-11-16 晚）**：R63 图像类交付物的三个运行时缺陷（§3.95）；
+**最新一轮（2026-11-18）R65**：按一次外部评审给出的六阶段方案，先做「堵漏洞 + 真实运行
+可靠性」：多接收端 webhook 签名密钥不再明文进 `run.json`（存量 266 个 run 已回填）、
+RBAC `run_ids` 白名单真正按 run id 生效、确定性失败不再把 `attempts` 额度烧光、
+G2 评审材料改为「完整交付清单 + 按文件均分预算 + 禁止以『未提供全文』驳回」；
+另收口审计 P2/P3 六小项（`--plan-only` 互斥、实体记忆时间戳、分页 400、
+`diff` 退出码、队列租约收尾、时间守卫的变量桥）。细节见
+[`PROJECT-STATE.md`](../PROJECT-STATE.md) §3.97，逐条处置见
+[`BUG-AUDIT-2026-11-16.md`](BUG-AUDIT-2026-11-16.md) §〇。
+
+**上一批（2026-11-16 晚）**：R63 图像类交付物的三个运行时缺陷（§3.95）；
 R64 运行侧六处「说得不对」——审批单带超时崩 CLI、时间显示差 8 小时、`cancel`
 写坏时间口径、`rewind` 给出跑不通的下一步、样例 `revision` 名不副实（离线回放
 没有「驳回→返工→通过」的表达能力，新增 `"@r<轮次>"` 键）、C14 经验库锁文件被
-抢建导致 run 偶发崩（§3.96）。细节见 [`PROJECT-STATE.md`](../PROJECT-STATE.md)
-§3.95–§3.96。MCP 双向 / Node SDK / 容量与分布式见
+抢建导致 run 偶发崩（§3.96）。MCP 双向 / Node SDK / 容量与分布式见
 [`docs/CLOSURE-2026-11-16.md`](CLOSURE-2026-11-16.md)（§3.91–§3.94）。
 
 **R50（历史）**：

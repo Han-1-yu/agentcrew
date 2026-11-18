@@ -85,6 +85,20 @@ CANCELLED_ERROR = "cancelled"
 #: 这是让重试「有的可改」而不是原样重放的唯一通道。
 _RETRY_REASON_PREFIX = "retry: "
 
+#: 确定性失败：同样的输入再跑一遍不可能改变结果，重试只是烧 token。
+#: 2026-11-18 实跑证据（output/20261101-175339-89d0）：动态子任务先写了
+#: ``logstat/__init__.py``，父任务写入时被 ``ArtifactConflictError`` 硬拒；
+#: 调度器按 attempts 额度原样重试 3 次，三条错误字节级相同，最后整轮 FAILED。
+#: 这类型错误应当立即收口并留下可执行诊断（谁的产物、改哪条路径），而不是
+#: 把额度耗尽。
+_FATAL_ERROR_TYPES: frozenset[str] = frozenset({
+    "ArtifactConflictError",
+    "UndeclaredArtifactError",
+    "ArtifactScopeError",
+    "UnsafePathError",
+    "ArtifactTooLargeError",
+})
+
 #: P2-2：停滞检测的唤醒周期（秒）。主循环每这么久醒一次检查「距上次进展是否
 #: 已超过 ``stall_timeout_seconds``」。取较小值让停滞能及时被发现，同时又不会
 #: 忙等；真正的判停阈值是构造参数 ``stall_timeout_seconds``，不是这个常量。
@@ -670,7 +684,27 @@ class Scheduler:
         if task.status is TaskStatus.RUNNING:
             self._emit_error("agent.execute", task_id, error,
                              error_type=error_type)
-            if task.attempts < task.max_attempts:
+            retry_reason = f"{_RETRY_REASON_PREFIX}{error[:400]}"
+            previous_retries = [
+                change.reason
+                for change in task.status_history
+                if change.reason.startswith(_RETRY_REASON_PREFIX)
+            ]
+            fatal = error_type in _FATAL_ERROR_TYPES
+            # 同一错误文本连续出现 = 这一轮重试没有任何新信息；再跑一次只是把
+            # 同样的徒劳重放一遍（实跑里连报 3 次字节级相同的冲突错误）。
+            no_progress = bool(previous_retries) and previous_retries[-1] == retry_reason
+            if fatal or no_progress:
+                reason = f"fatal-{error_type}" if fatal else "no-progress"
+                self._ledger.emit(
+                    "task_retry_suppressed",
+                    task_id=task_id,
+                    reason="fatal" if fatal else "no-progress",
+                    error_type=error_type,
+                    error=error[:400],
+                )
+                self._transition(task_id, TaskStatus.FAILED, reason=reason)
+            elif task.attempts < task.max_attempts:
                 # 把失败原因**写进跃迁理由**：它会随 status_history 落进
                 # tasks.json，下一次派发时由 _fix_hints 取出来交给模型。
                 # 没有这一条，重试就是原样重放 —— 实测架构师的回复连续 3 次被
@@ -678,7 +712,7 @@ class Scheduler:
                 self._transition(
                     task_id,
                     TaskStatus.READY,
-                    reason=f"{_RETRY_REASON_PREFIX}{error[:400]}",
+                    reason=retry_reason,
                 )
             else:
                 self._transition(

@@ -274,6 +274,32 @@ def _redact_unknown(value: Any) -> Any:
     }
 
 
+def _redact_webhook_targets(targets: Any) -> list[Any]:
+    """``webhooks`` 列表的落盘脱敏（每个接收端的 ``secret`` 一律抹成 ``***``）。
+
+    与顶层 ``webhook_secret`` 同一口径：快照是文件，写出去就收不回来。
+    R15 引入多接收端时只处理了标量字段，列表里的 ``secret`` 会明文进
+    ``run.json``，且 ``secret_values()`` 也没收集它 —— 日志脱敏同样失明。
+    保留条目数、``url``、``events`` 等非密钥字段，便于 ``resume`` 比对配置。
+    """
+    if not isinstance(targets, list):
+        return []
+    out: list[Any] = []
+    for item in targets:
+        if not isinstance(item, Mapping):
+            out.append(item)
+            continue
+        cleaned = _redact_unknown(item)
+        # ``_redact_unknown`` 按字段名把 ``secret`` 一律抹成 ``***``（空串也会），
+        # 这里按**原始值**回填：没配 secret 的接收端保持空串，便于区分
+        # 「未签名」与「配了签名密钥」。
+        if isinstance(cleaned, dict) and "secret" in cleaned:
+            raw_secret = item.get("secret")
+            cleaned["secret"] = REDACTED if raw_secret not in (None, "") else ""
+        out.append(cleaned)
+    return out
+
+
 def _nested_models(model: type[BaseModel]) -> dict[str, type[BaseModel]]:
     """``model`` 里类型是 pydantic 模型的字段 → 它的模型（递归校验的下一层）。"""
     return {
@@ -1677,6 +1703,9 @@ class Settings(BaseModel):
         # C8：入站触发密钥同样不能进快照——它会随 run.json 落盘。
         if data.get("webhook_trigger_secret"):
             data["webhook_trigger_secret"] = "***"
+        # R15：多接收端的 ``webhooks[*].secret`` 与顶层同属签名密钥，逐条脱敏。
+        # 这里必须按**列表**处理：``_redact_unknown`` 只递归映射，不递归列表。
+        data["webhooks"] = _redact_webhook_targets(self.webhooks)
         return data
 
     def _api_key_env_name(self, provider: str) -> str:
@@ -1724,6 +1753,15 @@ class Settings(BaseModel):
         # C8：入站触发密钥同样参与脱敏。
         if self.webhook_trigger_secret.strip():
             found.append(self.webhook_trigger_secret.strip())
+        # R15：多接收端各自的签名密钥也要进脱敏词表。历史上只收集了顶层
+        # 标量，列表里的 secret 既落盘（config_snapshot）又不在词表里——
+        # 密钥三处防泄露的承诺在这里断了。
+        for target in self.webhooks:
+            if not isinstance(target, Mapping):
+                continue
+            raw_secret = str(target.get("secret") or "").strip()
+            if raw_secret:
+                found.append(raw_secret)
         return list(dict.fromkeys(found))
 
     def api_key_for(self, provider: str) -> str | None:

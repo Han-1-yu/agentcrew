@@ -356,7 +356,13 @@ class Reviewer:
         else:
             parts.append("（无验收标准）")
         parts += ["", "## 返工历史", *self._render_history(task), "", "## 产物内容"]
-        own_blocks = self._render_artifacts(task)
+        # 有参考材料时给本任务产物留 70%，剩下的额度留给跨文件核对；否则
+        # 参考材料会被本任务产物挤成 0（旧实现的「先来先占」正是这样饿死
+        # cli.py 的）。没有参考材料就整份额度都给本任务。
+        own_budget = self._excerpt_budget_tokens
+        if self._referenced_paths(task):
+            own_budget = max(1, int(self._excerpt_budget_tokens * 0.7))
+        own_blocks = self._render_artifacts(task, budget=own_budget)
         parts += own_blocks
         binaries = self._binary_paths(task)
         if binaries:
@@ -394,27 +400,42 @@ class Reviewer:
             lines.append("- （无）")
         return lines
 
-    def _render_artifacts(self, task: Task) -> list[str]:
-        """产物节选：按契约声明顺序读**已落盘**的路径，共享一个 token 预算。
+    def _render_artifacts(self, task: Task, *, budget: int | None = None) -> list[str]:
+        """产物节选：先给**完整清单**，再按文件数均分预算。
 
-        先来先占、装不下即截断（与 ``ContextBus`` 的预算语义一致）：靠前的
-        产物拿到完整内容，靠后的拿到空节选并附截断说明。未落盘的路径不读
-        （``store.read`` 会抛 ``FileNotFoundError``）：必需产物缺失已归 G1，
-        G2 只在该跑的时候跑。
+        旧实现「先来先占」：靠前的产物吃满 8000 token，靠后的拿到空节选。
+        2026-11-01 实跑（output/20261101-174643-311c）里，评审员要核对
+        ``logstat/cli.py`` 却拿不到内容，只能以「未提供该文件」连续三轮驳回，
+        返工额度烧光、整轮 FAILED —— 文件其实早就落盘了。
+
+        现在：
+        - 清单永远完整（路径 + 字节数 + 产出者），让评审员知道文件确实已交付；
+        - 预算按文件数均分（至少每份一份），避免巨型产物饿死其余文件；
+        - 截断说明写明「已交付、只是节选」，堵住「未提供」式驳回。
         """
-        produced = {record.path for record in self._store.by_task(task.id)}
+        produced = {
+            record.path: record for record in self._store.by_task(task.id)}
         paths = [spec.path for spec in task.deliverables if spec.path in produced]
         if not paths:
             return ["（无产物）"]
-        remaining = self._excerpt_budget_tokens
-        blocks: list[str] = []
+        total = self._excerpt_budget_tokens if budget is None else max(0, budget)
+        blocks: list[str] = ["### 交付清单（以下文件均已落盘，可在产物目录读取）"]
+        blocks += [
+            f"- {path}（{produced[path].size_bytes} bytes，"
+            f"由 {produced[path].produced_by_task} 产出）"
+            for path in paths
+        ]
+        per_file = max(1, total // len(paths))
+        remaining = total
         for path in paths:
+            share = min(per_file, remaining)
             excerpt, truncated = _truncate_lines(
-                self._store.read_for_prompt(path), remaining)
+                self._store.read_for_prompt(path), share)
             remaining = max(0, remaining - estimate_tokens(excerpt))
             block = f"### {path}\n{excerpt}"
             if truncated:
                 block += f"\n{_TRUNCATION_NOTE}"
+                block += "（该文件已交付，以上只是节选；不得以「未提供该文件」为由判为不满足。）"
             blocks.append(block)
         return blocks
 
@@ -661,7 +682,9 @@ def _system_prompt(spec: RoleSpec) -> str:
         "2. **一条都不能漏，也不要多**：judgements 的数量必须与验收标准的条数完全相等；\n"
         "3. satisfied 为 true/false；evidence 写产物中支持该判定的具体依据"
         "（文件名 + 关键内容）；若标准要求与「参考材料」里的文件比对，"
-        "**必须打开参考材料核对后再判定**，不得以「本次材料未提供该文件」为由判为不满足；\n"
+        "**必须打开参考材料核对后再判定**，不得以「本次材料未提供该文件」为由判为不满足；"
+        "「交付清单」里列出的文件均已落盘——若只附了节选，应基于节选评审，"
+        "需要更多细节时在 evidence 里写明具体文件与段落，不得以「未提供全文」直接驳回；\n"
         "4. satisfied 为 false 时，evidence 必须写清「产物里缺什么、要改成什么」，"
         "让返工方能直接照做；含糊的「不够好」不合格；\n"
         "5. **标准之外的任何意见**（可读性、健壮性、更优写法、性能、风格……）一律放进 "

@@ -66,6 +66,25 @@ def test_goal_and_demo_are_mutually_exclusive(capsys):
     assert "--goal" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("extra", [["--auto"], ["--gate", "both"]])
+def test_plan_only_conflicts_with_auto_and_gate(capsys, extra):
+    """P2-1：``--plan-only`` 与 ``--auto`` / ``--gate`` 的互斥必须在入口拦下。
+
+    旧行为是静默接受（exit 0）——参数被忽略，用户以为进了全自动或交互闸门，
+    续跑执行时却按配置默认 gate 走，卡在预期外的人工卡点上。
+    """
+    assert cli.main(["run", "--goal", "写个 hello", "--plan-only", *extra]) == 3
+    err = capsys.readouterr().err
+    assert "--plan-only" in err and "互斥" in err
+
+
+def test_resume_plan_only_conflicts_with_auto(capsys):
+    """resume 侧同一互斥（校验先于「run 不存在」判定，因此无需真 run）。"""
+    assert cli.main(
+        ["resume", "20260101-000000-aaaa", "--plan-only", "--auto"]) == 3
+    assert "--plan-only" in capsys.readouterr().err
+
+
 def test_no_args_prints_help(capsys):
     assert cli.main([]) == 0
     assert "usage" in capsys.readouterr().out.lower()
@@ -436,8 +455,12 @@ def test_resume_integrity_error_reports_config(tmp_path, monkeypatch, capsys):
 
 
 def test_module_runs_as_script():
+    # main.py 会把管道 stdout 显式 reconfigure 成 UTF-8（见 main.py 的
+    # `_EncodingSafeStream`）；这里必须按 UTF-8 解码，否则 Windows 的 GBK
+    # 默认 locale 会在 reader 线程里抛 UnicodeDecodeError、stdout 变成 None。
     r = subprocess.run([sys.executable, str(ROOT / "main.py"), "roles"],
-                       capture_output=True, text=True, cwd=ROOT)
+                       capture_output=True, text=True, cwd=ROOT,
+                       encoding="utf-8", errors="replace")
     assert r.returncode == 0 and "architect" in r.stdout
 
 

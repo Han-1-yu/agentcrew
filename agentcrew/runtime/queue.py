@@ -206,7 +206,14 @@ class RunQueue:
     ) -> None:
         claim_path = self.root / "claims" / f"{run_id}.json"
         claim = _read_json(claim_path)
-        if claim is not None and str(claim.get("worker_id") or "") != worker_id:
+        if claim is None:
+            # 2026-11-18 审计 P3-2：claim 缺失 = 租约已失（被 requeue_stale 回收，
+            # 或已由别的 worker 收尾）。旧实现在这里直接放行收尾，于是「心跳失败
+            # → 租约回收 → 旧 worker 仍在收尾」三者重叠时，旧 worker 会写
+            # done/failed 并删掉 pending，与新 worker 双写（先到者赢，后到者
+            # 把结果覆盖成自己的）。收尾权必须凭 claim 证明，没有就拒绝。
+            raise QueueError(f"租约已失（claim 不存在），拒绝收尾：{run_id}")
+        if str(claim.get("worker_id") or "") != worker_id:
             raise QueueError(f"租约不属于 {worker_id}：{run_id}")
         running_path = self.root / "running" / f"{run_id}.json"
         data = _read_json(running_path) or _read_json(

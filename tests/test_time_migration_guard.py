@@ -13,6 +13,10 @@ ReviewRecord / ApprovalRequest / Ledger 六个模型，并同步改掉所有「�
 R64 起扫描范围**包含 `main.py`**：CLI 是唯一在 run 之外改写 `run.json` 的入口
 （`cancel`），此前不在扫描范围内，于是它的 `updated_at = datetime.now()` 一直
 没被发现——实跑里表现为同一个 `run.json` 内「创建是 UTC、更新是本地」。
+
+2026-11-18 审计 P2-2：守卫只认**字面**写法，`entity.py` 用局部变量中转
+（`now = datetime.now()` → `updated_at=now`）就整条绕过去了。本文件因此加了
+第二道扫描 `_scan_indirect()`（见下），把「变量桥」这种形式也钉住。
 """
 
 from __future__ import annotations
@@ -123,3 +127,108 @@ def test_clock_module_is_the_designated_entry():
         utc_now,
     )
     assert utc_now().tzinfo is not None
+
+
+# ── 第二道扫描：变量中转换走的 naive 落盘（P2-2 / P3-3）─────────────────────
+
+#: ``now = datetime.now()``（可带类型标注）。命中行只是「桥」，不是落盘。
+_LOCAL_CLOCK_ASSIGN = re.compile(
+    r"^[ \t]*(?P<var>[A-Za-z_]\w*)[ \t]*(?::[ \t]*[\w.\[\] |]+[ \t]*)?"
+    r"=[ \t]*datetime\.now\(\)[ \t]*$"
+)
+
+#: 落盘时间字段（与 ``_WRITE_PATTERN`` 保持一致）。
+_TIME_FIELD = (
+    r"(?:updated_at|created_at|started_at|finished_at|decided_at"
+    r"|expires_at|written_at)"
+)
+
+#: 已知存量（只减不增）。``tasks.json`` 这一族时间戳整体仍是 naive 本地时间：
+#: ``Task.created_at/updated_at`` 的 ``default_factory`` 就是 ``datetime.now``，
+#: ``TaskResult.started_at/finished_at`` 也由同一族代码写入。它与 D-14 的
+#: ``run.json`` 迁移不是同一批——只改其中一处会让同一文件 naive / aware 混用，
+#: 反而制造 P2-2 那类 TypeError。故在本表登记，等专门一批迁移时清零。
+_INDIRECT_DEBT: dict[str, int] = {
+    "agents/team.py": 6,
+    "task/task_board.py": 4,
+}
+
+
+def _indirect_hits(text: str) -> list[tuple[int, str, int]]:
+    """``text`` 里「变量赋值 datetime.now()、随后写进时间字段」的位置。
+
+    返回 ``[(桥所在行号, 变量名, 落盘行号), ...]``（行号从 1 起）。
+
+    只扫**同一文件内赋值之后**的代码：跨文件、跨函数的别名追踪不做——守卫
+    的目标是拦住「顺手写成本地时间」这种回归，不是做数据流分析。
+    """
+    lines = text.splitlines()
+    hits: list[tuple[int, str, int]] = []
+    for index, line in enumerate(lines):
+        matched = _LOCAL_CLOCK_ASSIGN.match(line)
+        if matched is None:
+            continue
+        var = matched.group("var")
+        tail = "\n".join(lines[index:])
+        pattern = re.compile(
+            rf"(?:\.{_TIME_FIELD}\s*=|{_TIME_FIELD}[\"']?\s*[=:])\s*"
+            rf"{re.escape(var)}\b")
+        found = pattern.search(tail)
+        if found is not None:
+            hits.append((index + 1, var, index + 1 + tail[:found.start()].count("\n")))
+    return hits
+
+
+def _scan_indirect() -> dict[str, list[tuple[int, str, int]]]:
+    found: dict[str, list[tuple[int, str, int]]] = {}
+    for path in _PACKAGE.rglob("*.py"):
+        hits = _indirect_hits(path.read_text(encoding="utf-8"))
+        if hits:
+            found[path.relative_to(_PACKAGE).as_posix()] = hits
+    if _CLI_ENTRY.is_file():
+        hits = _indirect_hits(_CLI_ENTRY.read_text(encoding="utf-8"))
+        if hits:
+            found["main.py"] = hits
+    return found
+
+
+def test_no_new_indirect_naive_timestamp_writes():
+    """变量中转换道也不得新增（entity.py 的漏洞形态）。"""
+    found = _scan_indirect()
+    detail = "\n".join(
+        f"  {rel}: {len(hits)} 处 → 桥 L{hit[0]}（{hit[1]}）落盘 L{hit[2]}"
+        for rel, hits in sorted(found.items())
+        for hit in hits
+        if len(hits) > _INDIRECT_DEBT.get(rel, 0)
+    )
+    grown = {
+        rel: len(hits) for rel, hits in found.items()
+        if len(hits) > _INDIRECT_DEBT.get(rel, 0)
+    }
+    assert not grown, (
+        "新增了「变量中转」形式的 naive 时间落盘。\n"
+        "新代码请用 agentcrew.utils.clock.utc_now()：\n" + detail)
+
+
+def test_indirect_guard_catches_variable_bridge():
+    """守卫自身有效性：能认出 P2-2 的真实形态，也不冤枉纯计时变量。"""
+    bridged = (
+        "def f(rec):\n"
+        "    now = datetime.now()\n"
+        "    return rec.model_copy(update={'updated_at': now})\n"
+    )
+    assert _indirect_hits(bridged) == [(2, "now", 3)]
+
+    typed = (
+        "before = datetime.now()\n"
+        "record.updated_at = before\n"
+    )
+    assert _indirect_hits(typed) == [(1, "before", 2)]
+
+    # 纯计时（只用于算耗时，不落盘）不算落盘，不应误报
+    timing_only = (
+        "started = datetime.now()\n"
+        "elapsed = datetime.now() - started\n"
+    )
+    assert _indirect_hits(timing_only) == []
+

@@ -117,6 +117,44 @@ def test_finish_by_other_worker_is_rejected(tmp_path):
         queue.complete("R-1", status="completed", worker_id="w2")
 
 
+def test_finish_without_claim_is_rejected(tmp_path):
+    """P3-2：claim 不存在 = 租约已失，不能再写 done/failed。
+
+    旧实现在 ``claim is None`` 时直接放行：租约被 ``requeue_stale`` 回收后，
+    旧 worker 仍会写 done 并删掉 pending，与新 worker 双写同一 run。
+    """
+    queue = _queue(tmp_path)
+    queue.enqueue(goal="x", run_id="R-1")
+    queue.claim("w1")
+    (queue.root / "claims" / "R-1.json").unlink()      # 模拟被回收
+    with pytest.raises(QueueError):
+        queue.complete("R-1", status="completed", worker_id="w1")
+    assert not (queue.root / "done" / "R-1.json").exists()
+
+
+def test_old_worker_cannot_overwrite_after_requeue(tmp_path):
+    """回收 + 新 worker 接管后，旧 worker 的收尾必须被拒，结果归新 worker。"""
+    queue = _queue(tmp_path, lease_seconds=1)
+    queue.enqueue(goal="慢慢跑", run_id="R-1")
+    queue.claim("w-old")
+    # 让租约过期并把任务放回 pending
+    claim_path = queue.root / "claims" / "R-1.json"
+    claim = json.loads(claim_path.read_text(encoding="utf-8"))
+    claim["lease_until"] = time.time() - 1
+    claim_path.write_text(json.dumps(claim), encoding="utf-8")
+    assert queue.requeue_stale() == 1
+    assert queue.claim("w-new") is not None
+
+    with pytest.raises(QueueError):
+        queue.complete("R-1", status="completed", worker_id="w-old")
+    # 新 worker 仍能正常收尾（claim 归它）
+    queue.fail("R-1", error="RuntimeError: 新 worker 的结果", worker_id="w-new")
+    failed = json.loads(
+        (queue.root / "failed" / "R-1.json").read_text(encoding="utf-8"))
+    assert failed["status"] == "failed"
+    assert failed["worker_id"] == "w-new"
+
+
 def test_duplicate_run_id_is_rejected(tmp_path):
     queue = _queue(tmp_path)
     queue.enqueue(goal="x", run_id="R-1")

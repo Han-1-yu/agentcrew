@@ -143,3 +143,37 @@ def test_system_prompt_tells_reviewer_to_open_reference_material():
     prompt = _system_prompt(next(r for r in BUILTIN_ROLES if r.key == "architect"))
     assert "参考材料" in prompt
     assert "未提供" in prompt
+
+
+def test_artifact_manifest_lists_every_deliverable_and_shares_budget(env):
+    """多产物时先给完整清单，再按文件数均分预算。
+
+    2026-11-01 实跑（output/20261101-174643-311c）：本任务有 4 个交付物，
+    靠前的吃满 8000 token，``logstat/cli.py`` 拿到空节选；评审员以此为由
+    连续三轮驳回「未提供该文件」，其实文件早已落盘。
+    """
+    big = ArtifactSpec(path="big.py", kind="python", description="d")
+    small = ArtifactSpec(path="small.py", kind="python", description="d")
+    task = Task(id="T-7", title="多产物", description="",
+                role="backend_dev", acceptance_criteria=["ok"],
+                deliverables=[big, small])
+    store = env["store"]
+    store.commit(big.path, "\n".join(f"BIG_{i} = {i}" for i in range(400)),
+                 spec=big, task=task)
+    store.commit(small.path, "def build_parser():\n    return None\n",
+                 spec=small, task=task)
+
+    material = _reviewer(env, excerpt_budget_tokens=60)._render_material(
+        task, round_no=1)
+    own = material.split("## 产物内容", 1)[1]
+
+    # 清单永远完整：路径 + 字节数 + 产出者，与是否截断无关
+    assert "### 交付清单" in own
+    assert own.count("由 T-7 产出") == 2
+    assert f"- {big.path}（" in own and f"- {small.path}（" in own
+    # 每份都分到预算：小文件不会因为大文件在前而消失
+    assert f"### {big.path}" in own
+    assert f"### {small.path}" in own
+    assert "def build_parser()" in own
+    # 截断说明必须点明「已交付」，堵住「未提供该文件」式驳回
+    assert "已交付" in own and "未提供该文件" in own

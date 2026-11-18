@@ -22,6 +22,7 @@ from agentcrew.knowledge.entity import (
 )
 from agentcrew.knowledge.experience import Experience, ExperienceStore
 from agentcrew.runtime.ledger import Ledger
+from agentcrew.utils.clock import utc_now
 
 
 def _exp(**overrides) -> Experience:
@@ -44,7 +45,7 @@ def _record(name: str, *, context: str = "", run_id: str = "R-1",
             when: datetime | None = None) -> EntityRecord:
     return EntityRecord(
         name=name, kind="technology", context=context, sources=[run_id],
-        mentions=1, updated_at=when or datetime.now(),
+        mentions=1, updated_at=when or utc_now(),
     )
 
 
@@ -96,6 +97,20 @@ def test_entities_from_experience_keeps_run_id_and_short_context():
     assert all(record.mentions == 1 for record in records)
 
 
+def test_entities_from_experience_writes_aware_utc():
+    """P2-2：``updated_at`` 必须落 aware UTC，不能是 naive 本地时间。
+
+    旧实现 ``now = datetime.now()`` 经变量中转，绕过了
+    ``test_time_migration_guard`` 的字面正则；东八区会写进「本机时间」，
+    与同库的 aware 记录比较直接 ``TypeError``。
+    """
+    records = entities_from_experience(_exp(), run_id="R-9", max_entities=2)
+    assert records
+    assert all(record.updated_at.tzinfo is not None for record in records)
+    assert all(record.updated_at.utcoffset() == timedelta(0)
+               for record in records)
+
+
 # ── 全局库 ─────────────────────────────────────────────────────────────
 
 def test_store_missing_file_is_empty(tmp_path: Path):
@@ -107,8 +122,8 @@ def test_store_missing_file_is_empty(tmp_path: Path):
 
 def test_store_merges_by_name(tmp_path: Path):
     store = EntityMemoryStore(tmp_path)
-    older = datetime.now() - timedelta(days=1)
-    newer = datetime.now()
+    older = utc_now() - timedelta(days=1)
+    newer = utc_now()
     store.append([
         _record("FastAPI", context="旧上下文", run_id="R-1", when=older),
         _record("fastapi", context="新上下文", run_id="R-2", when=newer),
@@ -121,6 +136,28 @@ def test_store_merges_by_name(tmp_path: Path):
     assert set(fastapi.sources) == {"R-1", "R-2"}
     assert fastapi.context == "新上下文", "上下文取最近一次"
     assert fastapi.updated_at == newer
+
+
+def test_store_reads_legacy_naive_rows_without_comparison_error(tmp_path: Path):
+    """旧库里的 naive 行按本机时区补齐后再归并，不与新记录「比较就崩」。
+
+    D-14 之前 ``entities.jsonl`` 写的是 naive 本地时间；把写入侧改成 aware UTC
+    之后，同一文件里两种口径必然共存——读取侧必须宽容，否则一次升级就让整个
+    实体库不可用（``TypeError: can't compare offset-naive and offset-aware``）。
+    """
+    store = EntityMemoryStore(tmp_path)
+    legacy = EntityRecord(name="FastAPI", kind="technology", context="旧上下文",
+                          sources=["R-1"], updated_at=datetime.now())
+    assert legacy.updated_at.tzinfo is None        # 旧行确实是 naive
+    store.append([legacy])
+    store.append([_record("FastAPI", context="新上下文", run_id="R-2",
+                          when=utc_now() + timedelta(seconds=1))])
+
+    merged = store.all()
+    assert len(merged) == 1
+    assert merged[0].context == "新上下文"
+    assert merged[0].mentions == 2
+    assert merged[0].updated_at.tzinfo is not None
 
 
 def test_store_tolerates_broken_lines(tmp_path: Path):

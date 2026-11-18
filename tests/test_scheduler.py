@@ -531,3 +531,76 @@ async def test_task_timeout_does_not_affect_quick_tasks(env):
     board, sch = build(env, [task])
     await sch.run()
     assert board.get("A").status is S.SUCCEEDED
+
+
+# ── P1：确定性失败不重试（fatal / no-progress）──────────────────────────────
+#
+# 2026-11-01 实跑（output/20261101-175339-89d0）：动态子任务先写了
+# ``logstat/__init__.py``，父任务再写同路径时被 ``ArtifactConflictError`` 硬拒。
+# 调度器按 attempts 额度原样重放 3 次，三条错误字节级相同，最后整轮 FAILED。
+# 同样的输入再跑一遍不可能改变结果 —— 额度应该留给「真的改了什么」的重试。
+
+
+def _make_scheduler(env, tasks):
+    """只装配 `_handle_error` 需要的板/调度器（不跑 run 循环）。"""
+    board = TaskBoard(tasks)
+    store = env["store"]
+    gk = Gatekeeper(env["reviewer"], store, board, gate="none",
+                    ledger=env["ledger"], prompter=NullPrompter())
+    bus = ContextBus("g", board, store)
+    return board, Scheduler(board, env["agents"], gk, bus,
+                            ledger=env["ledger"])
+
+
+def test_fatal_error_fails_immediately_without_spending_retries(env):
+    board, sch = _make_scheduler(env, [mk("A")])
+    board.transition("A", S.READY)
+    board.take_ready(limit=1)                       # → RUNNING，attempts=1
+
+    sch._handle_error(
+        "A", "ArtifactConflictError: logstat/__init__.py 已被 T-002 写入",
+        "ArtifactConflictError")
+
+    t = board.get("A")
+    assert t.status is S.FAILED
+    assert t.attempts == 1                          # 额度一次都没再花
+    assert t.status_history[-1].reason == "fatal-ArtifactConflictError"
+
+    suppressed = list(env["ledger"].events("task_retry_suppressed"))
+    assert len(suppressed) == 1
+    assert suppressed[0].data["reason"] == "fatal"
+    assert suppressed[0].data["error_type"] == "ArtifactConflictError"
+
+
+def test_identical_error_on_retry_fails_fast(env):
+    """同一错误文本第二次出现 = 没有新信息，直接 FAILED（reason=no-progress）。"""
+    board, sch = _make_scheduler(env, [mk("A")])
+    board.transition("A", S.READY)
+    board.take_ready(limit=1)                       # → RUNNING，attempts=1
+    error = "RuntimeError: 依赖服务 502"
+
+    sch._handle_error("A", error, "RuntimeError")
+    assert board.get("A").status is S.READY         # 第一次：正常重试
+    board.take_ready(limit=1)                       # → RUNNING，attempts=2
+    sch._handle_error("A", error, "RuntimeError")
+
+    t = board.get("A")
+    assert t.status is S.FAILED
+    assert t.status_history[-1].reason == "no-progress"
+    suppressed = list(env["ledger"].events("task_retry_suppressed"))
+    assert [e.data["reason"] for e in suppressed] == ["no-progress"]
+
+
+def test_different_error_still_retries(env):
+    """错误文本变了说明这一轮有新信息，仍按 attempts 额度重试。"""
+    board, sch = _make_scheduler(env, [mk("A")])
+    board.transition("A", S.READY)
+    board.take_ready(limit=1)
+    sch._handle_error("A", "RuntimeError: 第一次失败 502", "RuntimeError")
+    board.take_ready(limit=1)
+    sch._handle_error("A", "ValueError: 第二次失败，字段缺失", "ValueError")
+
+    t = board.get("A")
+    assert t.status is S.READY
+    assert t.attempts == 2
+    assert not list(env["ledger"].events("task_retry_suppressed"))

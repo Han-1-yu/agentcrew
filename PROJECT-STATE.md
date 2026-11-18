@@ -8,11 +8,18 @@
 
 ## 0. 一句话现状
 
+**最新一轮：R65（2026-11-18）** —— 按外部评审方案先堵漏洞再提可靠性：webhook 多接收端
+签名密钥不再进快照（存量 266 个 run 回填后 0 命中）、RBAC `run_ids` 白名单按 run id
+生效、确定性失败不再烧重试额度、G2 评审材料给完整交付清单并按文件均分预算，外加审计
+P2/P3 六小项与 README 两条限制纠偏。全量 **3546 passed / 0 failed / 6 skipped / 0 error**
+（189 文件 / 95 批次 / 509.5s），`ruff` 全绿、`mypy` 146 文件零错误。细节见 §3.97，
+逐条处置见 `docs/BUG-AUDIT-2026-11-16.md` §〇。
+
 **当前代码基线：R59–R61（`c9cc47c` / `c9c4a60`，CI 七 job 全绿）、R62 与 Studio/桌面批（`ebb9895` / `8c6e411` / `b712113`，连同两笔状态回填推到 `67aeda4`）、C10 切片一（`5cdeea8`）均在 `origin/master`；**C10 切片二 + Studio 指引 / rewind 入口**是 2026-11-15 的工作（§3.87）；此后 C6 真语义 embedding（§3.90）、C9 MCP 双向与产物读取（§3.91）、C13 Node SDK（§3.92）、C14 单进程容量与分布式执行（§3.93–§3.94）全部闭环，当前基线 **`c1a7ea7`**。** 最近一次全量 **3500 passed / 0 failed / 6 skipped / 0 error**（186 文件 / 93 批次 / 473.4s，C14 分布式后 Windows 本机实跑），零崩溃重试、零「首次失败、重试通过」；`ruff` **All checks passed**、`mypy` **146 文件零错误**；Studio 本轮实跑：`check` **80 模块 / 44 分片**、`test:unit` **37/37**、`verify:api` **13/13**、electron `e2e` **32/32**、`selftest` **16/16**（首次 15/16 是后台全量回归并发导致 OS python 进程计数误判，隔离复跑 16/16）。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道；R19 给主管审核开了独立、不阻塞的 `suggestions` 建议通道；R20 补上单步/断点调试——每个任务派发前可挂起裁决，第二档功能项全部闭环；R21 给 API 契约装上守卫，openapi.yaml 与代码路由双向锁死、不再漏端点；R22 补上 resume 状态白名单与 MCP 管道显式关闭；R23 产出 2501 用例的模块/场景覆盖矩阵（`docs/TEST-REPORT.md`），验收报告遗留的最后一项小项闭环；R24 补上工具管理页与单工具试跑；R25 把共享 API Key 升级为多用户 RBAC（密钥/角色/作用域/归属/审计）；R26 补上拖拽式可视化编排（画布 + YAML 双向 + 图校验）；R27 给检索加向量通道（混合打分 + 磁盘缓存 + 本地退化）；R28 打通「画布 → run」直通规划；R29 让实体记忆也走向量混合（不加列、不迁移）；R30 给审批单加等待窗口与过期告警；R31 给条件边补否定/兜底写法；R32 把控制台 UI 重构成令牌化 + 明暗主题 + 侧栏布局；R33 把单层主管复核扩成可配的多级链；R34 修好本机测试环境（崩溃隔离跑器，一条命令出可信结论）；R50 按差距报告 69 条完成上线前加固——8 项 P0 全关、时钟容错让"前跳误杀/回拨死锁"不再可能、审批与预算的并发边界收口、`/metrics` 补齐可观测入口、Studio 断线可自愈（明细见 `docs/REMEDIATION-STATUS.md`）。R51 按能力路线第一批补上三根支柱的关键缺口：**能查**（`web_search`，四提供方、默认关、密钥只走环境变量）、**敢跑**（可插拔执行后端，默认 `local` 行为逐字不变，`docker` 可选：禁网/非 root/资源上限/只挂 run 目录，缺 docker 即报错）、**跑得出结论**（`run_tests` + G1 执行校验，失败并入既有返工通道），并把评测做成 mock/真实双轨（`eval --live` + 23 条真实小目标 + 夜间脚本）。R52 补上互操作与无人值守：**C7** 暴露为 MCP server（`mcp-serve`，5 个工具全走 HTTP API 复用 RBAC/审计）、**C6 第一步**借现成浏览器 MCP（配置模板 + 读优先白名单，零开发）、**C8** 入站 Webhook 触发（`POST /webhooks/trigger`，HMAC 或 API Key 两条认证路径，来源进 ledger）。R53 补上多模态输入（**C4**）：`run --image` / `POST /runs` 的 `images`（内联 base64，最多 4 张），provider 能力位 `supports_vision`（默认关）决定是否真发图，不支持时降级纯文本并落 `vision_unsupported`（降级可见），图片落盘留证。R54 补上文档 RAG（**C5**）：`knowledge/docs/` 下的团队手册/规范增量摄取分块，按相关性注入 PM 规划提示词与每个任务的上下文（复用 R11/R27 检索资产），`docs list/search` 管理入口。能力路线第二批至此全部落地。
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | R64 后最新全量 **3524 passed / 0 failed / 6 skipped / 0 error**（187 文件 / 47 批次 / 438.5s，Windows 本机 `scripts/test.py --batch 2 --retries 4 --retry-failed 3 --keep-pycache`），1 个批次崩溃重试（本机 `0xC0000005` 老问题）。C10 分支在云主机（Linux / Python 3.12.11）另跑一次 `pytest -q`：**3285 passed / 4 skipped / 0 failed**（233.3s，当时树在 R62 之前）。6 个 skip 沿用跑器结果，其中 4 个 docker 真容器用例由 CI 覆盖 |
+| 全量测试 | **R65 后最新全量 3546 passed / 0 failed / 6 skipped / 0 error**（189 文件 / 95 批次 / 509.5s，Windows 本机 `scripts/test.py --batch 2 --retries 4 --retry-failed 3 --keep-pycache`，**零崩溃重试**）。上一轮 R64 后为 3524 passed（187 文件 / 47 批次 / 438.5s，1 个批次崩溃重试，本机 `0xC0000005` 老问题）。C10 分支在云主机（Linux / Python 3.12.11）另跑一次 `pytest -q`：**3285 passed / 4 skipped / 0 failed**（233.3s，当时树在 R62 之前）。6 个 skip 沿用跑器结果，其中 4 个 docker 真容器用例由 CI 覆盖 |
 | 静态检查 | 切片二后重跑 `ruff check agentcrew/ main.py tests/`：**All checks passed**；`mypy agentcrew/`：**144 文件零错误**（Windows / Python 3.12.16）；云主机同口径复跑 ruff 全绿、mypy 140 文件零错误（当时树在 R62 之前） |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
@@ -3065,6 +3072,81 @@ approval_timeout / time_migration_guard / jsonl_concurrency / knowledge* + 新�
 case 仍 pass@1 100%；`ruff check .` 全绿、`mypy agentcrew/` 146 文件零错误。
 文档：`docs/TUTORIAL.md` 补 `@r<n>` / `@<n>` 两套夹具键的区别（这是唯一一处在用户
 文档里解释「怎么造离线驳回」的地方）；`mock.py` 模块 docstring 同步查找顺序。
+
+---
+
+### 3.97 R65：按外部评审方案修「漏洞 → 可靠性 → 可诊断性」（2026-11-18）
+
+**起点**：一次「读项目给评价」的外部评审（工程 8/10、产品 6/10、可维护性 6.5/10），
+随后按它给出的六阶段方案施工。本轮只做**阶段 1（堵漏洞）+ 阶段 2（真实运行可靠性）
++ 审计 P2/P3 小项 + 文档纠偏**，阶段 3（持久化性能）/ 4（Crew/CLI/API 拆分）/
+5（文档减重、LICENSE）/ 6（质量评测）未动 —— 顺序刻意如此：先消灭已知漏洞与
+「重试烧钱」，再谈结构。
+
+**1）P0：多接收端 webhook 签名密钥明文落盘（审计 P0-1）**
+
+`Settings.config_snapshot()` 只抹顶层标量 `webhook_secret` / `webhook_trigger_secret`，
+R15 引入的 `webhooks[*].secret` 原样进了 `run.json`，且 `secret_values()` 不收集它
+——「不导出 / 不进快照 / 进脱敏词表」这三条承诺同时破了。修法：新增
+`_redact_webhook_targets()` 逐条抹 `secret`（保留条目数、`url`、`events`，
+空串仍留空串以区分「未签名」与「配了密钥」），`secret_values()` 收集各接收端密钥。
+存量文件不会自己变干净：`scripts/scrub_run_snapshots.py` 做一次性回填（默认预演，
+`--yes` 才原子重写）。本机 266 个 run 预演后命中 0 —— 历史快照已清空。
+`docs/THREAT_MODEL.md` T-32 补了**轮换指引**（泄漏已经发生，回填只是止血）。
+
+**2）P1：RBAC `run_ids` 白名单完全失效（审计 P1-1）**
+
+`can_see_run(owner)` 拿 `owner.json` 里的**身份名**与 `run_ids`（**run id 列表**）
+比较，两个维度不同 —— 按 run 授权的 key 永远 404。修法：`can_see_run(owner, run_id)`
+两个维度任一命中即可见，`server.py` 三处调用同步传 `run_id`；不传 `run_id` 的旧
+调用保持「只看自己创建的」。fail-closed，不存在越权面。
+
+**3）真实运行的两个失败模式（方案阶段 2）**
+
+- **确定性失败被当成可重试**（现场 `output/20261101-175339-89d0`）：动态子任务先写了
+  `logstat/__init__.py`，父任务写入被硬拒，调度器按额度原样重放 3 次、三条错误字节级
+  相同。修法：`_FATAL_ERROR_TYPES`（产物冲突 / 未声明产物 / 越界 / 不安全路径 / 超限）
+  直接 FAILED，并把「同一错误文本第二次出现」判为 `no-progress` —— 两者都发
+  `task_retry_suppressed` 事件留痕，额度留给「真的改了什么」的重试。
+- **G2 因节选预算反复驳回**（现场 `output/20261101-174643-311c`）：4 个交付物，靠前的
+  吃满 8000 token，`logstat/cli.py` 拿到空节选，评审员连续三轮以「未提供该文件」驳回，
+  返工额度烧光、整轮 FAILED —— 文件其实早就落盘。修法：评审材料先给**完整交付清单**
+  （路径 + 字节数 + 产出者），预算按文件数均分；有参考材料时本任务产物只占 70%；
+  截断说明写明「已交付、只是节选」，提示词加硬规则：不得以「未提供全文」驳回。
+
+**4）审计 P2/P3 小项（一次收口）**
+
+| 项 | 修法 | 验证 |
+|---|---|---|
+| P2-1 `--plan-only` 与 `--auto`/`--gate` 互斥只写在帮助里 | `main.py::_invalid_numbers` 显式拒绝（run / resume 共用） | 三条 CLI 用例，退出码 3 |
+| P2-2 实体记忆 naive 时间戳绕过 D-14 | `entity.py` 改 `utc_now()`；`all()` 把旧 naive 行按本机时区补齐 | 写入 aware 断言 + 旧行混读不 TypeError |
+| P2-3 分页参数静默容错 | `server.py::_query_int`：`/runs/{id}/ledger` 的 limit/offset 非法即 400，超上界不再静默截断 | 四组 HTTP 探针 + 合法分页仍 200 |
+| P2-4 `diff` 对 run 不存在返回 1 | 不存在 → 3（与 status/delete/rewind 同口径），读不出来才 1 | `test_diff` 改名并断言 3 |
+| P3-2 队列 `_finish` 在 claim 缺失时放行 | `claim` 缺失即「租约已失」拒收尾；worker 侧租约失即放弃收尾并打一行 stderr | 回收 + 新 worker 接管，旧 worker 收尾被拒、结果归新 worker |
+| P3-3 时间守卫可被变量绕过 | 守卫加 `_scan_indirect()`：`now = datetime.now()` → `updated_at=now` 这种「变量桥」也能检出 | 守卫自检用例（桥 / 带标注 / 纯计时三态） |
+
+**顺带发现（本轮不修）**：`tasks.json` 一族时间戳（`Task.created_at/updated_at`、
+`TaskResult.started_at/finished_at`）整体仍是 naive 本地时间，属 D-14 未覆盖的独立
+迁移；只改一处会让同一文件 naive/aware 混用，所以登记进守卫的 `_INDIRECT_DEBT`
+（只减不增），等专门一批迁移。
+
+**5）文档纠偏**：README「已知限制」第 1 条从「不执行生成的代码」改为「默认不执行，
+`exec_verify` 可在沙箱里跑交付物自带测试」，第 4 条从「单进程」改为「默认内联单进程 +
+C14 文件队列多 worker（at-least-once）」——这两条此前与代码直接矛盾。`diff` 的退出码
+说明同步改成 3。
+
+**坑（新）**：`main.py` 会把管道 stdout 显式 reconfigure 成 UTF-8，而 Windows 的
+`subprocess.run(text=True)` 默认按 GBK 解码 → reader 线程抛 `UnicodeDecodeError`，
+`stdout` 变 `None`，两个 CLI 用例随机红。修法是测试侧显式 `encoding="utf-8"`；
+这类失败看起来像「代码坏了」，实际是解码口径不一致。
+
+**验证**：见本文件 §0 顶部基线与 `docs/BUG-AUDIT-2026-11-16.md` §〇 的处置表
+（逐条列出修法落点与验证方式）。新增/改写用例：`test_webhook_secret_redaction.py`、
+`test_scrub_run_snapshots.py`、`test_scheduler.py`（3 例错误分类）、
+`test_reviewer_references.py`（清单 + 均分预算）、`test_rbac.py`（run_id 授权）、
+`test_cli.py`（互斥）、`test_diff.py`（退出码）、`test_run_queue.py`（租约收尾）、
+`test_entity_memory.py`（aware 写入 + 旧行混读）、`test_time_migration_guard.py`
+（间接落盘扫描）、`test_api_server.py`（分页 400）。
 
 ---
 

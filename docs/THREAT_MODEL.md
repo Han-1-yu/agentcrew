@@ -203,7 +203,7 @@ B5  配置（agentcrew.yaml / .env）──▶ CLI 命令模板、MCP server 命
 |---|---|---|---|
 | **T-30** | 密钥进版本库 | `.env` / `.env.*` / `output/` 已 gitignore | 无 |
 | **T-31** | `config export` 把密钥导出去 | 导出剔除 secret 字段（含 `mcp_servers.headers` 里的 `Authorization`） | 无 |
-| **T-32** | run 快照留明文密钥 | `run.json` 的 `config_snapshot` 按字段名打码 | 无 |
+| **T-32** | run 快照留明文密钥 | `run.json` 的 `config_snapshot` 按字段名打码；R15 多接收端的 `webhooks[*].secret` 同样逐条打码（2026-11-18 修：此前只覆盖顶层标量 `webhook_secret` / `webhook_trigger_secret`，列表里的 secret 会明文落盘且不进脱敏词表）；存量文件用 `scripts/scrub_run_snapshots.py` 回填（默认预演，`--yes` 才写盘） | ⚠️ **2026-11-18 之前创建的 `run.json` 里可能仍有明文 secret**。配过 `webhooks[*].secret` 的部署请按序处置：① 在接收端轮换密钥（泄漏已发生，回填只是止血）；② 更新配置并重启；③ 跑 `scripts/scrub_run_snapshots.py` 预演 → `--yes` 回填 |
 | **T-33** | 日志 / ledger / spool 里出现密钥 | `secret_values()` 脱敏词表覆盖 stderr、ledger、Web 启用信息；spool 只存 URL 短哈希与脱敏 payload | ⚠️ 词表**只能覆盖「值形如密钥」的情况**；自定义格式的凭据需自行加词 |
 | **T-34** | Webhook URL 里的 token 被记进日志 | 只记打码 URL，查询串整体丢弃 | 无 |
 | **T-35** | trace 里带源码/用户数据 | `otel_capture_content` **默认 `false`**；打开后仍先脱敏、再截断 4000 字符 | ⚠️ 打开即主动外发内容，需自行评估 collector 的信任级别（见 G-10） |

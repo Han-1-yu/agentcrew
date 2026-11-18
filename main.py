@@ -1480,6 +1480,7 @@ async def _worker_loop(settings: Any, queue: Any, args: argparse.Namespace,
         # 20 秒才收尾，队列吞吐被拖低四倍。这里等的是 task 本身，心跳只在
         # 超时未完成时做。
         interval = max(1.0, min(args.lease_seconds / 3, 5.0))
+        lease_lost = False
         try:
             while True:
                 done, _ = await asyncio.wait({task}, timeout=interval)
@@ -1489,18 +1490,36 @@ async def _worker_loop(settings: Any, queue: Any, args: argparse.Namespace,
                     crew.cancel()
                 if not queue.heartbeat(item.run_id, worker_id):
                     # 租约被别人接管（或已过期被回收）：立刻停，别写坏别人的 run。
+                    # P3-2：收尾权也随租约一起没了——下面的 complete/fail 会被
+                    # 队列拒绝（claim 已不存在/已换主），所以这里不写任何结果。
+                    lease_lost = True
                     crew.cancel()
                     break
             record = await task
+            if lease_lost:
+                print(f"[{worker_id}] {item.run_id} 租约已失，放弃收尾"
+                      "（结果由新租约持有者写入）", file=sys.stderr)
+                return
             status = str(getattr(record.status, "value", record.status))
             queue.complete(item.run_id, status=status, worker_id=worker_id)
         except asyncio.CancelledError:
             crew.cancel()
             raise
         except Exception as exc:  # noqa: BLE001 —— 单个 run 失败不能拖死 worker
-            queue.fail(
-                item.run_id, error=f"{type(exc).__name__}: {exc}",
-                worker_id=worker_id)
+            if lease_lost:
+                return
+            from agentcrew.runtime.queue import QueueError
+
+            try:
+                queue.fail(
+                    item.run_id, error=f"{type(exc).__name__}: {exc}",
+                    worker_id=worker_id)
+            except QueueError as queue_exc:
+                # 收尾时租约已失（心跳循环之后才被回收）：不覆盖新租约持有者的
+                # 结果，只留一行可诊断的痕迹。
+                print(f"[{worker_id}] {item.run_id} 收尾失败：{queue_exc}"
+                      f"（run 自身错误：{type(exc).__name__}: {exc}）",
+                      file=sys.stderr)
 
     while True:
         await sem.acquire()
@@ -2545,7 +2564,9 @@ def _cmd_diff(args: argparse.Namespace) -> int:
     """``diff <run_a> <run_b>``：对比两个 run 的配置/任务/产物/事件差异。
 
     退出码：两个 run 都存在 → 0（diff 是信息性命令，有差异也不报错）；任一 run
-    不存在 → 1（``failed``）。``--json`` 输出结构化差异供脚本解析。
+    不存在 → 3（``config``，与 status / delete / rewind 的「run 不存在」一致）；
+    run 存在但读不出来（run.json 损坏等）→ 1（``failed``）。
+    ``--json`` 输出结构化差异供脚本解析。
     """
     try:
         settings = _settings_from(args)
@@ -2563,6 +2584,12 @@ def _cmd_diff(args: argparse.Namespace) -> int:
     try:
         store_a, record_a = _load(args.run_id_a)
         store_b, record_b = _load(args.run_id_b)
+    except FileNotFoundError as exc:
+        # 2026-11-18 审计 P2-4：run 不存在是**输入错误**，不是「对比失败」。
+        # 此前这里返回 1，与 status / delete / rewind 的 3 不一致——按退出码
+        # 分诊的脚本会把「run_id 打错」误判成「run 执行失败」。
+        print(f"无法读取 run：{exc}", file=sys.stderr)
+        return EXIT_CODES["config"]
     except (OSError, ValueError) as exc:
         print(f"无法读取 run：{exc}", file=sys.stderr)
         return EXIT_CODES["failed"]
@@ -3176,6 +3203,20 @@ def _invalid_numbers(args: argparse.Namespace) -> str | None:
     calls = getattr(args, "max_llm_calls", None)
     if calls is not None and calls < 0:
         return f"{cmd}：--max-llm-calls 必须 >= 0。"
+    # 2026-11-18 审计 P2-1：``--plan-only`` 的「与 --auto / --gate 互斥」此前
+    # 只写在帮助文案里，实际静默接受（exit 0）：--auto / --gate 被忽略，用户以为
+    # 进了全自动或交互闸门，resume 执行时却走配置默认 gate。参数之间的矛盾必须
+    # 在开跑前说清楚，而不是靠用户读 help。
+    if getattr(args, "plan_only", False):
+        conflicts = [
+            flag for flag, given in (
+                ("--auto", getattr(args, "auto", False)),
+                ("--gate", getattr(args, "gate", None)),
+            ) if given
+        ]
+        if conflicts:
+            return (f"{cmd}：--plan-only 与 {' / '.join(conflicts)} 互斥"
+                    "（只出计划，不派发执行，闸门无从生效）。")
     return None
 
 

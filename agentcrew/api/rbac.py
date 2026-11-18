@@ -92,13 +92,21 @@ class Principal(BaseModel):
     def allows(self, scope: str | None) -> bool:
         return scope is None or scope in self.scopes
 
-    def can_see_run(self, owner: str | None) -> bool:
-        """按归属判定可见性。``owner`` 为 owner.json 里的 ``name``（可空）。"""
+    def can_see_run(self, owner: str | None, run_id: str | None = None) -> bool:
+        """判定 run 可见性：``owner`` 是 owner.json 里的身份名，``run_id`` 是目标 run。
+
+        两个维度任一命中即可见：
+        - 自己创建的（``owner == self.name``）；
+        - 显式白名单 ``run_ids`` 里的 run。
+
+        R25 初版把白名单与身份名比较（``owner in self.run_ids``），两个维度不同，
+        按 run id 授权的 key 永远 404。这里保留向后兼容：不传 ``run_id`` 时
+        只按归属判定，不改变旧调用方的语义。
+        """
         if self.is_admin:
             return True
-        if self.run_ids:
-            return owner is not None and (owner in self.run_ids
-                                          or owner == self.name)
+        if run_id is not None and run_id in self.run_ids:
+            return True
         return owner is not None and owner == self.name
 
 
