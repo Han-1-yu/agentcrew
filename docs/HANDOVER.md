@@ -11,7 +11,7 @@
 
 | 项 | 值 |
 |---|---|
-| 已提交 | 本轮 R65（2026-11-18）；上一批 R63 / R64（2026-11-16 晚）。`HEAD` 领先 `origin/master`（推送与 CI 由提交人决定） |
+| 已提交 | 本轮 R65 为 `5e35e84`（2026-11-18）；上一批 R63（`742e417` / `2d52a1a`）与 R64（`3735178`）（2026-11-16 晚）。`HEAD` 领先 `origin/master`（推送与 CI 由提交人决定） |
 | 测试 | 全量 **3546 passed / 0 failed / 6 skipped / 0 error**（189 文件 / 95 批次 / 509.5s，零崩溃重试） |
 | 静态检查 | `ruff check .` 全绿 · `mypy agentcrew/` 146 文件零错误 |
 | Studio / SDK | Studio `test:unit` + 架构检查通过；`sdk/typescript` 12 例 `node --test`（独立 CI job） |
