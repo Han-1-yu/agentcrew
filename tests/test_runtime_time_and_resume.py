@@ -181,7 +181,8 @@ def test_resume_refusal_points_at_runnable_command(tmp_path, monkeypatch, capsys
     capsys.readouterr()
 
     # 不带任何开关续跑：配置比对必然不过（快照 mock=true，当前 mock=false）
-    monkeypatch.setattr(cli, "_stdin_isatty", lambda: False)
+    # R66f：_cmd_resume 已拆到 agentcrew.cli.run，补丁打在它查找该名字的位置。
+    monkeypatch.setattr("agentcrew.cli.run._stdin_isatty", lambda: False)
     assert cli.main(["resume", rid]) == cli.EXIT_CODES["config"]
     err = capsys.readouterr().err
     assert "--sample linear" in err, err
