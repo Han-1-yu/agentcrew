@@ -8,19 +8,22 @@
 
 ## 0. 一句话现状
 
-**最新一轮：R65（2026-11-18）** —— 按外部评审方案先堵漏洞再提可靠性：webhook 多接收端
-签名密钥不再进快照（存量 266 个 run 回填后 0 命中）、RBAC `run_ids` 白名单按 run id
-生效、确定性失败不再烧重试额度、G2 评审材料给完整交付清单并按文件均分预算，外加审计
-P2/P3 六小项与 README 两条限制纠偏。全量 **3546 passed / 0 failed / 6 skipped / 0 error**
-（189 文件 / 95 批次 / 509.5s），`ruff` 全绿、`mypy` 146 文件零错误。细节见 §3.97，
-逐条处置见 `docs/BUG-AUDIT-2026-11-16.md` §〇。
+**最新一轮：R66（2026-11-19）** —— 整体代码审查与结构/性能优化，九个切片各自提交：
+统一脱敏/退避去重（R66a）、`stream_call` 治理链与 `call` 对齐的缺陷修复（R66b）、
+`validate_run_options` 表驱动化（R66c，复杂度 67→≤10）+ NaN 入口拦截（R66d）、
+config 解析去重（R66e）、`main.py` 3388→~700 行拆进 `cli/` 九模块并修正 cli↔api
+分层契约（R66f）、ApiServer 路由分发表化（R66g）、Crew 装配群迁 `crew/assembly.py`
+（R66h，2843→2075 行）、EXP-1 裁决落地——并发流逐 chunk 审计落盘自适应下沉
+（R66i，并发 4 流墙钟 −65%、循环滞后 p95 27→10ms，单流无回归，逐帧 fsync 审计
+语义保留）。全量 **3576 passed / 0 failed / 6 skipped / 0 error**（193 文件 /
+97 批次 / 632.4s），`ruff` 全绿、`mypy` 158 文件零错误。细节见 §3.98。
 
 **当前代码基线：R59–R61（`c9cc47c` / `c9c4a60`，CI 七 job 全绿）、R62 与 Studio/桌面批（`ebb9895` / `8c6e411` / `b712113`，连同两笔状态回填推到 `67aeda4`）、C10 切片一（`5cdeea8`）均在 `origin/master`；**C10 切片二 + Studio 指引 / rewind 入口**是 2026-11-15 的工作（§3.87）；此后 C6 真语义 embedding（§3.90）、C9 MCP 双向与产物读取（§3.91）、C13 Node SDK（§3.92）、C14 单进程容量与分布式执行（§3.93–§3.94）全部闭环，当前基线 **`c1a7ea7`**。** 最近一次全量 **3500 passed / 0 failed / 6 skipped / 0 error**（186 文件 / 93 批次 / 473.4s，C14 分布式后 Windows 本机实跑），零崩溃重试、零「首次失败、重试通过」；`ruff` **All checks passed**、`mypy` **146 文件零错误**；Studio 本轮实跑：`check` **80 模块 / 44 分片**、`test:unit` **37/37**、`verify:api` **13/13**、electron `e2e` **32/32**、`selftest` **16/16**（首次 15/16 是后台全量回归并发导致 OS python 进程计数误判，隔离复跑 16/16）。R4 把编排内核从「静态 DAG + 同步 TTY 卡点」升级为「条件分支 + 可跨进程恢复的人工审批」；R5 把 `<message to>` 接成真实模型调用；R6 补委派治理、咨询上下文与咨询沉淀；R7 补上「谁派的活谁验收」的监督回路；R8 把委派被拒的原因回灌给模型，让它能改；R9 让经理也验收规划期的活；R10 让主管驳回后能换个人做；R11 把经验检索从单字计数换成中文二元组 + BM25；R12 补上出站 Webhook；R13 把 MCP 服务器接进生产工具链；R14 让 Webhook 支持多接收端与「只推失败」；R15 让未投出的通知落盘，在下一次启动自动补投；运维部署/排障手册已补入 `docs/OPERATIONS.md`；R16 补上官方 Python SDK 与示例；R17 给 run 加心跳、启动时僵尸收敛与跨进程 resume 锁；R18 让 CI 检查链首次全绿并补齐限流窗口配置通道；R19 给主管审核开了独立、不阻塞的 `suggestions` 建议通道；R20 补上单步/断点调试——每个任务派发前可挂起裁决，第二档功能项全部闭环；R21 给 API 契约装上守卫，openapi.yaml 与代码路由双向锁死、不再漏端点；R22 补上 resume 状态白名单与 MCP 管道显式关闭；R23 产出 2501 用例的模块/场景覆盖矩阵（`docs/TEST-REPORT.md`），验收报告遗留的最后一项小项闭环；R24 补上工具管理页与单工具试跑；R25 把共享 API Key 升级为多用户 RBAC（密钥/角色/作用域/归属/审计）；R26 补上拖拽式可视化编排（画布 + YAML 双向 + 图校验）；R27 给检索加向量通道（混合打分 + 磁盘缓存 + 本地退化）；R28 打通「画布 → run」直通规划；R29 让实体记忆也走向量混合（不加列、不迁移）；R30 给审批单加等待窗口与过期告警；R31 给条件边补否定/兜底写法；R32 把控制台 UI 重构成令牌化 + 明暗主题 + 侧栏布局；R33 把单层主管复核扩成可配的多级链；R34 修好本机测试环境（崩溃隔离跑器，一条命令出可信结论）；R50 按差距报告 69 条完成上线前加固——8 项 P0 全关、时钟容错让"前跳误杀/回拨死锁"不再可能、审批与预算的并发边界收口、`/metrics` 补齐可观测入口、Studio 断线可自愈（明细见 `docs/REMEDIATION-STATUS.md`）。R51 按能力路线第一批补上三根支柱的关键缺口：**能查**（`web_search`，四提供方、默认关、密钥只走环境变量）、**敢跑**（可插拔执行后端，默认 `local` 行为逐字不变，`docker` 可选：禁网/非 root/资源上限/只挂 run 目录，缺 docker 即报错）、**跑得出结论**（`run_tests` + G1 执行校验，失败并入既有返工通道），并把评测做成 mock/真实双轨（`eval --live` + 23 条真实小目标 + 夜间脚本）。R52 补上互操作与无人值守：**C7** 暴露为 MCP server（`mcp-serve`，5 个工具全走 HTTP API 复用 RBAC/审计）、**C6 第一步**借现成浏览器 MCP（配置模板 + 读优先白名单，零开发）、**C8** 入站 Webhook 触发（`POST /webhooks/trigger`，HMAC 或 API Key 两条认证路径，来源进 ledger）。R53 补上多模态输入（**C4**）：`run --image` / `POST /runs` 的 `images`（内联 base64，最多 4 张），provider 能力位 `supports_vision`（默认关）决定是否真发图，不支持时降级纯文本并落 `vision_unsupported`（降级可见），图片落盘留证。R54 补上文档 RAG（**C5**）：`knowledge/docs/` 下的团队手册/规范增量摄取分块，按相关性注入 PM 规划提示词与每个任务的上下文（复用 R11/R27 检索资产），`docs list/search` 管理入口。能力路线第二批至此全部落地。
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | **R65 后最新全量 3546 passed / 0 failed / 6 skipped / 0 error**（189 文件 / 95 批次 / 509.5s，Windows 本机 `scripts/test.py --batch 2 --retries 4 --retry-failed 3 --keep-pycache`，**零崩溃重试**）。上一轮 R64 后为 3524 passed（187 文件 / 47 批次 / 438.5s，1 个批次崩溃重试，本机 `0xC0000005` 老问题）。C10 分支在云主机（Linux / Python 3.12.11）另跑一次 `pytest -q`：**3285 passed / 4 skipped / 0 failed**（233.3s，当时树在 R62 之前）。6 个 skip 沿用跑器结果，其中 4 个 docker 真容器用例由 CI 覆盖 |
-| 静态检查 | 切片二后重跑 `ruff check agentcrew/ main.py tests/`：**All checks passed**；`mypy agentcrew/`：**144 文件零错误**（Windows / Python 3.12.16）；云主机同口径复跑 ruff 全绿、mypy 140 文件零错误（当时树在 R62 之前） |
+| 全量测试 | **R66 后最新全量 3576 passed / 0 failed / 6 skipped / 0 error**（193 文件 / 97 批次 / 632.4s，Windows 本机 `scripts/test.py --batch 2 --retries 4 --retry-failed 3 --keep-pycache`，**零崩溃重试**）。上一轮 R65 后为 3546 passed（189 文件 / 95 批次 / 509.5s）；R66a 后中间基线 3558 passed（496.1s）。6 个 skip 沿用跑器结果，其中 4 个 docker 真容器用例由 CI 覆盖 |
+| 静态检查 | R66 后重跑 `ruff check agentcrew/ main.py`：**All checks passed**；`mypy agentcrew/ main.py`：**158 文件零错误**（Windows / Python 3.12.16；R66f 起 main.py 纳入 mypy 范围） |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
@@ -3150,6 +3153,75 @@ C14 文件队列多 worker（at-least-once）」——这两条此前与代码�
 
 ---
 
+### 3.98 R66：整体代码审查与结构/性能优化（2026-11-19）
+
+**起点**：用户要求「审查并优化项目整体代码」并批准方案后裁决三项：① R-F 流式治理
+对齐按缺陷**直接修复**（不加 legacy 开关）；② 审计粒度放宽与否自行判断；③ 脱敏
+合并副作用按最优方案抉择。本轮按 R-A→R-F→R-B→R-C→R-D→R-E→EXP-1 切片推进，
+每片独立提交 + 定向验证，最后全量回归收口。
+
+**切片与提交**
+
+| 切片 | 提交 | 内容 | 定向验证 |
+|---|---|---|---|
+| R66a | `a2b73e6` | 去重与可读性：统一按值脱敏 `utils/redact.py`、退避 `compute_delay`、SIM/PERF/RET 清理、异常命名对齐（留别名）、ruff 规则集扩展 | 全量 3558 passed / 0 failed / 6 skipped（496.1s） |
+| R66b | `83e8173` | **缺陷修复**：`stream_call` 治理链与 `call` 对齐（预算守卫/降级/R44 headroom/权重路由/会话亲和），`_CandidatePlan` 驱动 + 首块后不转移哨兵；单别名机制抽 `_stream_attempt`，外层 `finally aclose` | 6 条新测试 + 两个 mutant 均被击中 |
+| R66c | `5798185` | `validate_run_options` 表驱动化（检查器工厂 + 分发表 + flow 前置），复杂度 67→≤10，顺序契约保留 | 1790 例差分 oracle 零差异 + 234 钉文案测试 |
+| R66d | `a396bc1` | **缺陷修复**：`webhook_timeout_seconds` 的 NaN 穿过范围检查 → `socket.settimeout(nan)` 运行时 ValueError；`math.isnan` 并入 ">0" 分支 | 机制链实跑验证 + 8 条新测试 |
+| R66e | `0454fcc` | `config.py` YAML/环境变量解析去重：`_yaml_values` 35→≤12、`_env_values` 21→≤12，原语 `_yaml_mapping/_yaml_list`（None=未设置、空列表合法——与映射段语义刻意不同） | 123 例差分 oracle 零差异 |
+| R66f | `e139a8a` | `main.py` 3388→~700 行：AST 行界拆进 `cli/` 九模块；**分层契约修正**——cli↔api 互禁，依赖 api 的 serve/worker/mcp-serve/keys 回包外组合根 main.py；拆分后首次纳入 mypy 暴露并修复 9 个存量类型错误（含 `ApiServer.auth` 注解放宽为 `APIKeyAuth\|MultiKeyAuth\|None`） | 架构 26 + CLI 面 354 passed / 1 skipped |
+| R66g | `7a27e74` | ApiServer 路由分发表化（exact_get/get_actions/exact_post/post_actions）+ 三个内联路由体抽命名方法（`_get_status`/`_post_run_event`/`_delete_run`），P0-2/P0-3 校验原样保留 | 契约 88（OpenAPI 双向锁死未改一字）+ API 面 398 passed |
+| R66h | `286c5c2` | Crew 装配分离：17 个自包含方法（689 行）+ 3 纯函数迁 `crew/assembly.py`（mixin），Crew 2843→2075 行；依赖闭包审计零调用留守编排方法；日志通道不变；Reviewer/Gatekeeper 补丁点随迁 | Crew 面 385 passed（22 文件） |
+| R66i | `62c7432` | **EXP-1 裁决落地**：并发流逐 chunk 审计落盘自适应下沉（见下） | 流式族 + ledger 89 passed + 机制 4 条 |
+
+**EXP-1：流式逐 chunk 审计的事件循环阻塞（E1）**
+
+- 机制链（SOURCE）：`base_agent._invoke_model` 每 chunk 同步 `Ledger.emit` →
+  `open("a")+write+flush+os.fsync` + `model_validate_json` 重建，fsync 阻塞事件
+  循环；`crew._append_stream` 注释明言「逐帧 fsync 会拖慢流式」而刻意免 fsync，
+  但**同一帧**的 ledger 审计带着 fsync——设计意图被自己的审计通道抵消。
+- 实验（`scripts/exp1_stream_emit.py`，组件边界：mock 流 500 chunk × 并发{1,4}，
+  交替配对 7 对 + 3 次基线重复预登记噪声门槛；原始样本 `bench/exp1-r66-*.json`）：
+  - 无条件 `to_thread` 下沉：c4 **ACCEPT**（墙钟 5.95→2.22s −62.8%，滞后 p95
+    27→10ms）；c1 **REJECT**（dispatch 开销 +10.9% > 噪声 1.9%）→ 不授权无条件采用。
+  - 自适应（并发流 >1 才下沉）：c1 **REMEASURE**（无回归，走原同步路径）；
+    c4 **ACCEPT**（5.91→2.07s −65.0%，滞后 p95 27→10ms，7 对 oracle 全过）。
+  - mutant：drop-frame / skip-notify 在两种变体下均被 oracle 击中后恢复全绿。
+- **审计粒度裁决（用户授权自行判断）**：保留逐帧 fsync 语义，拒绝攒批（候选 b）
+  与任务级汇总（候选 c）——spec §13.2 的逐事件持久化（崩溃时最后一条要么完整
+  落盘要么不出现）与 SSE 回放精度是文档化保证，放宽即改审计契约。
+- 实现：`Ledger.emit` 拆 `write_event`（落盘半，可下沉）+ `notify`（观察者半，
+  **必须留循环线程**：`EventBus` 的 `asyncio.Queue.put_nowait` 非线程安全——
+  整体下沉会破坏跨边界语义）；`base_agent` 以 `_ACTIVE_STREAM_CONSUMERS`
+  计数（仅循环线程读写）自适应选择路径，try/finally 保证异常归零。
+- 范围声明：组件边界证据，不外推端到端；`stream` 默认关闭，仅影响显式开启流式
+  的 run。EXP-2（emit Pydantic 往返微基准）/ EXP-3（_append_stream 句柄复用）
+  合同已登记未执行。
+
+**明确延期（登记不做）**
+
+- R-G：`api/dashboard.py` 64KB HTML 外置 `api/static/` + importlib.resources——
+  可选打磨，收益/风险比低于本轮已做项。
+- `api/routers/` 物理 mixin 拆分：R66g 的分发表 + 命名方法已消除 god-method；
+  再按域拆文件需逐组审计模块全局依赖，边际收益不抵循环导入风险。
+- EXP-2 / EXP-3：合同在方案文档 §四，待专门一批。
+
+**坑（新）**
+
+- isort 把多名再导出拆成**单名单行** import：按「删名行」方式删会留空括号
+  SyntaxError，正则编辑须整条语句删除。
+- 嵌套异步生成器：外层 `aclose()` 不自动终结内层，须显式 `await attempt.aclose()`
+  （R66b 并发配额测试曾因此红）。
+- 测量 harness 两坑：ledger 是 append 模式，跨 run 复用文件会累积污染行数
+  oracle 与 fsync 成本（每次 run 须独立目录）；配对循环变量与变体参数同名会
+  遮蔽，第二对起退化成 baseline vs baseline（样本中位数为完全同值即是信号）。
+
+**验证**：见 §0 顶部基线（R66 后全量）。新增用例：`test_stream_governance.py`（6）、
+`test_run_options_table.py`（8）、`test_stream_emit_offload.py`（4）；差分 oracle
+脚本与旧版快照在会话工作区（1790 + 123 例）。
+
+---
+
 ## 4. 历史报告汇总（已并入本文，原文归档）
 
 | 报告 | 时间 | 核心结论 | 现状 |
@@ -3217,7 +3289,8 @@ C14 文件队列多 worker（at-least-once）」——这两条此前与代码�
 | R31 | 条件边否定/兜底（见 §3.36） | 2608 |
 | R32 | 控制台 UI 重构（见 §3.37） | 2614 |
 | R33 | 多级主管链（见 §3.38） | 2621 |
-| R34 | 本机环境修复·崩溃隔离跑器（见 §3.39） | **2632（当前）** |
+| R34 | 本机环境修复·崩溃隔离跑器（见 §3.39） | 2632 |
+| R66 | 整体审查与结构/性能优化九切片（见 §3.98） | **3576（当前）** |
 
 ---
 
