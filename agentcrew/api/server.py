@@ -31,7 +31,7 @@ import json
 import logging
 import os
 import time
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -631,31 +631,23 @@ class ApiServer:
         # 与授权中间件用的是同一个字符串；这里再 unquote 一次就等于制造第二种
         # 解释，正是路径绕过的成因。查询串单独传入，不参与路径语义。
         p = path
-        if p == "/" or p == "/index.html":
-            # 看板页面按需 import：dashboard 是纯字符串大常量，只有访问根路径时
-            # 才需要它，别让每个 API 请求都背着它。
-            from agentcrew.api.dashboard import DASHBOARD_HTML
-            await http_transport.send_html(writer, DASHBOARD_HTML)
-            return
-        if p == "/health":
-            await self._send_json(writer, 200, {"status": "ok"})
-            return
-        if p == "/metrics":
-            # D-7：Prometheus 文本格式。走与 /health 相同的认证链（默认开启时
-            # 抓取端必须带 key），避免把运行态信息暴露在匿名端口上。
-            await self._handle_metrics(writer)
-            return
-        if p == "/runs":
-            await self._list_runs(writer)
-            return
-        if p == "/tools":
-            await self._list_tools(writer)
-            return
-        if p == "/keys":
-            await self._list_keys(writer)
-            return
-        if p == "/flows":
-            await self._list_flows(writer)
+        # R66g：精确路径分发表——加端点 = 加一个方法 + 一行表项。精确键与
+        # 下面的段模式互不重叠（段模式至少 2 段），查表顺序无语义影响。
+        exact_get: dict[str, Callable[[], Awaitable[None]]] = {
+            "/": lambda: self._serve_dashboard(writer),
+            "/index.html": lambda: self._serve_dashboard(writer),
+            # D-7：/metrics 走与 /health 相同的认证链（默认开启时抓取端必须
+            # 带 key），避免把运行态信息暴露在匿名端口上。
+            "/health": lambda: self._send_json(writer, 200, {"status": "ok"}),
+            "/metrics": lambda: self._handle_metrics(writer),
+            "/runs": lambda: self._list_runs(writer),
+            "/tools": lambda: self._list_tools(writer),
+            "/keys": lambda: self._list_keys(writer),
+            "/flows": lambda: self._list_flows(writer),
+        }
+        exact = exact_get.get(p)
+        if exact is not None:
+            await exact()
             return
         if p.startswith("/flows/"):
             await self._get_flow(p[len("/flows/"):], writer)
@@ -667,68 +659,66 @@ class ApiServer:
             return
         if len(segments) == 3 and segments[0] == "runs":
             run_id, action = segments[1], segments[2]
-            if action == "events":
-                await self._handle_sse(run_id, writer)
-                return
-            if action == "artifacts":
-                await self._get_artifacts(run_id, query, writer)
-                return
-            if action == "status":
-                if await self._deny_if_run_hidden(run_id, writer):
-                    return
-                run = self.runs.get(run_id)
-                if run is not None:
-                    await self._send_json(writer, 200, {
-                        "run_id": run.run_id,
-                        "goal": run.goal,
-                        "status": run.status,
-                        "task_count": len(run.tasks),
-                        "tasks": run.tasks,
-                    })
-                    return
-                # 内存表只覆盖本进程启动过的 run；服务重启后 /runs、/ledger、
-                # /stats 都能从磁盘读，唯独 /status 回 404，看板点开历史 run
-                # 永远停在 pending。这里按同一份 run.json / tasks.json 回落。
-                disk = self._disk_status(run_id)
-                if disk is None and self._queue is not None:
-                    item = self._queue.get(run_id)
-                    if item is not None:
-                        # worker 还没建 run.json：先按队列状态回答，客户端拿到的
-                        # 202 立刻可查，不会 404。
-                        await self._send_json(writer, 200, {
-                            "run_id": run_id,
-                            "goal": item.goal,
-                            "status": ("queued" if item.status == "pending"
-                                       else item.status),
-                            "task_count": 0,
-                            "tasks": {},
-                            "from_queue": True,
-                        })
-                        return
-                if disk is None:
-                    await self._send_json(writer, 404, {"error": "run not found"})
-                    return
-                await self._send_json(writer, 200, disk)
-                return
-            if action == "model":
-                await self._get_model(run_id, writer)
-                return
-            if action == "ledger":
-                await self._get_ledger(run_id, query, writer)
-                return
-            if action == "stats":
-                await self._get_stats(run_id, writer)
-                return
-            if action == "approvals":
-                await self._get_approvals(run_id, writer)
-                return
-            if action == "guidance":
-                await self._get_guidance(run_id, writer)
-                return
-            if action == "agents":
-                await self._get_agents(run_id, writer)
+            get_actions: dict[str, Callable[[str], Awaitable[None]]] = {
+                "events": lambda rid: self._handle_sse(rid, writer),
+                "artifacts": lambda rid: self._get_artifacts(rid, query, writer),
+                "status": lambda rid: self._get_status(rid, writer),
+                "model": lambda rid: self._get_model(rid, writer),
+                "ledger": lambda rid: self._get_ledger(rid, query, writer),
+                "stats": lambda rid: self._get_stats(rid, writer),
+                "approvals": lambda rid: self._get_approvals(rid, writer),
+                "guidance": lambda rid: self._get_guidance(rid, writer),
+                "agents": lambda rid: self._get_agents(rid, writer),
+            }
+            handler = get_actions.get(action)
+            if handler is not None:
+                await handler(run_id)
                 return
         await self._send_json(writer, 404, {"error": "Not Found"})
+
+    async def _serve_dashboard(self, writer: asyncio.StreamWriter) -> None:
+        """看板页面按需 import：dashboard 是纯字符串大常量，只有访问根路径时
+        才需要它，别让每个 API 请求都背着它。"""
+        from agentcrew.api.dashboard import DASHBOARD_HTML
+        await http_transport.send_html(writer, DASHBOARD_HTML)
+
+    async def _get_status(self, run_id: str, writer: asyncio.StreamWriter) -> None:
+        """``GET /runs/{id}/status``：内存表 → 磁盘 → 队列三级回落。"""
+        if await self._deny_if_run_hidden(run_id, writer):
+            return
+        run = self.runs.get(run_id)
+        if run is not None:
+            await self._send_json(writer, 200, {
+                "run_id": run.run_id,
+                "goal": run.goal,
+                "status": run.status,
+                "task_count": len(run.tasks),
+                "tasks": run.tasks,
+            })
+            return
+        # 内存表只覆盖本进程启动过的 run；服务重启后 /runs、/ledger、
+        # /stats 都能从磁盘读，唯独 /status 回 404，看板点开历史 run
+        # 永远停在 pending。这里按同一份 run.json / tasks.json 回落。
+        disk = self._disk_status(run_id)
+        if disk is None and self._queue is not None:
+            item = self._queue.get(run_id)
+            if item is not None:
+                # worker 还没建 run.json：先按队列状态回答，客户端拿到的
+                # 202 立刻可查，不会 404。
+                await self._send_json(writer, 200, {
+                    "run_id": run_id,
+                    "goal": item.goal,
+                    "status": ("queued" if item.status == "pending"
+                               else item.status),
+                    "task_count": 0,
+                    "tasks": {},
+                    "from_queue": True,
+                })
+                return
+        if disk is None:
+            await self._send_json(writer, 404, {"error": "run not found"})
+            return
+        await self._send_json(writer, 200, disk)
 
     def _disk_status(self, run_id: str) -> dict[str, Any] | None:
         """从盘上 ``run.json`` / ``tasks.json`` 还原最小状态（服务重启后的 /status）。
@@ -1082,11 +1072,20 @@ class ApiServer:
     ) -> None:
         # ``path`` 已是规范路径（见 _handle_get 的说明），不再二次 unquote。
         p = path
-        if p == "/webhooks/trigger":
-            await self._webhook_trigger(headers or {}, body, writer)
-            return
-        if p == "/runs":
-            await self._create_run(body, writer)
+        # R66g：精确路径分发表（键互不重叠，且与段模式不冲突）。
+        exact_post: dict[str, Callable[[], Awaitable[None]]] = {
+            "/webhooks/trigger": lambda: self._webhook_trigger(
+                headers or {}, body, writer),
+            "/runs": lambda: self._create_run(body, writer),
+            # R25：POST /keys —— 新建密钥（明文只回这一次）
+            "/keys": lambda: self._create_key(body, writer),
+            # R26：POST /flows（保存）与 /flows/validate（只校验不落盘）
+            "/flows": lambda: self._save_flow(body, writer),
+            "/flows/validate": lambda: self._validate_flow(body, writer),
+        }
+        exact = exact_post.get(p)
+        if exact is not None:
+            await exact()
             return
         segments = [s for s in p.split("/") if s]
         # A4：POST /providers/{name}/test（V5 P2：支持 ?mode=stream 流式测速）
@@ -1097,17 +1096,6 @@ class ApiServer:
         # R24：POST /tools/{name}/test —— 单工具试跑（沙箱隔离）
         if len(segments) == 3 and segments[0] == "tools" and segments[2] == "test":
             await self._tool_test(segments[1], body, writer)
-            return
-        # R25：POST /keys —— 新建密钥（明文只回这一次）
-        if p == "/keys":
-            await self._create_key(body, writer)
-            return
-        # R26：POST /flows（保存）与 /flows/validate（只校验不落盘）
-        if p == "/flows":
-            await self._save_flow(body, writer)
-            return
-        if p == "/flows/validate":
-            await self._validate_flow(body, writer)
             return
         # 任务级覆盖：POST /runs/{id}/tasks/{task_id}/agent
         if (len(segments) == 5 and segments[0] == "runs"
@@ -1121,55 +1109,53 @@ class ApiServer:
             return
         if len(segments) == 3 and segments[0] == "runs":
             run_id, action = segments[1], segments[2]
-            if action == "cancel":
-                await self._cancel_run(run_id, writer)
-                return
-            if action == "resume":
-                await self._resume_run(run_id, writer)
-                return
-            if action == "rewind":
-                await self._rewind_run(run_id, body, writer)
-                return
-            if action == "approvals":
-                await self._decide_approval(run_id, body, writer)
-                return
-            if action == "guidance":
-                await self._add_guidance(run_id, body, writer)
-                return
-            if action == "agents":
-                await self._switch_agent(run_id, body, writer)
-                return
-            if action == "events":
-                # P0-2：与其余 run 级端点同一道归属校验（此前是唯一漏掉的
-                # 一个）——不校验的话，任意 ``runs:write`` key 可以向别人的
-                # run 注入事件：on_event 会改写 self.runs[run_id] 的状态并经
-                # EventBus 推给该 run 的全部 SSE 订阅者。
-                if await self._deny_if_run_hidden(run_id, writer):
-                    return
-                try:
-                    data = json.loads(body.decode("utf-8")) if body else {}
-                except (json.JSONDecodeError, UnicodeDecodeError):
-                    await self._send_json(writer, 400, {"error": "invalid JSON"})
-                    return
-                if not isinstance(data, dict):
-                    await self._send_json(
-                        writer, 400, {"error": "body 必须是 JSON 对象"})
-                    return
-                event = data.pop("_event", "custom")
-                # P0-3 第一层：入口就拒绝非法事件名（sse_frame 里还有第二层
-                # 降级兜底），带换行的名字可伪造任意 SSE 帧。
-                if not http_transport.valid_event_name(event):
-                    await self._send_json(
-                        writer, 400,
-                        {"error": "_event 必须是 1-64 位字母/数字/./_/- 的事件名"})
-                    return
-                # 强制覆盖（不能用 setdefault）：body 自带的 run_id 不允许
-                # 把事件记到/推到另一个 run 名下。
-                data["run_id"] = run_id
-                self.on_event(event, data)
-                await self._send_json(writer, 202, {"accepted": True})
+            post_actions: dict[str, Callable[[str], Awaitable[None]]] = {
+                "cancel": lambda rid: self._cancel_run(rid, writer),
+                "resume": lambda rid: self._resume_run(rid, writer),
+                "rewind": lambda rid: self._rewind_run(rid, body, writer),
+                "approvals": lambda rid: self._decide_approval(rid, body, writer),
+                "guidance": lambda rid: self._add_guidance(rid, body, writer),
+                "agents": lambda rid: self._switch_agent(rid, body, writer),
+                "events": lambda rid: self._post_run_event(rid, body, writer),
+            }
+            handler = post_actions.get(action)
+            if handler is not None:
+                await handler(run_id)
                 return
         await self._send_json(writer, 404, {"error": "Not Found"})
+
+    async def _post_run_event(
+        self, run_id: str, body: bytes, writer: asyncio.StreamWriter,
+    ) -> None:
+        """``POST /runs/{id}/events``：向 run 注入自定义事件（SSE 推送）。"""
+        # P0-2：与其余 run 级端点同一道归属校验（此前是唯一漏掉的
+        # 一个）——不校验的话，任意 ``runs:write`` key 可以向别人的
+        # run 注入事件：on_event 会改写 self.runs[run_id] 的状态并经
+        # EventBus 推给该 run 的全部 SSE 订阅者。
+        if await self._deny_if_run_hidden(run_id, writer):
+            return
+        try:
+            data = json.loads(body.decode("utf-8")) if body else {}
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            await self._send_json(writer, 400, {"error": "invalid JSON"})
+            return
+        if not isinstance(data, dict):
+            await self._send_json(
+                writer, 400, {"error": "body 必须是 JSON 对象"})
+            return
+        event = data.pop("_event", "custom")
+        # P0-3 第一层：入口就拒绝非法事件名（sse_frame 里还有第二层
+        # 降级兜底），带换行的名字可伪造任意 SSE 帧。
+        if not http_transport.valid_event_name(event):
+            await self._send_json(
+                writer, 400,
+                {"error": "_event 必须是 1-64 位字母/数字/./_/- 的事件名"})
+            return
+        # 强制覆盖（不能用 setdefault）：body 自带的 run_id 不允许
+        # 把事件记到/推到另一个 run 名下。
+        data["run_id"] = run_id
+        self.on_event(event, data)
+        await self._send_json(writer, 202, {"accepted": True})
 
     # ── P1-5：run 生命周期 ────────────────────────────────────────────────
 
@@ -2454,7 +2440,13 @@ class ApiServer:
         if len(segments) != 2 or segments[0] != "runs":
             await self._send_json(writer, 404, {"error": "Not Found"})
             return
-        run_id = segments[1]
+        await self._delete_run(segments[1], query, writer)
+
+    async def _delete_run(
+        self, run_id: str, query: dict[str, list[str]],
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        """``DELETE /runs/{run_id}?confirm=1`` 的落盘删除与注册表清理。"""
         if await self._deny_if_run_hidden(run_id, writer):
             return
         if query.get("confirm", ["0"])[0] != "1":
