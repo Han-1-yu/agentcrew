@@ -154,7 +154,9 @@ def _int_check(
 def _webhook_timeout_check(value: Any) -> str | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return "options.webhook_timeout_seconds 必须是数字"
-    if value <= 0:
+    # R66d：NaN 必须拦在入口——json.loads 默认接受 NaN，而 NaN 比较全 False
+    # 会穿过下面的范围检查，直到 socket.settimeout(nan) 才在运行时炸 ValueError。
+    if math.isnan(value) or value <= 0:
         return "options.webhook_timeout_seconds 必须 > 0"
     if value > _MAX_WEBHOOK_TIMEOUT_SECONDS:
         return (f"options.webhook_timeout_seconds 必须 "
