@@ -2,7 +2,7 @@
 .conv-note h1, .conv-note h2, .conv-note h3, .conv-note h4, .conv-note h5, .conv-note h6,
 .conv-stream-body h1, .conv-stream-body h2, .conv-stream-body h3, .conv-stream-body h4, .conv-stream-body h5, .conv-stream-body h6 {
   margin: 10px 0 6px;
-  font-weight: 500;
+  font-weight: 600;
   line-height: var(--lh-tight);
 }
 .conv-note h1, .conv-stream-body h1 { font-size: 16px; }
@@ -24,8 +24,9 @@
   padding: 1px 5px;
 }
 .conv-note pre, .conv-stream-body pre {
-  margin: 8px 0; padding: 8px 10px;
-  background: var(--ink-04);
+  margin: 8px 0; padding: 10px 12px;
+  background: var(--bg-subtle);
+  border: 0.5px solid var(--border-weak);
   border-radius: var(--r-sm);
   overflow-x: auto;
 }

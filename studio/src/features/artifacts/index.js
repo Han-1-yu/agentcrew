@@ -1,7 +1,7 @@
 /**
  * 产物页：目录选择 + 代码预览 + 语法着色 + 导出。
  */
-import { artifactExportOutcome, groupArtifacts, normalizeArtifactList } from '../../lib/artifacts.js';
+import { artifactExportOutcome, artifactIcon, groupArtifacts, normalizeArtifactList } from '../../lib/artifacts.js';
 import { $$, h } from '../../lib/dom.js';
 import { fmtBytes } from '../../lib/format.js';
 import { S } from '../../lib/store.js';
@@ -86,19 +86,18 @@ async function renderArtifactsPage(container) {
     h('span', {}, `${entries.length} 个文件`),
     h('span', { class: 'art-summary-sep' }, '·'),
     h('span', {}, fmtBytes(totalSize)),
-    ...Object.entries(kinds).map(([k, v]) => [h('span', { class: 'art-summary-sep' }, '·'), h('span', {}, `${ARTIFACT_ICONS[k] || '📄'} ${v}`)]).flat());
+    ...Object.entries(kinds).map(([k, v]) => [h('span', { class: 'art-summary-sep' }, '·'), h('span', { class: 'art-summary-kind', innerHTML: `${artifactIcon(k)} ${v}` })]).flat());
   tree.insertBefore(summary, listEl);
 
   for (const [dir, files] of groupArtifacts(entries)) {
     listEl.appendChild(h('div', { class: 'art-dir' }, dir));
     for (const f of files) {
-      const icon = ARTIFACT_ICONS[f.kind] || '📄';
       const item = h('button', { class: 'art-file', type: 'button', onclick: async () => {
         $$('.art-file').forEach(x => x.classList.remove('active'));
         item.classList.add('active');
         await previewArtifact(preview, f);
       }},
-        h('span', { class: 'art-file-icon' }, icon),
+        h('span', { class: 'art-file-icon', innerHTML: artifactIcon(f.kind) }),
         h('span', { class: 'art-file-name', title: f.path }, (f.path || '').split('/').pop()),
         h('span', { class: 'art-file-size' }, fmtBytes(f.sizeBytes)));
       listEl.appendChild(item);
@@ -121,7 +120,7 @@ async function previewArtifact(preview, f) {
       f.task ? h('button', { class: 'btn btn-sm', onclick: () => openTaskDetail(f.task) }, '关联任务') : null,
       h('button', { class: 'btn btn-sm', title: '在文件管理器中显示',
         onclick: () => { const p = S.dash.run.dir + '\\' + (f.path || '').replace(/\//g, '\\'); window.studio.revealFile(p); } },
-        '📂 显示'))));
+        h('span', { class: 'art-reveal-label', innerHTML: `${artifactIcon('folder')} 显示` })))));
   const content = h('pre', { class: 'art-preview-content' });
   content.textContent = '加载中…';
   preview.appendChild(content);

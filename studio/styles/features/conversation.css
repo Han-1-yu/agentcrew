@@ -14,24 +14,27 @@
   scroll-behavior: smooth;
 }
 
-/* 回到最新按钮：白卡 + 细边框，浮在消息流右下 */
+/* 回到最新按钮：底部居中悬浮胶囊，毛玻璃底 + 细边框，200ms 淡入淡出 */
 .conv-to-latest {
   position: absolute;
-  right: 14px;
+  left: 50%;
   bottom: 14px;
-  padding: 5px 12px;
+  transform: translateX(-50%);
+  padding: 6px 14px;
   font-size: var(--fs-sm);
   color: var(--text-sub);
-  background: var(--bg-float);
-  border: 0.5px solid var(--border);
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(var(--blur-card)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--blur-card)) saturate(var(--glass-saturate));
+  border: 0.5px solid var(--glass-border);
   border-radius: var(--r-pill);
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-2);
   cursor: pointer;
   animation: convToLatestIn .2s var(--ease-out);
-  transition: color var(--dur-1), border-color var(--dur-1);
+  transition: color var(--dur-1), background var(--dur-1);
 }
-.conv-to-latest:hover { color: var(--text); border-color: var(--ink-25); }
-@keyframes convToLatestIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.conv-to-latest:hover { color: var(--text); background: var(--glass-bg-strong); }
+@keyframes convToLatestIn { from { opacity: 0; transform: translateX(-50%) translateY(4px); } to { opacity: 1; transform: translateX(-50%); } }
 
 /* 消息与折叠项进入动效（transform/opacity ≤200ms） */
 .conv-msg { animation: convMsgIn .2s var(--ease-out) backwards; }
@@ -39,7 +42,7 @@
 .conv-item-body { animation: convItemIn .18s var(--ease-out); }
 @keyframes convItemIn { from { opacity: 0; } to { opacity: 1; } }
 
-/* 用户目标：右对齐品牌紫气泡 */
+/* 用户目标：iMessage 右对齐系统蓝实底气泡（18px 圆角，己方侧小圆角） */
 .conv-msg.conv-user {
   display: flex;
   justify-content: flex-end;
@@ -48,7 +51,7 @@
   max-width: 78%;
   background: var(--accent);
   color: var(--on-solid);
-  border-radius: var(--r-md);
+  border-radius: 18px 18px 6px 18px;
   padding: 10px 14px;
   border: none;
 }
@@ -94,9 +97,9 @@
   width: 28px;
   height: 28px;
   border-radius: var(--r-pill);
-  color: #FFFFFF;
+  color: var(--on-role);
   font-size: 11px;
-  font-weight: 500;
+  font-weight: 600;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -106,19 +109,23 @@
   flex: 1;
   min-width: 0;
   background: var(--bg-panel);
-  border: 0.5px solid var(--ink-10);
-  border-radius: var(--r-md);
-  padding: 10px 12px;
+  border: 0.5px solid var(--border-weak);
+  border-radius: 6px 18px 18px 18px;
+  padding: 10px 14px;
+  box-shadow: var(--shadow-1);
 }
 .conv-agent-head {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  margin-bottom: 4px;
 }
+/* 角色名：气泡上方 13px 灰字（角色色由头像承载） */
 .conv-agent-role {
-  font-size: var(--fs-body);
+  font-size: var(--fs-sm);
   font-weight: 500;
+  color: var(--text-sub);
 }
 .conv-agent-task {
   padding: 0;
@@ -154,22 +161,22 @@
 }
 .conv-note-toggle:hover { color: var(--accent-hover); }
 
-/* 折叠项：工具调用 / 门禁评审 / 产物 */
+/* 折叠项：iOS 披露列表行——左图标 + 标题 + 右侧 chevron */
 .conv-item {
   margin-top: 6px;
-  border: 0.5px solid var(--ink-10);
+  border: none;
   border-radius: var(--r-sm);
-  background: var(--ink-03);
+  background: var(--bg-subtle);
   overflow: hidden;
-  transition: border-color var(--dur-1);
+  transition: background var(--dur-1);
 }
-.conv-item:hover { border-color: var(--ink-20); }
+.conv-item:hover { background: var(--ink-10); }
 .conv-item-head {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   width: 100%;
-  padding: 6px 10px;
+  padding: 8px 12px;
   cursor: pointer;
   font-size: var(--fs-sm);
   font-family: inherit;
@@ -180,11 +187,12 @@
   user-select: none;
 }
 .conv-item-head:hover { background: var(--ink-04); }
-.conv-item-chev { color: var(--text-ter); width: 10px; text-align: center; }
+.conv-item-head:active { opacity: 0.7; }
+.conv-item-chev { order: 99; margin-left: 6px; color: var(--text-ter); width: 10px; text-align: center; }
 .conv-item-dim { color: var(--text-ter); font-size: var(--fs-xs); }
 .conv-item-body {
-  padding: 8px 10px;
-  border-top: 0.5px solid var(--ink-08);
+  padding: 8px 12px;
+  border-top: 0.5px solid var(--border-weak);
   font-size: var(--fs-sm);
 }
 .conv-item-body pre {
@@ -222,7 +230,7 @@
   transition: border-color var(--dur-1);
 }
 .conv-artifact:hover { border-color: var(--accent-border); background: var(--accent-bg-faint); }
-.conv-artifact-icon { flex: 0 0 auto; }
+.conv-artifact-icon { flex: 0 0 auto; display: inline-flex; color: var(--text-ter); }
 .conv-artifact-path {
   font-family: var(--font-mono);
   font-size: var(--fs-sm);

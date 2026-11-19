@@ -1,6 +1,7 @@
 /* 对话消息视图：纯渲染与消息签名，不包含实时状态和调度。 */
 import { h } from '../../lib/dom.js';
 import { STATUS_META, roleMeta } from '../../contracts/enums.js';
+import { artifactIcon } from '../../lib/artifacts.js';
 import { fmtBytes, fmtClock, fmtDur, trunc } from '../../lib/format.js';
 import { renderMarkdown } from '../../lib/markdown.js';
 
@@ -78,7 +79,7 @@ function renderGate(it, key, expanded, onToggle) {
 
 function renderArtifact(it, onOpenTask) {
   return h('button', { class: 'conv-item conv-artifact', type: 'button', onclick: () => onOpenTask(it.taskId || '') },
-    h('span', { class: 'conv-artifact-icon' }, '📄'),
+    h('span', { class: 'conv-artifact-icon', innerHTML: artifactIcon('doc') }),
     h('span', { class: 'conv-artifact-path' }, it.path || ''),
     h('span', { class: 'conv-item-dim', style: 'margin-left:auto' }, it.size != null ? fmtBytes(it.size) : ''));
 }
@@ -90,7 +91,7 @@ function renderAgent(m, taskIndex, stream, expanded, onToggle, onOpenTask) {
   const sm = status ? STATUS_META[status] : null;
   const body = h('div', { class: 'conv-agent-body' },
     h('div', { class: 'conv-agent-head' },
-      h('span', { class: 'conv-agent-role', style: `color:${rm.color}` }, rm.full),
+      h('span', { class: 'conv-agent-role' }, rm.full),
       h('button', { class: 'conv-agent-task', type: 'button', onclick: () => onOpenTask(m.taskId) },
         m.taskId + (task && task.title ? ` · ${trunc(task.title, 24)}` : '')),
       sm ? h('span', { class: `status-chip status-${status}`, style: 'margin-left:auto' }, sm.label) : null));

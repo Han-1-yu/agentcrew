@@ -5,7 +5,7 @@
  * 三层门禁；产物 tab 复用产物页的文件清单 + 内联预览 + 语法高亮。面板复用
  * ``#detail-panel`` 容器（同一套遮罩 / Esc 关闭 / 淡入动效）。
  */
-import { artifactExportOutcome, groupArtifacts, normalizeArtifactList } from '../../lib/artifacts.js';
+import { artifactExportOutcome, artifactIcon, groupArtifacts, normalizeArtifactList } from '../../lib/artifacts.js';
 import { h } from '../../lib/dom.js';
 import { S } from '../../lib/store.js';
 import { RUN_META, STATUS_META, STATUS_ORDER } from '../../contracts/enums.js';
@@ -217,7 +217,7 @@ async function renderArtifactsInto(wrap) {
     list.appendChild(h('div', { class: 'art-dir' }, dir));
     for (const f of files) {
       list.appendChild(h('button', { class: 'art-file', type: 'button', onclick: () => previewResult(prev, f) },
-        h('span', { class: 'art-file-icon' }, ARTIFACT_ICONS[f.kind] || '📄'),
+        h('span', { class: 'art-file-icon', innerHTML: artifactIcon(f.kind) }),
         h('span', { class: 'art-file-name', title: f.path }, (f.path || '').split('/').pop()),
         h('span', { class: 'art-file-size' }, fmtBytes(f.sizeBytes))));
     }

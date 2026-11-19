@@ -20,7 +20,10 @@
   transition: background .1s; }
 .art-file:hover { background: var(--bg-subtle); }
 .art-file.active { background: var(--accent-bg); }
-.art-file-icon { font-size: var(--fs-body); flex: 0 0 auto; }
+.art-file-icon { flex: 0 0 auto; display: inline-flex; color: var(--text-ter); }
+.art-summary-kind { display: inline-flex; align-items: center; gap: 4px; }
+.art-summary-kind svg, .art-reveal-label svg { vertical-align: -2px; }
+.art-reveal-label { display: inline-flex; align-items: center; gap: 5px; }
 .art-file-name { flex: 1; font-size: var(--fs-sm); color: var(--text); white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis; }
 .art-file-size { font-size: var(--fs-xs); color: var(--text-ter); font-variant-numeric: tabular-nums; flex: 0 0 auto; }

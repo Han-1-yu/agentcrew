@@ -44,6 +44,8 @@
 }
 .dp-text { font-size: var(--fs-body); color: var(--text); line-height: var(--lh-body); }
 .dp-text.dim { color: var(--text-sub); }
+.dp-art-line { display: flex; align-items: center; gap: 6px; }
+.dp-art-ico { display: inline-flex; color: var(--text-ter); flex: 0 0 auto; }
 
 /* 键值对：值是主角，用等宽数字 */
 .dp-meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }

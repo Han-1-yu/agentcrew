@@ -5,6 +5,7 @@ import { STATUS_META, roleMeta } from '../../contracts/enums.js';
 import { agentStatusLabel } from '../../contracts/enums.js';
 
 import { $, h } from '../../lib/dom.js';
+import { artifactIcon } from '../../lib/artifacts.js';
 import { fmtBytes, fmtClock, fmtCost, fmtDur, fmtTokens, trunc } from '../../lib/format.js';
 import { S } from '../../lib/store.js';
 
@@ -89,7 +90,7 @@ function openTaskDetail(taskId){
         metaCell('超时',`${t.timeout_seconds||300}s`),
         metaCell('优先级',`P${t.priority||5}`))),
       sec('输出产物', res&&res.artifacts&&res.artifacts.length
-        ? h('div',{},res.artifacts.map(a=>h('div',{class:'dp-text',style:'margin:2px 0'},`📄 ${a.path} · ${fmtBytes(a.size_bytes)}`)))
+        ? h('div',{},res.artifacts.map(a=>h('div',{class:'dp-text dp-art-line',style:'margin:2px 0'},h('span',{class:'dp-art-ico',innerHTML:artifactIcon('doc')}),` ${a.path} · ${fmtBytes(a.size_bytes)}`)))
         : h('div',{class:'dp-text dim'},'待生成')),
       t.error?sec('最近错误',h('div',{class:'dp-text',style:'color:var(--error)'},t.error)):null,
       res&&(res.tokens_used||res.duration_ms)?sec('执行统计',h('div',{class:'dp-meta-grid'},
