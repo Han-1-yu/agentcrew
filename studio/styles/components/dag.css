@@ -7,13 +7,13 @@
   font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-sub);
 }
 
-/* 画布：直接坐在白卡上，不再套一层"卡中卡" */
+/* 画布：iOS 分组底（浅色 #F2F2F7 / 深色 #000000），16px 圆角内嵌于卡片 */
 .dag-canvas-wrap {
   position: relative; height: auto; aspect-ratio: 2 / 1;
   min-height: 300px; max-height: clamp(340px, 40vh, 480px);
-  border: none; border-radius: 0;
+  border: none; border-radius: var(--r-md);
   overflow: hidden; cursor: grab;
-  background: none;
+  background: var(--bg-canvas);
 }
 .dag-canvas-wrap.panning { cursor: grabbing; }
 #dag-svg { width: 100%; height: 100%; display: block; position: relative; }
@@ -130,19 +130,25 @@
 }
 .dag-tier-ghost { fill: var(--bg-subtle); letter-spacing: -2px; }
 
-/* ---- Agent 卡片 ---- */
+/* ---- Agent 卡片：surface 底 + 角色色描边 1.5px（身份编码），状态色覆盖 ---- */
 .agent-node[data-status] rect.node-box {
   fill: var(--dag-node-fill);
-  stroke: var(--dag-node-border); stroke-opacity: 1; stroke-width: 0.5;
+  stroke: var(--role-color, var(--dag-node-border)); stroke-opacity: 0.65; stroke-width: 1.5;
 }
+.agent-node[data-status="running"] rect.node-box { stroke: var(--accent); stroke-opacity: 1; }
+.agent-node[data-status="failed"] rect.node-box { stroke: var(--error); stroke-opacity: 0.8; }
+.agent-node[data-status="blocked"] rect.node-box { stroke: var(--warn); stroke-opacity: 0.8; }
 .agent-node[data-status]:hover rect.node-box,
-.agent-node[data-status].is-focus rect.node-box { stroke: var(--accent); stroke-width: 1.2; }
+.agent-node[data-status].is-focus rect.node-box { stroke: var(--accent); stroke-opacity: 1; stroke-width: 1.5; }
 .agent-node .node-inner { stroke: transparent; }
 .agent-node .node-sheen { pointer-events: none; opacity: 0; }
 .agent-node[data-status] .node-accent { fill: transparent; }
 .agent-node .node-avatar-ring { fill: none; stroke: var(--border); stroke-width: 0.5; }
+/* 头像承载角色色，文字用 --on-role 保证两套主题可读 */
+.agent-node .node-avatar { fill: var(--role-color, var(--avatar-fill)); }
+.agent-node text.node-on-solid { fill: var(--on-role); }
 
-.agent-node text.node-title { fill: var(--text); font-weight: 500; }
+.agent-node text.node-title { fill: var(--text); font-weight: 600; }
 .agent-node text.node-sub { fill: var(--text-ter); }
 .agent-node text.metric-value { fill: var(--text); font-weight: 500; font-family: var(--font-mono); }
 .agent-node text.metric-label { fill: var(--text-ter); }
@@ -153,9 +159,9 @@
 .agent-state-dot { fill: var(--tone-color); }
 .agent-node text.agent-state-text { fill: var(--text-ter); }
 
-/* 完成率 */
-.agent-node .agent-progress-track { fill: var(--ink-08); }
-.agent-node .agent-progress-fill { fill: var(--accent); }
+/* 完成率：iOS 进度条 4px 高、全圆角 */
+.agent-node .agent-progress-track { fill: var(--ink-08); height: 4px; rx: 2px; }
+.agent-node .agent-progress-fill { fill: var(--accent); height: 4px; rx: 2px; }
 .agent-node text.agent-progress-text { fill: var(--text-ter); font-family: var(--font-mono); }
 
 /* 任务 chip：点它直达任务详情 */

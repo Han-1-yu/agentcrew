@@ -7,7 +7,7 @@
 }
 @media (max-width: 1100px) {
   .agents-grid { grid-template-columns: repeat(2, 1fr); }
-  #dashboard-view { padding: 16px 20px 192px; gap: 16px; }
+  #dashboard-view { padding: 16px 16px 192px; gap: 16px; }
 }
 /* 1024px 平板横屏：侧栏折叠为图标条（窗口最小宽度 1080，正常不会触发，仅作兜底） */
 @media (max-width: 1024px) {
