@@ -62,7 +62,14 @@ import logging
 import random
 import time
 from asyncio import Lock as _AsyncLock
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Mapping,
+    Sequence,
+)
 from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -966,63 +973,110 @@ class ModelFactory:
         response_format: ResponseFormat | None = None,
         tools: Sequence[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
+        session_id: str | None = None,
     ) -> AsyncIterator[StreamChunk]:
-        """流式调用入口（P3-3）：逐块 yield :class:`StreamChunk`，流结束后统一记账。
+        """流式调用入口（P3-3；R66b 起治理链与 :meth:`call` 对齐）。
 
-        与 :meth:`call` 的差异：
+        与非流式共用同一条治理链：run/执行体预算前置检查 → 预算降级
+        （``_maybe_apply_downgrade``，含 R44 成本感知路由）→ 候选计划
+        （``_plan``：权重路由 / 有序故障转移 / 会话亲和）→ 逐别名尝试
+        （``_stream_attempt``）。R66b 之前本方法手写故障转移循环，**绕过了
+        降级与权重路由**——预算软阈值触发后，流式（Agent 主输出路径）仍走
+        原贵模型、权重配置静默失效；本轮按缺陷修复对齐。
 
-        - 走 ``provider.stream_complete``（默认实现退化为一次性 complete），边生成
-         边把增量块吐给调用方，长输出可实时看到进度；
-        - **首个块吐出后不再做故障转移**：流已吐出的块无法回滚，转移会产生两半
-          不同来源的文本。首块之前失败仍按 ``model_failover`` 切换；
-        - 记账在流**完整消费完**后进行：把全部 ``delta`` 拼成全文，按与 mock
-          ``complete()`` 相同的口径估算 prompt/completion token，复用 :meth:`_account`
-          落一条 ``llm_call`` 事件（token/成本/预算检查与非流式完全一致）。
+        与 :meth:`call` 的差异（刻意保留）：
 
-        信号量同样只包住 ``stream_complete`` 的逐块消费；流结束后才释放并记账。
+        - 走 ``provider.stream_complete``，边生成边吐块；
+        - **首个块吐出后不再故障转移**：已吐出的块无法回滚，转移会产生两半
+          不同来源的文本；首块之前失败仍按候选计划切换；
+        - 不使用响应缓存（流式语义与「一次性返回缓存结果」不兼容）；
+        - 记账在流完整消费完后进行，与非流式同一条 ``_account`` 口径。
 
-        P1.5：``settings.loop_guard_enabled`` 为真时，每个 chunk 喂入 text 通道的
-        :class:`~agentcrew.models.loop_guard.LoopGuard`；窗口内 distinct unit 过少即
-        抛 :class:`LoopDetectedError` 中断流（已 yield 的 chunk 不回滚），并落
-        ``loop_detected`` 事件。``False``（默认）时行为与改造前逐字节一致。
-
-        C2：配额与 :meth:`_attempt` 同口径——起流前 ``check`` + ``reserve``，
-        任何退出路径（正常结束 / 被打断 / 首块前失败 / 取消）都在 ``finally``
-        里 ``release``。预扣的意义是让**并发**流不能同时通过检查而一起超配额；
-        实际用量仍只由 ``_account`` / 部分记账结算一次。
+        ``session_id``（R66b）：有序计划下参与会话亲和，与 ``call`` 同口径；
+        权重计划下忽略（亲和与按权重分摊直接冲突，见 ``_plan``）。
         """
-        aliases = self._failover_aliases(alias)
-        last_error: BaseException | None = None
-        # C2：估算口径与 _attempt 一致（请求体 + max_tokens），一次算好复用。
-        estimated = _estimate_request_tokens(messages, max_tokens)
-        for idx, current_alias in enumerate(aliases):
-            self._guard_run_cost()
-            agent_budget.guard()
-            provider = self.get(current_alias)
-            # check 必须在 reserve 之外、try 之外：QuotaExhaustedError 属于故障
-            # 转移白名单，但若与 reserve 同处一个 try，异常分支会把「本次从未
-            # 预扣」误 release，抹掉别的并发流的预扣 → 并发超卖。因此这里手工
-            # 做转移（流尚未吐块，切换不会产生两半不同来源的文本）。
+        self._guard_run_cost()
+        agent_budget.guard()
+        alias = self._maybe_apply_downgrade(alias)
+        plan = self._plan(alias, session_id=session_id)
+        current = plan.start()
+        while current is not None:
+            yielded_first = False
+            attempt = self._stream_attempt(
+                current, messages,
+                temperature=temperature, max_tokens=max_tokens,
+                purpose=purpose, role=role,
+                response_format=response_format,
+                tools=tools, tool_choice=tool_choice,
+                session_id=session_id,
+            )
             try:
-                self._quota_tracker.check(current_alias)
-            except QuotaExhaustedError as exc:
-                last_error = exc
+                async for chunk in attempt:
+                    yielded_first = True
+                    yield chunk
+                return
+            except _PROVIDER_UNAVAILABLE_TYPES as exc:
+                if yielded_first:
+                    # 已吐出块给调用方，无法回滚 —— 直接上抛，不转移。
+                    raise
                 self._mark_cooldown(
-                    current_alias, getattr(exc, "status_code", None), exc)
-                if idx < len(aliases) - 1:
-                    self._emit_failover(current_alias, aliases[idx + 1], exc)
-                    continue
-                if len(aliases) > 1:
-                    raise ProviderUnavailableError(
-                        f"全部故障转移别名均不可用（primary={alias!r}，"
-                        f"尝试了 {len(aliases)} 个）：{exc}") from exc
-                raise
-            self._quota_tracker.reserve(current_alias, estimated)
-            started = time.perf_counter()
-            parts: list[str] = []
-            finish_reason: str | None = None
-            guard = LoopGuard(enabled=self._settings.loop_guard_enabled)
-            # V7-P0：流式调用同样脱敏请求、逐块还原响应
+                    current, getattr(exc, "status_code", None), exc)
+                nxt = plan.after_failure(current)
+                if nxt is None:
+                    if plan.total > 1:
+                        raise ProviderUnavailableError(
+                            plan.exhausted_message(alias, exc)) from exc
+                    raise
+                self._emit_failover(current, nxt, exc)
+                plan.announce()
+                current = nxt
+            finally:
+                # 外层被 aclose()/取消时，内层尝试必须**立即**收尾（部分记账 +
+                # 归还预扣）：嵌套异步生成器不会随外层关闭自动终结，等事件循环
+                # 的异步生成器钩子就晚了——调用方 aclose() 返回时配额必须已归还。
+                await attempt.aclose()
+        raise RuntimeError(
+            f"stream_call({alias!r}) 未产生结果也未抛出异常")
+
+    async def _stream_attempt(
+        self,
+        alias: str,
+        messages: Sequence[Message],
+        *,
+        temperature: float,
+        max_tokens: int,
+        purpose: str,
+        role: str,
+        response_format: ResponseFormat | None = None,
+        tools: Sequence[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        session_id: str | None = None,
+    ) -> AsyncGenerator[StreamChunk, None]:
+        """对一个别名做一次完整流式尝试：配额 → 信号量 → 脱敏 → 记账。
+
+        与 :meth:`_attempt` 同口径（C2）：``check`` 在 ``reserve`` 之外、try 之外
+        ——``QuotaExhaustedError`` 属于故障转移白名单，若与 reserve 同处一个
+        try，异常分支会把「本次从未预扣」误 release，抹掉别的并发流的预扣 →
+        并发超卖。任何退出路径（正常结束 / 被打断 / 取消）都在 ``finally`` 里
+        归还预扣；被打断的流按已吐出块记部分用量——不记会让预算与用量悄悄偏低。
+
+        P1.5：``loop_guard_enabled`` 为真时逐块喂 :class:`LoopGuard`，窗口内
+        distinct unit 过少即抛 :class:`LoopDetectedError` 中断流（已 yield 的块
+        不回滚），并落 ``loop_detected`` 事件。
+
+        成功后重置冷却并记录会话亲和（V7-P3，与 ``_attempt`` 同口径）。
+        """
+        estimated = _estimate_request_tokens(messages, max_tokens)
+        provider = self.get(alias)
+        self._quota_tracker.check(alias)
+        self._quota_tracker.reserve(alias, estimated)
+        started = time.perf_counter()
+        parts: list[str] = []
+        finish_reason: str | None = None
+        guard = LoopGuard(enabled=self._settings.loop_guard_enabled)
+        success = False
+        try:
+            # V7-P0：流式调用同样脱敏请求、逐块还原响应。
             redactor = self._make_redactor()
             masked_messages = redactor.mask_messages(messages)
             provider_name = provider.binding.provider
@@ -1030,120 +1084,99 @@ class ModelFactory:
                 provider_name, provider.binding.max_concurrency)
             await self._wait_for_rpm(provider_name, provider.binding.max_rpm)
             await self._wait_for_agent_rpm()
-            yielded_first = False
-            success = False
-            try:
-                async with self._slots(sem):
-                    # P2-5：流式也支持原生工具调用（tools 透传给 provider）。
-                    stream_kwargs: dict[str, Any] = (
-                        {"tools": tools, "tool_choice": tool_choice}
-                        if tools else {})
-                    async for chunk in provider.stream_complete(
-                        cast("Sequence[Message]", masked_messages),
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                        response_format=response_format,
-                        **stream_kwargs,
-                    ):
-                        yielded_first = True
-                        # V7-P0：逐块还原脱敏占位符（处理占位符被拆分到两个 chunk）
-                        delta = redactor.unmask_stream_chunk(chunk.delta)
-                        parts.append(delta)
-                        if delta != chunk.delta:
-                            chunk = chunk.model_copy(update={"delta": delta})
-                        if guard.enabled:
-                            samples = guard.feed_text(chunk.delta)
-                            if samples:
-                                self._emit_loop_detected(
-                                    "text", samples, UnitRun.LOOP_WINDOW)
-                                raise LoopDetectedError(
-                                    "text", samples, UnitRun.LOOP_WINDOW)
-                        if chunk.finish_reason is not None:
-                            finish_reason = chunk.finish_reason
-                        yield chunk
-                # V7-P0：流结束后冲刷脱敏缓冲区（最后一个不完整占位符）
-                flush_delta = redactor.unmask_stream_flush()
-                if flush_delta:
-                    parts.append(flush_delta)
-                    yield StreamChunk(delta=flush_delta, finish_reason=None)
-                # 流正常结束后冲刷缓冲（最后一个不完整 unit 也参与判定）。
-                if guard.enabled:
-                    for channel, samples in guard.flush().items():
-                        self._emit_loop_detected(
-                            channel, samples, UnitRun.LOOP_WINDOW)
-                        raise LoopDetectedError(
-                            channel, samples, UnitRun.LOOP_WINDOW)
-                success = True
-            except _PROVIDER_UNAVAILABLE_TYPES as exc:
-                last_error = exc
-                if yielded_first:
-                    # 已吐出块给调用方，无法回滚 —— 直接上抛。
-                    raise
-                # 第一个 chunk 前失败：标记冷却并切换到下一个备用别名。
-                self._mark_cooldown(
-                    current_alias, getattr(exc, "status_code", None), exc)
-                if idx < len(aliases) - 1:
-                    self._emit_failover(current_alias, aliases[idx + 1], exc)
-                    continue
-                if len(aliases) > 1:
-                    raise ProviderUnavailableError(
-                        f"全部故障转移别名均不可用（primary={alias!r}，"
-                        f"尝试了 {len(aliases)} 个）：{exc}") from exc
-                raise
-            else:
-                self._reset_cooldown(current_alias)
-                latency_ms = int((time.perf_counter() - started) * 1000)
-                text = "".join(parts)
-                result = CompletionResult(
-                    text=text,
+            async with self._slots(sem):
+                # P2-5：流式也支持原生工具调用（tools 透传给 provider）。
+                stream_kwargs: dict[str, Any] = (
+                    {"tools": tools, "tool_choice": tool_choice}
+                    if tools else {})
+                async for chunk in provider.stream_complete(
+                    cast("Sequence[Message]", masked_messages),
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    response_format=response_format,
+                    **stream_kwargs,
+                ):
+                    # V7-P0：逐块还原脱敏占位符（处理占位符被拆分到两个 chunk）。
+                    delta = redactor.unmask_stream_chunk(chunk.delta)
+                    parts.append(delta)
+                    if delta != chunk.delta:
+                        chunk = chunk.model_copy(update={"delta": delta})
+                    if guard.enabled:
+                        samples = guard.feed_text(chunk.delta)
+                        if samples:
+                            self._emit_loop_detected(
+                                "text", samples, UnitRun.LOOP_WINDOW)
+                            raise LoopDetectedError(
+                                "text", samples, UnitRun.LOOP_WINDOW)
+                    if chunk.finish_reason is not None:
+                        finish_reason = chunk.finish_reason
+                    yield chunk
+            # V7-P0：流结束后冲刷脱敏缓冲区（最后一个不完整占位符）。
+            flush_delta = redactor.unmask_stream_flush()
+            if flush_delta:
+                parts.append(flush_delta)
+                yield StreamChunk(delta=flush_delta, finish_reason=None)
+            # 流正常结束后冲刷缓冲（最后一个不完整 unit 也参与判定）。
+            if guard.enabled:
+                for channel, samples in guard.flush().items():
+                    self._emit_loop_detected(
+                        channel, samples, UnitRun.LOOP_WINDOW)
+                    raise LoopDetectedError(
+                        channel, samples, UnitRun.LOOP_WINDOW)
+            success = True
+            self._reset_cooldown(alias)
+            # V7-P3：成功流结束后把会话绑定到该别名（下次亲和性优先命中）。
+            if session_id is not None:
+                self._affinity_tracker.remember(session_id, alias)
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            text = "".join(parts)
+            result = CompletionResult(
+                text=text,
+                provider=provider.binding.provider,
+                model=provider.binding.model,
+                prompt_tokens=sum(
+                    estimate_tokens(m["content"]) for m in messages),
+                completion_tokens=estimate_tokens(text),
+                latency_ms=latency_ms,
+                finish_reason=finish_reason,
+            )
+            self._account(
+                result, purpose=purpose, role=role,
+                binding=provider.binding, alias=alias)
+        finally:
+            # C2：流被中途打断（调用方 break / cancel / 已 yield 后异常）也要记
+            # 账——已吐出的块是**确定的 token 消耗**，不记会让预算与用量偏低
+            # （取消后重跑 = 计数悄悄偏低，可能无限逼近实际上限却永不触发）。
+            # 这里**不**抛 BudgetExhaustedError：异常正在传播，抛会掩盖真实
+            # 原因；下一次调用的 ``_guard_run_cost`` 会按已累计成本拦截。
+            if not success and parts:
+                partial_text = "".join(parts)
+                partial_result = CompletionResult(
+                    text=partial_text,
                     provider=provider.binding.provider,
                     model=provider.binding.model,
                     prompt_tokens=sum(
                         estimate_tokens(m["content"]) for m in messages),
-                    completion_tokens=estimate_tokens(text),
-                    latency_ms=latency_ms,
-                    finish_reason=finish_reason,
+                    completion_tokens=estimate_tokens(partial_text),
+                    latency_ms=int(
+                        (time.perf_counter() - started) * 1000),
+                    finish_reason=finish_reason or "aborted",
                 )
-                self._account(
-                    result, purpose=purpose, role=role,
-                    binding=provider.binding, alias=current_alias)
-                return
-            finally:
-                # C2：流被中途打断（调用方 break / cancel / 已 yield 后异常）也要记
-                # 账——已吐出的块是**确定的 token 消耗**，不记会让预算与用量偏低
-                # （取消后重跑 = 计数悄悄偏低，可能无限逼近实际上限却永不触发）。
-                # 这里**不**抛 BudgetExhaustedError：异常正在传播，抛会掩盖真实
-                # 原因；下一次调用的 ``_guard_run_cost`` 会按已累计成本拦截。
-                if not success and parts:
-                    partial_text = "".join(parts)
-                    partial_result = CompletionResult(
-                        text=partial_text,
-                        provider=provider.binding.provider,
-                        model=provider.binding.model,
-                        prompt_tokens=sum(
-                            estimate_tokens(m["content"]) for m in messages),
-                        completion_tokens=estimate_tokens(partial_text),
-                        latency_ms=int(
-                            (time.perf_counter() - started) * 1000),
-                        finish_reason=finish_reason or "aborted",
-                    )
-                    try:
-                        self._record_usage(
-                            partial_result, purpose=purpose, role=role,
-                            binding=provider.binding, alias=current_alias,
-                            temperature=temperature, max_tokens=max_tokens,
-                            partial=True)
-                        self._maybe_emit_budget_warning()
-                    except Exception:  # noqa: BLE001 —— 记账失败不掩盖原异常
-                        _logger.warning(
-                            "stream_call 部分用量记账失败（原异常照常传播）",
-                            exc_info=True)
-                # C2：预扣必须归还。成功路径的实际用量已由 _account 结算，失败 /
-                # 取消路径要么由上面的部分记账结算、要么什么都没消耗；无论哪条
-                # 路，预扣都不能留在窗口里——否则后续流会被自己的旧预扣误拒。
-                self._quota_tracker.release(current_alias, estimated)
-        if last_error is not None:
-            raise last_error
+                try:
+                    self._record_usage(
+                        partial_result, purpose=purpose, role=role,
+                        binding=provider.binding, alias=alias,
+                        temperature=temperature, max_tokens=max_tokens,
+                        partial=True)
+                    self._maybe_emit_budget_warning()
+                except Exception:  # noqa: BLE001 —— 记账失败不掩盖原异常
+                    _logger.warning(
+                        "stream_call 部分用量记账失败（原异常照常传播）",
+                        exc_info=True)
+            # C2：预扣必须归还。成功路径的实际用量已由 _account 结算，失败 /
+            # 取消路径要么由上面的部分记账结算、要么什么都没消耗；无论哪条
+            # 路，预扣都不能留在窗口里——否则后续流会被自己的旧预扣误拒。
+            self._quota_tracker.release(alias, estimated)
 
     async def complete_structured(
         self,
