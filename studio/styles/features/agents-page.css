@@ -1,9 +1,10 @@
 /* Agents 全屏页：角色卡片网格 + 产出统计。 */
 
+/* 自然高度：主区域统一滚动。定高网格 + overflow:hidden 卡片会把 auto 行
+   压到 min-content 与 max-content 之间，统计块第二行被裁切。 */
 .agents-full-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
   gap: var(--sp-3); padding: var(--sp-4) var(--sp-5);
-  height: calc(100vh - 100px); overflow-y: auto;
 }
 
 .agent-full-card {

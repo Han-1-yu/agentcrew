@@ -1,0 +1,30 @@
+/* iOS Switch（HIG）：51×31 轨道、27px 白色滑块带微阴影、开启 success 绿、
+   弹簧过渡。input 不能用伪元素，滑块用背景径向渐变绘制。
+   适用：设置页布尔项（.set-check）、新建运行/定时任务模态的布尔项。
+   多选列表（供应商勾选、星期 chips）保留复选框语义，不适用本组件。 */
+.set-check input[type="checkbox"],
+.nr-checks input[type="checkbox"],
+.nr-slow-label input[type="checkbox"] {
+  appearance: none; -webkit-appearance: none;
+  width: 51px; height: 31px; margin: 0; flex: 0 0 auto;
+  border: none; border-radius: var(--r-pill);
+  background-color: var(--ink-20);
+  background-image: radial-gradient(circle, var(--on-solid) 0 12.5px, rgba(0, 0, 0, 0.08) 12.5px 13.5px, transparent 14px);
+  background-size: 27px 27px; background-repeat: no-repeat;
+  background-position: 2px 2px;
+  cursor: pointer;
+  transition: background-color var(--dur-3) var(--ease-out), background-position var(--dur-3) var(--ease-spring);
+}
+.set-check input[type="checkbox"]:checked,
+.nr-checks input[type="checkbox"]:checked,
+.nr-slow-label input[type="checkbox"]:checked {
+  background-color: var(--success);
+  background-position: 22px 2px;
+}
+.set-check input[type="checkbox"]:focus-visible,
+.nr-checks input[type="checkbox"]:focus-visible,
+.nr-slow-label input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+.nr-checks input[type="checkbox"]:disabled,
+.nr-slow-label input[type="checkbox"]:disabled { cursor: not-allowed; opacity: 0.4; }

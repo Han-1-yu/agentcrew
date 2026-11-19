@@ -63,22 +63,7 @@
   font-size: var(--fs-sm); color: var(--text-sub); cursor: pointer;
   font-weight: 400;
 }
-/* iOS Switch：51×31，开启 success 绿，白色滑块带微阴影，弹簧过渡 */
-.set-check input[type="checkbox"] {
-  appearance: none; -webkit-appearance: none;
-  width: 51px; height: 31px; margin: 0; flex: 0 0 auto;
-  border: none; border-radius: var(--r-pill);
-  background-color: var(--ink-20);
-  background-image: radial-gradient(circle, var(--on-solid) 0 12.5px, rgba(0, 0, 0, 0.08) 12.5px 13.5px, transparent 14px);
-  background-size: 27px 27px; background-repeat: no-repeat;
-  background-position: 2px 2px;
-  cursor: pointer;
-  transition: background-color var(--dur-3) var(--ease-out), background-position var(--dur-3) var(--ease-spring);
-}
-.set-check input[type="checkbox"]:checked {
-  background-color: var(--success);
-  background-position: 22px 2px;
-}
+/* iOS Switch 样式见 components/switch.css（.set-check 复用） */
 .set-check input:disabled + span { opacity: 0.4; }
 .set-check input:disabled { cursor: not-allowed; opacity: 0.4; }
 .set-row-label {
