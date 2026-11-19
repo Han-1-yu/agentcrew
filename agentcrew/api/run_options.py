@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import base64
 import math
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 __all__ = ["ALLOWED_RUN_OPTIONS", "apply_run_options", "validate_run_options"]
@@ -83,122 +83,201 @@ _MAX_WEBHOOK_RETRIES = 5
 _MAX_WEBHOOK_TIMEOUT_SECONDS = 30.0
 
 
-def validate_run_options(options: Mapping[str, Any]) -> str | None:
-    """校验一个 options 映射；合法返回 ``None``，非法返回可直接回给调用方的文案。"""
-    unknown = sorted(set(options) - ALLOWED_RUN_OPTIONS)
-    if unknown:
-        return ("options 含不支持的键：" + "、".join(unknown)
-                + "；可用：" + "、".join(sorted(ALLOWED_RUN_OPTIONS)))
+# ── 表驱动校验：每个键一个「值 → 错误文案 | None」检查器 ─────────────────
+#
+# 文案是用户可见契约（测试逐字钉住），检查器只负责产出与旧 if/elif 链
+# **逐字相同**的文案；新增键 = 白名单加一行 + 这里挂一个检查器。
+
+_ValueCheck = Callable[[Any], str | None]
+
+
+def _bool_check(key: str) -> _ValueCheck:
+    def check(value: Any) -> str | None:
+        if not isinstance(value, bool):
+            return f"options.{key} 必须是布尔值"
+        return None
+    return check
+
+
+def _enum_check(key: str, choices: tuple[str, ...], text: str) -> _ValueCheck:
+    def check(value: Any) -> str | None:
+        # 刻意不做类型预检：与旧链一致，任何不在枚举里的值（含数组/对象）
+        # 都走同一条文案。
+        if value not in choices:
+            return f"options.{key} 必须是 {text}"
+        return None
+    return check
+
+
+def _nonempty_str_check(key: str) -> _ValueCheck:
+    def check(value: Any) -> str | None:
+        if not isinstance(value, str) or not value.strip():
+            return f"options.{key} 必须是非空字符串"
+        return None
+    return check
+
+
+def _str_array_check(
+    key: str, array_text: str, *, empty_text: str | None = None,
+) -> _ValueCheck:
+    def check(value: Any) -> str | None:
+        if isinstance(value, str) or not isinstance(value, list):
+            return f"options.{key} 必须是{array_text}"
+        if empty_text is not None and not value:
+            return f"options.{key} {empty_text}"
+        for item in value:
+            if not isinstance(item, str) or not item.strip():
+                return f"options.{key} 的每一项都必须是非空字符串"
+        return None
+    return check
+
+
+def _int_check(
+    key: str, *, lower: int = 0, upper: int | None = None,
+    range_text: str | None = None,
+) -> _ValueCheck:
+    def check(value: Any) -> str | None:
+        if isinstance(value, bool) or not isinstance(value, int):
+            return f"options.{key} 必须是整数"
+        if range_text is not None:
+            if not lower <= value <= upper:  # type: ignore[operator]
+                return f"options.{key} 必须落在 {range_text}"
+            return None
+        if value < lower:
+            return f"options.{key} 必须 >= {lower}"
+        if upper is not None and value > upper:
+            return f"options.{key} 必须 <= {upper}"
+        return None
+    return check
+
+
+def _webhook_timeout_check(value: Any) -> str | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "options.webhook_timeout_seconds 必须是数字"
+    if value <= 0:
+        return "options.webhook_timeout_seconds 必须 > 0"
+    if value > _MAX_WEBHOOK_TIMEOUT_SECONDS:
+        return (f"options.webhook_timeout_seconds 必须 "
+                f"<= {_MAX_WEBHOOK_TIMEOUT_SECONDS:g}")
+    return None
+
+
+def _max_cost_check(value: Any) -> str | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "options.max_cost_usd 必须是数值"
+    if not math.isfinite(value) or value < 0:
+        return "options.max_cost_usd 必须是 >= 0 的有限数"
+    return None
+
+
+def _vector_weight_check(value: Any) -> str | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "options.docs_rag_vector_weight 必须是数字"
+    if not 0.0 <= float(value) <= 1.0:
+        return "options.docs_rag_vector_weight 必须落在 0.0~1.0 之间"
+    return None
+
+
+def _role_fallback_check(value: Any) -> str | None:
+    if not isinstance(value, dict):
+        return "options.role_fallback 必须是对象（角色 → 备选角色数组）"
+    for role, candidates in value.items():
+        if isinstance(candidates, str) or not isinstance(candidates, list):
+            return f"options.role_fallback.{role} 必须是角色 key 数组"
+    return None
+
+
+def _search_provider_check(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return "options.search_provider 必须是字符串"
+    if value.strip() and value.strip().lower() not in (
+            "tavily", "brave", "duckduckgo", "mock"):
+        return ("options.search_provider 必须是 "
+                "tavily / brave / duckduckgo / mock 或空串")
+    return None
+
+
+def _flow_check(value: Any) -> str | None:
+    if not isinstance(value, dict):
+        return "options.flow 必须是对象（{version, name, tasks}）"
+    return None
+
+
+#: 键 → 检查器。未挂检查器的白名单键（model_tiers / gate_config）走
+#: 「必须是对象」兜底——与旧链最后的 else 分支一致。
+_VALIDATORS: dict[str, _ValueCheck] = {
+    **{key: _bool_check(key) for key in _BOOL_KEYS},
+    **{key: _int_check(key) for key in _NON_NEGATIVE_INT_KEYS},
+    "delegation_mode": _enum_check(
+        "delegation_mode", ("any", "manager_only"), "any 或 manager_only"),
+    "supervisor_scope": _enum_check(
+        "supervisor_scope", ("delegated", "all"), "delegated 或 all"),
+    "approval_mode": _enum_check(
+        "approval_mode", ("interactive", "deferred"), "interactive 或 deferred"),
+    "supervisor_role": _nonempty_str_check("supervisor_role"),
+    "default_model": _nonempty_str_check("default_model"),
+    "flow_name": _nonempty_str_check("flow_name"),
+    "supervisor_chain": _str_array_check("supervisor_chain", "角色 key 数组"),
+    "webhook_events": _str_array_check(
+        "webhook_events", "事件名数组",
+        empty_text="不能为空数组（要全推请用 [\"*\"]）"),
+    "role_fallback": _role_fallback_check,
+    "search_provider": _search_provider_check,
+    "search_max_results": _int_check(
+        "search_max_results", lower=1, upper=20, range_text="1~20 之间"),
+    "docs_rag_limit": _int_check(
+        "docs_rag_limit", lower=0, upper=50,
+        range_text="0~50 之间（0 = 不注入）"),
+    "docs_rag_vector_weight": _vector_weight_check,
+    "webhook_max_retries": _int_check(
+        "webhook_max_retries", upper=_MAX_WEBHOOK_RETRIES),
+    "webhook_timeout_seconds": _webhook_timeout_check,
+    "max_cost_usd": _max_cost_check,
+    "max_concurrency": _int_check("max_concurrency", lower=1),
+    "context_budget_tokens": _int_check("context_budget_tokens", lower=1),
+    "max_llm_calls": _int_check("max_llm_calls"),
+    "flow": _flow_check,
+}
+
+
+def _precheck_flow(options: Mapping[str, Any]) -> str | None:
+    """flow / flow_name 的互斥与前置类型检查（先于逐键检查，顺序是契约）。"""
     if "flow" in options and "flow_name" in options:
         return "options.flow 与 options.flow_name 只能给一个"
     if "flow" in options and not isinstance(options["flow"], Mapping):
         return "options.flow 必须是对象（{version, name, tasks}）"
     if "flow_name" in options and not isinstance(options["flow_name"], str):
         return "options.flow_name 必须是字符串"
+    return None
+
+
+def validate_run_options(options: Mapping[str, Any]) -> str | None:
+    """校验一个 options 映射；合法返回 ``None``，非法返回可直接回给调用方的文案。
+
+    检查顺序是契约的一部分：未知键 → flow/flow_name 互斥与前置类型 →
+    按 options **插入序**逐键检查（第一个非法键的文案胜出）。
+    """
+    unknown = sorted(set(options) - ALLOWED_RUN_OPTIONS)
+    if unknown:
+        return ("options 含不支持的键：" + "、".join(unknown)
+                + "；可用：" + "、".join(sorted(ALLOWED_RUN_OPTIONS)))
+    error = _precheck_flow(options)
+    if error is not None:
+        return error
     for key, value in options.items():
         if value is None:
             if key not in _NULLABLE_KEYS:
                 return f"options.{key} 不能为 null"
             continue
-        if key in _BOOL_KEYS:
-            if not isinstance(value, bool):
-                return f"options.{key} 必须是布尔值"
-        elif key == "delegation_mode":
-            if value not in ("any", "manager_only"):
-                return "options.delegation_mode 必须是 any 或 manager_only"
-        elif key == "supervisor_scope":
-            if value not in ("delegated", "all"):
-                return "options.supervisor_scope 必须是 delegated 或 all"
-        elif key == "supervisor_role":
-            if not isinstance(value, str) or not value.strip():
-                return "options.supervisor_role 必须是非空字符串"
-        elif key == "supervisor_chain":
-            if isinstance(value, str) or not isinstance(value, list):
-                return "options.supervisor_chain 必须是角色 key 数组"
-            for item in value:
-                if not isinstance(item, str) or not item.strip():
-                    return "options.supervisor_chain 的每一项都必须是非空字符串"
-        elif key == "role_fallback":
-            if not isinstance(value, dict):
-                return "options.role_fallback 必须是对象（角色 → 备选角色数组）"
-            for role, candidates in value.items():
-                if isinstance(candidates, str) or not isinstance(candidates, list):
-                    return f"options.role_fallback.{role} 必须是角色 key 数组"
-        elif key in _NON_NEGATIVE_INT_KEYS:
-            if isinstance(value, bool) or not isinstance(value, int):
-                return f"options.{key} 必须是整数"
-            if value < 0:
-                return f"options.{key} 必须 >= 0"
-        elif key == "approval_mode":
-            if value not in ("interactive", "deferred"):
-                return "options.approval_mode 必须是 interactive 或 deferred"
-        elif key == "webhook_max_retries":
-            if isinstance(value, bool) or not isinstance(value, int):
-                return "options.webhook_max_retries 必须是整数"
-            if value < 0:
-                return "options.webhook_max_retries 必须 >= 0"
-            if value > _MAX_WEBHOOK_RETRIES:
-                return f"options.webhook_max_retries 必须 <= {_MAX_WEBHOOK_RETRIES}"
-        elif key == "webhook_events":
-            if isinstance(value, str) or not isinstance(value, list):
-                return "options.webhook_events 必须是事件名数组"
-            if not value:
-                return "options.webhook_events 不能为空数组（要全推请用 [\"*\"]）"
-            for item in value:
-                if not isinstance(item, str) or not item.strip():
-                    return "options.webhook_events 的每一项都必须是非空字符串"
-        elif key == "search_provider":
-            if not isinstance(value, str):
-                return "options.search_provider 必须是字符串"
-            if value.strip() and value.strip().lower() not in (
-                    "tavily", "brave", "duckduckgo", "mock"):
-                return ("options.search_provider 必须是 "
-                        "tavily / brave / duckduckgo / mock 或空串")
-        elif key == "search_max_results":
-            if isinstance(value, bool) or not isinstance(value, int):
-                return "options.search_max_results 必须是整数"
-            if not 1 <= value <= 20:
-                return "options.search_max_results 必须落在 1~20 之间"
-        elif key == "docs_rag_limit":
-            if isinstance(value, bool) or not isinstance(value, int):
-                return "options.docs_rag_limit 必须是整数"
-            if not 0 <= value <= 50:
-                return "options.docs_rag_limit 必须落在 0~50 之间（0 = 不注入）"
-        elif key == "docs_rag_vector_weight":
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                return "options.docs_rag_vector_weight 必须是数字"
-            if not 0.0 <= float(value) <= 1.0:
-                return "options.docs_rag_vector_weight 必须落在 0.0~1.0 之间"
-        elif key == "default_model":
-            if not isinstance(value, str) or not value.strip():
-                return "options.default_model 必须是非空字符串"
-        elif key in ("max_concurrency", "context_budget_tokens", "max_llm_calls"):
-            if isinstance(value, bool) or not isinstance(value, int):
-                return f"options.{key} 必须是整数"
-            lower = 0 if key == "max_llm_calls" else 1
-            if value < lower:
-                return f"options.{key} 必须 >= {lower}"
-        elif key == "webhook_timeout_seconds":
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                return "options.webhook_timeout_seconds 必须是数字"
-            if value <= 0:
-                return "options.webhook_timeout_seconds 必须 > 0"
-            if value > _MAX_WEBHOOK_TIMEOUT_SECONDS:
-                return (f"options.webhook_timeout_seconds 必须 "
-                        f"<= {_MAX_WEBHOOK_TIMEOUT_SECONDS:g}")
-        elif key == "max_cost_usd":
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                return "options.max_cost_usd 必须是数值"
-            if not math.isfinite(value) or value < 0:
-                return "options.max_cost_usd 必须是 >= 0 的有限数"
-        elif key == "flow":
-            if not isinstance(value, dict):
-                return "options.flow 必须是对象（{version, name, tasks}）"
-        elif key == "flow_name":
-            if not isinstance(value, str) or not value.strip():
-                return "options.flow_name 必须是非空字符串"
+        check = _VALIDATORS.get(key)
+        if check is not None:
+            error = check(value)
         elif not isinstance(value, dict):
-            return f"options.{key} 必须是对象"
+            error = f"options.{key} 必须是对象"
+        else:
+            error = None
+        if error is not None:
+            return error
     return None
 
 
