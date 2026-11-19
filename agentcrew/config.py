@@ -369,6 +369,129 @@ def _validate_webhook_target_url(url: str, *, where: str = "webhook_url") -> str
     return url
 
 
+def _yaml_mapping(
+    data: Mapping[str, Any], key: str, path: Path, *, label: str | None = None,
+) -> dict[str, Any] | None:
+    """truthy 段 → 必须是映射并浅拷贝；falsy（含缺省）视为未配置。
+
+    错误文案是配置错误契约的一部分（CLI 各入口按 ValueError 收口），段名逐字。
+    ``label`` 用于嵌套段的报错名（如 ``agents.profiles``）。
+    """
+    raw = data.get(key)
+    if not raw:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError(f"配置文件 {label or key} 段必须是映射：{path}")
+    return dict(raw)
+
+
+def _yaml_list(data: Mapping[str, Any], key: str, path: Path) -> list[Any] | None:
+    """``None`` = 未设置；空列表是合法值（与映射段的 truthy 语义刻意不同）。"""
+    raw = data.get(key)
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise ValueError(f"配置文件 {key} 段必须是列表：{path}")
+    return list(raw)
+
+
+def _normalize_webhooks(webhooks: list[Any], path: Path) -> list[dict[str, Any]]:
+    """webhooks 形状在加载期就校验完：让配置错误当场炸，而不是 run 跑到一半
+    才发现某条 url 是 ftp://。"""
+    normalized_targets: list[dict[str, Any]] = []
+    for index, item in enumerate(webhooks):
+        if not isinstance(item, dict):
+            raise ValueError(
+                f"配置文件 webhooks[{index}] 必须是映射：{path}")
+        url = str(item.get("url") or "").strip()
+        if not url:
+            raise ValueError(f"配置文件 webhooks[{index}] 缺少 url：{path}")
+        _validate_webhook_target_url(url, where=f"webhooks[{index}]")
+        normalized_targets.append({
+            "name": str(item.get("name") or ""),
+            "url": url,
+            "secret": str(item.get("secret") or ""),
+            "events": [str(e) for e in (item.get("events") or [])
+                       if str(e).strip()],
+            "only_failures": bool(item.get("only_failures", False)),
+            "filter": str(item.get("filter") or ""),
+        })
+    return normalized_targets
+
+
+def _normalize_role_fallback(
+    raw: Mapping[str, Any], path: Path,
+) -> dict[str, list[str]]:
+    """形状固定为 role → [备选角色…]；写成标量是常见手误，当场报错比默默
+    把字符串拆成单字符好（Python 对 str 迭代正是这么做的）。"""
+    normalized: dict[str, list[str]] = {}
+    for key, value in raw.items():
+        if isinstance(value, str) or not isinstance(value, (list, tuple)):
+            raise ValueError(
+                f"配置文件 role_fallback.{key} 必须是角色 key 列表：{path}")
+        normalized[str(key)] = [str(item) for item in value if str(item).strip()]
+    return normalized
+
+
+def _yaml_agent_profiles(
+    data: Mapping[str, Any], path: Path,
+) -> dict[str, Any] | None:
+    """``agents.profiles`` → ``agent_profiles``；profile 的 key 就是映射键，
+    补进去省得配置文件里再抄一遍。"""
+    agents_cfg = _yaml_mapping(data, "agents", path)
+    if agents_cfg is None:
+        return None
+    profiles = _yaml_mapping(
+        agents_cfg, "profiles", path, label="agents.profiles")
+    if not profiles:
+        return None
+    return {
+        name: ({**cfg, "key": name} if isinstance(cfg, dict) else cfg)
+        for name, cfg in profiles.items()
+    }
+
+
+def _yaml_models_section(
+    models: Mapping[str, Any], values: dict[str, object], path: Path,
+) -> None:
+    """``models.*`` → 对应 Settings 字段（default/role_bindings/providers/
+    custom_providers）。role_bindings/providers 刻意不做显式类型检查——
+    与历史行为一致，形状错误由 ``dict(...)`` 自然抛出。"""
+    if models.get("default"):
+        values["default_model"] = models["default"]
+    if models.get("role_bindings"):
+        values["role_bindings"] = dict(models["role_bindings"])
+    if models.get("providers"):
+        values["provider_overrides"] = dict(models["providers"])
+    custom = _yaml_mapping(
+        models, "custom_providers", path, label="models.custom_providers")
+    if custom is not None:
+        values["custom_providers"] = custom
+
+
+def _yaml_structured_sections(
+    data: Mapping[str, Any], values: dict[str, object], path: Path,
+) -> None:
+    """直通映射段 + 两个列表段 + role_fallback 的归一化。"""
+    for section in ("mcp_servers", "gate_config", "tool_permissions"):
+        section_values = _yaml_mapping(data, section, path)
+        if section_values is not None:
+            values[section] = section_values
+    # P2-4：工具级 guardrails。形状与正则都在这里先粗校验一遍、再由
+    # ``Settings._validate_tool_guards`` 精校验——两层是有意的：这一层能报出
+    # 「配置文件哪一段写错了」，Pydantic 那层保证任何构造路径（含 model_copy）
+    # 都过同样的检查。
+    tool_guards = _yaml_list(data, "tool_guards", path)
+    if tool_guards is not None:
+        values["tool_guards"] = tool_guards
+    webhooks = _yaml_list(data, "webhooks", path)
+    if webhooks is not None:
+        values["webhooks"] = _normalize_webhooks(webhooks, path)
+    role_fallback = _yaml_mapping(data, "role_fallback", path)
+    if role_fallback is not None:
+        values["role_fallback"] = _normalize_role_fallback(role_fallback, path)
+
+
 def _yaml_values(
     config_path: Path | str | None = None, *, strict: bool = False
 ) -> dict[str, object]:
@@ -404,102 +527,15 @@ def _yaml_values(
     config_version = data.get("config_version")
     if config_version is not None:
         values["config_version"] = config_version
-    agents_cfg = data.get("agents") or {}
-    if agents_cfg:
-        if not isinstance(agents_cfg, dict):
-            raise ValueError(f"配置文件 agents 段必须是映射：{path}")
-        profiles = agents_cfg.get("profiles") or {}
-        if not isinstance(profiles, dict):
-            raise ValueError(f"配置文件 agents.profiles 段必须是映射：{path}")
-        if profiles:
-            # profile 的 key 就是映射键：补进去，省得配置文件里再抄一遍
-            values["agent_profiles"] = {
-                name: ({**cfg, "key": name} if isinstance(cfg, dict) else cfg)
-                for name, cfg in profiles.items()
-            }
-    roles_cfg = data.get("roles") or {}
-    if roles_cfg:
-        if not isinstance(roles_cfg, dict):
-            raise ValueError(f"配置文件 roles 段必须是映射：{path}")
-        values["role_agents"] = dict(roles_cfg)
+    agent_profiles = _yaml_agent_profiles(data, path)
+    if agent_profiles is not None:
+        values["agent_profiles"] = agent_profiles
+    roles_cfg = _yaml_mapping(data, "roles", path)
+    if roles_cfg is not None:
+        values["role_agents"] = roles_cfg
 
-    models = data.get("models") or {}
-    if not isinstance(models, dict):
-        raise ValueError(f"配置文件 models 段必须是映射：{path}")
-    if models.get("default"):
-        values["default_model"] = models["default"]
-    if models.get("role_bindings"):
-        values["role_bindings"] = dict(models["role_bindings"])
-    if models.get("providers"):
-        values["provider_overrides"] = dict(models["providers"])
-    if models.get("custom_providers"):
-        custom = models["custom_providers"]
-        if not isinstance(custom, dict):
-            raise ValueError(
-                f"配置文件 models.custom_providers 段必须是映射：{path}")
-        values["custom_providers"] = dict(custom)
-    mcp_servers = data.get("mcp_servers")
-    if mcp_servers:
-        if not isinstance(mcp_servers, dict):
-            raise ValueError(f"配置文件 mcp_servers 段必须是映射：{path}")
-        values["mcp_servers"] = dict(mcp_servers)
-    gate_config = data.get("gate_config")
-    if gate_config:
-        if not isinstance(gate_config, dict):
-            raise ValueError(f"配置文件 gate_config 段必须是映射：{path}")
-        values["gate_config"] = dict(gate_config)
-    tool_permissions = data.get("tool_permissions")
-    if tool_permissions:
-        if not isinstance(tool_permissions, dict):
-            raise ValueError(f"配置文件 tool_permissions 段必须是映射：{path}")
-        values["tool_permissions"] = dict(tool_permissions)
-    # P2-4：工具级 guardrails。形状与正则都在这里先粗校验一遍、再由
-    # ``Settings._validate_tool_guards`` 精校验——两层是有意的：这一层能报出
-    # 「配置文件哪一段写错了」，Pydantic 那层保证任何构造路径（含 model_copy）
-    # 都过同样的检查。
-    tool_guards = data.get("tool_guards")
-    if tool_guards is not None:
-        if not isinstance(tool_guards, list):
-            raise ValueError(f"配置文件 tool_guards 段必须是列表：{path}")
-        values["tool_guards"] = list(tool_guards)
-    webhooks = data.get("webhooks")
-    if webhooks is not None:
-        if not isinstance(webhooks, list):
-            raise ValueError(f"配置文件 webhooks 段必须是列表：{path}")
-        # 形状在这里就校验完：让配置错误在加载期就炸，而不是等 run 跑到一半
-        # 才发现某条 url 是 ftp://。
-        normalized_targets: list[dict[str, Any]] = []
-        for index, item in enumerate(webhooks):
-            if not isinstance(item, dict):
-                raise ValueError(
-                    f"配置文件 webhooks[{index}] 必须是映射：{path}")
-            url = str(item.get("url") or "").strip()
-            if not url:
-                raise ValueError(f"配置文件 webhooks[{index}] 缺少 url：{path}")
-            _validate_webhook_target_url(url, where=f"webhooks[{index}]")
-            normalized_targets.append({
-                "name": str(item.get("name") or ""),
-                "url": url,
-                "secret": str(item.get("secret") or ""),
-                "events": [str(e) for e in (item.get("events") or [])
-                           if str(e).strip()],
-                "only_failures": bool(item.get("only_failures", False)),
-                "filter": str(item.get("filter") or ""),
-            })
-        values["webhooks"] = normalized_targets
-    role_fallback = data.get("role_fallback")
-    if role_fallback:
-        if not isinstance(role_fallback, dict):
-            raise ValueError(f"配置文件 role_fallback 段必须是映射：{path}")
-        # 形状固定为 role → [备选角色…]；写成标量是常见手误，当场报错比默默
-        # 把字符串拆成单字符好（Python 对 str 迭代正是这么做的）。
-        normalized: dict[str, list[str]] = {}
-        for key, raw in role_fallback.items():
-            if isinstance(raw, str) or not isinstance(raw, (list, tuple)):
-                raise ValueError(
-                    f"配置文件 role_fallback.{key} 必须是角色 key 列表：{path}")
-            normalized[str(key)] = [str(item) for item in raw if str(item).strip()]
-        values["role_fallback"] = normalized
+    _yaml_models_section(_yaml_mapping(data, "models", path) or {}, values, path)
+    _yaml_structured_sections(data, values, path)
     if strict and unknown:
         raise ValueError(
             f"{path} 里有无法识别的顶层段：{', '.join(unknown)}"
@@ -535,6 +571,50 @@ def load_yaml_config(
     return _yaml_values(path, strict=strict)
 
 
+def _split_csv(raw: str) -> list[str]:
+    """逗号分隔 → strip 后的非空项（列表型环境变量的唯一拆法）。"""
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _prefixed_env(prefix: str) -> dict[str, str]:
+    """``prefix*`` 环境变量 → 小写后缀 → strip 值（空值视为未设置）。"""
+    return {
+        name[len(prefix):].lower(): raw.strip()
+        for name, raw in os.environ.items()
+        if name.startswith(prefix) and raw.strip()
+    }
+
+
+def _env_model_failover() -> dict[str, list[str]]:
+    """P0-2：``AGENTCREW_FAILOVER_<ALIAS>``（别名中 : 用 __ 表示，值逗号分隔）。"""
+    model_failover: dict[str, list[str]] = {}
+    for suffix, raw in _prefixed_env(_FAILOVER_ENV_PREFIX).items():
+        backups = _split_csv(raw)
+        if backups:
+            model_failover[suffix.replace("__", ":")] = backups
+    return model_failover
+
+
+def _env_custom_providers() -> dict[str, Any] | None:
+    """A1：``AGENTCREW_CUSTOM_PROVIDERS`` 紧凑 JSON → dict[str, dict]。
+
+    形如 '{"myrelay":{"implementation":"openai_compat","base_url":"http://h/v1",
+    "api_key_env":"MYRELAY_KEY"}}'。
+    """
+    raw_custom = os.environ.get("AGENTCREW_CUSTOM_PROVIDERS", "").strip()
+    if not raw_custom:
+        return None
+    try:
+        parsed = json.loads(raw_custom)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"AGENTCREW_CUSTOM_PROVIDERS 不是合法 JSON：{exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError(
+            "AGENTCREW_CUSTOM_PROVIDERS 必须是 JSON 对象（名字 → 预设映射）")
+    return parsed
+
+
 def _env_values() -> dict[str, object]:
     """``AGENTCREW_*`` 环境变量；空值视为未设置。"""
     values: dict[str, object] = {}
@@ -542,73 +622,39 @@ def _env_values() -> dict[str, object]:
         raw = os.environ.get(env_name, "").strip()
         if raw:
             values[field_name] = raw
-    # R12：事件列表在环境变量里只能写成逗号分隔，交给这里拆；
+    # R12/R33：事件列表与主管复核链在环境变量里只能写成逗号分隔，交给这里拆；
     # 若塞进 _ENV_TO_FIELD，字符串会被直接赋给 list 字段并报校验错。
-    raw_webhook_events = os.environ.get("AGENTCREW_WEBHOOK_EVENTS", "").strip()
-    if raw_webhook_events:
-        values["webhook_events"] = [
-            item.strip() for item in raw_webhook_events.split(",") if item.strip()
-        ]
-    # R33：主管复核链同样是列表，环境变量里只能逗号分隔。
-    raw_supervisor_chain = os.environ.get("AGENTCREW_SUPERVISOR_CHAIN", "").strip()
-    if raw_supervisor_chain:
-        values["supervisor_chain"] = [
-            item.strip() for item in raw_supervisor_chain.split(",") if item.strip()
-        ]
-    role_bindings: dict[str, str] = {}
-    for env_name, raw in os.environ.items():
-        if env_name.startswith(_ROLE_MODEL_ENV_PREFIX) and raw.strip():
-            role = env_name[len(_ROLE_MODEL_ENV_PREFIX):].lower()
-            role_bindings[role] = raw.strip()
+    for env_name, field_name in (
+        ("AGENTCREW_WEBHOOK_EVENTS", "webhook_events"),
+        ("AGENTCREW_SUPERVISOR_CHAIN", "supervisor_chain"),
+    ):
+        raw_list = os.environ.get(env_name, "").strip()
+        if raw_list:
+            values[field_name] = _split_csv(raw_list)
+    role_bindings = _prefixed_env(_ROLE_MODEL_ENV_PREFIX)
     if role_bindings:
         values["role_bindings"] = role_bindings
     # V2：按复杂度选模型 —— AGENTCREW_TIER_LOW/MEDIUM/HIGH
-    model_tiers: dict[str, str] = {}
-    for env_name, raw in os.environ.items():
-        if env_name.startswith(_TIER_ENV_PREFIX) and raw.strip():
-            level = env_name[len(_TIER_ENV_PREFIX):].lower()
-            if level in ("low", "medium", "high"):
-                model_tiers[level] = raw.strip()
+    model_tiers = {
+        level: alias
+        for level, alias in _prefixed_env(_TIER_ENV_PREFIX).items()
+        if level in ("low", "medium", "high")
+    }
     if model_tiers:
         values["model_tiers"] = model_tiers
-    # P0-2：Provider 故障转移 —— AGENTCREW_FAILOVER_<ALIAS>（别名中 : 用 __ 表示）
-    model_failover: dict[str, list[str]] = {}
-    for env_name, raw in os.environ.items():
-        if env_name.startswith(_FAILOVER_ENV_PREFIX) and raw.strip():
-            suffix = env_name[len(_FAILOVER_ENV_PREFIX):].lower()
-            alias = suffix.replace("__", ":")
-            backups = [b.strip() for b in raw.split(",") if b.strip()]
-            if backups:
-                model_failover[alias] = backups
+    model_failover = _env_model_failover()
     if model_failover:
         values["model_failover"] = model_failover
-    # E-3：AGENTCREW_API_KEYS 逗号分隔 → list[str]。通用循环把它当成普通标量
-    # 塞进了 raw 字符串，而 pydantic 不能把 "a,b" 直接强转成 list[str]，在这里拆。
-    raw_api_keys = values.get("api_keys")
-    if isinstance(raw_api_keys, str):
-        values["api_keys"] = [
-            key.strip() for key in raw_api_keys.split(",") if key.strip()
-        ]
-    # P0-4：AGENTCREW_TRUSTED_PROXIES 逗号分隔 → list[str]（同 api_keys 的拆法）。
-    raw_trusted = values.get("trusted_proxies")
-    if isinstance(raw_trusted, str):
-        values["trusted_proxies"] = [
-            item.strip() for item in raw_trusted.split(",") if item.strip()
-        ]
-    # A1：AGENTCREW_CUSTOM_PROVIDERS 紧凑 JSON → dict[str, dict]。
-    # 形如 '{"myrelay":{"implementation":"openai_compat","base_url":"http://h/v1",
-    # "api_key_env":"MYRELAY_KEY"}}'。
-    raw_custom = os.environ.get("AGENTCREW_CUSTOM_PROVIDERS", "").strip()
-    if raw_custom:
-        try:
-            parsed = json.loads(raw_custom)
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"AGENTCREW_CUSTOM_PROVIDERS 不是合法 JSON：{exc}") from exc
-        if not isinstance(parsed, dict):
-            raise ValueError(
-                "AGENTCREW_CUSTOM_PROVIDERS 必须是 JSON 对象（名字 → 预设映射）")
-        values["custom_providers"] = parsed
+    # E-3/P0-4：api_keys 与 trusted_proxies 逗号分隔 → list[str]。通用循环把
+    # 它们当成普通标量塞进了 raw 字符串，而 pydantic 不能把 "a,b" 直接强转成
+    # list[str]，在这里拆。
+    for field_name in ("api_keys", "trusted_proxies"):
+        raw_csv = values.get(field_name)
+        if isinstance(raw_csv, str):
+            values[field_name] = _split_csv(raw_csv)
+    custom_providers = _env_custom_providers()
+    if custom_providers is not None:
+        values["custom_providers"] = custom_providers
     return values
 
 
