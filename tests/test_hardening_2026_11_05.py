@@ -40,7 +40,9 @@ def test_gate_config_is_wired_from_settings(monkeypatch):
         def __init__(self, *args, **kwargs):
             captured.update(kwargs)
 
-    monkeypatch.setattr(crew_module, "Gatekeeper", _Spy)
+    # R66h：_build_gatekeeper 迁居 assembly，Gatekeeper 名字在那里解析。
+    from agentcrew.crew import assembly as assembly_module
+    monkeypatch.setattr(assembly_module, "Gatekeeper", _Spy)
     crew._build_gatekeeper(MagicMock(), MagicMock(), None)
     assert captured["gate_config"] == cfg
 

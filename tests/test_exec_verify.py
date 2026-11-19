@@ -189,7 +189,7 @@ def test_crew_wires_verifier_only_when_enabled(tmp_path, monkeypatch):
     """Crew 侧接线：``gate_config.exec_verify`` 打开且非 mock 才注入。"""
     from types import SimpleNamespace
 
-    import agentcrew.crew.crew as crew_mod
+    import agentcrew.crew.assembly as crew_mod  # R66h：装配群迁居 assembly
     from agentcrew.config import Settings
     from agentcrew.crew.crew import Crew
 
@@ -221,7 +221,7 @@ def test_crew_skips_verifier_on_mock_channel(tmp_path, monkeypatch):
     """mock 通道显式跳过并留痕：夹具是跨任务引用的，铺单任务产物必然 import 失败。"""
     from types import SimpleNamespace
 
-    import agentcrew.crew.crew as crew_mod
+    import agentcrew.crew.assembly as crew_mod  # R66h：装配群迁居 assembly
     from agentcrew.config import Settings
     from agentcrew.crew.crew import Crew
 
