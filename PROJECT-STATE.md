@@ -1,6 +1,6 @@
 # AgentCrew 项目状态
 
-> **最后更新：2026-11-15** · 本文是仓库**唯一状态源**。
+> **最后更新：2026-11-19** · 本文是仓库**唯一状态源**。
 > 历次交接文档、验收/审查/测试报告、一次性工作提示词已在本日汇总并入本文后删除，
 > 原文备份见 `.workbuddy/archive/reports-2026-11-02/`（git 亦可通过历史恢复）。
 
@@ -8,7 +8,17 @@
 
 ## 0. 一句话现状
 
-**最新一轮：R66（2026-11-19）** —— 整体代码审查与结构/性能优化，九个切片各自提交：
+**最新一轮：R67（2026-11-19）** —— Studio 前端 iOS/HIG 视觉与交互重设计，
+**功能与接口调用零变更**、Python 后端一行未改：令牌层双主题对齐 HIG（系统色/分隔线/
+字阶 28-22-17-15-13-12/圆角 16/三级阴影/SF 字体栈）、通用组件 iOS 化（大标题+tint 操作、
+Switch、Sheet grabber、毛玻璃侧栏）、对话页 iMessage 化 + 文件 emoji 全换共享线性 SVG、
+DAG 角色色描边/分组灰底/4px 进度条、Agents 页定高网格裁切修复。五笔提交
+`a1481a9→27c8fb1→20dda95→b25fd31→c7f2151`；check 81 模块/45 分片、unit 38/38、
+e2e 32/32、selftest 16/16、visual 基线人工核对后重建复检 20/20、Python 全量
+**3576 passed / 0 failed / 6 skipped / 0 error**（513.5s，与 R66 同数）。
+明细见 §3.99 与 `docs/STUDIO-IOS-REDESIGN-2026-11-19.md`。
+
+**上一轮：R66（2026-11-19）** —— 整体代码审查与结构/性能优化，九个切片各自提交：
 统一脱敏/退避去重（R66a）、`stream_call` 治理链与 `call` 对齐的缺陷修复（R66b）、
 `validate_run_options` 表驱动化（R66c，复杂度 67→≤10）+ NaN 入口拦截（R66d）、
 config 解析去重（R66e）、`main.py` 3388→~700 行拆进 `cli/` 九模块并修正 cli↔api
@@ -27,7 +37,7 @@ config 解析去重（R66e）、`main.py` 3388→~700 行拆进 `cli/` 九模块
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
-| Studio | `npm run check` **81** 模块 / **44** 样式分片、`test:unit` **38/38**、`verify:api` **13/13**、electron `e2e` **32/32**（13 页导航）、`selftest` **16/16**（2026-11-15 切片三后本机实跑，见 §3.89） |
+| Studio | `npm run check` **81** 模块 / **45** 样式分片、`test:unit` **38/38**、`verify:api` **13/13**、electron `e2e` **32/32**（13 页导航）、`selftest` **16/16**、`visual` 基线重建后复检 **20/20**（2026-11-19 R67 iOS/HIG 重设计后本机实跑，见 §3.99） |
 | 上线自检 | 本机可验 **9 项全通过**（doctor / 离线冒烟 / REST 认证 200·401 / `/metrics` / 无密钥退 3 / `clean` 干跑 / Studio 三连 / ruff+mypy）；目标机 10 项判据见 `docs/DEPLOY-CHECK-2026-11-13.md` |
 | 收尾 | 交付说明见 **`docs/CLOSURE-2026-11-13.md`**；B 类外部环境项 **5/5 全部闭环**；云主机真实部署验收 10 项中 **7 项闭环**（TLS/SSE、告警规则、日志、密钥、成本、webhook、备份），仅剩独立数据盘与两项 Docker 依赖（§3.77、`docs/DEPLOYMENT-VM-2026-11-13.md`） |
 | Git | `c9c4a60`（R61 真机修复）与 `c9cc47c`（R59–R61）均已推送到 `origin/master`，CI run **43453359080** / **43449592343** 的 **7 个 job 全部 success**（Python 3.10/3.11/3.12/3.13、Windows、Studio、Docker 真隔离）；`ebb9895`（R62）/ `8c6e411`（Studio V6-FE）/ `b712113`（桌面启动器）连同两笔状态回填已于 2026-11-14 推送到 `origin/master`（`92d3854..67aeda4`）；C10 `5cdeea8` 与状态回填 `d76d2ef` 同批推送，**2026-11-15 复核 CI run `43608513108`（head = `d76d2ef`）的 7 个 job 逐一 success**（Python 3.10/3.11/3.12/3.13、Windows·uv、Studio·Node 20、Sandbox·docker 真隔离），`Sync main` run `43608513094` success；上一批 `67aeda4` 的 run `43607497931` 亦 success。验收报告 `docs/ACCEPTANCE-2026-11-12.md`；真实模型评测历史证据为 23 条中 22 通过（`bench/eval-live-2026-11-13.md`，本次未重跑真实模型评测）。**2026-11-15 本轮两笔提交 `5e9bc70`（实现，26 文件 / +1866 −119）/ `bedb7e7`（状态回填）已推送到 `origin/master`**（`d76d2ef..bedb7e7`，`origin/main` 同哈希）；对应 CI run **`43712615843`** 结论 `success`、7 个 job 逐一 success，`Sync main` `43712615752` success |
@@ -3222,6 +3232,38 @@ C14 文件队列多 worker（at-least-once）」——这两条此前与代码�
 
 ---
 
+### 3.99 R67：Studio iOS/HIG 视觉与交互重设计（2026-11-19）
+
+**起点**：用户要求「保持原有功能和接口调用不变」对前端做 iOS 风格重设计（页面结构/
+信息层级/组件布局/交互反馈/响应式 + 配色/字体/间距基础规范），第二轮按用户上传的
+HIG 规格文档切片落地。范围仅 `studio/`；规格中 `.shell/.sidebar/.badge` 等类名与
+`bg/surface/danger` 令牌键描述的是 Python 后端控制台（`api/dashboard.py`），规格明确
+不改后端 → Python 一行未动，守卫 `test_dashboard_ui.py`/`test_dashboard_ops.py` 定向 16 passed。
+
+**切片与提交**
+
+| 切片 | 提交 | 内容 |
+|---|---|---|
+| A 令牌层 | `a1481a9` | 双主题对齐 HIG：light 底 `#F2F2F7`/分隔 `rgba(60,60,67,.12)`，dark 底 `#000`/卡片 `#1C1C1E`/主文字 `#FFF`；字阶 28/22/17/15/13/12、行高 1.45、标题 700；SF 字体栈不打包；`--r-md` 16；三级阴影；iOS 缓动；新增 `--on-role`/`--seg-thumb`/`color-scheme` 双主题同键；含第一轮整体 iOS 化基础（毛玻璃顶栏/命令框/toast/下拉、分段控件、断点 + 触控放大）；`main.js` 窗口底色改 `#F2F2F7`（唯一 JS 改动） |
+| B 通用组件 | `27c8fb1` | 页头 28/700 + tint 操作；看板 gap 24/边距 16；侧栏毛玻璃；布尔项 iOS Switch 51×31；模态 Sheet grabber + 弹簧滑入 + 加粗取消；菊花三态灰；页面淡入 ≤200ms |
+| C 对话页 | `20dda95` | iMessage 气泡（用户 18/18/6/18 蓝实底、Agent 6/18/18/18 + 发丝边）；角色色头像 + 13px 灰角色名；披露行 chevron 右置；回到最新居中玻璃胶囊；Markdown 代码块灰底；文件 emoji 全换线性 SVG——`lib/artifacts.js` 新增共享 `artifactIcon()`，产物/结果/对话/详情四处共用 |
+| D DAG | `b25fd31` | 画布分组灰底 16 圆角；节点角色色描边 1.5（纯 CSS 消费内联 `--role-color`）+ 状态色覆盖；头像 `--on-role` 文字；进度条 4px 圆角（CSS 几何覆盖、JS 不动） |
+| D 补 | `c7f2151` | Switch 抽 `components/switch.css`（44→45 分片）覆盖模态布尔项；Agents 页定高网格 + overflow:hidden 裁切统计第二行 → 自然高度主区滚动 |
+
+**裁决与披露**：语义系统色做底/点/进度、深阶变体做文字（≥4.5:1）；xs 12 保留密集 mono
+元信息；`✓✗✕⚡` 文本符号保留（e2e 文案断言依赖）；多选列表保留复选框语义；暗色逐页
+截图覆盖四个代表面 + 主题断言，其余页靠令牌层（非令牌分片无写死颜色）；窄屏/触控未实机验证。
+
+**验证**：check 81/45、unit 38/38、e2e 32/32、selftest 16/16；20 张明暗截图逐张人工核对后
+`visual:update` 重建基线、`visual` 复检 20/20 一致；Python 全量 **3576 passed / 0 failed /
+6 skipped / 0 error**（193 文件/97 批次/513.5s，零崩溃重试，与 R66 同数）。
+改造说明 `docs/STUDIO-IOS-REDESIGN-2026-11-19.md`。
+
+**坑（新）**：`ELECTRON_RUN_AS_NODE` 设空串仍触发 Node 模式（`app` undefined 崩溃），
+须整变量移除；emoji→`h()` 子节点替换须配平括号（架构检查的语法关会拦截）。
+
+---
+
 ## 4. 历史报告汇总（已并入本文，原文归档）
 
 | 报告 | 时间 | 核心结论 | 现状 |
@@ -3290,7 +3332,8 @@ C14 文件队列多 worker（at-least-once）」——这两条此前与代码�
 | R32 | 控制台 UI 重构（见 §3.37） | 2614 |
 | R33 | 多级主管链（见 §3.38） | 2621 |
 | R34 | 本机环境修复·崩溃隔离跑器（见 §3.39） | 2632 |
-| R66 | 整体审查与结构/性能优化九切片（见 §3.98） | **3576（当前）** |
+| R66 | 整体审查与结构/性能优化九切片（见 §3.98） | 3576 |
+| R67 | Studio iOS/HIG 视觉重设计五切片，功能零变更（见 §3.99） | **3576（当前）** |
 
 ---
 
