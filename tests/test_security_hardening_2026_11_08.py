@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import sys
@@ -101,10 +102,8 @@ async def _http(port: int, method: str, target: str,
     await writer.drain()
     raw = await asyncio.wait_for(reader.read(65536), timeout=10)
     writer.close()
-    try:
+    with contextlib.suppress(ConnectionError, asyncio.CancelledError):
         await writer.wait_closed()
-    except (ConnectionError, asyncio.CancelledError):
-        pass
     head, _, body_bytes = raw.partition(b"\r\n\r\n")
     status = int(head.split(b"\r\n", 1)[0].split()[1])
     try:
@@ -231,10 +230,8 @@ async def test_sse_stream_only_sees_own_run(tmp_path: Path):
         assert "A 的目标" in text
         assert "B 的秘密目标" not in text
         writer.close()
-        try:
+        with contextlib.suppress(ConnectionError, asyncio.CancelledError):
             await writer.wait_closed()
-        except (ConnectionError, asyncio.CancelledError):
-            pass
     finally:
         await srv.stop()
 
@@ -498,10 +495,8 @@ async def test_html_response_carries_csp(tmp_path: Path):
         await writer.drain()
         raw = await asyncio.wait_for(reader.read(65536), timeout=10)
         writer.close()
-        try:
+        with contextlib.suppress(ConnectionError, asyncio.CancelledError):
             await writer.wait_closed()
-        except (ConnectionError, asyncio.CancelledError):
-            pass
         head = raw.split(b"\r\n\r\n", 1)[0].decode("latin-1")
         assert "Content-Security-Policy" in head
         assert "connect-src 'self'" in head

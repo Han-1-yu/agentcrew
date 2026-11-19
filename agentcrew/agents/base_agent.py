@@ -36,6 +36,7 @@
   截断」提示恰恰在那时最有解释力（Task 10 的裁定）。
 """
 
+import contextlib
 import inspect
 import json
 import re
@@ -289,15 +290,15 @@ class ParsedToolCall:
 
 def _native_tool_calls(completion: CompletionResult) -> list[ParsedToolCall]:
     """把 Provider 解析好的原生 ``tool_calls`` 转成执行层的统一形状（P2-1）。"""
-    calls: list[ParsedToolCall] = []
-    for item in completion.tool_calls:
-        calls.append(ParsedToolCall(
+    return [
+        ParsedToolCall(
             item.name, dict(item.arguments),
             call_id=item.id,
             error=(f"工具 {item.name!r} 的 arguments 不可用：{item.arguments_error}"
                    if item.arguments_error else None),
-        ))
-    return calls
+        )
+        for item in completion.tool_calls
+    ]
 
 
 def _dsml_args(body: str) -> dict[str, Any]:
@@ -463,12 +464,10 @@ def _extract_agent_messages(raw: str) -> list[ParsedAgentMessage]:
     ``to`` 为空串的块仍保留（路由层会拒收并回灌错误文本，而不是悄悄丢掉——
     与 tool_call 的 ``<malformed>`` 同族）。
     """
-    messages: list[ParsedAgentMessage] = []
-    for match in _MESSAGE_RE.finditer(raw):
-        messages.append(
-            ParsedAgentMessage(to=match.group("to").strip(), content=match.group("content").strip())
-        )
-    return messages
+    return [
+        ParsedAgentMessage(to=match.group("to").strip(), content=match.group("content").strip())
+        for match in _MESSAGE_RE.finditer(raw)
+    ]
 
 
 class AgentExecutionError(RuntimeError):
@@ -1390,7 +1389,8 @@ class BaseAgent(ABC):
         tracer = getattr(self._models, "tracer", None)
         if tracer is None:
             return
-        try:
+        # 可观测性不许打断工具执行：任何 tracer 异常都吞掉。
+        with contextlib.suppress(Exception):
             tracer.record_tool(
                 tool_name=call.name,
                 task_id=task.id,
@@ -1400,8 +1400,6 @@ class BaseAgent(ABC):
                 call_id=call.id,
                 error=error,
             )
-        except Exception:  # noqa: BLE001 —— 可观测性不许打断工具执行
-            pass
 
     async def _execute_tool_calls(
         self, calls: list[ParsedToolCall], task: Task, *, mode: str = "fence",

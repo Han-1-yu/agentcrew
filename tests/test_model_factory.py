@@ -396,7 +396,7 @@ def test_default_fixtures_dir_is_module_level_and_read_at_construction(
         settings, tmp_path, monkeypatch):
     """Task 34 的 Crew 与测试都靠 monkeypatch 这个模块级常量注入 fixtures。"""
     expected = Path(__file__).resolve().parents[1] / "examples" / "fixtures"
-    assert DEFAULT_FIXTURES_DIR == expected
+    assert expected == DEFAULT_FIXTURES_DIR
     fx = tmp_path / "fx"
     (fx / "responses" / "T-9").mkdir(parents=True)
     (fx / "responses" / "T-9" / "attempt-1.md").write_text("MARKER", encoding="utf-8")

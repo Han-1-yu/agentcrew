@@ -121,11 +121,11 @@ def validate_flow(spec: FlowSpec) -> list[str]:
         if task.id == RESERVED_TASK_ID:
             errors.append(
                 f"任务 id {RESERVED_TASK_ID!r} 是引擎保留的交付任务，不能自己声明")
-        for deliverable in task.deliverables:
-            if deliverable.path == RESERVED_ARTIFACT_PATH:
-                errors.append(
-                    f"{RESERVED_ARTIFACT_PATH} 是引擎保留的交付产物（由 {RESERVED_TASK_ID} "
-                    "生成），流程里不能重复声明")
+        errors.extend(
+            f"{RESERVED_ARTIFACT_PATH} 是引擎保留的交付产物（由 {RESERVED_TASK_ID} "
+            "生成），流程里不能重复声明"
+            for deliverable in task.deliverables
+            if deliverable.path == RESERVED_ARTIFACT_PATH)
     cycle = _find_cycle(spec)
     if cycle:
         errors.append("依赖成环：" + " → ".join(cycle))

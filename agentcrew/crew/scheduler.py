@@ -64,7 +64,7 @@ from agentcrew.artifacts.spec import ArtifactSpec, parse_kind
 from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.config import Settings
 from agentcrew.context.context_bus import ContextBus
-from agentcrew.contracts import AgentBudgetExceeded
+from agentcrew.contracts import AgentBudgetExceededError
 from agentcrew.gate.gatekeeper import GateDecision, Gatekeeper
 from agentcrew.models.complexity import ComplexityCalibrator, get_calibrator
 from agentcrew.models.factory import BudgetExhaustedError, ModelFactoryError
@@ -446,7 +446,7 @@ class Scheduler:
             outcome = _error_outcome(task.id, exc)
         tracer = self._tracer
         if span is not None and tracer is not None:
-            try:
+            with contextlib.suppress(Exception):
                 tracer.end_span(
                     span,
                     status="error" if outcome.error is not None else "ok",
@@ -459,8 +459,6 @@ class Scheduler:
                         "agentcrew.task_error": (
                             str(outcome.error)[:300] if outcome.error else None),
                     })
-            except Exception:  # noqa: BLE001
-                pass
         self._completion_queue.put_nowait(outcome)
 
     async def _regate_worker(self, task_id: str) -> None:
@@ -551,7 +549,7 @@ class Scheduler:
                     task_id=task.id, role=task.role,
                 ),
             )
-        except AgentBudgetExceeded as exc:
+        except AgentBudgetExceededError as exc:
             # 执行体预算耗尽：转成执行失败，走 attempts 通道；因为闸门在调用前，
             # 重试不会再多花钱（每次都在第一次调用前被拦下）。
             return _error_outcome(task.id, AgentExecutionError(
@@ -1059,11 +1057,10 @@ class Scheduler:
         """
         while True:
             try:
-                outcome = await asyncio.wait_for(
+                return await asyncio.wait_for(
                     self._completion_queue.get(),
                     timeout=_STALL_CHECK_INTERVAL,
                 )
-                return outcome
             except asyncio.TimeoutError:
                 if not self._workers:
                     continue

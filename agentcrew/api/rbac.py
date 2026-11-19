@@ -20,6 +20,7 @@ asyncio task 里，ContextVar 的拷贝语义正好保证并发连接之间不�
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -196,10 +197,9 @@ class KeyStore:
         tmp = self.path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
                        encoding="utf-8")
-        try:
+        # Windows 上 chmod 只是尽力而为。
+        with contextlib.suppress(OSError):
             os.chmod(tmp, 0o600)
-        except OSError:
-            pass   # Windows 上 chmod 只是尽力而为
         tmp.replace(self.path)
         try:
             self._mtime = self.path.stat().st_mtime
@@ -311,10 +311,9 @@ class KeyStore:
         if last is not None and (now - last).total_seconds() < 60:
             return
         self._persist_after[record.id] = now
-        try:
+        # 审计字段落盘失败不影响认证。
+        with contextlib.suppress(OSError):
             self.save()
-        except OSError:
-            pass   # 审计字段落盘失败不影响认证
 
 
 class MultiKeyAuth:
@@ -466,11 +465,10 @@ def write_owner(run_dir: Path, principal: Principal) -> None:
         "key_id": principal.key_id, "name": principal.name,
         "role": principal.role, "created_at": _now(),
     }
-    try:
+    # 归属标记是尽力而为：写失败时按「无主」处理（非 admin 不可见）。
+    with contextlib.suppress(OSError):
         (Path(run_dir) / OWNER_FILE_NAME).write_text(
             json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    except OSError:
-        pass   # 归属标记是尽力而为：写失败时按「无主」处理（非 admin 不可见）
 
 
 def read_owner(run_dir: Path) -> str | None:

@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -237,10 +238,8 @@ async def _http(port: int, method: str, path: str, body: bytes | None = None):
     status = int(raw.split(b"\r\n", 1)[0].decode().split()[1])
     text = await reader.read(65536)
     writer.close()
-    try:
+    with contextlib.suppress(ConnectionError, asyncio.CancelledError):
         await writer.wait_closed()
-    except (ConnectionError, asyncio.CancelledError):
-        pass
     return status, text.decode("utf-8", errors="replace")
 
 

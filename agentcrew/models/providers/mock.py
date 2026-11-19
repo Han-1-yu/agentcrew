@@ -12,7 +12,7 @@
   返回同一内容」语义，不属回退、不上报）；再没有则返回占位回复
 
 fixture **文件**缺失一律不抛异常：走回退/占位路径并调用 ``_on_fallback``
-上报（绝不静默）。``MockFixtureMissing`` 仅在 ``fixtures_dir is None`` 且
+上报（绝不静默）。``MockFixtureMissingError`` 仅在 ``fixtures_dir is None`` 且
 purpose 为 plan/review（二者无法伪造回复）时抛出。
 
 **回放上下文按调用隔离**（C1）：purpose/role/task_id/attempt 存在
@@ -75,8 +75,12 @@ class _Replay:
     round_no: int | None = None
 
 
-class MockFixtureMissing(RuntimeError):
+class MockFixtureMissingError(RuntimeError):
     """plan/review 回放需要 ``fixtures_dir``，但构造时未提供。"""
+
+
+#: R-A 命名规范（N818）：旧名保留为兼容别名。
+MockFixtureMissing = MockFixtureMissingError
 
 
 class MockProvider(BaseProvider):
@@ -263,7 +267,7 @@ class MockProvider(BaseProvider):
 
     def _require_fixtures_dir(self, purpose: str) -> Path:
         if self._fixtures_dir is None:
-            raise MockFixtureMissing(f"purpose={purpose!r} 需要 fixtures_dir，但未配置")
+            raise MockFixtureMissingError(f"purpose={purpose!r} 需要 fixtures_dir，但未配置")
         return self._fixtures_dir
 
     def _report(self, message: str, replay: _Replay) -> None:

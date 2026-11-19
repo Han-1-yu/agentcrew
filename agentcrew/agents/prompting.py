@@ -131,8 +131,7 @@ def render_deliverables(task: Task) -> str:
         "或目录，**以本清单为准**：先按下面的路径落盘，设计文档里的结构体现在文件"
         "内容里。输出任何未列出的路径都会让本次执行直接失败。"
     ]
-    for spec in task.deliverables:
-        lines.append(_deliverable_line(spec))
+    lines.extend(_deliverable_line(spec) for spec in task.deliverables)
     return "\n".join(lines)
 
 

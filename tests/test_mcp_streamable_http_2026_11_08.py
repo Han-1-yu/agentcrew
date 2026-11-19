@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from typing import Any
 
@@ -175,10 +176,8 @@ class FakeStreamableServer:
             pass
         finally:
             writer.close()
-            try:
+            with contextlib.suppress(OSError, asyncio.IncompleteReadError):
                 await writer.wait_closed()
-            except (OSError, asyncio.IncompleteReadError):
-                pass
 
     async def _write_status(
         self, writer: asyncio.StreamWriter, status: int, body: bytes

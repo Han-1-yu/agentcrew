@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from pathlib import Path
 from typing import Any
@@ -157,9 +158,8 @@ def test_tool_span_uses_tool_conventions():
 
 def test_exception_inside_span_marks_error_and_reraises():
     tracer = OTLPTracer()
-    with pytest.raises(RuntimeError):
-        with tracer.span("boom"):
-            raise RuntimeError("x")
+    with pytest.raises(RuntimeError), tracer.span("boom"):
+        raise RuntimeError("x")
     span = _spans(tracer.payload())[0]
     assert span["status"]["code"] == 2
 
@@ -188,10 +188,8 @@ async def _start_collector() -> tuple[asyncio.AbstractServer, list[dict[str, Any
             await writer.drain()
         finally:
             writer.close()
-            try:
+            with contextlib.suppress(ConnectionError, OSError):
                 await writer.wait_closed()
-            except (ConnectionError, OSError):
-                pass
 
     server = await asyncio.start_server(handler, "127.0.0.1", 0)
     port = server.sockets[0].getsockname()[1]

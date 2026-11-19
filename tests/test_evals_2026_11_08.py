@@ -278,7 +278,7 @@ async def test_global_fixtures_are_restored_after_each_case():
 
     before = factory.DEFAULT_FIXTURES_DIR
     await run_case(EvalCase(id="restore", sample="todo", checks=[]))
-    assert factory.DEFAULT_FIXTURES_DIR == before
+    assert before == factory.DEFAULT_FIXTURES_DIR
 
 
 async def test_bad_sample_is_recorded_not_raised():

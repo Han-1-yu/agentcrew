@@ -300,10 +300,9 @@ def test_lock_context_manager_releases_on_exception(tmp_path):
     run_dir = tmp_path / "r"
     run_dir.mkdir()
 
-    with pytest.raises(RuntimeError):
-        with ResumeLock(run_dir) as lock:
-            assert lock.held
-            raise RuntimeError("boom")
+    with pytest.raises(RuntimeError), ResumeLock(run_dir) as lock:
+        assert lock.held
+        raise RuntimeError("boom")
 
     assert not (run_dir / LOCK_FILE).exists()
 

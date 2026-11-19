@@ -30,6 +30,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -375,11 +376,9 @@ class GuidanceStore:
         self._chmod()
 
     def _chmod(self) -> None:
-        try:
+        # Windows 上只落地只读位；权限收紧是尽力而为，不是语义。
+        with contextlib.suppress(OSError):
             os.chmod(self._path, 0o600)
-        except OSError:
-            # Windows 上只落地只读位；权限收紧是尽力而为，不是语义。
-            pass
 
     def _load(self) -> list[GuidanceItem]:
         if not self._path.is_file():

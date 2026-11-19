@@ -492,7 +492,7 @@ def test_register_does_not_pollute_module_registry(env):
         """占位子类。"""
 
     f.register("devops_engineer", Special)
-    assert AGENT_CLASSES == before
+    assert before == AGENT_CLASSES
 
 
 def test_reviewer_agent_for_returns_first_reviewer(env):

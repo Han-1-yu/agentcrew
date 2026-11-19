@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import ipaddress
 import json
 import math
@@ -2515,10 +2516,9 @@ def _cmd_serve(args: argparse.Namespace) -> int:
             try:
                 loop.add_signal_handler(_sig, stop_event.set)
             except (NotImplementedError, RuntimeError, ValueError):
-                try:
+                # 非主线程等场景：只保留 KeyboardInterrupt 兜底。
+                with contextlib.suppress(ValueError, OSError):
                     signal.signal(_sig, _request_stop)
-                except (ValueError, OSError):
-                    pass  # 非主线程等场景：只保留 KeyboardInterrupt 兜底
         try:
             await stop_event.wait()
         except KeyboardInterrupt:

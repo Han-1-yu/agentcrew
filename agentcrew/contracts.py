@@ -79,7 +79,7 @@ class TaskLike(Protocol):
         ...
 
 
-class AgentBudgetExceeded(RuntimeError):
+class AgentBudgetExceededError(RuntimeError):
     """执行体在单个任务上的预算耗尽（成本或调用次数）。
 
     定义在零依赖契约层：模型层抛出、调度层捕获，两边都不必互相 import。
@@ -97,3 +97,7 @@ class AgentBudgetExceeded(RuntimeError):
         else:
             label, detail = "调用次数", f"{used} / {limit} 次"
         super().__init__(f"agent {profile} 已达{label}上限（{detail}）")
+
+
+#: R-A 命名规范（N818）：旧名保留为兼容别名，既有 import 与 except 不受影响。
+AgentBudgetExceeded = AgentBudgetExceededError

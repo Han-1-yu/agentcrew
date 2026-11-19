@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 from typing import Any
 
@@ -168,10 +169,8 @@ def _event_stats(run_dir: Path, run_id: str) -> dict[str, Any]:
         if event.event == "llm_call":
             llm_calls += 1
             raw = event.data.get("estimated_cost_usd", 0)
-            try:
+            with contextlib.suppress(TypeError, ValueError):
                 cost += float(raw or 0)
-            except (TypeError, ValueError):
-                pass
     return {"counts": counts, "llm_calls": llm_calls, "cost": round(cost, 6)}
 
 

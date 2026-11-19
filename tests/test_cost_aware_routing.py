@@ -117,7 +117,7 @@ def test_headroom_is_configurable(headroom):
     token = bind_budget("p", None, None, run_ceiling_usd=1.0)
     try:
         note_call(0.25)
-        expect_shift = 0.25 >= (1 - headroom)
+        expect_shift = (1 - headroom) <= 0.25
         assert (factory._maybe_apply_downgrade("pricey:model") == "cheap:model") is expect_shift
     finally:
         release_budget(token)

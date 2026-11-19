@@ -100,10 +100,10 @@ def _rejection_evidence(output: CaseOutput, stage: str) -> list[str]:
             continue
         if name == "plan_rejected" and stage in ("any", "plan"):
             evidence.append(" ".join(str(item) for item in (data.get("errors") or [])))
-        elif name == "gate_result" and stage in ("any", "gate"):
-            if str(data.get("verdict") or "") == "reject":
-                evidence.append(
-                    " ".join(str(item) for item in (data.get("issues") or [])))
+        elif (name == "gate_result" and stage in ("any", "gate")
+              and str(data.get("verdict") or "") == "reject"):
+            evidence.append(
+                " ".join(str(item) for item in (data.get("issues") or [])))
     return [item for item in evidence if item]
 
 
@@ -228,10 +228,7 @@ def _event_field(check: Mapping[str, Any], output: CaseOutput) -> CheckResult:
         return CheckResult(
             kind="event_field", ok=ok,
             detail="" if ok else f"{name}.{field} 为空")
-    if isinstance(value, list):
-        ok = needle in value
-    else:
-        ok = str(needle) in str(value)
+    ok = needle in value if isinstance(value, list) else str(needle) in str(value)
     return CheckResult(
         kind="event_field", ok=ok,
         detail="" if ok else f"{name}.{field} = {value!r} 不含 {needle!r}")

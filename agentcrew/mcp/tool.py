@@ -40,10 +40,10 @@ class MCPToolResult(BaseModel):
         （序列化成 JSON——**没有这一条，结构化结果会被整个丢掉**，模型看到的
         是空串）；③非文本块（image / resource …）给一句类型提示而不是空串。
         """
-        parts: list[str] = []
-        for item in self.content:
-            if item.get("type") == "text":
-                parts.append(str(item.get("text", "")))
+        parts: list[str] = [
+            str(item.get("text", "")) for item in self.content
+            if item.get("type") == "text"
+        ]
         if parts:
             return "\n".join(parts)
         if self.structuredContent:

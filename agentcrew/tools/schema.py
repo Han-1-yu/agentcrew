@@ -142,14 +142,13 @@ def validate_tool_args(schema: Any, args: Any) -> list[str]:
     errors: list[str] = []
     required = schema.get("required")
     if isinstance(required, (list, tuple)):
-        for name in required:
-            if name not in args:
-                errors.append(f"缺少必填参数 {name}")
+        errors.extend(
+            f"缺少必填参数 {name}" for name in required if name not in args)
 
     if schema.get("additionalProperties") is False:
-        for name in args:
-            if name not in properties:
-                errors.append(f"未知参数 {name}（该工具不接受额外参数）")
+        errors.extend(
+            f"未知参数 {name}（该工具不接受额外参数）"
+            for name in args if name not in properties)
 
     for name, rule in properties.items():
         if name not in args or not isinstance(rule, dict):

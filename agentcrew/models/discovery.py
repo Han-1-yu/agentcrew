@@ -109,15 +109,14 @@ def _parse_models(body: str) -> list[str]:
     items = data.get("data")
     if not isinstance(items, list):
         raise ModelDiscoveryError("响应缺少 data 列表", kind="parse")
-    names: list[str] = []
-    for item in items:
-        # 只收录非空字符串 id：部分端点会回 ``{"id": ""}`` 占位条目，
-        # 放过它免得在模型下拉里出现一个「空模型」。
+    # 只收录非空字符串 id：部分端点会回 ``{"id": ""}`` 占位条目，
+    # 放过它免得在模型下拉里出现一个「空模型」。
+    return [
+        item["id"] for item in items
         if (isinstance(item, dict)
-                and isinstance(item.get("id"), str)
-                and item["id"].strip()):
-            names.append(item["id"])
-    return names
+            and isinstance(item.get("id"), str)
+            and item["id"].strip())
+    ]
 
 
 def _fetch_one_sync(url: str, binding: ModelBinding, api_key: str) -> list[str]:

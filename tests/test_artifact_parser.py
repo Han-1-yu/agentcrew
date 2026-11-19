@@ -114,7 +114,7 @@ def test_lang_table_values_cover_exactly_the_text_kinds():
     assert len(text_kinds) == 12
     assert set(LANG_TO_KIND.values()) == text_kinds
     # R61：image 是二进制 kind，不在围栏语言表里，但必须是合法 ArtifactKind。
-    assert BINARY_KINDS <= kinds
+    assert kinds >= BINARY_KINDS
     assert not (set(LANG_TO_KIND.values()) & BINARY_KINDS)
 
 

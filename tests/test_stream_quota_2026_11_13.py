@@ -81,12 +81,12 @@ async def test_quota_exhausted_stream_fails_over_to_backup(tmp_path):
     )
     _bind(models, "mock:primary")
     _bind(models, "mock:backup")
-    parts = []
-    async for chunk in models.stream_call(
-        "mock:primary", MESSAGES, temperature=0, max_tokens=100,
-        purpose="execute", role="backend_dev",
-    ):
-        parts.append(chunk.delta)
+    parts = [
+        chunk.delta async for chunk in models.stream_call(
+            "mock:primary", MESSAGES, temperature=0, max_tokens=100,
+            purpose="execute", role="backend_dev",
+        )
+    ]
     assert "".join(parts).strip() != ""
     assert models.llm_calls == 1
     # 备用别名实际入账一次；primary 未预扣也未消耗

@@ -29,6 +29,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
+from agentcrew.utils.retry import compute_delay
+
 #: 缓存文件名（相对 output_dir）。
 CACHE_DIR_NAME = "_cache"
 CACHE_FILE_NAME = "embeddings.jsonl"
@@ -241,7 +243,11 @@ class HttpEmbedder:
                     f"embedding 响应不是合法 JSON（{self.model}）：{exc}"
                 ) from exc
             if attempt + 1 < self._max_attempts:
-                time.sleep(min(0.3 * (2 ** attempt), _MAX_EMBEDDING_BACKOFF))
+                # R-A 去重：与旧式 min(0.3 * 2**attempt, 上限) 逐字同值
+                # （compute_delay 的 attempt 从 1 起，故 +1；jitter=0 无抖动）。
+                time.sleep(compute_delay(
+                    attempt + 1, base_delay=0.3,
+                    max_delay=_MAX_EMBEDDING_BACKOFF, jitter=0))
         raise EmbeddingError(
             f"embedding 调用失败（{self.model}）：{last_error or 'unknown'}")
 
@@ -374,6 +380,4 @@ def is_semantic_embedder(embedder: Embedder | None) -> bool:
     if isinstance(embedder, HashEmbedder):
         return False
     inner = getattr(embedder, "_inner", None)
-    if isinstance(inner, HashEmbedder):
-        return False
-    return True
+    return not isinstance(inner, HashEmbedder)

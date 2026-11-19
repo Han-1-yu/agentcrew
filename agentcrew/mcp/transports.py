@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import shutil
@@ -177,12 +178,16 @@ MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 MAX_SSE_EVENTS = 1000
 
 
-class MCPSessionExpired(MCPTransportError):
+class MCPSessionExpiredError(MCPTransportError):
     """服务端已不认识当前会话（``404``）——调用方应重新 ``initialize``。
 
     单独一个类型是因为**处理方式完全不同**：普通传输错误要报给人，会话过期则是
     「握手重来一次就好」。用字符串匹配错误信息来判断这种事迟早会错。
     """
+
+
+#: R-A 命名规范（N818）：旧名保留为兼容别名。
+MCPSessionExpired = MCPSessionExpiredError
 
 
 async def _open_http(
@@ -386,10 +391,8 @@ async def _http_request(
         return status, await _read_body(reader, resp_headers)
     finally:
         writer.close()
-        try:
+        with contextlib.suppress(OSError, asyncio.IncompleteReadError):
             await writer.wait_closed()
-        except (OSError, asyncio.IncompleteReadError):
-            pass
 
 
 class SSETransport(MCPTransport):
@@ -542,7 +545,7 @@ class HTTPTransport(MCPTransport):
     3. **SSE 响应**：服务端可以用 ``text/event-stream`` 回一批消息（先来通知、
        最后才是响应）。只读一次 JSON 会在这种服务端上直接超时。
     4. **会话失效**：服务端回 ``404`` 表示会话没了，必须重新握手——抛
-       :class:`MCPSessionExpired`，由 :class:`~agentcrew.mcp.client.MCPClient`
+       :class:`MCPSessionExpiredError`，由 :class:`~agentcrew.mcp.client.MCPClient`
        重建一次；用「字符串里有没有 404」来判断这种事迟早会错。
 
     仍只支持 ``http://``：TLS 由反向代理终止（与主服务的部署约定一致）。
@@ -604,7 +607,7 @@ class HTTPTransport(MCPTransport):
             if status == 404 and self._session_id:
                 # 会话被服务端丢弃：清掉本地 id，让上层重新握手。
                 self._session_id = ""
-                raise MCPSessionExpired(
+                raise MCPSessionExpiredError(
                     "MCP 会话已失效（HTTP 404），需要重新 initialize")
             if status >= 400:
                 raise MCPTransportError(f"POST 返回 HTTP {status}")
@@ -615,10 +618,8 @@ class HTTPTransport(MCPTransport):
                 await self._consume_json(await _read_body(reader, resp_headers))
         finally:
             writer.close()
-            try:
+            with contextlib.suppress(OSError, asyncio.IncompleteReadError):
                 await writer.wait_closed()
-            except (OSError, asyncio.IncompleteReadError):
-                pass
 
     def _absorb_session(self, headers: dict[str, str]) -> None:
         """记下服务端发的会话 id / 协商后的协议版本（忽略空值）。"""

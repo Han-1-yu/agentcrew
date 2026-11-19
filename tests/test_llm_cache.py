@@ -53,8 +53,7 @@ class _CountingProvider(BaseProvider):
 @pytest.fixture
 def factory(tmp_path, monkeypatch) -> ModelFactory:
     s = Settings.load().model_copy(update={"mock": True})
-    f = ModelFactory(s, ledger=Ledger(tmp_path / "l.jsonl", run_id="R"))
-    return f
+    return ModelFactory(s, ledger=Ledger(tmp_path / "l.jsonl", run_id="R"))
 
 
 async def _call(f: ModelFactory, content: str, temperature: float = 0.0):

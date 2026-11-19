@@ -25,8 +25,7 @@ import main as cli
 def _run_providers(*args: str, tmp_path, monkeypatch):
     """跑 ``python main.py providers ...`` 并返回 (退出码, stdout, stderr)。"""
     monkeypatch.setenv("AGENTCREW_OUTPUT_DIR", str(tmp_path / "o"))
-    code = cli.main(["providers", *args])
-    return code
+    return cli.main(["providers", *args])
 
 
 def _run_providers_json(*args: str, tmp_path, monkeypatch):

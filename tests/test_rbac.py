@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from datetime import datetime, timedelta
 
@@ -132,10 +133,8 @@ async def _request(port: int, method: str, path: str,
     await writer.drain()
     raw = await asyncio.wait_for(reader.read(65536), timeout=10)
     writer.close()
-    try:
+    with contextlib.suppress(ConnectionError, asyncio.CancelledError):
         await writer.wait_closed()
-    except (ConnectionError, asyncio.CancelledError):
-        pass
     head, _, body_text = raw.partition(b"\r\n\r\n")
     status = int(head.split(b"\r\n", 1)[0].split()[1])
     try:

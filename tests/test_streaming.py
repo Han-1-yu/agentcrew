@@ -91,14 +91,14 @@ async def test_factory_stream_call_yields_chunks_and_accounts(env, tmp_path):
 
     before_calls = models.llm_calls
     before_completion = models.total_completion_tokens
-    deltas: list[str] = []
-    async for chunk in models.stream_call(
-        alias,
-        [{"role": "user", "content": "hi"}],
-        temperature=0, max_tokens=100,
-        purpose="execute", role="backend_dev",
-    ):
-        deltas.append(chunk.delta)
+    deltas = [
+        chunk.delta async for chunk in models.stream_call(
+            alias,
+            [{"role": "user", "content": "hi"}],
+            temperature=0, max_tokens=100,
+            purpose="execute", role="backend_dev",
+        )
+    ]
 
     assert len(deltas) > 1
     assert "".join(deltas) == GOOD_A

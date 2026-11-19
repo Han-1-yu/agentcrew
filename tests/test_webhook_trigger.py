@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import hmac
 import json
@@ -70,10 +71,8 @@ async def _request(
     await writer.drain()
     raw = await reader.read(65536)
     writer.close()
-    try:
+    with contextlib.suppress(ConnectionError, OSError):
         await writer.wait_closed()
-    except (ConnectionError, OSError):
-        pass
     head, _, body_text = raw.decode("utf-8", errors="replace").partition("\r\n\r\n")
     status = int(head.split("\r\n")[0].split(" ")[1])
     try:

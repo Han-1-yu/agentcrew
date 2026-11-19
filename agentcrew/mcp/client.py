@@ -15,6 +15,7 @@ https://modelcontextprotocol.io/specification/2025-03-26/
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 from typing import Any
@@ -23,7 +24,7 @@ from agentcrew.mcp.tool import MCPTool, MCPToolResult
 from agentcrew.mcp.transports import (
     PROTOCOL_VERSION_DEFAULT,
     HTTPTransport,
-    MCPSessionExpired,
+    MCPSessionExpiredError,
     MCPTransport,
     MCPTransportError,
     SSETransport,
@@ -137,10 +138,8 @@ class MCPClient:
         """关闭传输连接。"""
         if self._reader_task is not None:
             self._reader_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._reader_task
-            except asyncio.CancelledError:
-                pass
             self._reader_task = None
         await self._transport.close()
         self._initialized = False
@@ -190,7 +189,7 @@ class MCPClient:
         # 「重连 ↔ 404」的死循环，表现为整个 run 卡在这里不报错。
         try:
             await self._notify("notifications/initialized", {})
-        except MCPSessionExpired as exc:
+        except MCPSessionExpiredError as exc:
             if self._handshake_retry_used:
                 self._initialized = False
                 raise MCPError(
@@ -209,7 +208,7 @@ class MCPClient:
 
         ``allow_reinit``：streamable HTTP 的服务端可以随时丢掉会话（重启、过期），
         此时 POST 回 404。这种情况**重握手一次就能恢复**，比让整次 run 失败好得多；
-        所以这里捕获 :class:`MCPSessionExpired` → 重新 ``initialize`` → 重发一次，
+        所以这里捕获 :class:`MCPSessionExpiredError` → 重新 ``initialize`` → 重发一次，
         且**只重试一次**（``allow_reinit=False``），避免 404 ↔ 重连的死循环。
         """
         self._request_id += 1
@@ -224,7 +223,7 @@ class MCPClient:
         }
         try:
             await self._transport.send(message)
-        except MCPSessionExpired as exc:
+        except MCPSessionExpiredError as exc:
             self._pending.pop(req_id, None)
             if method == "initialize" or not allow_reinit:
                 # 握手本身都建不起来：再试也是同一个结果，如实报错。
@@ -252,7 +251,7 @@ class MCPClient:
         }
         try:
             await self._transport.send(message)
-        except MCPSessionExpired:
+        except MCPSessionExpiredError:
             # 原样上抛：调用方要能区分「会话没了，重建即可」与「真的发不出去」。
             raise
         except MCPTransportError as exc:

@@ -152,8 +152,7 @@ def failover_candidates(
 
     if health_enabled and health:
         result = reorder_healthy_first(result, health)
-    result = reorder_cooled_last(result, is_cooled)
-    return result
+    return reorder_cooled_last(result, is_cooled)
 
 
 def usage_score(

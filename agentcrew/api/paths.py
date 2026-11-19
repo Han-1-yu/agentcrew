@@ -31,6 +31,7 @@ from urllib.parse import unquote
 __all__ = [
     "MAX_PATH_CHARS",
     "PathRejected",
+    "PathRejectedError",
     "canonical_path",
     "canonical_target",
 ]
@@ -48,8 +49,12 @@ _FORBIDDEN_CHARS = frozenset({"/", "\\", "\x00"})
 _PERCENT_ESCAPE = re.compile(r"%([0-9A-Fa-f]{2})")
 
 
-class PathRejected(ValueError):
+class PathRejectedError(ValueError):
     """路径不可规范化（伪造分隔符 / 控制字符 / 穿越段 / 超长）。"""
+
+
+#: R-A 命名规范（N818）：旧名保留为兼容别名。
+PathRejected = PathRejectedError
 
 
 def _reject_encoded_separators(raw: str) -> None:
@@ -61,10 +66,10 @@ def _reject_encoded_separators(raw: str) -> None:
     for match in _PERCENT_ESCAPE.finditer(raw):
         byte = chr(int(match.group(1), 16))
         if byte in _FORBIDDEN_CHARS:
-            raise PathRejected(
+            raise PathRejectedError(
                 f"路径包含编码后的分隔符/空字符（{match.group(0)}）")
         if ord(byte) < 0x20 or ord(byte) == 0x7F:
-            raise PathRejected(
+            raise PathRejectedError(
                 f"路径包含编码后的控制字符（{match.group(0)}）")
 
 
@@ -72,21 +77,21 @@ def _decode_once(raw: str) -> str:
     try:
         return unquote(raw, encoding="utf-8", errors="strict")
     except UnicodeDecodeError as exc:
-        raise PathRejected(f"路径的百分号转义不是合法 UTF-8：{exc}") from None
+        raise PathRejectedError(f"路径的百分号转义不是合法 UTF-8：{exc}") from None
 
 
 def canonical_path(raw_path: str) -> str:
-    """原始路径（可含查询串之外的一切）→ 规范路径；非法时抛 :class:`PathRejected`。
+    """原始路径（可含查询串之外的一切）→ 规范路径；非法时抛 :class:`PathRejectedError`。
 
     返回值恒以 ``/`` 开头、无尾斜杠（根路径为 ``/``）、无重复斜杠、无 ``.`` /
     ``..`` 段、无未解码的百分号转义。授权正则与路由分发都只看这个值。
     """
     if not raw_path:
-        raise PathRejected("路径为空")
+        raise PathRejectedError("路径为空")
     if len(raw_path) > MAX_PATH_CHARS:
-        raise PathRejected(f"路径过长（上限 {MAX_PATH_CHARS} 字符）")
+        raise PathRejectedError(f"路径过长（上限 {MAX_PATH_CHARS} 字符）")
     if not raw_path.startswith("/"):
-        raise PathRejected("路径必须以 / 开头（不支持绝对 URI 形式）")
+        raise PathRejectedError("路径必须以 / 开头（不支持绝对 URI 形式）")
 
     decoded = raw_path
     for _ in range(_MAX_UNQUOTE_PASSES):
@@ -99,20 +104,20 @@ def canonical_path(raw_path: str) -> str:
         # for 正常结束（没 break）= 每一轮都还在变 → 编码层数可疑。
         _reject_encoded_separators(decoded)
         if _decode_once(decoded) != decoded:
-            raise PathRejected("路径编码层数过多")
+            raise PathRejectedError("路径编码层数过多")
 
     for char in decoded:
         if ord(char) < 0x20 or ord(char) == 0x7F:
-            raise PathRejected("路径包含控制字符")
+            raise PathRejectedError("路径包含控制字符")
         if char == "\\":
-            raise PathRejected("路径包含反斜杠")
+            raise PathRejectedError("路径包含反斜杠")
 
     segments: list[str] = []
     for segment in decoded.split("/"):
         if not segment:
             continue                      # 折叠重复斜杠与尾斜杠
         if segment in (".", ".."):
-            raise PathRejected(f"路径包含穿越段（{segment!r}）")
+            raise PathRejectedError(f"路径包含穿越段（{segment!r}）")
         segments.append(segment)
     if not segments:
         return "/"

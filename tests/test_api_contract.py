@@ -16,6 +16,7 @@ R16 之前 ``openapi.yaml`` 一直缺 ``/providers`` 族与执行体切换端点
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from pathlib import Path
 
@@ -93,17 +94,13 @@ async def _request(
     status = int(status_line.split()[1])
     if headers_only:
         writer.close()
-        try:
+        with contextlib.suppress(ConnectionError, asyncio.CancelledError):
             await writer.wait_closed()
-        except (ConnectionError, asyncio.CancelledError):
-            pass
         return status, status_line
     text = (await reader.read(65536)).decode("utf-8", errors="replace")
     writer.close()
-    try:
+    with contextlib.suppress(ConnectionError, asyncio.CancelledError):
         await writer.wait_closed()
-    except (ConnectionError, asyncio.CancelledError):
-        pass
     return status, text
 
 
@@ -221,17 +218,13 @@ async def _request_with_headers(
     status = int(raw.split(b"\r\n", 1)[0].decode().split()[1])
     if headers_only:
         writer.close()
-        try:
+        with contextlib.suppress(ConnectionError, asyncio.CancelledError):
             await writer.wait_closed()
-        except (ConnectionError, asyncio.CancelledError):
-            pass
         return status, ""
     text = (await reader.read(65536)).decode("utf-8", errors="replace")
     writer.close()
-    try:
+    with contextlib.suppress(ConnectionError, asyncio.CancelledError):
         await writer.wait_closed()
-    except (ConnectionError, asyncio.CancelledError):
-        pass
     return status, text
 
 

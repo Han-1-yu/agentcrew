@@ -56,12 +56,12 @@ class StubAgent:
         self.hints.append(list(fix_hints))
         self.packs.append(pack)
         now = datetime.now()
-        records = []
-        for spec in task.deliverables:
-            if spec.path in self.files:
-                records.append(self.store.commit(
-                    spec.path, self.files[spec.path], spec=spec, task=task,
-                    path_scope=self.scope, agent=self.key))
+        records = [
+            self.store.commit(
+                spec.path, self.files[spec.path], spec=spec, task=task,
+                path_scope=self.scope, agent=self.key)
+            for spec in task.deliverables if spec.path in self.files
+        ]
         return TaskResult(
             task_id=task.id, role=task.role, summary=f"{self.key} 完成",
             artifacts=records, started_at=now, finished_at=now, duration_ms=1)

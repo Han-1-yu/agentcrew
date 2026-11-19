@@ -14,7 +14,7 @@ from __future__ import annotations
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 
-from agentcrew.contracts import AgentBudgetExceeded
+from agentcrew.contracts import AgentBudgetExceededError
 
 
 @dataclass
@@ -77,11 +77,11 @@ def guard() -> None:
     if state is None:
         return
     if state.max_calls is not None and state.calls >= state.max_calls:
-        raise AgentBudgetExceeded(
+        raise AgentBudgetExceededError(
             state.profile, kind="calls", limit=state.max_calls, used=state.calls)
     if (state.cost_ceiling_usd is not None
             and state.spent_usd >= state.cost_ceiling_usd):
-        raise AgentBudgetExceeded(
+        raise AgentBudgetExceededError(
             state.profile, kind="cost",
             limit=state.cost_ceiling_usd, used=state.spent_usd)
 

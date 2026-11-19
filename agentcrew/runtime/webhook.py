@@ -41,6 +41,7 @@ run 启动时自动补投。
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import json
@@ -57,6 +58,9 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+from agentcrew.utils.redact import redact_value
+from agentcrew.utils.retry import compute_delay
 
 #: 接收方可据此分发，不必解析 body 才知道事件类型。
 EVENT_HEADER = "X-AgentCrew-Event"
@@ -196,9 +200,7 @@ class WebhookTarget:
         if self.only_failures and not _is_failure(event, payload):
             return False
         # 短路：空表达式不进任何新分支，默认配置的布尔结果与改造前逐字一致。
-        if self.filter and not match_filter(self.filter, event, payload):
-            return False
-        return True
+        return not self.filter or match_filter(self.filter, event, payload)
 
 
 @dataclass(frozen=True)
@@ -270,17 +272,10 @@ def _target_key(url: str) -> str:
     return hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
 
 
-def _redact_value(value: Any, secrets: tuple[str, ...]) -> Any:
-    """递归替换字符串里的密钥；只在写 spool 文件时用。"""
-    if isinstance(value, str):
-        for secret in secrets:
-            value = value.replace(secret, "***")
-        return value
-    if isinstance(value, dict):
-        return {key: _redact_value(item, secrets) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_redact_value(item, secrets) for item in value]
-    return value
+#: R-A 去重：改用 ``utils/redact.py`` 的统一实现（ledger 语义为基准）。
+#: 相对旧版的行为变更（显式采纳，见该模块 docstring）：spool 也吃 sk-/Bearer
+#: 固定规则、dict 键也脱敏、tuple 保持 tuple（JSON 落盘字节与旧版一致）。
+_redact_value = redact_value
 
 
 @dataclass(frozen=True)
@@ -379,17 +374,13 @@ class WebhookSpool:
             tmp.write_text(text, encoding="utf-8")
             os.replace(tmp, path)
         finally:
-            try:
+            with contextlib.suppress(OSError):
                 tmp.unlink()
-            except OSError:
-                pass
 
     def remove(self, path: Path) -> None:
         """投递成功后删除；文件已被别的进程删掉也是成功。"""
-        try:
+        with contextlib.suppress(OSError):
             path.unlink()
-        except OSError:
-            pass
 
     def retry(self, path: Path, record: PendingDelivery) -> None:
         """一次投递失败：累加 attempts 写回，超限则丢弃。"""
@@ -402,10 +393,8 @@ class WebhookSpool:
         if next_record.attempts > self._max_attempts:
             self.remove(path)
             return
-        try:
+        with contextlib.suppress(OSError, TypeError, ValueError):
             self._write(path, next_record)
-        except (OSError, TypeError, ValueError):
-            pass
 
     def load(self) -> tuple[list[tuple[Path, PendingDelivery]], list[tuple[str, str]]]:
         """扫出待补投记录；顺手清理坏文件、过期记录与超次数的记录。
@@ -720,7 +709,11 @@ class WebhookDispatcher:
                 return
             last_error = detail
             if attempt < self._config.max_retries:
-                time.sleep(min(0.2 * (2 ** attempt), _MAX_BACKOFF_SECONDS))
+                # R-A 去重：与旧式 min(0.2 * 2**attempt, 上限) 逐字同值
+                # （compute_delay 的 attempt 从 1 起，故 +1；jitter=0 无抖动）。
+                time.sleep(compute_delay(
+                    attempt + 1, base_delay=0.2,
+                    max_delay=_MAX_BACKOFF_SECONDS, jitter=0))
         result = {
             "ok": False, "webhook_event": record.event, "target": label,
             "delivery": record.delivery,

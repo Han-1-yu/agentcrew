@@ -139,10 +139,12 @@ async def test_stream_call_raises_loop_detected_when_enabled(
 
     chunks: list[str] = []
     with pytest.raises(LoopDetectedError) as ei:
+        # noqa 理由（PERF401）：中断流已吐出的部分 chunk 必须留在 chunks 里，
+        # 异步推导式在异常时不会 extend，会丢掉「流不可回滚」的证据。
         async for chunk in f.stream_call(
             "mock:loop", [{"role": "user", "content": "hi"}],
             temperature=0, max_tokens=100, purpose="execute", role="r"):
-            chunks.append(chunk.delta)
+            chunks.append(chunk.delta)  # noqa: PERF401
 
     assert ei.value.channel == "text"
     assert ei.value.window_size == UnitRun.LOOP_WINDOW
@@ -163,10 +165,10 @@ async def test_stream_call_no_loop_guard_by_default(settings, tmp_path, monkeypa
     repeating = "i am stuck in a loop and i repeat myself. " * 400
     monkeypatch.setattr(f, "_resolve", lambda alias: _RepeatingStreamProvider(repeating))
 
-    chunks: list[str] = []
-    async for chunk in f.stream_call(
-        "mock:loop", [{"role": "user", "content": "hi"}],
-        temperature=0, max_tokens=100, purpose="execute", role="r"):
-        chunks.append(chunk.delta)
+    chunks = [
+        chunk.delta async for chunk in f.stream_call(
+            "mock:loop", [{"role": "user", "content": "hi"}],
+            temperature=0, max_tokens=100, purpose="execute", role="r")
+    ]
     assert "".join(chunks) == repeating
     assert lg.count("loop_detected") == 0

@@ -24,7 +24,7 @@ import logging
 import os
 import time
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any
 
@@ -81,10 +81,8 @@ def _exclusive(fd: int) -> Iterator[None]:
         yield
     finally:
         if releaser is not None:
-            try:
+            with suppress(OSError):
                 releaser()
-            except OSError:
-                pass
 
 
 def _open_lock(path: Path) -> int | None:

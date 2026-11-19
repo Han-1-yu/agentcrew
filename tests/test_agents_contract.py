@@ -363,6 +363,6 @@ def test_builtin_roles_are_the_agent_module_roles():
     )
     modules = (project_manager, product_manager, architect, backend_dev,
                frontend_dev, qa_engineer, devops_engineer, technical_writer)
-    assert BUILTIN_ROLES == tuple(module.ROLE for module in modules)
+    assert tuple(module.ROLE for module in modules) == BUILTIN_ROLES
     for role, module in zip(BUILTIN_ROLES, modules, strict=True):
         assert role is module.ROLE

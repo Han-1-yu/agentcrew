@@ -26,6 +26,7 @@ HTTP 响应并登记进 :attr:`ApiServer.active_crews`，任务结束时摘除�
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -38,7 +39,7 @@ from urllib.parse import parse_qs
 
 from agentcrew.api import http as http_transport
 from agentcrew.api.auth import APIKeyAuth, RateLimiter
-from agentcrew.api.paths import PathRejected, canonical_target
+from agentcrew.api.paths import PathRejectedError, canonical_target
 from agentcrew.api.rbac import (
     ALL_SCOPES,
     SCOPE_RUNS_WRITE,
@@ -117,10 +118,9 @@ class EventBus:
         for queue, want in list(self._subscribers.items()):
             if want is not None and run_id and want != run_id:
                 continue   # 别的 run 的事件：不投递，连队列都不碰
-            try:
+            # 慢客户端丢弃，不阻塞发布者。
+            with contextlib.suppress(asyncio.QueueFull):
                 queue.put_nowait(payload)
-            except asyncio.QueueFull:
-                pass  # 慢客户端丢弃，不阻塞发布者
 
     def subscribe(self, run_id: str | None = None) -> asyncio.Queue[str]:
         """订阅事件流（``run_id`` 为空 = 通配）；用完须调用 :meth:`unsubscribe`。"""
@@ -413,7 +413,7 @@ class ApiServer:
             # /keys」的编码绕过就没有生存空间（见 agentcrew/api/paths.py）。
             try:
                 path, query = canonical_target(request.path)
-            except PathRejected as exc:
+            except PathRejectedError as exc:
                 await self._send_json(
                     writer, 400, {"error": f"非法请求路径：{exc}"})
                 return
@@ -463,17 +463,13 @@ class ApiServer:
             _logger.error("unhandled api error on %s: %s",
                           request.path if request else "-",
                           self._internal_detail(exc))
-            try:
+            with contextlib.suppress(ConnectionError, OSError):
                 await self._send_json(
                     writer, 500, self._internal_error_body(exc))
-            except (ConnectionError, OSError):
-                pass
         finally:
             writer.close()
-            try:
+            with contextlib.suppress(ConnectionError, OSError):
                 await writer.wait_closed()
-            except (ConnectionError, OSError):
-                pass
 
     # ── E-3：认证 / 速率限制中间件 ──────────────────────────────────────────
 
@@ -1462,10 +1458,8 @@ class ApiServer:
             raise
         except Exception as exc:
             if not started.done():
-                try:
+                with contextlib.suppress(Exception):
                     started.set_exception(exc)
-                except Exception:
-                    pass
         finally:
             # 2026-11 并发加固：无论结局如何都释放并发 run 槽位（创建端点在
             # ``create_task`` 前同步占用）。coroutine 已被调度后才可能进入本
@@ -1497,10 +1491,8 @@ class ApiServer:
             if original is not None:
                 original(event, payload)
 
-        try:
+        with contextlib.suppress(Exception):
             crew._on_event = forward
-        except Exception:
-            pass
 
     async def _get_agents(self, run_id: str, writer: asyncio.StreamWriter) -> None:
         """``GET /runs/{id}/agents``：读本次 run **解析后**的执行体编排计划。
@@ -2758,9 +2750,9 @@ class ApiServer:
             "# TYPE agentcrew_runs_by_status gauge",
         ]
         if by_status:
-            for status in sorted(by_status):
-                lines.append(
-                    f'agentcrew_runs_by_status{{status="{status}"}} {by_status[status]}')
+            lines.extend(
+                f'agentcrew_runs_by_status{{status="{status}"}} {by_status[status]}'
+                for status in sorted(by_status))
         else:
             lines.append('agentcrew_runs_by_status{status="none"} 0')
         lines += [

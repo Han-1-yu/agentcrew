@@ -235,10 +235,7 @@ class CheckpointStore:
         # D-14：``run_id`` 仍用**本地时间**生成——目录名是给人看的，用户期望
         # 看到「我刚才 15:30 跑的那个」。落盘时间戳则统一 aware UTC。
         local_now = datetime.now()
-        if run_id is None:
-            run_id = slugify_run_id(local_now)
-        else:
-            run_id = _validated_run_id(run_id)
+        run_id = slugify_run_id(local_now) if run_id is None else _validated_run_id(run_id)
         run_dir = Path(output_dir) / run_id
         if (run_dir / "run.json").is_file():
             raise FileExistsError(

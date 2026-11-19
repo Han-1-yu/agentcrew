@@ -1735,12 +1735,12 @@ class Settings(BaseModel):
         自定义 provider 的密钥一旦漏进事件/日志也必须被抹掉。
         """
         env_names: list[str] = list(_PROVIDER_KEY_ENV.values())
-        for preset in PROVIDER_PRESETS.values():
-            if preset.api_key_env:
-                env_names.append(preset.api_key_env)
-        for custom in self.custom_providers.values():
-            if isinstance(custom, Mapping) and custom.get("api_key_env"):
-                env_names.append(str(custom["api_key_env"]))
+        env_names.extend(
+            preset.api_key_env for preset in PROVIDER_PRESETS.values()
+            if preset.api_key_env)
+        env_names.extend(
+            str(custom["api_key_env"]) for custom in self.custom_providers.values()
+            if isinstance(custom, Mapping) and custom.get("api_key_env"))
         found = [
             raw.strip()
             for env_name in env_names

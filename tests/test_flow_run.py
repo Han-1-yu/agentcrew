@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 
@@ -220,10 +221,8 @@ async def test_api_accepts_inline_flow_and_starts_run(fx):
         await writer.drain()
         raw = await asyncio.wait_for(reader.read(65536), timeout=15)
         writer.close()
-        try:
+        with contextlib.suppress(ConnectionError, asyncio.CancelledError):
             await writer.wait_closed()
-        except (ConnectionError, asyncio.CancelledError):
-            pass
         head, _, body = raw.partition(b"\r\n\r\n")
         status = int(head.split(b"\r\n", 1)[0].split()[1])
         data = json.loads(body.decode("utf-8") or "{}")
@@ -256,10 +255,8 @@ async def test_api_rejects_invalid_flow_with_400(fx):
         await writer.drain()
         raw = await asyncio.wait_for(reader.read(65536), timeout=15)
         writer.close()
-        try:
+        with contextlib.suppress(ConnectionError, asyncio.CancelledError):
             await writer.wait_closed()
-        except (ConnectionError, asyncio.CancelledError):
-            pass
         head, _, body = raw.partition(b"\r\n\r\n")
         status = int(head.split(b"\r\n", 1)[0].split()[1])
         data = json.loads(body.decode("utf-8") or "{}")

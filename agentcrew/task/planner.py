@@ -231,13 +231,12 @@ def _check_condition_edges(tasks: Sequence[Task]) -> list[str]:
                 f"任务 {task.id!r} 声明了 when_outcomes 但没有 dependencies："
                 "条件边必须挂在至少一个上游任务之后"
             )
-        for raw in task.when_outcomes:
-            if normalize_condition(raw) is None:
-                errors.append(
-                    f"任务 {task.id!r} 的 when_outcomes 含非法条件 {raw!r}："
-                    "允许小写字母/数字/下划线/连字符的标签（1–64），"
-                    "或否定写法 !label，或兜底写法 *"
-                )
+        errors.extend(
+            f"任务 {task.id!r} 的 when_outcomes 含非法条件 {raw!r}："
+            "允许小写字母/数字/下划线/连字符的标签（1–64），"
+            "或否定写法 !label，或兜底写法 *"
+            for raw in task.when_outcomes
+            if normalize_condition(raw) is None)
     return errors
 
 
@@ -613,10 +612,9 @@ def _goal_keywords(goal: str) -> list[str]:
     中文没有空格分词，二元滑窗是最简单的「覆盖面」近似 —— 它不做语义分析，
     只衡量任务正文里是否反复出现 goal 里的字组。去重保序。
     """
-    keys: list[str] = []
-    for word in _ASCII_TOKEN.findall(goal):
-        if len(word) >= 2:
-            keys.append(word.lower())
+    keys: list[str] = [
+        word.lower() for word in _ASCII_TOKEN.findall(goal) if len(word) >= 2
+    ]
     for run in _CJK_RUN.findall(goal):
         if len(run) >= 2:
             keys.extend(run[i : i + 2] for i in range(len(run) - 1))
@@ -682,10 +680,8 @@ def score_plan(tasks: Sequence[Task], goal: str) -> PlanScore:
         dependency_quality = 0.5
 
     # ── deliverable_clarity ──
-    if drafts:
-        with_deliv = sum(1 for task in drafts if task.deliverables) / len(drafts)
-    else:
-        with_deliv = 0.0
+    with_deliv = (sum(1 for task in drafts if task.deliverables) / len(drafts)
+                  if drafts else 0.0)
     all_deliverables = [spec for task in drafts for spec in task.deliverables]
     if all_deliverables:
         required_ratio = (

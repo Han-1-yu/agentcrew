@@ -57,6 +57,7 @@ import** 运行时编排层（``runtime.ledger``）与任务领域层（``task.t
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import random
 import time
@@ -70,7 +71,7 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 from pydantic import BaseModel, ValidationError
 
 from agentcrew.config import Settings
-from agentcrew.contracts import AgentBudgetExceeded, EventSink, TaskLike
+from agentcrew.contracts import AgentBudgetExceededError, EventSink, TaskLike
 from agentcrew.models import agent_budget, budget, routing, structured
 from agentcrew.models.affinity import AffinityTracker
 from agentcrew.models.cache import LLMCache
@@ -1689,7 +1690,7 @@ class ModelFactory:
         if state is not None and state.run_ceiling_usd is not None and state.profile:
             spent = self._agent_run_cost.get(state.profile, 0.0)
             if spent >= state.run_ceiling_usd:
-                raise AgentBudgetExceeded(
+                raise AgentBudgetExceededError(
                     state.profile, kind="run_cost",
                     limit=state.run_ceiling_usd, used=spent)
         # 全局硬上限（None = 未配置，整体空转）：已在盘上的花费/次数先于下一次
@@ -1827,7 +1828,8 @@ class ModelFactory:
         request_preview = response_preview = None
         if getattr(tracer, "capture_content", False):
             response_preview = result.text
-        try:
+        # 可观测性不许打断真实调用：任何 tracer 异常都吞掉。
+        with contextlib.suppress(Exception):
             tracer.record_llm(
                 model=binding.model,
                 provider=binding.provider,
@@ -1842,8 +1844,6 @@ class ModelFactory:
                 request_preview=request_preview,
                 response_preview=response_preview,
             )
-        except Exception:  # noqa: BLE001 —— 可观测性不许打断真实调用
-            pass
 
     def _account_cached(
         self, result: CompletionResult, *, purpose: str, role: str

@@ -130,10 +130,8 @@ class _ReviewOutcome:
 
     @property
     def summary(self) -> str:
-        if self.approved:
-            base = "未发现问题"
-        else:
-            base = "；".join(self.issues) or "有验收标准未满足"
+        base = ("未发现问题" if self.approved
+                else "；".join(self.issues) or "有验收标准未满足")
         if self.suggestions:
             base += "（建议：" + "；".join(self.suggestions) + "）"
         return base

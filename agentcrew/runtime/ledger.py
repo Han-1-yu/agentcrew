@@ -35,7 +35,7 @@ import itertools
 import json
 import logging
 import os
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -43,6 +43,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from agentcrew.utils.logger import redact
+from agentcrew.utils.redact import redact_value
 
 from ..utils.clock import utc_now
 
@@ -78,24 +79,9 @@ class LedgerEvent(BaseModel):
     data: dict[str, Any]
 
 
-def _redact_value(value: Any, secrets: Sequence[str]) -> Any:
-    """递归脱敏：字符串过 ``redact``，容器**重建**（不改调用方对象），其余原样。
-
-    字符串之外的标量不转字符串：``emit`` 写盘时 int 仍写 int、bool 仍写 bool；
-    键同样过一遍——键和值一样可能夹带密钥（如 ``{"sk-...": ...}``）。
-    """
-    if isinstance(value, str):
-        return redact(value, secrets)
-    if isinstance(value, Mapping):
-        return {
-            _redact_value(key, secrets): _redact_value(item, secrets)
-            for key, item in value.items()
-        }
-    if isinstance(value, list):
-        return [_redact_value(item, secrets) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_redact_value(item, secrets) for item in value)
-    return value
+#: R-A 去重：实现迁至 ``utils/redact.py``（ledger 语义为基准），此处保留旧名
+#: 供模块内引用；行为逐字不变。
+_redact_value = redact_value
 
 
 def _error_location(exc: ValidationError, secrets: Sequence[str]) -> str:
@@ -196,7 +182,9 @@ class Ledger:
         if event is not None:
             event = redact(event, self._secrets)
         try:
-            file = open(self._path, encoding="utf-8", errors="replace")
+            # noqa 理由：SIM115 误报——句柄在下方 ``with file:`` 中管理，
+            # 这里拆开只是为了把「打不开」与「读中途出错」分成两条路径。
+            file = open(self._path, encoding="utf-8", errors="replace")  # noqa: SIM115
         except FileNotFoundError:
             return  # 从未 emit 过（或 run 目录被清理）：零事件是诚实的答案
         except OSError as exc:

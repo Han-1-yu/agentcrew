@@ -37,8 +37,15 @@ target-version = "py310"  # spec 声明的运行下界就是 3.10；定高了会
 extend-exclude = ["examples/fixtures", "output", ".venv"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B"]
-ignore = ["E501"]  # 行长由 formatter / 评审把关，起步阶段不设硬线
+# R-A 收口：在起步集之上加 SIM（可简化写法）/ RET（返回路径）/ PERF（常见低效）。
+# 刻意不引入 TRY：TRY003（异常带长文案）与 TRY004（类型错误抛 ValueError）是
+# 项目约定——中文直白报错文案 + 配置错误统一收口为 ValueError（见 config.py
+# `_yaml_values` 的注释），迁移它们只会制造噪音，不是缺陷。
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RET", "PERF"]
+# E501：行长由 formatter / 评审把关，起步阶段不设硬线。
+# PERF203：循环内 try/except 在 py3.11+ 才是零成本；本项目运行下界 3.10，
+# 且这些循环多为「逐条容错」语义，为消规则而重构会改变容错边界，不值。
+ignore = ["E501", "PERF203"]
 
 # ── 覆盖率（P1「覆盖率基线 + 门槛」）────────────────────────────────────
 # 只测 agentcrew 本体；报告在 `scripts/test.py --coverage` 里 combine 后统一出。

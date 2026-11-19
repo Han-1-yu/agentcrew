@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import logging
 from collections.abc import Callable, Mapping, Sequence
@@ -1014,11 +1015,9 @@ class Crew:
             # 来源，且盘上与硬杀产生的死 run 完全无法区分。CancelledError 已在
             # 上面单独收口为 INTERRUPTED，这里处理其余全部退出路径。
             if not self._finalized:
-                try:
+                # 封版自身失败不能掩盖原始异常；原异常必须如实抛给调用方。
+                with contextlib.suppress(Exception):
                     self._finalize(run, RunStatus.FAILED)
-                except Exception:
-                    # 封版自身失败不能掩盖原始异常；原异常必须如实抛给调用方。
-                    pass
             raise
 
     # ── 阶段 0：规划 ──────────────────────────────────────────────────────
@@ -1231,13 +1230,11 @@ class Crew:
         tracer = getattr(tracer, "tracer", None)
         if span is None or tracer is None:
             return
-        try:
+        with contextlib.suppress(Exception):
             tracer.end_span(
                 span,
                 status="ok" if status is RunStatus.COMPLETED else "error",
                 attributes={"agentcrew.run_status": status.value})
-        except Exception:  # noqa: BLE001
-            pass
 
     async def _flush_telemetry(self) -> None:
         """把本次 run 的 trace 导出（**不阻塞事件循环**，失败只记日志）。
@@ -1835,10 +1832,9 @@ class Crew:
                 specs = await client.list_tools()
             except Exception as exc:  # noqa: BLE001 —— 第三方进程什么都可能抛
                 if client is not None:
-                    try:
+                    # 关闭失败不掩盖原始错误。
+                    with contextlib.suppress(Exception):
                         await client.stop()
-                    except Exception:  # noqa: BLE001 —— 关闭失败不掩盖原始错误
-                        pass
                 ledger.emit(
                     "mcp_failed", server=str(server),
                     error=f"{type(exc).__name__}: {exc}"[:300])
@@ -1860,10 +1856,9 @@ class Crew:
         """
         clients, self._mcp_clients = self._mcp_clients, []
         for client in clients:
-            try:
+            # 已在收尾，关不掉的连接不再向上抛。
+            with contextlib.suppress(Exception):
                 await client.stop()
-            except Exception:  # noqa: BLE001 —— 已在收尾，不再向上抛
-                pass
 
     def _webhook_sink(
         self, ledger: Ledger
@@ -1874,13 +1869,11 @@ class Crew:
         那些结果记不上就记不上——绝不能因为「一条通知的日志」在收尾阶段抛异常。
         """
         def sink(name: str, data: dict[str, Any]) -> None:
-            try:
+            # RuntimeError：ledger 已关（收尾顺序差异）。
+            # TypeError：data 的键与 emit 的位置参数撞名——实测过一次
+            # （`event`），这类错误绝不该让 run 挂掉，所以一并兜住。
+            with contextlib.suppress(RuntimeError, TypeError):
                 ledger.emit(name, **data)
-            except (RuntimeError, TypeError):
-                # RuntimeError：ledger 已关（收尾顺序差异）。
-                # TypeError：data 的键与 emit 的位置参数撞名——实测过一次
-                # （`event`），这类错误绝不该让 run 挂掉，所以一并兜住。
-                pass
 
         return sink
 
@@ -2314,10 +2307,9 @@ class Crew:
                     hits=len(hits),
                 )
                 lines = ["## 团队文档（knowledge/docs/ 检索命中）"]
-                for hit in hits:
-                    lines.append(
-                        f"### {hit.chunk.doc} · {hit.chunk.heading}\n"
-                        f"{hit.chunk.text}")
+                lines.extend(
+                    f"### {hit.chunk.doc} · {hit.chunk.heading}\n{hit.chunk.text}"
+                    for hit in hits)
                 blocks.append("\n".join(lines))
         return "\n\n".join(blocks)
 
@@ -2736,10 +2728,7 @@ def _extract_experiences(
         if task.status is not TaskStatus.SUCCEEDED:
             continue
         result = task.result
-        if result is not None:
-            summary = (result.summary or result.notes)[:200]
-        else:
-            summary = ""
+        summary = (result.summary or result.notes)[:200] if result is not None else ""
         artifacts = sorted(record.path for record in store.by_task(task.id))
         exp = Experience(
             id=uuid4().hex,

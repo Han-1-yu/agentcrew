@@ -25,6 +25,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import threading
@@ -71,13 +72,11 @@ def write_heartbeat(run_dir: Path, *, now: datetime | None = None) -> None:
         "pid": os.getpid(),
         "updated_at": (now or utc_now()).isoformat(),
     }
-    try:
+    with contextlib.suppress(OSError):
         atomic_write_text(
             _heartbeat_path(run_dir),
             json.dumps(payload, ensure_ascii=False),
         )
-    except OSError:
-        pass
 
 
 def read_heartbeat(run_dir: Path) -> datetime | None:
@@ -93,10 +92,8 @@ def read_heartbeat(run_dir: Path) -> datetime | None:
 
 def clear_heartbeat(run_dir: Path) -> None:
     """正常收尾时删掉心跳；文件已被别的进程删掉也算成功。"""
-    try:
+    with contextlib.suppress(OSError):
         _heartbeat_path(run_dir).unlink()
-    except OSError:
-        pass
 
 
 class RunHeartbeat:
@@ -265,10 +262,8 @@ class ResumeLock:
                 with os.fdopen(handle, "w", encoding="utf-8") as file:
                     file.write(payload)
             except OSError as exc:
-                try:
+                with contextlib.suppress(OSError):
                     self._path.unlink(missing_ok=True)
-                except OSError:
-                    pass
                 raise ResumeLockError(
                     f"无法写入 resume 锁 {self._path}：{exc}") from exc
             self._owner = owner
