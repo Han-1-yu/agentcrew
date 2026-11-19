@@ -7,7 +7,9 @@
   flex: 0 0 22%; width: 22%; min-width: 232px; max-width: 304px;
   display: flex; flex-direction: column; min-height: 0;
   padding: 14px 10px 12px;
-  background: var(--bg-page);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: saturate(var(--glass-saturate)) blur(var(--blur-panel));
+  backdrop-filter: saturate(var(--glass-saturate)) blur(var(--blur-panel));
   border-right: 0.5px solid var(--border);
 }
 
@@ -78,7 +80,7 @@
 .sb-group { display: flex; flex-direction: column; min-height: 0; margin-top: var(--sp-4); }
 .sb-group-label {
   padding: 0 10px; margin-bottom: 7px;
-  font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0;
+  font-size: var(--fs-sm); font-weight: 600; letter-spacing: 0;
   color: var(--text-ter);
 }
 .sb-proj { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px; color: var(--text); }

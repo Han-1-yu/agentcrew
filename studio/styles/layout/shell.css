@@ -21,8 +21,8 @@
 /* ===== 主内容区 ===== */
 #main { flex: 1; min-width: 0; overflow-y: auto; overflow-x: hidden; }
 
-/* 看板：垂直节奏 20px，分组卡片之间留足呼吸；底部预留悬浮命令框高度 */
-#dashboard-view { padding: 20px 28px 192px; display: flex; flex-direction: column; gap: 20px; }
+/* 看板：inset grouped——主区左右 16px 边距，组间 24px；底部预留悬浮命令框高度 */
+#dashboard-view { padding: 24px 16px 192px; display: flex; flex-direction: column; gap: 24px; }
 
 /* 非看板页：页面自带内边距 */
 #placeholder-view:not(.hidden) { padding-bottom: 2rem; }

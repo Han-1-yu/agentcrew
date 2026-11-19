@@ -19,7 +19,7 @@
 .rs-goal {
   flex: 1; min-width: 140px;
   font-family: var(--font-display);
-  font-size: 22px; font-weight: 600; letter-spacing: var(--ls-tight);
+  font-size: var(--fs-h1); font-weight: 700; letter-spacing: var(--ls-tight);
   color: var(--text);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }

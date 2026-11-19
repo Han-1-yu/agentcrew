@@ -10,10 +10,10 @@
   animation: none !important;
 }
 
-/* 页面内容淡入 */
+/* 页面内容淡入（≤200ms 约束） */
 @keyframes pageFadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 .dash-block, .page-head, .ev-full-list, .art-layout, .agents-grid, .gate-cards, .dag-full-wrap, .settings-form, .settings-groups {
-  animation: pageFadeIn var(--dur-2) var(--ease-out);
+  animation: pageFadeIn .2s var(--ease-out);
 }
 
 /* 详情面板：iOS 抽屉滑入 */
@@ -32,10 +32,10 @@
 .toast { animation: toastIn var(--dur-3) var(--ease-spring); }
 .toast.leaving { animation: toastOut var(--dur-2) var(--ease-in-out) forwards; }
 
-/* 模态弹窗：iOS alert 式淡入 + 轻微缩放回落 */
-@keyframes modalIn { from { opacity: 0; transform: translate(-50%, -50%) scale(1.04); } to { opacity: 1; transform: translate(-50%, -50%) scale(1); } }
-#modal { opacity: 0; transform: translate(-50%, -50%) scale(1.04); transition: opacity var(--dur-2) ease, transform var(--dur-3) var(--ease-out); }
-#modal.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+/* 模态弹窗：iOS Sheet 弹簧滑入 */
+@keyframes modalIn { from { opacity: 0; transform: translate(-50%, -46%); } to { opacity: 1; transform: translate(-50%, -50%); } }
+#modal { opacity: 0; transform: translate(-50%, -46%); transition: opacity var(--dur-2) ease, transform var(--dur-3) var(--ease-spring); }
+#modal.show { opacity: 1; transform: translate(-50%, -50%); }
 #modal-mask { opacity: 0; transition: opacity var(--dur-2) ease; pointer-events: none; }
 #modal-mask.show { opacity: 1; pointer-events: auto; }
 
@@ -57,7 +57,7 @@ body, #topbar, #sidebar, .dash-block, .gate-card, .agent-card,
 }
 .btn { transition: background var(--dur-1) ease, color var(--dur-1) ease, opacity var(--dur-1) ease, transform var(--dur-1) var(--ease-out), box-shadow var(--dur-1) ease; }
 #detail-panel { transition: transform var(--dur-3) var(--ease-out), opacity var(--dur-2) ease, background-color var(--dur-2) ease; }
-#modal { transition: opacity var(--dur-2) ease, transform var(--dur-3) var(--ease-out), background-color var(--dur-2) ease; }
+#modal { transition: opacity var(--dur-2) ease, transform var(--dur-3) var(--ease-spring), background-color var(--dur-2) ease; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }

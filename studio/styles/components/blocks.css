@@ -20,16 +20,20 @@
   letter-spacing: var(--ls-tight); color: var(--text);
 }
 
-/* ---- 页面头（非看板页）：大标题层级 ---- */
+/* ---- 页面头（非看板页）：iPadOS 大标题导航 + 右对齐 tint 操作 ---- */
 .page-head {
   display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
-  padding: var(--sp-5) var(--sp-6) var(--sp-3);
+  padding: var(--sp-6) var(--sp-4) var(--sp-4);
   border-bottom: 0.5px solid var(--border-weak);
 }
 .page-head h2 {
   margin: 0; font-family: var(--font-display);
-  font-size: var(--fs-h1); font-weight: 600; letter-spacing: var(--ls-tight);
+  font-size: var(--fs-display); font-weight: 700; letter-spacing: var(--ls-tight);
 }
+/* 工具栏操作：tint 风格（accent 文字/图标，无粗边框），主/危险按钮除外 */
+.page-head .btn:not(.btn-primary):not(.btn-danger) { background: transparent; color: var(--accent-text); }
+.page-head .btn:not(.btn-primary):not(.btn-danger):hover { background: var(--accent-bg-soft); }
+.page-head .btn:not(.btn-primary):not(.btn-danger):active { background: var(--accent-bg); }
 .ph-empty { padding: var(--sp-10) var(--sp-5); text-align: center; font-size: var(--fs-body); color: var(--text-ter); }
 
 /* ---- 状态点：一颗小圆，状态色是它唯一的色彩 ---- */

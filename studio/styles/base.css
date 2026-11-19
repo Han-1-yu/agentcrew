@@ -24,7 +24,7 @@ button { cursor: pointer; }
 h1, h2, h3, h4 {
   margin: 0;
   font-family: var(--font-display);
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: var(--ls-tight);
   line-height: var(--lh-tight);
 }

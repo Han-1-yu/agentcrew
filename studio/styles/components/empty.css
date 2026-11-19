@@ -26,8 +26,8 @@
 .loading-overlay { position: fixed; inset: 0; background: var(--loading-mask);
    z-index: 100; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 14px; }
-.loading-spinner { width: 28px; height: 28px; border: 2.5px solid var(--accent-track);
-  border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
+.loading-spinner { width: 28px; height: 28px; border: 2.5px solid var(--ink-15);
+  border-top-color: var(--text-sub); border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .loading-text { font-size: var(--fs-body); color: var(--text-sub); }
 
@@ -46,9 +46,9 @@
 }
 .page-state .btn { margin-top: var(--sp-2); }
 .page-state-spinner {
-  width: 22px; height: 22px; border: 2px solid var(--accent-track);
-  border-top-color: var(--accent); border-radius: 50%;
-  animation: spin .7s linear infinite;
+  width: 22px; height: 22px; border: 2px solid var(--ink-15);
+  border-top-color: var(--text-sub); border-radius: 50%;
+  animation: spin .8s linear infinite;
 }
 .page-state.is-error .page-state-title { color: var(--error-text); }
 .page-state.is-error { background: var(--error-bg-faint); border-radius: var(--r-sm); }
