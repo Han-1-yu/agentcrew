@@ -1,174 +1,182 @@
-/* 浅色主题（默认）—— WorkBuddy 扁平设计语言的本体。
+/* 浅色主题（默认）—— iOS 设计语言。
  * 与 tokens.css 共用同一套变量名，只覆盖颜色；字阶 / 间距 / 圆角 / 动效共用 :root。
  * 选择器必须限定在 :root 上——设置页的主题分段按钮也带 data-theme，不能被误伤。
  *
- * 取色规则：c-gray 暖灰中性（50 底 / 600 次文字 / 900 正文），
- * c-purple 600 强调，c-blue/green/amber/red 的 50 底 + 600/800 字做语义色。
+ * 取色规则：iOS systemGroupedBackground #F2F2F7 页底 + 纯白分组卡片，
+ * label / secondaryLabel / tertiaryLabel 三级文字，系统蓝 #007AFF 强调，
+ * green / orange / red 用可达性深阶做文字、系统色半透明做底。
  */
 
 :root[data-theme="light"] {
-  /* ── 背景四层：暖灰页底 + 纯白卡片 ── */
-  --bg-page: #F1EFE8;
-  --bg-panel: #FFFFFF;
-  --bg-subtle: #E8E6DE;
-  --bg-float: #FFFFFF;
-  --bg-canvas: #FFFFFF;
-  --bg-inset: rgba(44, 44, 42, 0.04);
+  color-scheme: light;
 
-  /* ── 极光：透明（DOM 层已删） ── */
+  /* ── 背景四层：分组灰页底 + 纯白卡片 ── */
+  --bg-page: #F2F2F7;
+  --bg-panel: #FFFFFF;
+  --bg-subtle: rgba(118, 118, 128, 0.10);
+  --bg-float: #FFFFFF;
+  --bg-canvas: #F2F2F7;
+  --bg-inset: rgba(118, 118, 128, 0.07);
+
+  /* ── 极光：兼容保留，透明 ── */
   --aurora-1: transparent;
   --aurora-2: transparent;
   --aurora-3: transparent;
-  --aurora-base-from: #F1EFE8;
-  --aurora-base-mid: #F1EFE8;
-  --aurora-base-to: #F1EFE8;
+  --aurora-base-from: #F2F2F7;
+  --aurora-base-mid: #F2F2F7;
+  --aurora-base-to: #F2F2F7;
 
-  /* ── 旧玻璃变量：实色白面 + 细边框 + 无高光无模糊 ── */
-  --glass-bg: #FFFFFF;
-  --glass-bg-strong: #FFFFFF;
-  --glass-bg-quiet: #FFFFFF;
-  --glass-border: rgba(44, 44, 42, 0.15);
-  --glass-border-strong: rgba(44, 44, 42, 0.30);
-  --glass-highlight: none;
-  --glass-highlight-strong: none;
+  /* ── 毛玻璃材质：白雾面 + 模糊 + 顶部高光 ── */
+  --glass-bg: rgba(255, 255, 255, 0.72);
+  --glass-bg-strong: rgba(255, 255, 255, 0.86);
+  --glass-bg-quiet: rgba(255, 255, 255, 0.55);
+  --glass-border: rgba(60, 60, 67, 0.14);
+  --glass-border-strong: rgba(60, 60, 67, 0.26);
+  --glass-highlight: inset 0 0.5px 0 rgba(255, 255, 255, 0.65);
+  --glass-highlight-strong: inset 0 0.5px 0 rgba(255, 255, 255, 0.85);
 
-  /* ── 边框：0.5px 实线 ── */
-  --border: rgba(44, 44, 42, 0.15);
-  --border-weak: rgba(44, 44, 42, 0.08);
-  --border-input: rgba(44, 44, 42, 0.30);
+  /* ── 边框：0.5px 发丝线（iOS separator） ── */
+  --border: rgba(60, 60, 67, 0.12);
+  --border-weak: rgba(60, 60, 67, 0.08);
+  --border-input: rgba(60, 60, 67, 0.28);
 
-  /* ── 文字三级（c-gray 900 / 600 / 400） ── */
-  --text: #2C2C2A;
-  --text-sub: #5F5E5A;
-  --text-ter: #66655E;
+  /* ── 文字三级（iOS label；辅助灰字加深到对比度 ≥4.5:1） ── */
+  --text: #1C1C1E;
+  --text-sub: rgba(60, 60, 67, 0.78);
+  --text-ter: rgba(60, 60, 67, 0.72);
   --on-solid: #FFFFFF;
+  --on-role: #FFFFFF;
 
-  /* ── 强调色：c-purple 600 ── */
-  --accent: #534AB7;
-  --accent-hover: #3C3489;
-  --accent-text: #534AB7;
-  --accent-bg-faint: rgba(83, 74, 183, 0.04);
-  --accent-bg-soft: rgba(83, 74, 183, 0.07);
-  --accent-bg: #EEEDFE;
-  --accent-bg-strong: #CECBF6;
-  --accent-focus: rgba(83, 74, 183, 0.22);
-  --accent-track: rgba(83, 74, 183, 0.26);
-  --accent-border: rgba(83, 74, 183, 0.32);
-  --accent-border-med: rgba(83, 74, 183, 0.42);
-  --accent-border-strong: rgba(83, 74, 183, 0.60);
-  --accent-border-soft: rgba(83, 74, 183, 0.20);
+  /* ── 强调色：iOS 系统蓝 ── */
+  --accent: #007AFF;
+  --accent-hover: #0066D6;
+  --accent-text: #007AFF;
+  --accent-bg-faint: rgba(0, 122, 255, 0.05);
+  --accent-bg-soft: rgba(0, 122, 255, 0.08);
+  --accent-bg: rgba(0, 122, 255, 0.11);
+  --accent-bg-strong: rgba(0, 122, 255, 0.18);
+  --accent-focus: rgba(0, 122, 255, 0.25);
+  --accent-track: rgba(0, 122, 255, 0.28);
+  --accent-border: rgba(0, 122, 255, 0.34);
+  --accent-border-med: rgba(0, 122, 255, 0.44);
+  --accent-border-strong: rgba(0, 122, 255, 0.62);
+  --accent-border-soft: rgba(0, 122, 255, 0.22);
   --glow-accent: transparent;
   --glow-running: transparent;
 
-  /* ── 中性墨色：暖灰透明档 ── */
-  --ink-02: rgba(44, 44, 42, 0.02);
-  --ink-03: rgba(44, 44, 42, 0.03);
-  --ink-04: rgba(44, 44, 42, 0.04);
-  --ink-05: rgba(44, 44, 42, 0.05);
-  --ink-06: rgba(44, 44, 42, 0.06);
-  --ink-07: rgba(44, 44, 42, 0.07);
-  --ink-08: rgba(44, 44, 42, 0.08);
-  --ink-10: rgba(44, 44, 42, 0.10);
-  --ink-12: rgba(44, 44, 42, 0.12);
-  --ink-14: rgba(44, 44, 42, 0.14);
-  --ink-15: rgba(44, 44, 42, 0.15);
-  --ink-18: rgba(44, 44, 42, 0.18);
-  --ink-20: rgba(44, 44, 42, 0.20);
-  --ink-22: rgba(44, 44, 42, 0.22);
-  --ink-25: rgba(44, 44, 42, 0.25);
-  --ink-28: rgba(44, 44, 42, 0.28);
-  --ink-30: rgba(44, 44, 42, 0.30);
+  /* ── 中性墨色：iOS fill 透明档 ── */
+  --ink-02: rgba(60, 60, 67, 0.02);
+  --ink-03: rgba(60, 60, 67, 0.03);
+  --ink-04: rgba(60, 60, 67, 0.04);
+  --ink-05: rgba(60, 60, 67, 0.05);
+  --ink-06: rgba(60, 60, 67, 0.06);
+  --ink-07: rgba(60, 60, 67, 0.07);
+  --ink-08: rgba(60, 60, 67, 0.08);
+  --ink-10: rgba(60, 60, 67, 0.10);
+  --ink-12: rgba(60, 60, 67, 0.12);
+  --ink-14: rgba(60, 60, 67, 0.14);
+  --ink-15: rgba(60, 60, 67, 0.15);
+  --ink-18: rgba(60, 60, 67, 0.18);
+  --ink-20: rgba(60, 60, 67, 0.20);
+  --ink-22: rgba(60, 60, 67, 0.22);
+  --ink-25: rgba(60, 60, 67, 0.25);
+  --ink-28: rgba(60, 60, 67, 0.28);
+  --ink-30: rgba(60, 60, 67, 0.30);
 
-  /* ── 语义色：50 底 + 600/800 字（c-green / c-amber / c-red） ── */
-  --success: #3B6D11;
-  --success-text: #27500A;
-  --success-bg-quiet: rgba(234, 243, 222, 0.55);
-  --success-bg: #EAF3DE;
-  --success-bg-chip: #C0DD97;
+  /* ── 语义色：iOS 系统色做底/点/进度，深阶变体做文字（保证 ≥4.5:1） ── */
+  --success: #34C759;
+  --success-text: #1E7A34;
+  --success-bg-quiet: rgba(52, 199, 89, 0.07);
+  --success-bg: rgba(52, 199, 89, 0.13);
+  --success-bg-chip: rgba(52, 199, 89, 0.22);
 
-  --warn: #854F0B;
-  --warn-text: #633806;
-  --warn-bg-soft: rgba(250, 238, 218, 0.55);
-  --warn-bg: #FAEEDA;
-  --warn-border-soft: rgba(133, 79, 11, 0.18);
-  --warn-border: rgba(133, 79, 11, 0.32);
+  --warn: #FF9500;
+  --warn-text: #A53A00;
+  --warn-bg-soft: rgba(255, 149, 0, 0.08);
+  --warn-bg: rgba(255, 149, 0, 0.14);
+  --warn-border-soft: rgba(201, 52, 0, 0.20);
+  --warn-border: rgba(201, 52, 0, 0.34);
 
-  --error: #A32D2D;
-  --error-text: #791F1F;
-  --error-bg-faint: rgba(252, 235, 235, 0.40);
-  --error-bg-ghost: rgba(252, 235, 235, 0.50);
-  --error-bg-quiet: rgba(252, 235, 235, 0.65);
-  --error-bg: #FCEBEB;
-  --error-bg-soft: #FCEBEB;
-  --error-bg-med: #F7C1C1;
-  --error-bg-chip: #F7C1C1;
-  --error-border-soft: rgba(163, 45, 45, 0.18);
-  --error-border: rgba(163, 45, 45, 0.32);
-  --error-border-strong: rgba(163, 45, 45, 0.52);
+  --error: #FF3B30;
+  --error-text: #C40016;
+  --error-bg-faint: rgba(255, 59, 48, 0.04);
+  --error-bg-ghost: rgba(255, 59, 48, 0.05);
+  --error-bg-quiet: rgba(255, 59, 48, 0.07);
+  --error-bg: rgba(255, 59, 48, 0.11);
+  --error-bg-soft: rgba(255, 59, 48, 0.14);
+  --error-bg-med: rgba(255, 59, 48, 0.18);
+  --error-bg-chip: rgba(255, 59, 48, 0.24);
+  --error-border-soft: rgba(215, 0, 21, 0.20);
+  --error-border: rgba(215, 0, 21, 0.34);
+  --error-border-strong: rgba(215, 0, 21, 0.54);
 
-  /* ── 10 种任务状态：蓝 / 绿 / 红 / 琥珀 / 灰 ── */
-  --status-pending: #5F5E5A;
-  --status-pending-bg: #F1EFE8;
-  --status-ready: #185FA5;
-  --status-ready-bg: #E6F1FB;
-  --status-running: #185FA5;
-  --status-running-bg: #E6F1FB;
-  --status-review: #854F0B;
-  --status-review-bg: #FAEEDA;
-  --status-rework: #854F0B;
-  --status-rework-bg: #FAEEDA;
-  --status-blocked: #854F0B;
-  --status-blocked-bg: #FAEEDA;
-  --status-succeeded: #3B6D11;
-  --status-succeeded-bg: #EAF3DE;
-  --status-failed: #A32D2D;
-  --status-failed-bg: #FCEBEB;
-  --status-skipped: #5F5E5A;
-  --status-skipped-bg: #F1EFE8;
-  --status-cancelled: #5F5E5A;
-  --status-cancelled-bg: #F1EFE8;
+  /* ── 10 种任务状态：蓝 / 绿 / 红 / 橙 / 灰 ── */
+  --status-pending: rgba(60, 60, 67, 0.68);
+  --status-pending-bg: rgba(118, 118, 128, 0.12);
+  --status-ready: #0071E3;
+  --status-ready-bg: rgba(0, 122, 255, 0.11);
+  --status-running: #007AFF;
+  --status-running-bg: rgba(0, 122, 255, 0.14);
+  --status-review: #C93400;
+  --status-review-bg: rgba(255, 149, 0, 0.14);
+  --status-rework: #C93400;
+  --status-rework-bg: rgba(255, 149, 0, 0.18);
+  --status-blocked: #C93400;
+  --status-blocked-bg: rgba(255, 149, 0, 0.12);
+  --status-succeeded: #248A3D;
+  --status-succeeded-bg: rgba(52, 199, 89, 0.14);
+  --status-failed: #D70015;
+  --status-failed-bg: rgba(255, 59, 48, 0.12);
+  --status-skipped: rgba(60, 60, 67, 0.55);
+  --status-skipped-bg: rgba(118, 118, 128, 0.10);
+  --status-cancelled: rgba(60, 60, 67, 0.55);
+  --status-cancelled-bg: rgba(118, 118, 128, 0.10);
 
-  /* ── 角色装饰色：ramp 600 级，扁平实色 ── */
-  --purple: #534AB7;
-  --pink: #993556;
-  --sky: #185FA5;
-  --orange: #BA7517;
-  --indigo: #3C3489;
+  /* ── 角色装饰色：iOS 系统色 ── */
+  --purple: #AF52DE;
+  --pink: #FF2D55;
+  --sky: #32ADE6;
+  --orange: #FF9500;
+  --indigo: #5856D6;
 
-  /* ── 依赖图：白节点 + 0.5px 灰描边 ── */
+  /* ── 依赖图：白节点 + 发丝描边 ── */
   --dag-node-bg: #FFFFFF;
   --dag-node-fill: #FFFFFF;
-  --avatar-fill: #EEEDFE;
-  --dag-node-border: rgba(44, 44, 42, 0.15);
-  --dag-node-inner: rgba(44, 44, 42, 0.02);
-  --dag-edge: rgba(44, 44, 42, 0.30);
-  --dag-edge-hot: #534AB7;
-  --dag-tier-bg: rgba(44, 44, 42, 0.02);
-  --dag-tier-border: rgba(44, 44, 42, 0.08);
+  --avatar-fill: rgba(0, 122, 255, 0.10);
+  --dag-node-border: rgba(60, 60, 67, 0.16);
+  --dag-node-inner: rgba(60, 60, 67, 0.02);
+  --dag-edge: rgba(60, 60, 67, 0.32);
+  --dag-edge-hot: #007AFF;
+  --dag-tier-bg: rgba(118, 118, 128, 0.04);
+  --dag-tier-border: rgba(60, 60, 67, 0.08);
 
-  /* ── 日志 / Toast：浅色语义底 + 深字 ── */
-  --log-bg: #F1EFE8;
-  --log-text: #2C2C2A;
-  --log-err: #A32D2D;
-  --toast-bg: #FFFFFF;
-  --toast-success-bg: #EAF3DE;
-  --toast-error-bg: #FCEBEB;
-  --toast-warning-bg: #FAEEDA;
+  /* ── 日志 / Toast：玻璃白底 + 语义浅底 ── */
+  --log-bg: #F7F7FA;
+  --log-text: #1C1C1E;
+  --log-err: #D70015;
+  --toast-bg: rgba(255, 255, 255, 0.88);
+  --toast-success-bg: rgba(232, 248, 236, 0.94);
+  --toast-error-bg: rgba(253, 235, 234, 0.94);
+  --toast-warning-bg: rgba(253, 243, 228, 0.94);
 
-  /* ── 遮罩 / 阴影 ── */
-  --mask: rgba(44, 44, 42, 0.28);
-  --mask-strong: rgba(44, 44, 42, 0.38);
-  --shadow: transparent;
-  --shadow-modal: transparent;
-  --shadow-drawer: transparent;
-  --loading-mask: rgba(241, 239, 232, 0.72);
-  --shadow-1: none;
-  --shadow-2: none;
-  --shadow-3: none;
+  /* ── 遮罩 / 阴影：三级高度（卡片仅极轻投影） ── */
+  --mask: rgba(0, 0, 0, 0.30);
+  --mask-strong: rgba(0, 0, 0, 0.40);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.06);
+  --shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.22), 0 4px 16px rgba(0, 0, 0, 0.10);
+  --shadow-drawer: -16px 0 48px rgba(0, 0, 0, 0.14);
+  --loading-mask: rgba(242, 242, 247, 0.72);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.12), 0 1px 4px rgba(0, 0, 0, 0.06);
+  --shadow-3: 0 24px 64px rgba(0, 0, 0, 0.22), 0 4px 16px rgba(0, 0, 0, 0.10);
 
-  /* ── 发送键：实心紫，无渐变无投影 ── */
-  --cmp-send-bg: #534AB7;
+  /* ── 分段控件选中拇指 ── */
+  --seg-thumb: #FFFFFF;
+  --seg-thumb-text: #1C1C1E;
+
+  /* ── 发送键：实心系统蓝 + 轻投影 ── */
+  --cmp-send-bg: #007AFF;
   --cmp-send-fg: #FFFFFF;
-  --cmp-send-shadow: none;
+  --cmp-send-shadow: 0 2px 8px rgba(0, 122, 255, 0.30);
   --scrim: transparent;
 }

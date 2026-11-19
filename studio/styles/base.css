@@ -1,6 +1,6 @@
-/* 基础重置与全局排版 —— WorkBuddy 扁平语言：
-   正文 13px / 400 / 1.6，标题只用 500，全局仅 400 与 500 两档字重；
-   强调色焦点环 2px；细滚动条；sentence case（无 uppercase）。 */
+/* 基础重置与全局排版 —— iOS 设计语言：
+   正文 13px / 400 / 1.55，标题 600（SF semibold 层级），强调 500；
+   键盘焦点用系统蓝双环；细滚动条；sentence case（无 uppercase）。 */
 
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
@@ -24,30 +24,31 @@ button { cursor: pointer; }
 h1, h2, h3, h4 {
   margin: 0;
   font-family: var(--font-display);
-  font-weight: 500;
+  font-weight: 600;
   letter-spacing: var(--ls-tight);
   line-height: var(--lh-tight);
 }
 
 ::selection { background: var(--accent-bg-strong); color: var(--text); }
 
-/* 滚动条：细、无轨道、hover 才明显 */
-::-webkit-scrollbar { width: 10px; height: 10px; }
+/* 滚动条：iOS 式悬浮细条，无轨道，hover 才明显 */
+::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb {
-  background: var(--ink-14);
+  background: var(--ink-18);
   border-radius: var(--r-pill);
-  border: 3px solid transparent;
+  border: 2px solid transparent;
   background-clip: content-box;
 }
-::-webkit-scrollbar-thumb:hover { background: var(--ink-25); background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--ink-30); background-clip: content-box; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-corner { background: transparent; }
 
-/* 键盘焦点环：只在键盘操作时出现 */
+/* 键盘焦点环：只在键盘操作时出现，系统蓝细环 + 柔和外晕 */
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
   border-radius: var(--r-xs);
+  box-shadow: 0 0 0 4px var(--accent-focus);
 }
 
 .hidden { display: none !important; }

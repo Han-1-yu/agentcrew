@@ -16,10 +16,10 @@
 .skeleton { border-radius: var(--r-xs); background: var(--bg-subtle); animation: skel 1.3s ease-in-out infinite; }
 @keyframes skel { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 
-.banner { padding: 8px 12px; border-radius: var(--r-xs); font-size: var(--fs-sm); margin-bottom: 10px; border: 0.5px solid transparent; }
-.banner.warn { background: var(--warn-bg-soft); color: var(--warn-text); border-color: var(--warn-border-soft); }
-.banner.err { background: var(--error-bg); color: var(--error-text); border-color: var(--error-border-soft); }
-.banner.info { background: var(--accent-bg-soft); color: var(--accent-text); border-color: var(--accent-border-soft); }
+.banner { padding: 9px 13px; border-radius: var(--r-sm); font-size: var(--fs-sm); margin-bottom: 10px; border: none; }
+.banner.warn { background: var(--warn-bg-soft); color: var(--warn-text); }
+.banner.err { background: var(--error-bg); color: var(--error-text); }
+.banner.info { background: var(--accent-bg-soft); color: var(--accent-text); }
 
 /* ---- 加载遮罩 ---- */
 /* 加载遮罩 */

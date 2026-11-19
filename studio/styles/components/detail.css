@@ -1,4 +1,4 @@
-/* 右侧详情抽屉 —— WorkBuddy 扁平风格：白底浮层 + 0.5px 左边框，
+/* 右侧详情抽屉 —— iOS 抽屉浮层：elevated 底 + 发丝左边框 + 抽屉级阴影，
    粘性标题、分区标题、等宽数字读数；动效只在打开时淡入一次。 */
 
 #detail-mask {
@@ -10,6 +10,7 @@
   background: var(--bg-float); z-index: 41;
   display: flex; flex-direction: column;
   border-left: 0.5px solid var(--border);
+  box-shadow: var(--shadow-drawer);
 }
 
 /* 标题区：粘在顶部，滚动时内容从下面穿过去 */
@@ -20,7 +21,7 @@
   border-bottom: 0.5px solid var(--border);
 }
 .dp-title-row { display: flex; align-items: flex-start; gap: 8px; }
-.dp-title { font-size: var(--fs-h1); font-weight: 500; flex: 1; letter-spacing: var(--ls-tight); line-height: 1.35; }
+.dp-title { font-size: var(--fs-h1); font-weight: 600; flex: 1; letter-spacing: var(--ls-tight); line-height: 1.35; }
 
 .dp-body { flex: 1; overflow-y: auto; padding: 14px 16px 20px; }
 .dp-body > * { animation: dpItemIn .2s var(--ease-out) backwards; }

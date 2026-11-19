@@ -1,6 +1,6 @@
-/* 悬浮命令输入框 —— 对齐 WorkBuddy 对话框形态：
-   主区底部居中限宽白卡、0.5px 边框、12px 圆角、聚焦 2px 紫色焦点环，
-   左上项目/模式 chips，右下模型选择 + 实心紫发送键。 */
+/* 悬浮命令输入框 —— iOS 悬浮玻璃卡：
+   主区底部居中限宽、毛玻璃材质 + 18px 圆角 + 二级阴影，聚焦系统蓝焦点环，
+   左上项目/模式 chips，右下模型选择 + 圆形系统蓝发送键。 */
 
 .composer {
   position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%);
@@ -13,16 +13,19 @@
 /* ---------- 项目选择条 ---------- */
 .composer-bar {
   display: inline-flex; align-items: center; gap: 8px;
-  height: 27px; padding: 0 12px;
+  height: 28px; padding: 0 13px;
   border-radius: var(--r-pill);
-  border: 0.5px solid var(--border);
-  background: var(--bg-panel);
+  border: 0.5px solid var(--glass-border);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--blur-card)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--blur-card)) saturate(var(--glass-saturate));
+  box-shadow: var(--shadow-1);
   font-size: var(--fs-xs); color: var(--text-ter);
   max-width: 100%;
   cursor: pointer;
-  transition: border-color var(--dur-1) ease, color var(--dur-1) ease;
+  transition: color var(--dur-1) ease, background var(--dur-1) ease;
 }
-.composer-bar:hover { border-color: var(--border-input); color: var(--text-sub); }
+.composer-bar:hover { background: var(--glass-bg-strong); color: var(--text-sub); }
 .cb-dot { width: 4px; height: 4px; border-radius: 50%; background: var(--text-ter); flex: 0 0 auto; }
 .cb-proj { color: var(--text-sub); font-weight: 500; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cb-sep { opacity: 0.5; }
@@ -33,14 +36,17 @@
 .composer-box {
   width: 100%;
   padding: 12px 14px 10px;
-  border-radius: var(--r-md);
-  border: 0.5px solid var(--border);
-  background: var(--bg-panel);
+  border-radius: var(--r-lg);
+  border: 0.5px solid var(--glass-border);
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(var(--blur-float)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--blur-float)) saturate(var(--glass-saturate));
+  box-shadow: var(--shadow-2), var(--glass-highlight);
   transition: border-color var(--dur-2) ease, box-shadow var(--dur-2) ease;
 }
 .composer-box:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
+  border-color: var(--accent-border-med);
+  box-shadow: var(--shadow-2), 0 0 0 3px var(--accent-focus);
 }
 .composer-input {
   display: block; width: 100%;
@@ -58,25 +64,26 @@
 .cf-add {
   display: grid; place-items: center;
   width: 26px; height: 26px; padding: 0;
-  border-radius: var(--r-sm);
-  border: 0.5px solid var(--border);
-  background: var(--bg-panel); color: var(--text-sub);
+  border-radius: var(--r-pill);
+  border: none;
+  background: var(--bg-subtle); color: var(--text-sub);
   font-size: var(--fs-h1); line-height: 1;
-  transition: background var(--dur-1) ease, color var(--dur-1) ease, border-color var(--dur-1) ease;
+  transition: background var(--dur-1) ease, color var(--dur-1) ease, transform var(--dur-1) var(--ease-out);
 }
-.cf-add:hover { background: var(--bg-subtle); color: var(--text); border-color: var(--border-input); }
+.cf-add:hover { background: var(--ink-12); color: var(--text); }
+.cf-add:active { transform: scale(0.92); }
 
 .cf-tag {
   display: inline-flex; align-items: center; gap: 6px;
   height: 26px; padding: 0 11px;
   border-radius: var(--r-pill);
-  border: 0.5px solid var(--border);
+  border: none;
   background: var(--bg-subtle); color: var(--text-sub);
   font-size: var(--fs-xs);
   transition: background var(--dur-1) ease, color var(--dur-1) ease;
 }
 .cf-tag i { width: 4px; height: 4px; border-radius: 50%; background: var(--accent); transition: background var(--dur-1) ease; }
-.cf-tag:hover { background: var(--bg-subtle); color: var(--text); }
+.cf-tag:hover { background: var(--ink-12); color: var(--text); }
 .cf-tag.off { color: var(--text-ter); }
 .cf-tag.off i { background: var(--text-ter); }
 
@@ -93,13 +100,14 @@
 .cf-send {
   display: grid; place-items: center;
   width: 30px; height: 30px; padding: 0;
-  border: none; border-radius: var(--r-sm);
+  border: none; border-radius: var(--r-pill);
   background: var(--cmp-send-bg); color: var(--cmp-send-fg);
-  transition: background var(--dur-1) ease, opacity var(--dur-1) ease;
+  box-shadow: var(--cmp-send-shadow);
+  transition: background var(--dur-1) ease, opacity var(--dur-1) ease, transform var(--dur-1) var(--ease-out);
 }
 .cf-send:hover { background: var(--accent-hover); }
-.cf-send:active { opacity: 0.8; }
-.cf-send:disabled { opacity: 0.45; cursor: not-allowed; }
+.cf-send:active { transform: scale(0.9); }
+.cf-send:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; transform: none; }
 
 /* 窄窗口：让出左右留白，避免和依赖图抢宽度 */
 @media (max-width: 1180px) {

@@ -1,4 +1,5 @@
-/* 窄屏适配（≤1100 / ≤760）。 */
+/* 响应式适配 —— 断点：1280 收窄抽屉 / 1100 双列 / 1024 图标侧栏 /
+   768 平板（DAG 降级列表）/ 480 手机；粗指针设备放大触控目标。 */
 
 /* ===== 响应式 ===== */
 @media (max-width: 1280px) {
@@ -6,6 +7,7 @@
 }
 @media (max-width: 1100px) {
   .agents-grid { grid-template-columns: repeat(2, 1fr); }
+  #dashboard-view { padding: 16px 20px 192px; gap: 16px; }
 }
 /* 1024px 平板横屏：侧栏折叠为图标条（窗口最小宽度 1080，正常不会触发，仅作兜底） */
 @media (max-width: 1024px) {
@@ -13,19 +15,20 @@
   .sb-head { justify-content: center; padding: 0; }
   .brand-name, .brand-chev, .sb-group, .sb-meta { display: none; }
   .nav-row .nav-text, .sidebar-bottom .sb-label, .sidebar-bottom .sb-value, .sidebar-bottom .sb-row > span:not(.dot) { display: none; }
-  .nav-row { justify-content: center; padding: 0; }
+  .nav-row { justify-content: center; padding: 0; height: 36px; }
   .sidebar-bottom { padding: 8px; }
   .sb-progress, .sb-row.sb-conn span:last-child { display: none; }
   .sb-conn { justify-content: center; }
   .tb-workspace { display: none; }
 }
-/* 768px 平板：DAG 降级为列表 */
+/* 768px 平板：DAG 降级为列表，单列布局 */
 @media (max-width: 768px) {
   .dag-canvas-wrap { display: none; }
   .dag-list-fallback { display: flex; }
   .tb-budget { display: none; }
   .agents-grid { grid-template-columns: 1fr; }
-  #dashboard-view { padding: 12px; }
+  #dashboard-view { padding: 12px 12px 180px; gap: 12px; }
+  .dash-block { padding: 14px 16px; }
   .art-body { flex-direction: column; height: auto; min-height: 0; }
   .art-tree { width: 100%; max-height: 220px; flex: 0 0 auto; border-right: none; border-bottom: 0.5px solid var(--border); }
   .art-preview { min-height: 420px; }
@@ -33,13 +36,18 @@
   .run-stats { grid-template-columns: repeat(3, 1fr); }
   .run-actions { flex-wrap: wrap; }
   .section-head h3 { font-size: var(--fs-h2); }
+  .rs-stats { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .rs-goal { font-size: var(--fs-h1); min-width: 100px; }
+  .composer { width: calc(100% - 24px); bottom: 12px; }
+  #toasts { left: 12px; right: 12px; bottom: 12px; }
+  .toast { max-width: none; }
 }
-/* 390px 手机：基础适配 */
+/* 480px 手机：基础适配 */
 @media (max-width: 480px) {
   #topbar { padding: 0 10px; gap: 6px; }
   .brand-name em { display: none; }
   .tb-run-status span:last-child { display: none; }
-  #detail-panel { width: 100vw; }
+  #detail-panel { width: 100vw; max-width: 100vw; }
   .run-stats { grid-template-columns: repeat(2, 1fr); gap: 8px; }
   .stat-cell { padding: 8px 10px; }
   .stat-val { font-size: var(--fs-h1); }
@@ -48,11 +56,29 @@
   .run-meta { flex-wrap: wrap; gap: 6px 14px; }
   .events-list { max-height: 300px; }
   .event-item { padding: 6px 8px; font-size: var(--fs-xs); }
-  .page-head h2 { font-size: 17px; }
+  .page-head { padding: var(--sp-4) var(--sp-4) var(--sp-3); }
+  .page-head h2 { font-size: var(--fs-h1); }
   .dag-task-row { flex-wrap: wrap; gap: 4px; }
   .dag-task-title { flex: 1 1 100%; }
+  #modal { width: calc(100vw - 32px); padding: 1rem; }
+  .modal-actions { flex-wrap: wrap; }
+  .modal-actions .btn { flex: 1 1 auto; }
+}
+
+/* 触控设备：不依赖 hover，放大可点目标（≥44px 命中区由 padding 补足） */
+@media (pointer: coarse) {
+  .btn { height: 36px; }
+  .btn-sm { height: 30px; }
+  .btn-icon, .icon-btn { width: 36px; height: 36px; }
+  .nav-row { height: 38px; }
+  .sb-task-chip, .rd-filter-chip { padding-top: 5px; padding-bottom: 5px; }
+  .cf-send { width: 36px; height: 36px; }
+  .cf-add { width: 32px; height: 32px; }
+  .rd-del { opacity: 1; }
+  .rs-stage-seg button { height: 30px; }
+  .seg button { padding-top: 8px; padding-bottom: 8px; }
 }
 
 /* 动效：状态变化轻量反馈，仅响应用户操作 */
 @keyframes pulseIn { 0% { transform: scale(0.98); opacity: 0.6; } 100% { transform: scale(1); opacity: 1; } }
-.flash-update { animation: pulseIn .25s ease; }
+.flash-update { animation: pulseIn var(--dur-2) var(--ease-out); }

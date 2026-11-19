@@ -20,7 +20,7 @@
   transition: color var(--dur-1), background var(--dur-1);
 }
 .result-tab:hover { color: var(--text); }
-.result-tab.active { background: var(--bg-panel); color: var(--text); font-weight: 500; }
+.result-tab.active { background: var(--seg-thumb); color: var(--seg-thumb-text); font-weight: 600; box-shadow: var(--shadow-1); }
 
 /* 概览 tab */
 .result-body { padding: 14px 16px 20px; display: flex; flex-direction: column; gap: 14px; overflow-y: auto; }

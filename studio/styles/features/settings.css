@@ -116,19 +116,19 @@
 .btn-danger { color: var(--error-text); border-color: var(--error-border-soft); }
 .btn-danger:hover { background: var(--error-bg-soft); }
 
-/* 主题 segmented control */
+/* 主题 segmented control —— iOS 分段控件 */
 .seg {
-  display: inline-flex; border: 0.5px solid var(--border-input);
-  border-radius: var(--r-xs); overflow: hidden; background: var(--bg-subtle);
+  display: inline-flex; gap: 2px; padding: 2px;
+  border: none; border-radius: var(--r-pill); overflow: hidden; background: var(--bg-subtle);
 }
 .seg button {
-  padding: 6px 18px; border: none; background: transparent; color: var(--text-sub);
+  padding: 5px 16px; border: none; background: transparent; color: var(--text-sub);
   font-size: var(--fs-sm); font-family: inherit; cursor: pointer;
-  border-right: 0.5px solid var(--border-input); transition: background .12s, color .12s;
+  border-radius: var(--r-pill);
+  transition: background .15s, color .15s, box-shadow .15s;
 }
-.seg button:last-child { border-right: none; }
 .seg button:hover { color: var(--text); }
-.seg button.active { background: var(--accent); color: var(--on-solid); }
+.seg button.active { background: var(--seg-thumb); color: var(--seg-thumb-text); font-weight: 600; box-shadow: var(--shadow-1); }
 
 @media (max-width: 480px) {
   .nr-adv-grid { grid-template-columns: 1fr; }

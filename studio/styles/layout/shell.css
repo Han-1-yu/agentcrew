@@ -1,5 +1,5 @@
-/* 应用骨架 —— WorkBuddy 扁平布局：纯色页底 + 两列（通高侧边栏 / 主列），
-   主列内分 顶栏 / 内容 / 底部命令输入框。无极光、无渐变、无渐隐遮罩。 */
+/* 应用骨架 —— iOS 分组式布局：分组灰页底 + 两列（通高侧边栏 / 主列），
+   主列内分 毛玻璃顶栏 / 内容 / 底部悬浮命令框。 */
 
 .layout {
   position: relative;
@@ -21,8 +21,8 @@
 /* ===== 主内容区 ===== */
 #main { flex: 1; min-width: 0; overflow-y: auto; overflow-x: hidden; }
 
-/* 看板：垂直节奏 1.5rem，区块之间留足呼吸；底部预留悬浮命令框高度 */
-#dashboard-view { padding: 1.5rem 2rem 192px; display: flex; flex-direction: column; gap: 1.5rem; }
+/* 看板：垂直节奏 20px，分组卡片之间留足呼吸；底部预留悬浮命令框高度 */
+#dashboard-view { padding: 20px 28px 192px; display: flex; flex-direction: column; gap: 20px; }
 
 /* 非看板页：页面自带内边距 */
 #placeholder-view:not(.hidden) { padding-bottom: 2rem; }
