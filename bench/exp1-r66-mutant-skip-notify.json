@@ -1,0 +1,8 @@
+[
+  {
+    "mutant": "skip-notify",
+    "concurrency": 1,
+    "killed": true,
+    "reason": "观察者回调序列不一致"
+  }
+]

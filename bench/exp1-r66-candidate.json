@@ -1,0 +1,368 @@
+[
+  {
+    "concurrency": 1,
+    "verdict": "REJECT",
+    "thresholds": {
+      "noise_rel_spread": 0.018793623339703715,
+      "improve_wall_factor": 0.9812063766602963,
+      "regression_wall_factor": 1.0187936233397037,
+      "lag_p95_must_decrease": true
+    },
+    "baseline_repeat_walls": [
+      1.4749941999998555,
+      1.5029668000006495,
+      1.4884091000003536
+    ],
+    "median_wall_baseline": 1.4369910000004893,
+    "median_wall_candidate": 1.5926086999998006,
+    "median_lag_p95_baseline": 0.011000000000531144,
+    "median_lag_p95_candidate": 0.01099999999962165,
+    "oracle_failures": [],
+    "samples": [
+      {
+        "pair": 0,
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "baseline": {
+          "wall": 1.4168115999991642,
+          "cpu": 0.515625,
+          "lag_p95": 0.011000000000531144,
+          "lag_max": 0.011000000000531144,
+          "lag_mean": 0.0006653386454166159,
+          "ledger_writes": 500
+        },
+        "candidate": {
+          "wall": 1.6233706000002712,
+          "cpu": 0.625,
+          "lag_p95": 0.01099999999962165,
+          "lag_max": 0.011000000000531144,
+          "lag_mean": -0.003383084577114428,
+          "ledger_writes": 500
+        }
+      },
+      {
+        "pair": 1,
+        "order": [
+          "candidate",
+          "baseline"
+        ],
+        "baseline": {
+          "wall": 1.459472999999889,
+          "cpu": 0.53125,
+          "lag_p95": 0.011000000000531144,
+          "lag_max": 0.027000000000152794,
+          "lag_mean": 0.0008525896414344654,
+          "ledger_writes": 500
+        },
+        "candidate": {
+          "wall": 1.580985900000087,
+          "cpu": 0.765625,
+          "lag_p95": 0.01099999999962165,
+          "lag_max": 0.011000000000531144,
+          "lag_mean": -0.0034091816367264965,
+          "ledger_writes": 500
+        }
+      },
+      {
+        "pair": 2,
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "baseline": {
+          "wall": 1.4369910000004893,
+          "cpu": 0.421875,
+          "lag_p95": 0.011000000000531144,
+          "lag_max": 0.011000000000531144,
+          "lag_mean": 0.0007250996015932192,
+          "ledger_writes": 500
+        },
+        "candidate": {
+          "wall": 1.9079733999997188,
+          "cpu": 0.78125,
+          "lag_p95": 0.01099999999962165,
+          "lag_max": 0.027000000000152794,
+          "lag_mean": -0.00312770137524563,
+          "ledger_writes": 500
+        }
+      },
+      {
+        "pair": 3,
+        "order": [
+          "candidate",
+          "baseline"
+        ],
+        "baseline": {
+          "wall": 1.4495043000006262,
+          "cpu": 0.328125,
+          "lag_p95": 0.011000000000531144,
+          "lag_max": 0.011000000000531144,
+          "lag_mean": 0.0007250996015932192,
+          "ledger_writes": 500
+        },
+        "candidate": {
+          "wall": 1.5614032000003135,
+          "cpu": 0.421875,
+          "lag_p95": 0.01099999999962165,
+          "lag_max": 0.011000000000531144,
+          "lag_mean": -0.0034395604395605415,
+          "ledger_writes": 500
+        }
+      },
+      {
+        "pair": 4,
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "baseline": {
+          "wall": 1.4296009999998205,
+          "cpu": 0.4375,
+          "lag_p95": 0.011000000000531144,
+          "lag_max": 0.011000000000531144,
+          "lag_mean": 0.0007250996015932192,
+          "ledger_writes": 500
+        },
+        "candidate": {
+          "wall": 1.6504742000006445,
+          "cpu": 0.59375,
+          "lag_p95": 0.01099999999962165,
+          "lag_max": 0.011000000000531144,
+          "lag_mean": -0.003347956131605032,
+          "ledger_writes": 500
+        }
+      },
+      {
+        "pair": 5,
+        "order": [
+          "candidate",
+          "baseline"
+        ],
+        "baseline": {
+          "wall": 1.4310110000005807,
+          "cpu": 0.484375,
+          "lag_p95": 0.011000000000531144,
+          "lag_max": 0.011000000000531144,
+          "lag_mean": 0.0007250996015932192,
+          "ledger_writes": 500
+        },
+        "candidate": {
+          "wall": 1.5555469999999332,
+          "cpu": 0.5625,
+          "lag_p95": 0.01099999999962165,
+          "lag_max": 0.011000000000531144,
+          "lag_mean": -0.003469530469530317,
+          "ledger_writes": 500
+        }
+      },
+      {
+        "pair": 6,
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "baseline": {
+          "wall": 1.5536824999999226,
+          "cpu": 0.515625,
+          "lag_p95": 0.011000000000531144,
+          "lag_max": 0.15099999999994906,
+          "lag_mean": 0.0012270916334665408,
+          "ledger_writes": 500
+        },
+        "candidate": {
+          "wall": 1.5926086999998006,
+          "cpu": 0.46875,
+          "lag_p95": 0.01099999999962165,
+          "lag_max": 0.011000000000531144,
+          "lag_mean": -0.0034085914085915615,
+          "ledger_writes": 500
+        }
+      }
+    ]
+  },
+  {
+    "concurrency": 4,
+    "verdict": "ACCEPT",
+    "thresholds": {
+      "noise_rel_spread": 0.03717506134392483,
+      "improve_wall_factor": 0.9628249386560752,
+      "regression_wall_factor": 1.0371750613439248,
+      "lag_p95_must_decrease": true
+    },
+    "baseline_repeat_walls": [
+      6.114938099999563,
+      5.9780399000001125,
+      5.892704100000628
+    ],
+    "median_wall_baseline": 5.953301300000021,
+    "median_wall_candidate": 2.216092800000297,
+    "median_lag_p95_baseline": 0.027000000000152794,
+    "median_lag_p95_candidate": 0.010000000000327417,
+    "oracle_failures": [],
+    "samples": [
+      {
+        "pair": 0,
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "baseline": {
+          "wall": 5.824651399999311,
+          "cpu": 1.703125,
+          "lag_p95": 0.027000000000152794,
+          "lag_max": 0.12,
+          "lag_mean": 0.018155378486055373,
+          "ledger_writes": 2000
+        },
+        "candidate": {
+          "wall": 2.1736222999998063,
+          "cpu": 1.921875,
+          "lag_p95": 0.010000000000327417,
+          "lag_max": 0.011000000000531144,
+          "lag_mean": -0.003976437323279699,
+          "ledger_writes": 2000
+        }
+      },
+      {
+        "pair": 1,
+        "order": [
+          "candidate",
+          "baseline"
+        ],
+        "baseline": {
+          "wall": 6.262559499999952,
+          "cpu": 1.859375,
+          "lag_p95": 0.027000000000152794,
+          "lag_max": 0.10400000000037835,
+          "lag_mean": 0.019964143426293313,
+          "ledger_writes": 2000
+        },
+        "candidate": {
+          "wall": 2.1701090000005934,
+          "cpu": 1.96875,
+          "lag_p95": 0.010000000000327417,
+          "lag_max": 0.027000000000152794,
+          "lag_mean": -0.003979323308270452,
+          "ledger_writes": 2000
+        }
+      },
+      {
+        "pair": 2,
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "baseline": {
+          "wall": 5.927368199999364,
+          "cpu": 1.828125,
+          "lag_p95": 0.027000000000152794,
+          "lag_max": 0.042000000000480216,
+          "lag_mean": 0.018657370517928692,
+          "ledger_writes": 2000
+        },
+        "candidate": {
+          "wall": 2.4454928000004656,
+          "cpu": 2.3125,
+          "lag_p95": 0.010000000000327417,
+          "lag_max": 0.025999999999949067,
+          "lag_mean": -0.003823841698841748,
+          "ledger_writes": 2000
+        }
+      },
+      {
+        "pair": 3,
+        "order": [
+          "candidate",
+          "baseline"
+        ],
+        "baseline": {
+          "wall": 6.0271560000001045,
+          "cpu": 1.984375,
+          "lag_p95": 0.027000000000152794,
+          "lag_max": 0.08900000000005093,
+          "lag_mean": 0.019027888446214936,
+          "ledger_writes": 2000
+        },
+        "candidate": {
+          "wall": 2.2997008000002097,
+          "cpu": 2.25,
+          "lag_p95": 0.010000000000327417,
+          "lag_max": 0.025999999999949067,
+          "lag_mean": -0.003881694255112186,
+          "ledger_writes": 2000
+        }
+      },
+      {
+        "pair": 4,
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "baseline": {
+          "wall": 6.211905899999692,
+          "cpu": 2.03125,
+          "lag_p95": 0.027000000000152794,
+          "lag_max": 0.12,
+          "lag_mean": 0.019772908366533257,
+          "ledger_writes": 2000
+        },
+        "candidate": {
+          "wall": 1.979982399999244,
+          "cpu": 1.71875,
+          "lag_p95": 0.010000000000327417,
+          "lag_max": 0.011000000000531144,
+          "lag_mean": -0.004051108968177509,
+          "ledger_writes": 2000
+        }
+      },
+      {
+        "pair": 5,
+        "order": [
+          "candidate",
+          "baseline"
+        ],
+        "baseline": {
+          "wall": 5.7813328000002,
+          "cpu": 1.734375,
+          "lag_p95": 0.027000000000152794,
+          "lag_max": 0.042000000000480216,
+          "lag_mean": 0.01796812749003752,
+          "ledger_writes": 2000
+        },
+        "candidate": {
+          "wall": 2.2972874000006414,
+          "cpu": 1.84375,
+          "lag_p95": 0.010000000000327417,
+          "lag_max": 0.027000000000152794,
+          "lag_mean": -0.003906711089956935,
+          "ledger_writes": 2000
+        }
+      },
+      {
+        "pair": 6,
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "baseline": {
+          "wall": 5.953301300000021,
+          "cpu": 1.734375,
+          "lag_p95": 0.027000000000152794,
+          "lag_max": 0.245,
+          "lag_mean": 0.018717131474101673,
+          "ledger_writes": 2000
+        },
+        "candidate": {
+          "wall": 2.216092800000297,
+          "cpu": 1.75,
+          "lag_p95": 0.010000000000327417,
+          "lag_max": 0.025999999999949067,
+          "lag_mean": -0.0039518186112423,
+          "ledger_writes": 2000
+        }
+      }
+    ]
+  }
+]

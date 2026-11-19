@@ -132,6 +132,21 @@ class Ledger:
         返回的是**从刚写入的那一行重建**的事件：``run_id``、事件名、``data`` 与
         文件逐字节一致（``default`` 兜底与字符串化的效果也在其中）。消费方
         （看板、报告）直接渲染 ``event.data`` 不会打印文件里已被替换掉的原值。
+
+        实现是 ``write_event``（落盘半）+ ``notify``（观察者半）的顺序组合，
+        与拆分前逐字节同行为；拆开是为了让流式路径能把落盘半下沉工作线程。
+        """
+        written = self.write_event(event, **data)
+        self.notify(event, written)
+        return written
+
+    def write_event(self, event: str, **data: Any) -> LedgerEvent:
+        """``emit`` 的落盘半：追加 + flush + fsync + 重建，**不调观察者**。
+
+        R66i（EXP-1）：流式逐 chunk 审计的 fsync 是同步阻塞调用，直接在事件
+        循环里跑会卡住同进程的其他 run 与 SSE 心跳。这一半是纯文件操作，可以
+        经 ``asyncio.to_thread`` 下沉；观察者半（:meth:`notify`）必须留在循环
+        线程——下游 ``EventBus`` 用 ``asyncio.Queue.put_nowait``，非线程安全。
         """
         if self._closed:
             raise RuntimeError("Ledger 已关闭")
@@ -154,18 +169,22 @@ class Ledger:
             os.fsync(file.fileno())
         # 直接返回上面的 record 不够：它里面的 set/bytes/自定义对象仍是原值，
         # 只有序列化器兜底才把它们脱敏。重建自写入行，返回值与文件不可能漂移。
-        written = LedgerEvent.model_validate_json(line)
-        # 观察者拿到的也是重建后的脱敏 data：与返回值同源，密钥绝不会漏给
-        # 实时通道。回调失败（下游断连/序列化失败）不能破坏审计落盘——文件已写；
-        # A-23：也不能上抛：``_account`` 里 llm_call 的 emit 位于预算消耗之后、
-        # 硬上限检查之前，observer 异常会绕过整段预算判定。这里只记 warning。
+        return LedgerEvent.model_validate_json(line)
+
+    def notify(self, event: str, written: LedgerEvent) -> None:
+        """``emit`` 的观察者半：把重建后的脱敏 data 回调给实时通道。
+
+        **必须在事件循环线程调用**（下游 asyncio.Queue 非线程安全）。回调失败
+        （下游断连/序列化失败）不能破坏审计落盘——文件已写；A-23：也不能上抛：
+        ``_account`` 里 llm_call 的 emit 位于预算消耗之后、硬上限检查之前，
+        observer 异常会绕过整段预算判定。这里只记 warning。
+        """
         if self._observer is not None:
             try:
                 self._observer(event, written.data)
             except Exception:  # noqa: BLE001 —— 观察者是辅助通道，任何异常都不该打断主流程
                 logging.getLogger(__name__).warning(
                     "ledger observer 回调失败（事件已落盘）：%s", event)
-        return written
 
     def events(self, event: str | None = None) -> Iterator[LedgerEvent]:
         """逐行产出事件；``event`` 非 None 时只产出同名事件。

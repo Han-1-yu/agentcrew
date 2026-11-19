@@ -36,6 +36,7 @@
   截断」提示恰恰在那时最有解释力（Task 10 的裁定）。
 """
 
+import asyncio
 import contextlib
 import inspect
 import json
@@ -113,6 +114,12 @@ _ARTIFACT_SUMMARY_TOTAL = 1500
 
 #: ``RoleSpec.model`` 的哨兵值：字面量 ``"default"`` 表示「按三级优先级解析」。
 _DEFAULT_ALIAS = "default"
+
+#: R66i（EXP-1）：本进程正在消费流式增量的调用数。只在事件循环线程读写
+#: （asyncio 单线程），无需锁。>1 时逐 chunk 审计的落盘半下沉工作线程——
+#: 实测并发 4 流墙钟 −65%、循环滞后 p95 27→10ms；单流保持同步 emit，因为
+#: to_thread 的逐帧 dispatch 开销在单流实测是回归（+10.9%）。
+_ACTIVE_STREAM_CONSUMERS = 0
 
 #: 起始围栏行：与 ``artifacts/parser.py`` 钉死的语法一致（顶格、≥3 个反引号、
 #: 可选语言名、可选 ``file=`` 到行尾）。只用于下面的一致性提示，不裁决任何事。
@@ -1066,29 +1073,48 @@ class BaseAgent(ABC):
         # P2-5：流式下的原生工具调用——把分片增量攒起来，流结束后一次性拼装。
         # 每片都解析是错的：一个 JSON 字符串字面量可能被切成两片。
         tool_deltas: list[Any] = []
-        async for chunk in self._models.stream_call(
-            alias,
-            messages,
-            temperature=self.spec.temperature,
-            max_tokens=self.spec.max_output_tokens,
-            purpose="execute",
-            role=self.spec.key,
-            tools=tools,
-            tool_choice="auto" if tools else None,
-        ):
-            parts.append(chunk.delta)
-            if chunk.tool_call_deltas:
-                tool_deltas.extend(chunk.tool_call_deltas)
-            if chunk.finish_reason is not None:
-                finish_reason = chunk.finish_reason
-            self._ledger.emit(
-                "agent_stream_chunk",
-                task_id=task.id,
+        global _ACTIVE_STREAM_CONSUMERS
+        _ACTIVE_STREAM_CONSUMERS += 1
+        try:
+            async for chunk in self._models.stream_call(
+                alias,
+                messages,
+                temperature=self.spec.temperature,
+                max_tokens=self.spec.max_output_tokens,
+                purpose="execute",
                 role=self.spec.key,
-                delta_length=len(chunk.delta),
-            )
-            if self._stream_sink is not None and chunk.delta:
-                self._stream_sink(task.id, self.spec.key, chunk.delta)
+                tools=tools,
+                tool_choice="auto" if tools else None,
+            ):
+                parts.append(chunk.delta)
+                if chunk.tool_call_deltas:
+                    tool_deltas.extend(chunk.tool_call_deltas)
+                if chunk.finish_reason is not None:
+                    finish_reason = chunk.finish_reason
+                # R66i（EXP-1）：逐 chunk 审计的 fsync 会阻塞事件循环。并发流
+                # >1 时把落盘半（write_event）下沉工作线程，观察者半（notify）
+                # 留在循环线程——下游 EventBus 的 asyncio.Queue 非线程安全。
+                # 逐帧 await 语义不变：每帧落盘完成后才消费下一帧。
+                if _ACTIVE_STREAM_CONSUMERS > 1:
+                    written = await asyncio.to_thread(
+                        self._ledger.write_event,
+                        "agent_stream_chunk",
+                        task_id=task.id,
+                        role=self.spec.key,
+                        delta_length=len(chunk.delta),
+                    )
+                    self._ledger.notify("agent_stream_chunk", written)
+                else:
+                    self._ledger.emit(
+                        "agent_stream_chunk",
+                        task_id=task.id,
+                        role=self.spec.key,
+                        delta_length=len(chunk.delta),
+                    )
+                if self._stream_sink is not None and chunk.delta:
+                    self._stream_sink(task.id, self.spec.key, chunk.delta)
+        finally:
+            _ACTIVE_STREAM_CONSUMERS -= 1
         provider = self._models.get(alias)
         return CompletionResult(
             text="".join(parts),

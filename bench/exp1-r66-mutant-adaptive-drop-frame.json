@@ -1,0 +1,8 @@
+[
+  {
+    "mutant": "drop-frame",
+    "concurrency": 4,
+    "killed": true,
+    "reason": "ledger 行不一致（2000 vs 1996）"
+  }
+]
