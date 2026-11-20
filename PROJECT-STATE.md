@@ -8,12 +8,19 @@
 
 ## 0. 一句话现状
 
-**最新一轮：R67（2026-11-19）** —— Studio 前端 iOS/HIG 视觉与交互重设计，
+**最新一轮：R68（2026-11-19）** —— 咨询多轮上下文（R5 遗留闭环）：同一
+`(提问方, 目标角色)` 配对保留最近 N 轮问答，作为 user/assistant 历史塞进下一次咨询，
+默认 3 轮、`0` = 退回 R6 行为；历史仅 run 内存、不落盘、不进经验库、配对隔离、单条
+截断防膨胀；env/YAML/快照/options 四通道登记。全量 **3588 passed / 0 failed /
+6 skipped / 0 error**（484.8s），`ruff` 全绿、`mypy` 158 文件零错误。明细见 §3.100。
+
+**上一轮：R67（2026-11-19）** —— Studio 前端 iOS/HIG 视觉与交互重设计，
 **功能与接口调用零变更**、Python 后端一行未改：令牌层双主题对齐 HIG（系统色/分隔线/
 字阶 28-22-17-15-13-12/圆角 16/三级阴影/SF 字体栈）、通用组件 iOS 化（大标题+tint 操作、
 Switch、Sheet grabber、毛玻璃侧栏）、对话页 iMessage 化 + 文件 emoji 全换共享线性 SVG、
-DAG 角色色描边/分组灰底/4px 进度条、Agents 页定高网格裁切修复。五笔提交
-`a1481a9→27c8fb1→20dda95→b25fd31→c7f2151`；check 81 模块/45 分片、unit 38/38、
+DAG 角色色描边/分组灰底/4px 进度条、Agents 页定高网格裁切修复；次日设计 bug 排查补片
+（四页状态徽章语义色接线、Switch 行 HIG 布局的特异性覆盖修复、全屏页统一滚动等 6 项）。
+六笔提交 `a1481a9→27c8fb1→20dda95→b25fd31→c7f2151→e80cefc`；check 81 模块/45 分片、unit 38/38、
 e2e 32/32、selftest 16/16、visual 基线人工核对后重建复检 20/20、Python 全量
 **3576 passed / 0 failed / 6 skipped / 0 error**（513.5s，与 R66 同数）。
 明细见 §3.99 与 `docs/STUDIO-IOS-REDESIGN-2026-11-19.md`。
@@ -32,7 +39,7 @@ config 解析去重（R66e）、`main.py` 3388→~700 行拆进 `cli/` 九模块
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | **R66 后最新全量 3576 passed / 0 failed / 6 skipped / 0 error**（193 文件 / 97 批次 / 632.4s，Windows 本机 `scripts/test.py --batch 2 --retries 4 --retry-failed 3 --keep-pycache`，**零崩溃重试**）。上一轮 R65 后为 3546 passed（189 文件 / 95 批次 / 509.5s）；R66a 后中间基线 3558 passed（496.1s）。6 个 skip 沿用跑器结果，其中 4 个 docker 真容器用例由 CI 覆盖 |
+| 全量测试 | **R68 后最新全量 3588 passed / 0 failed / 6 skipped / 0 error**（193 文件 / 97 批次 / 484.8s，Windows 本机 `scripts/test.py --batch 2 --retries 4 --retry-failed 3 --keep-pycache`，1 例崩溃重试恢复为环境噪音）。上一轮 R67 后为 3576 passed（513.5s）；R66 后为 3576 passed（632.4s）；R65 后 3546 passed（509.5s）。6 个 skip 沿用跑器结果，其中 4 个 docker 真容器用例由 CI 覆盖 |
 | 静态检查 | R66 后重跑 `ruff check agentcrew/ main.py`：**All checks passed**；`mypy agentcrew/ main.py`：**158 文件零错误**（Windows / Python 3.12.16；R66f 起 main.py 纳入 mypy 范围） |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
@@ -3260,7 +3267,38 @@ HIG 规格文档切片落地。范围仅 `studio/`；规格中 `.shell/.sidebar/
 改造说明 `docs/STUDIO-IOS-REDESIGN-2026-11-19.md`。
 
 **坑（新）**：`ELECTRON_RUN_AS_NODE` 设空串仍触发 Node 模式（`app` undefined 崩溃），
-须整变量移除；emoji→`h()` 子节点替换须配平括号（架构检查的语法关会拦截）。
+须整变量移除；emoji→`h()` 子节点替换须配平括号（架构检查的语法关会拦截）；
+**CSS 特异性覆盖**：`.settings-field label`(0,1,1) 压过 `.set-check`(0,1,0) 使 flex 行布局
+静默失效——文件规则正确≠运行时生效，用 CDP computed-style 探针实证（排查补片 `e80cefc`，
+另含四页状态徽章语义色接线、全屏页统一主区滚动、星期胶囊/复选框 iOS 化、气泡时间戳对比度）。
+
+### 3.100 R68：咨询多轮上下文（R5 遗留闭环，2026-11-19）
+
+**起点**：R5/R6 之后，跨角色 `consult` 每次只带「任务背景 + 当前问题」，被咨询方
+像第一次见提问方，长对话里会反复追问基础信息。本轮在同一 `(提问方, 目标角色)`
+配对上保留近期问答历史，作为 user/assistant 交替消息塞进下一次咨询。
+
+**实现（最小改动，不动调度/产物/经验沉淀内核）**
+
+| 层 | 文件 | 改动 |
+|---|---|---|
+| 路由 | `agents/peer.py` | `PeerRouter` 新增 `history_turns` 与 `_history`（配对 → 最近 N 轮 `{question, reply}`）；`ask()` 取历史快照透传，真实咨询成功后追加并按轮数截断；去重命中/配额用尽/拒绝不写历史 |
+| 工厂 | `agents/registry.py` | `AgentFactory.consult` 新增可选 `history`，原样透传给成员 Agent |
+| Agent | `agents/base_agent.py` | `consult` 接收 `history`，在系统提示词与当前问题之间插入历史 user/assistant 对；空条目跳过；问题截断 300 字、答复 500 字；无历史时消息序列与 R6 逐字一致 |
+| 装配 | `crew/crew.py` | 把 `settings.peer_consult_history_turns` 传入路由；`peer_dialogue_enabled` 事件补 `history_turns` 字段 |
+| 配置 | `config.py` | 新字段 `peer_consult_history_turns: int = Field(default=3, ge=0, le=5)`；env 映射 `AGENTCREW_PEER_CONSULT_HISTORY_TURNS`、YAML 标量键登记；随 `config_snapshot` 自动落盘 |
+| 入口 | `api/run_options.py` | 白名单登记 + `0~5` 整数校验（`0` = 不带历史，退回 R6 行为），非法值入口 400 |
+
+**边界与防护**：历史只在本次 run 内存活，不落盘、不跨 run、不进经验库；换配对不串
+历史；轮数上限 5、单条截断防上下文预算膨胀；`history_turns=0` 时行为与 R6 逐字
+一致。占位降级答复是否排除出历史，留待后续与 R6 沉淀口径统一重构（本次不跨层
+搬运常量）。
+
+**验证**：新增 12 例回归（Router 同配对带历史 / 配对隔离 / 轮数截断 / 0 关闭 /
+去重不写历史；Agent 历史消息序 / 超长截断 / 空条目跳过；配置默认值 / env / 快照；
+options 范围与类型校验）。全量 **3588 passed / 0 failed / 6 skipped / 0 error**
+（193 文件 / 97 批次 / 484.8s，1 例崩溃重试恢复，环境噪音非回归）；`ruff` 全绿、
+`mypy` 158 文件零错误。
 
 ---
 
@@ -3463,7 +3501,7 @@ HIG 规格文档切片落地。范围仅 `studio/`；规格中 `.shell/.sidebar/
 
 **R5 已闭环**（见 §3.10）：`<message to>` 从「只回一句角色职责」改为**目标角色的一次真实模型调用**；`PeerRouter` 配额 / 去重 / 问自己与未知角色零成本拒绝；`AgentFactory` 按角色绑定 `from_role` 并在 setter 里刷新已缓存实例；`peer_dialogue_enabled` / `max_peer_messages` 四处通道打通。
 
-**R5 新增遗留**（按 ROI）：咨询的历史上下文（当前 `consult` 只带问题本身与角色提示词，不带提问方的任务上下文，长对话会重复问基础信息）→ 咨询结果的经验沉淀（目前只进 ledger，不进经验库）。
+**R5 新增遗留**：~~咨询的历史上下文~~（✅ R68 已闭环，见 §3.100：配对级近期问答历史，默认 3 轮、`0` 退回 R6）；~~咨询结果的经验沉淀~~（✅ R6 已闭环：`peer_consult_capture_enabled` 把真实问答沉淀进经验库）。
 
 **R6 已闭环**（见 §3.11）：动态委派四道闸（角色存在 / `manager_only` 权限 / 层数 / 总数）+ `Task.delegated_by` 与带原因的拒绝事件；咨询带上提问方任务背景；`peer_consult_capture_enabled` 把真实问答沉淀进经验库。
 
