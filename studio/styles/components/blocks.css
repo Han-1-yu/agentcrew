@@ -36,6 +36,26 @@
 .page-head .btn:not(.btn-primary):not(.btn-danger):active { background: var(--accent-bg); }
 .ph-empty { padding: var(--sp-10) var(--sp-5); text-align: center; font-size: var(--fs-body); color: var(--text-ter); }
 
+/* ---- 语义状态徽章：对话/计划/任务图/门禁全屏页共用 ----
+   令牌 --status-* 双主题齐备（浅色为无障碍文字阶），此处统一接线；
+   看板门禁与 Agents 页另有专规（.gate-status-chip / .agent-full-status）。 */
+.status-chip, .dag-task-status, .gate-full-status {
+  font-size: var(--fs-xs); font-weight: 500; letter-spacing: 0.02em;
+  padding: 2px 8px; border-radius: var(--r-pill);
+  background: var(--bg-subtle); color: var(--text-sub);
+  flex: 0 0 auto;
+}
+.status-pending   { background: var(--status-pending-bg);   color: var(--status-pending); }
+.status-ready     { background: var(--status-ready-bg);     color: var(--status-ready); }
+.status-running   { background: var(--status-running-bg);   color: var(--status-running); }
+.status-review    { background: var(--status-review-bg);    color: var(--status-review); }
+.status-rework    { background: var(--status-rework-bg);    color: var(--status-rework); }
+.status-blocked   { background: var(--status-blocked-bg);   color: var(--status-blocked); }
+.status-succeeded { background: var(--status-succeeded-bg); color: var(--status-succeeded); }
+.status-failed    { background: var(--status-failed-bg);    color: var(--status-failed); }
+.status-skipped   { background: var(--status-skipped-bg);   color: var(--status-skipped); }
+.status-cancelled { background: var(--status-cancelled-bg); color: var(--status-cancelled); }
+
 /* ---- 状态点：一颗小圆，状态色是它唯一的色彩 ---- */
 .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-ter); flex: 0 0 auto; }
 .dot.running { background: var(--status-running); }

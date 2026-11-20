@@ -12,7 +12,7 @@
 }
 .settings-group-title {
   margin: 0 0 var(--sp-3); padding-bottom: var(--sp-2);
-  font-family: var(--font-display); font-size: var(--fs-h2); font-weight: 500;
+  font-family: var(--font-display); font-size: var(--fs-h2); font-weight: 600;
   letter-spacing: 0.01em; color: var(--text);
   border-bottom: 0.5px solid var(--border-weak);
 }
@@ -20,7 +20,8 @@
 /* ---- 表单：一套规格（32px 高、6px 圆角、focus 铜色环） ---- */
 .settings-field { margin-bottom: var(--sp-4); }
 .settings-field:last-child { margin-bottom: 0; }
-.settings-field label {
+/* 字段标题块级；.set-check 行自带 flex 布局（标题左 Switch 右），须排除 */
+.settings-field label:not(.set-check) {
   display: block; margin-bottom: 6px;
   font-size: var(--fs-sm); font-weight: 500; color: var(--text-sub);
 }
@@ -56,13 +57,15 @@
 
 /* V7 网关高级功能：复选框行 */
 .set-check-row {
-  display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 6px 0 8px;
+  display: flex; flex-direction: column; gap: 10px; margin: 6px 0 8px;
 }
+/* HIG 设置行：标题左、Switch 右 */
 .set-check {
-  display: inline-flex; align-items: center; gap: 5px;
+  display: flex; align-items: center; gap: 10px; width: 100%;
   font-size: var(--fs-sm); color: var(--text-sub); cursor: pointer;
   font-weight: 400;
 }
+.set-check input[type="checkbox"] { order: 2; margin-left: auto; }
 /* iOS Switch 样式见 components/switch.css（.set-check 复用） */
 .set-check input:disabled + span { opacity: 0.4; }
 .set-check input:disabled { cursor: not-allowed; opacity: 0.4; }

@@ -25,7 +25,7 @@
 }
 .fm-row:hover { background: var(--bg-subtle); }
 .fm-row.is-added { opacity: 0.62; cursor: default; }
-.fm-check { flex: 0 0 auto; cursor: pointer; }
+.fm-check { flex: 0 0 auto; cursor: pointer; width: 18px; height: 18px; accent-color: var(--accent); }
 .fm-row.is-added .fm-check { cursor: default; }
 .fm-id { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .fm-id-text {

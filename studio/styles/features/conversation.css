@@ -61,9 +61,10 @@
   white-space: pre-wrap;
   word-break: break-word;
 }
+/* 蓝底白字时间戳：不再降透明度（.72 白于系统蓝仅 ~2.8:1）；
+   纯白于 #007AFF ≈ 4.0:1，沿用 Apple 系统蓝白字惯例（披露见改造说明）。 */
 .conv-user-bubble .conv-ts {
   color: var(--on-solid);
-  opacity: 0.72;
 }
 
 /* 系统消息：居中，小字灰，带语义色 */

@@ -1,13 +1,13 @@
 /* ---- 门禁全屏页 ---- */
 /* 门禁全屏页 */
-.gates-full-list { padding: 16px 20px; display: flex; flex-direction: column; gap: 12px;
-  overflow-y: auto; height: calc(100vh - 100px); }
-.gate-full-card { background: var(--bg-panel); border: 0.5px solid var(--border-weak); border-radius: var(--r-sm);
+/* 自然高度：主区域统一滚动（与 Agents 页一致，避免嵌套滚动条） */
+.gates-full-list { padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; }
+.gate-full-card { background: var(--bg-panel); border: 0.5px solid var(--border-weak); border-radius: var(--r-md);
   padding: 16px; }
 .gate-full-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
 .gate-full-id { font-size: var(--fs-h2); font-weight: 500; color: var(--accent); font-family: var(--font-mono); }
-.gate-full-name { font-size: var(--fs-h1); font-weight: 500; color: var(--text); flex: 1; }
-.gate-full-status { font-size: var(--fs-xs); padding: 3px 10px; border-radius: var(--r-sm); font-weight: 500; }
+.gate-full-name { font-size: var(--fs-h1); font-weight: 600; color: var(--text); flex: 1; }
+/* 状态徽章基础样式与语义色见 components/blocks.css（.gate-full-status） */
 .gate-full-stats { display: flex; gap: 24px; margin-bottom: 12px; }
 .gate-full-stat { text-align: center; }
 .gate-full-stat .n { font-size: var(--fs-display); font-weight: 500; color: var(--text); font-variant-numeric: tabular-nums; }
