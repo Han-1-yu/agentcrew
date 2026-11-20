@@ -144,8 +144,10 @@
 .sb-group-recents { flex: 0 1 auto; overflow: hidden; min-height: 92px; }
 
 /* 侧边栏弹性布局：任务列表与最近运行各自滚动，头部/导航/分组头/「显示更多」固定，
-   避免内容变长时撑破侧边栏、覆盖「最近运行」或底部元信息。 */
-#sb-project-group { overflow: hidden; flex: 0 1 auto; }
+   避免内容变长时撑破侧边栏、覆盖「最近运行」或底部元信息。
+   项目组高度下限 = 固定开销（组题+项目行+搜索/筛选 chips 两行+显示更多），
+   防止矮窗口 flex 压缩把 chips 拦腰裁切（overflow:hidden 会切到不可收缩子项）。 */
+#sb-project-group { overflow: hidden; flex: 0 1 auto; min-height: 154px; }
 #sb-project-group .sb-group-label,
 #sb-project-group .sb-proj,
 #sb-project-group .sb-task-tools,
@@ -153,6 +155,17 @@
 #sb-tasklist { flex: 1 1 auto; overflow-y: auto; min-height: 0; }
 .sb-group-recents .sb-group-label { flex-shrink: 0; }
 #sb-recents { flex: 1 1 auto; overflow-y: auto; min-height: 0; }
+
+/* 矮窗口（≤880px）或窄窗口（≤1100px，chips 换行两行使开销增高）：
+   固定开销+双列表下限+底部元信息已超视口，改 macOS 侧边栏惯例——整栏滚动，
+   列表保留自身滚动下限，项目组下限抬高到开销+列表下限，任何尺寸都不裁切控件。 */
+@media (max-height: 880px), (max-width: 1100px) {
+  #sidebar { overflow-y: auto; overflow-x: hidden; }
+  #sb-project-group { min-height: 260px; }
+  #sb-tasklist { min-height: 88px; }
+  #sb-recents { min-height: 67px; }
+  .sb-foot { margin-top: var(--sp-4); }
+}
 
 /* ---------- 底部：运行元信息 + 设置 ---------- */
 .sb-foot { margin-top: auto; padding-top: var(--sp-2); flex-shrink: 0; }
