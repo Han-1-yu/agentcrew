@@ -8,7 +8,15 @@
 
 ## 0. 一句话现状
 
-**最新一轮（2026-11-21）：Studio N1-N2 定时任务编辑 / 启停 / 触发历史**
+**最新一轮（2026-11-21）：Studio P2-P3 壳层（对话分组可折叠 / 演示状态收进「开发者」）**
+—— 侧栏「对话」分组标题变成折叠开关（caret + `aria-expanded` + localStorage 记忆），
+收起后搜索框、筛选 chips、列表、「显示更多」整块让位给上方的任务列表，展开即复原
+（列表元素始终在 DOM 里，只是不占位）；账户菜单只留账户与工作区信息（数据源显示真实 /
+演示），9 个「演示边界状态」移进独立的「开发者」子菜单，并明写「只切 `--mock` 数据，
+不碰真实运行的 ledger / 产物 / 设置」。`check` 136 模块 / 55 分片、`test:unit` 161/161、
+`verify:api` 21/21、`e2e` **51/51**、`selftest` 16/16、`visual` 24/24。明细见 §3.116。
+
+**同日（2026-11-21）：Studio N1-N2 定时任务编辑 / 启停 / 触发历史**
 —— 定时任务从「只能新建和删除」补齐三件事：**启停**（CLI 新增 `schedule enable|disable`，
 启用时按当前时刻重算 `next_run`，避免停用一周后重新启用就补跑一次；一次性日程的 `at`
 已过则明确拒绝而不是排成「立刻触发」）；**编辑**（后端没有 update 子命令，前端按
@@ -171,7 +179,7 @@ config 解析去重（R66e）、`main.py` 3388→~700 行拆进 `cli/` 九模块
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
-| Studio | `npm run check` **136** 模块 / **55** 样式分片、`test:unit` **161/161**、`verify:api` **21/21**、electron `e2e` **49/49**（15 页导航 + 命令面板 + 通知中心 + 对话检索 + 供应商分层 + 工具试跑页头 + 任务详情产物摘要 + 产物操作条 + 快捷键录制 + 输出目录统计 + 事件范围筛选 + 定时任务表单与触发历史）、`selftest` **16/16**（15 页导航）、`visual` 基线重建后复检 **24/24**（N1-N2 重建，见 §3.115；L1 见 §3.114；O1-O3 见 §3.113） |
+| Studio | `npm run check` **136** 模块 / **55** 样式分片、`test:unit` **161/161**、`verify:api` **21/21**、electron `e2e` **51/51**（15 页导航 + 命令面板 + 通知中心 + 对话检索 + 供应商分层 + 工具试跑页头 + 任务详情产物摘要 + 产物操作条 + 快捷键录制 + 输出目录统计 + 事件范围筛选 + 定时任务表单与触发历史 + 侧栏折叠与开发者菜单）、`selftest` **16/16**（15 页导航）、`visual` 基线重建后复检 **24/24**（P2-P3 重建，见 §3.116；N1-N2 见 §3.115；L1 见 §3.114） |
 | 上线自检 | 本机可验 **9 项全通过**（doctor / 离线冒烟 / REST 认证 200·401 / `/metrics` / 无密钥退 3 / `clean` 干跑 / Studio 三连 / ruff+mypy）；目标机 10 项判据见 `docs/DEPLOY-CHECK-2026-11-13.md` |
 | 收尾 | 交付说明见 **`docs/CLOSURE-2026-11-13.md`**；B 类外部环境项 **5/5 全部闭环**；云主机真实部署验收 10 项中 **7 项闭环**（TLS/SSE、告警规则、日志、密钥、成本、webhook、备份），仅剩独立数据盘与两项 Docker 依赖（§3.77、`docs/DEPLOYMENT-VM-2026-11-13.md`） |
 | Git | `c9c4a60`（R61 真机修复）与 `c9cc47c`（R59–R61）均已推送到 `origin/master`，CI run **43453359080** / **43449592343** 的 **7 个 job 全部 success**（Python 3.10/3.11/3.12/3.13、Windows、Studio、Docker 真隔离）；`ebb9895`（R62）/ `8c6e411`（Studio V6-FE）/ `b712113`（桌面启动器）连同两笔状态回填已于 2026-11-14 推送到 `origin/master`（`92d3854..67aeda4`）；C10 `5cdeea8` 与状态回填 `d76d2ef` 同批推送，**2026-11-15 复核 CI run `43608513108`（head = `d76d2ef`）的 7 个 job 逐一 success**（Python 3.10/3.11/3.12/3.13、Windows·uv、Studio·Node 20、Sandbox·docker 真隔离），`Sync main` run `43608513094` success；上一批 `67aeda4` 的 run `43607497931` 亦 success。验收报告 `docs/ACCEPTANCE-2026-11-12.md`；真实模型评测历史证据为 23 条中 22 通过（`bench/eval-live-2026-11-13.md`，本次未重跑真实模型评测）。**2026-11-15 本轮两笔提交 `5e9bc70`（实现，26 文件 / +1866 −119）/ `bedb7e7`（状态回填）已推送到 `origin/master`**（`d76d2ef..bedb7e7`，`origin/main` 同哈希）；对应 CI run **`43712615843`** 结论 `success`、7 个 job 逐一 success，`Sync main` `43712615752` success |
@@ -4006,6 +4014,40 @@ F2 的 MANIFEST 真实数据只在本机 completed run 上人工核对（`202611
 - **未覆盖**：启停与编辑的真实点击未进 e2e（会往用户真实 `_schedules/schedules.json`
   写数据，只验到表单渲染与本地校验）；触发历史的扫描逻辑在 `main.js` 里，`npm run check`
   不覆盖 `main.js`，靠 e2e 的 2c3 与上述 CLI 实跑兜底。
+
+### 3.116 Studio P2-P3：侧栏折叠与开发者子菜单（2026-11-21）
+
+**起点**：两个壳层问题。① 侧栏的「对话」列表（B1 全量会话）和上方任务列表抢高度，
+矮窗口里两列都被压得很短；想只看任务时没法把对话区让出来。② `shell.js openUserMenu`
+把「账户」与 9 个「演示边界状态」混在一个弹窗里，点开账户先看到的是一排调数据的按钮——
+演示态开关是开发调试入口，不该和账户语义绑在一起。
+
+**落点**：
+- **P2 侧栏折叠**：`index.html` 把「对话」分组的标题换成按钮
+  `#sb-recents-toggle`（`aria-expanded` + `aria-controls` + caret），分组容器加
+  `#sb-recents-group`；`styles/layout/sidebar.css` 新增 `.sb-group-toggle` 与
+  `.sb-group-recents.is-collapsed`（收起时把 `#sb-run-tools` / `#sb-recents` /
+  `#sb-run-more` 一起 `display:none`，`min-height` 归零，caret 转 −90°）。
+- **P2 行为**：`shell.js` 新增 `setRecentsCollapsed` / `initSidebarRecents`，
+  `boot.js` 在绑定时调用一次。状态存 localStorage `agentcrew:sb-recents-collapsed`
+  ——纯观感偏好，不进 `settings.json` 白名单（O3 的设置导出也不该带上它）。
+  **只影响占位**：列表节点始终在 DOM 里，展开即复原，不触发重新拉取。
+- **P3 菜单分离**：`openUserMenu` 只留账户信息（工作区 + 数据源「真实 / 演示」）与一个
+  「开发者工具」入口；9 个演示状态搬进新的 `openDeveloperMenu`（`DEMO_STATES` 提成常量，
+  按钮带 `data-demo-state`），弹窗里明写「只切 `--mock` 数据，不碰真实运行的 ledger /
+  产物 / 设置」，并给一个「返回账户」。
+
+**边界**：折叠的是「对话」这一个分组（任务分组不折叠）；折叠状态不跨设备同步（localStorage
+按机器走，导入设置不会带走它）。开发者子菜单仍用同一个模态框（`showModal` 替换内容），
+不是独立窗口。
+
+**验证**：`check` **136 模块 / 55 分片**；`test:unit` **161/161**（本轮未新增纯函数）；
+`verify:api` 21/21（无后端改动）；`e2e` **51/51**（新增 20d：收起后搜索区高度 0、
+`aria-expanded=false`、列表 `display:none`、localStorage 写入 `1`、再点一次复原；
+20e：账户菜单标题不含「演示」且无 `[data-demo-state]`，开发者子菜单 9 个状态、Esc 可关）；
+`selftest` 16/16；`visual:update` 重建 24 张后 `visual` 24/24。
+- **未覆盖**：折叠状态的重启保持没有单独断言（e2e 只验单次写入与复原）；窄屏
+  （≤1100px）下的折叠布局未截图断言。
 
 ---
 
