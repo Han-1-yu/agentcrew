@@ -15,6 +15,7 @@ import { buildEnvironmentGroup } from './environment.js';
 import { collectSettings } from './fields.js';
 import { buildGatewayGroup } from './gateway.js';
 import { buildModelBudgetGroup } from './model-budget.js';
+import { buildShortcutsGroup } from './shortcuts.js';
 
 function buildPageHead(cfg) {
   return h('div', { class: 'page-head' },
@@ -47,6 +48,7 @@ async function renderSettingsPage(container) {
   wrap.appendChild(buildGatewayGroup(cfg));
   wrap.appendChild(buildAgentsGroup());
   wrap.appendChild(buildConnectionGroup(cfg));
+  wrap.appendChild(buildShortcutsGroup(cfg));
   wrap.appendChild(buildAppearanceGroup(cfg));
   wrap.appendChild(buildAboutGroup());
 }

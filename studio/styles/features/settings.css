@@ -136,3 +136,19 @@
   .nr-model-row .nr-input, .nr-model-row .nr-select.fixed { flex: 1 1 100%; width: 100%; }
 }
 
+/* ---- 快捷键（O1） ---- */
+.shortcut-note { font-size: var(--fs-xs); color: var(--text-ter); line-height: 1.6; margin-bottom: var(--sp-3); }
+.shortcut-row { display: flex; align-items: center; gap: var(--sp-2); padding: 6px 0;
+  border-bottom: 0.5px solid var(--border-weak); }
+.shortcut-row:last-of-type { border-bottom: none; }
+.shortcut-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.shortcut-label { font-size: var(--fs-sm); font-weight: 500; color: var(--text); }
+.shortcut-hint { font-size: var(--fs-xs); color: var(--text-ter); }
+.shortcut-spec { flex: 0 0 auto; min-width: 96px; text-align: center; padding: 3px 8px;
+  font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text);
+  background: var(--bg-subtle); border: 0.5px solid var(--border-weak); border-radius: var(--r-sm); }
+.shortcut-row.is-recording { background: var(--accent-focus); border-radius: var(--r-sm); }
+.shortcut-row.is-recording .shortcut-spec { border-color: var(--accent); color: var(--accent); }
+.shortcut-conflict { font-size: var(--fs-xs); line-height: 1.6; margin-top: var(--sp-2); color: var(--text-ter); }
+.shortcut-conflict.is-error { color: var(--warn-text); }
+

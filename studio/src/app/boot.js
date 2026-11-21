@@ -22,6 +22,7 @@ import { initMockData, startSim } from './mock.js';
 import { initRealtime, onWatchLedger, onWatchSnapshot } from './realtime.js';
 import { switchNav } from './router.js';
 import { applyTheme, cycleTheme, openUserMenu, renderChrome } from './shell.js';
+import { matches, normalizeSpec, resolveShortcuts } from '../lib/shortcuts.js';
 /** 首屏加载遮罩：getSettings / detectPython / listRuns / loadRealRun 都是异步 IPC，
  *  期间界面是一副「空闲 / 0 Agents / 0 任务」的静态骨架，看起来像数据丢了。
  *  返回一个幂等的收起函数，由 boot 在 finally 里调用，异常路径也不会留遮罩。 */
@@ -73,27 +74,34 @@ async function bootSequence(){
   window.addEventListener('error',(e)=>toast('error','界面错误',e.message));
   window.addEventListener('unhandledrejection',(e)=>toast('error','未处理异常',String(e.reason&&e.reason.message||e.reason)));
 
-  // 键盘快捷键
+  // 键盘快捷键：动作绑定来自设置（O1），用户改过就用改过的，非法值回默认。
+  const SHORTCUT_HANDLERS = {
+    palette: () => { if (!anyOverlayOpen()) openPalette(); },
+    newRun: () => { if (!anyOverlayOpen()) openNewRunModal(); },
+    refresh: () => $('#btn-refresh').click(),
+  };
   window.addEventListener('keydown',(e)=>{
     // Escape：关闭面板/弹窗/下拉
     if(e.key==='Escape'){
       closeDetailPanel(); closeModal(); closeRunDropdown();
       return;
     }
-    // Cmd/Ctrl + K：命令面板（B4）；Cmd/Ctrl + N：新建运行（已有弹窗/面板打开时不重复堆叠）
-    if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){ e.preventDefault(); if(!anyOverlayOpen()) openPalette(); return; }
-    if((e.metaKey||e.ctrlKey)&&e.key==='n'){ e.preventDefault(); if(!anyOverlayOpen()) openNewRunModal(); return; }
+    // 命令面板 / 新建运行 / 刷新：键位可在设置页改（默认 Mod+K / Mod+N / F5）
+    const map = resolveShortcuts(S.settings && S.settings.shortcuts);
+    for (const [id, spec] of Object.entries(map)) {
+      if (!matches(e, spec)) continue;
+      const handler = SHORTCUT_HANDLERS[id];
+      if (!handler || !normalizeSpec(spec)) continue;
+      e.preventDefault();
+      handler();
+      return;
+    }
     // 数字键 1-9：切换导航（弹窗/详情打开时屏蔽，避免在遮罩层背后切页）
     if(!e.metaKey&&!e.ctrlKey&&!e.altKey&&/^[1-9]$/.test(e.key)){
       if(anyOverlayOpen()) return;
       const pages=['conversation','dashboard','tasks','dag','agents','profiles','gates','artifacts','events'];
       const idx=parseInt(e.key)-1;
       if(pages[idx]){ switchNav(pages[idx]); }
-    }
-    // 空格：暂停/恢复（仅在 dashboard 且运行中）
-    if(e.key===' '&&S.nav==='dashboard'&&S.dash&&S.dash.run){
-      const run=S.dash.run;
-      if(run.status==='running'){ e.preventDefault(); /* 暂停按钮逻辑 */ }
     }
   });
 

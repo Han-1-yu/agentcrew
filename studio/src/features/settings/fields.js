@@ -2,9 +2,18 @@
  * 设置页表单读写：把散落在各组的输入框统一成一次采集。
  * 新增字段时改这里 + 对应组的 builder，保存逻辑不用动。
  */
-import { $ } from '../../lib/dom.js';
+import { $, $$ } from '../../lib/dom.js';
 
 import { readNumber, readUrl, showFieldError } from '../../lib/validate.js';
+
+/** 快捷键组：每行 `data-action` / `data-spec`（录制或恢复默认后即时更新）。 */
+function collectShortcuts() {
+  const map = {};
+  $$('.shortcut-row').forEach((row) => {
+    if (row.dataset.action) map[row.dataset.action] = String(row.dataset.spec || '');
+  });
+  return map;
+}
 
 /**
  * 从 DOM 读取当前表单值，组装成可写回主进程的设置对象。
@@ -44,6 +53,7 @@ function collectSettings(cfg) {
       routingStrategy: (cfg && cfg.routingStrategy) || 'weighted',
       affinityMode: (cfg && cfg.affinityMode) || 'off',
       affinityTtlDays: ttl.value,
+      shortcuts: collectShortcuts(),
     };
     return { values, error: cost.error || ttl.error || api.error };
   } catch (e) {

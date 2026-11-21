@@ -78,6 +78,8 @@ function defaultSettings() {
     // B3：会话元数据（conversation = run 的 1:1 别名层）。
     // { [run_id]: { alias, pinned, archived } }——纯增量键，旧版本忽略未知键。
     runMeta: {},
+    // O1：快捷键覆盖 { [action]: 'Mod+K' }；空表=全用 lib/shortcuts.js 的默认值
+    shortcuts: {},
   };
 }
 

@@ -261,9 +261,36 @@ function run(win) {
     }))()`);
     const settingsOk = settingsFields && settingsFields.python && settingsFields.output && settingsFields.model && settingsFields.api;
     check('13. 设置页面（Python/目录/模型/预算/API地址）', settingsOk, JSON.stringify(settingsFields));
+    // O1：快捷键组（三个动作各一行，带录制与恢复默认）
+    const shortcutRows = await js(`document.querySelectorAll('.shortcut-row').length`);
+    const shortcutBtns = await js(`document.querySelectorAll('.shortcut-row button').length`);
+    check('13a. 设置页快捷键组可自定义（录制 / 恢复默认）', Number(shortcutRows) === 3 && Number(shortcutBtns) === 6,
+      JSON.stringify({ shortcutRows, shortcutBtns }));
+
+    // 13b. O1：把命令面板录成 Alt+P → 保存 → 按 Alt+P 真能打开（再恢复默认）
+    const recordRes = await js(`(() => {
+      const row = document.querySelector('.shortcut-row[data-action="palette"]');
+      if (!row) return { ok: false, reason: 'no-row' };
+      row.querySelectorAll('button')[0].click();
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'p', altKey: true, bubbles: true }));
+      return { ok: row.dataset.spec === 'Alt+P', spec: row.dataset.spec };
+    })()`);
+    await js(`[...document.querySelectorAll('.page-head .btn-primary')].find((b) => b.textContent.trim() === '保存')?.click()`);
+    await sleep(500);
+    await js(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'p', altKey: true, bubbles: true }))`);
+    await sleep(300);
+    const paletteByAlt = await js('!!document.querySelector("#palette-input")');
+    check('13a2. 快捷键可录制并生效（Alt+P 打开命令面板）', !!(recordRes && recordRes.ok) && !!paletteByAlt,
+      JSON.stringify({ recordRes, paletteByAlt }));
+    await js(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+    await sleep(250);
+    // 复位：恢复默认并保存，后续用例继续用 Mod+K
+    await js(`document.querySelector('.shortcut-row[data-action="palette"]')?.querySelectorAll('button')[1]?.click()`);
+    await js(`[...document.querySelectorAll('.page-head .btn-primary')].find((b) => b.textContent.trim() === '保存')?.click()`);
+    await sleep(350);
     await shot('10-设置页面');
 
-    // ── 13b. F3 供应商管理页 ──
+    // ── 13c. F3 供应商管理页 ──
     await js(`document.querySelector('.nav-item[data-nav="providers"]')?.click()`);
     await sleep(1200); // 等待 keyStatus / 卡片渲染
     const provActive = await js(`document.querySelector('.nav-item[data-nav="providers"]')?.classList.contains('active')`);
