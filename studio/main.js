@@ -75,6 +75,9 @@ function defaultSettings() {
     providerModels: {}, // 供应商在线模型多选：{ [provider]: string[] }
     quotas: {},         // 多窗口配额：{ [alias]: { daily, weekly, monthly } }
     quota_enabled: false,
+    // B3：会话元数据（conversation = run 的 1:1 别名层）。
+    // { [run_id]: { alias, pinned, archived } }——纯增量键，旧版本忽略未知键。
+    runMeta: {},
   };
 }
 
@@ -227,7 +230,7 @@ function pythonSpawnSpec(extraArgs) {
  *
  * 返回结构统一为 ``{ status, stdout, stderr }``：``status=-1`` 表示启动失败或超时。
  */
-function runCli(args, { timeoutMs = 15000 } = {}) {
+function runCli(args, { timeoutMs = 15000, input = null } = {}) {
   return new Promise((resolve) => {
     let spec;
     try {
@@ -254,7 +257,29 @@ function runCli(args, { timeoutMs = 15000 } = {}) {
     child.stderr?.on('data', (buf) => { stderr += buf.toString('utf-8'); });
     child.on('error', (e) => finish(-1, String((e && e.message) || e)));
     child.on('close', (code) => finish(code === null ? -1 : code));
+    // 档案保存走 stdin：避免把用户输入先落到临时文件，也避免命令行长度上限。
+    if (input != null) {
+      try {
+        child.stdin?.end(String(input), 'utf-8');
+      } catch { /* 子进程已退出：close 事件会带回真实错误 */ }
+    }
   });
+}
+
+/** 从 CLI 输出里截取 JSON 对象（兼容 `--json` 的单行与 `tools` 的缩进多行）。 */
+function parseCliJson(result) {
+  const out = String((result && result.stdout) || '');
+  const start = out.indexOf('{');
+  const end = out.lastIndexOf('}');
+  if (start < 0 || end <= start) {
+    const detail = String((result && (result.stderr || result.stdout)) || '').trim();
+    throw new Error(detail || '无 JSON 输出');
+  }
+  try {
+    return JSON.parse(out.slice(start, end + 1));
+  } catch (e) {
+    throw new Error(`无法解析后端输出：${String((e && e.message) || e)}`);
+  }
 }
 
 // 跑 `main.py schedule ...` 并返回 stdout（只校验退出码，不解析 JSON）。
@@ -698,6 +723,58 @@ const IMAGE_MIME_BY_EXT = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
   '.webp': 'image/webp', '.gif': 'image/gif',
 };
+// A5：附件口径与 CLI --image / POST /runs images 一致（cli/common.py、
+// api/run_options.py）：最多 4 张、单张 ≤ 2.6MB、png/jpg/webp/gif。
+const IMAGE_MAX_COUNT = 4;
+const IMAGE_MAX_BYTES = 2_600_000;
+
+/** 校验一个候选图片文件；返回 { mime, sizeBytes } 或 { error }。 */
+function imageInfoFromPath(fullPath) {
+  const p = String(fullPath);
+  const mime = IMAGE_MIME_BY_EXT[path.extname(p).toLowerCase()];
+  if (!mime) return { error: `不支持的格式（可用 png / jpg / webp / gif）：${path.basename(p)}` };
+  let sizeBytes = 0;
+  try { sizeBytes = fs.statSync(p).size; } catch { return { error: `读取失败：${path.basename(p)}` }; }
+  if (sizeBytes > IMAGE_MAX_BYTES) {
+    return { error: `单张上限 2.6MB：${path.basename(p)}（实际 ${(sizeBytes / 1e6).toFixed(1)}MB）` };
+  }
+  return { mime, sizeBytes };
+}
+
+/** A5：附件选择对话框。existingCount 为已选数量，超出 4 张的部分静默丢弃并回报。 */
+async function pickImages(existingCount) {
+  const r = await dialog.showOpenDialog(win, {
+    title: '选择随目标附带的图片',
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }],
+  });
+  if (r.canceled || !r.filePaths || !r.filePaths.length) return { canceled: true, images: [] };
+  const room = Math.max(0, IMAGE_MAX_COUNT - (Number(existingCount) || 0));
+  const picked = r.filePaths.slice(0, room);
+  const images = [];
+  for (const filePath of picked) {
+    const info = imageInfoFromPath(filePath);
+    if (info.error) return { ok: false, error: info.error, images };
+    images.push({ path: filePath, name: path.basename(filePath), mime: info.mime, sizeBytes: info.sizeBytes });
+  }
+  return { ok: true, images, skipped: r.filePaths.length - picked.length };
+}
+
+/** A5：把已选图片读成 REST POST /runs 的 images 形状（base64 内联）。 */
+function readImageFiles(paths) {
+  const images = [];
+  for (const raw of (Array.isArray(paths) ? paths : []).slice(0, IMAGE_MAX_COUNT)) {
+    const p = String(raw);
+    const info = imageInfoFromPath(p);
+    if (info.error) return { ok: false, error: info.error, images };
+    let buf;
+    try { buf = fs.readFileSync(p); } catch (e) {
+      return { ok: false, error: `读取失败：${path.basename(p)}（${e.message}）`, images };
+    }
+    images.push({ path: p, name: path.basename(p), mime: info.mime, sizeBytes: buf.length, dataBase64: buf.toString('base64') });
+  }
+  return { ok: true, images };
+}
 
 function listRunImages(runDir) {
   const imgDir = path.resolve(runDir, 'context', 'images');
@@ -828,6 +905,99 @@ function registerIpc() {
     return { ok: true, yaml: result.stdout };
   });
 
+  // R69：档案写操作走 CLI 的同一条校验/备份/回收站路径。
+  // 输入是 YAML（也接受 JSON——JSON 是 YAML 的子集），从 stdin 传给子进程，
+  // 不落临时文件，也不在渲染进程里拼命令行。
+  ipcMain.handle('agents:save', async (_e, arg) => {
+    const p = objArg(arg);
+    const text = String(p.text || '');
+    if (!text.trim()) return { ok: false, error: '没有可保存的档案内容' };
+    const args = ['agents', '--save', '-', '--json'];
+    if (p.force) args.push('--force');
+    if (p.dryRun) args.push('--dry-run');
+    const result = await runCli(args, { timeoutMs: 30000, input: text });
+    try {
+      return { ok: true, data: parseCliJson(result) };
+    } catch (e) {
+      return { ok: false, error: (result.stderr || result.stdout || String(e.message || e)).trim() };
+    }
+  });
+
+  ipcMain.handle('agents:delete', async (_e, arg) => {
+    const p = objArg(arg);
+    const key = String(p.key || '').trim();
+    if (!key) return { ok: false, error: '缺少档案 key' };
+    const args = ['agents', '--delete', key, '--json'];
+    if (p.force) args.push('--force');
+    const result = await runCli(args, { timeoutMs: 30000 });
+    try {
+      return { ok: true, data: parseCliJson(result) };
+    } catch (e) {
+      return { ok: false, error: (result.stderr || result.stdout || String(e.message || e)).trim() };
+    }
+  });
+
+  // 单个档案的 YAML（复制到剪贴板 / 分享给同事）
+  ipcMain.handle('agents:yaml', async (_e, arg) => {
+    const key = String(objArg(arg).key || '').trim();
+    if (!key) return { ok: false, error: '缺少档案 key' };
+    const result = await runCli(['agents', '--yaml', '--key', key]);
+    if (result.status !== 0) {
+      return { ok: false, error: (result.stderr || result.stdout || '').trim() || `退出码 ${result.status}` };
+    }
+    return { ok: true, yaml: result.stdout };
+  });
+
+  // 跨 run 用量：按执行体聚合调用量 / 成本 / 最近使用（只扫最近 N 个 run）。
+  ipcMain.handle('agents:usage', async (_e, arg) => {
+    const limit = Math.max(1, Math.min(200, Number(objArg(arg).limit) || 30));
+    const result = await runCli(
+      ['agents', '--usage', '--json', '--limit', String(limit),
+        '--output-dir', settings.outputDir],
+      { timeoutMs: 60000 });
+    try {
+      return { ok: true, data: parseCliJson(result) };
+    } catch (e) {
+      return { ok: false, error: (result.stderr || result.stdout || String(e.message || e)).trim() };
+    }
+  });
+
+  // 工具目录：编辑器里的工具白名单候选（与 run 内注册表同一份元数据）。
+  ipcMain.handle('agents:tools', async () => {
+    const result = await runCli(['tools', '--json']);
+    try {
+      return { ok: true, data: parseCliJson(result) };
+    } catch (e) {
+      return { ok: false, error: (result.stderr || result.stdout || String(e.message || e)).trim() };
+    }
+  });
+
+  // 打开档案目录：路径必须由后端解析结果给出，渲染端不能传任意路径
+  // （shell:openPath 有 outputDir 边界，档案目录通常在仓库根，不能复用）。
+  ipcMain.handle('agents:openDir', async () => {
+    const result = await runCli(['agents', '--json'], { timeoutMs: 30000 });
+    try {
+      const data = parseCliJson(result);
+      const dir = String((data.storage || {}).profiles_dir || '').trim();
+      if (!dir) return { ok: false, error: '后端没有返回档案目录' };
+      fs.mkdirSync(dir, { recursive: true });
+      const failure = await shell.openPath(dir);
+      return failure ? { ok: false, error: failure } : { ok: true, path: dir };
+    } catch (e) {
+      return { ok: false, error: (result.stderr || result.stdout || String(e.message || e)).trim() };
+    }
+  });
+
+  // 配置损坏时的兜底诊断：`--check` 即使加载失败也会输出逐条问题。
+  ipcMain.handle('agents:check', async () => {
+    const result = await runCli(['agents', '--check', '--json'], { timeoutMs: 30000 });
+    try {
+      return { ok: true, data: parseCliJson(result) };
+    } catch (e) {
+      return { ok: false, error: (result.stderr || result.stdout || String(e.message || e)).trim() };
+    }
+  });
+
   // ── 定时任务（Automations）──
   ipcMain.handle('schedule:list', async () => {
     try { return { ok: true, data: await runScheduleJson(['list', '--json']) }; }
@@ -902,6 +1072,11 @@ function registerIpc() {
       : (settings.maxCostUsd && Number(settings.maxCostUsd) > 0 ? Number(settings.maxCostUsd) : 0);
     if (chosenMaxCost > 0) args.push('--max-cost', String(chosenMaxCost));
     if (p.maxLlmCalls && Number(p.maxLlmCalls) > 0) args.push('--max-llm-calls', String(p.maxLlmCalls));
+    // A5：随目标附带的图片 → CLI --image <path>（可重复；选图时已按
+    // ≤4 张 / ≤2.6MB / 后缀白名单校验，这里的 slice 只是双保险）。
+    for (const imgPath of (Array.isArray(p.images) ? p.images.slice(0, IMAGE_MAX_COUNT) : [])) {
+      args.push('--image', String(imgPath));
+    }
     args.push('--no-live', '--output-dir', outputDir);
     // spawnCli 恒返回 { key }；启动失败由 proc:error / proc:exit 推送，
     // 原来这里的 if (r.error) 是永远不触发的死分支。
@@ -954,6 +1129,10 @@ function registerIpc() {
   ipcMain.handle('artifact:read', (_e, dir, relPath) => readArtifact(String(dir), String(relPath)));
   ipcMain.handle('images:list', (_e, dir) => listRunImages(String(dir)));
   ipcMain.handle('images:read', (_e, dir, name) => readRunImage(String(dir), String(name)));
+  // A5：composer / 新建弹窗的附件区——选图（返回路径与元数据）与
+  // REST 通道用的 base64 读取。凭据无关，纯本地文件操作。
+  ipcMain.handle('images:pick', async (_e, arg) => pickImages(objArg(arg).existingCount));
+  ipcMain.handle('images:readFiles', (_e, arg) => readImageFiles(objArg(arg).paths));
   ipcMain.handle('streams:load', (_e, dir) => loadStreams(String(dir)));
 
   ipcMain.handle('artifacts:export', async (_e, dir) => {

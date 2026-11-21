@@ -26,6 +26,13 @@ contextBridge.exposeInMainWorld('studio', {
   detectPython: (candidate) => invoke('python:detect', candidate),
   agentsConfig: () => invoke('agents:config'),
   agentsExport: () => invoke('agents:export'),
+  agentsSave: (p) => invoke('agents:save', p),
+  agentsDelete: (p) => invoke('agents:delete', p),
+  agentsYaml: (p) => invoke('agents:yaml', p),
+  agentsUsage: (p) => invoke('agents:usage', p),
+  agentsTools: () => invoke('agents:tools'),
+  agentsCheck: () => invoke('agents:check'),
+  agentsOpenDir: () => invoke('agents:openDir'),
   // 定时任务（Automations）
   scheduleList: () => invoke('schedule:list'),
   scheduleAdd: (p) => invoke('schedule:add', p),
@@ -53,6 +60,9 @@ contextBridge.exposeInMainWorld('studio', {
   // C4：随 run 输入图片（context/images/）
   listRunImages: (dir) => invoke('images:list', dir),
   readRunImage: (dir, name) => invoke('images:read', dir, name),
+  // A5：附件区——选图（返回 {path,name,mime,sizeBytes}）与 REST 通道 base64 读取
+  pickImages: (existingCount) => invoke('images:pick', { existingCount }),
+  readImageFiles: (paths) => invoke('images:readFiles', { paths }),
   // 系统
   revealFile: (fullPath) => invoke('shell:showItemInFolder', { fullPath }),
   openPath: (fullPath) => invoke('shell:openPath', { fullPath }),
