@@ -86,11 +86,23 @@ Electron userData 目录的 `settings.json`，可在「设置」里手动修改�
 - **I1/I2/E1 审批闭环**：批准/接受后自动 `POST resume`（409 如实显示「已裁决，待恢复」+ 重试按钮，不假装成功）；审批卡带上下文（计划卡点 = 任务/角色数 + 查看计划；交付卡点 = T-FINAL 状态与产物摘要 + 查看产物）；计划审查页挂起时给「去审批」直达；对话页审批系统消息跳门禁页。
 - **回归**：`npm run check` 110 JS / 50 CSS；`npm run test:unit` 91/91（新增 composer-intent / run-meta / guidance 消息聚合用例）；`npm run verify:api` 18/18（新增 guidance 直发对账、审批自动 resume 409、REST 创建单发、分流判定四断言）；`npm run selftest` 16/16、`npm run e2e` 36/36；`npm run visual:update` 重建 23 张基线后一致。
 
+## V8-FE 管理与观测补全（P1 批次一，2026-11-21）
+
+按 `docs/STUDIO-FEATURE-COMPLETION-2026-11-21.md` 批次 2 先落地投入产出比最高的部分，Python 后端一行未改。
+
+- **F+ 流程库页**（第 14 页）：R26/R28 后端能力的前端入口——列表（名称/任务数/校验错误徽标/更新时间）、查看（图视图节点表 + 规范化 YAML + 校验错误）、新建/导入（YAML → `POST /flows/validate` 校验 → `POST /flows` 落盘）、删除（确认后 `DELETE /flows/{name}`）、**从当前 run 另存为流程**（tasks.json → FlowSpec）、**用此流程启动**（预填新建弹窗）；新建弹窗高级区新增流程下拉（`flow_name`，REST options / CLI `--flow` 两通道）。
+- **P1 通知中心**：聚合实时增量事件（审批请求/裁决、预算预警与耗尽、运行结束/取消/失败、错误）→ 面板列表 + 未读角标 + 点击跳转（审批→门禁页、结束→对话页等）+ 窗口失焦时的系统通知（HTML5 Notification，可关）；去重键 watchDir+event+ts+id；历史回放不触发。
+- **B4 Ctrl/Cmd+K 命令面板**：搜 14 页导航、运行切换（含 runMeta 别名）、当前 run 任务（回车开详情）；↑↓ 选择、Enter 执行、Esc 关闭。
+- **G1 deriveAgents 补全**：从 `llm_call` 事件按角色聚合模型（最高频别名）与成本（此前硬编码 `'—'/0`），快照与 SSE 两条更新链路都传事件。
+- **A6 对话导出**：工具栏「导出」按钮 → 主进程保存对话框 → `.md` 文件（内容仍来自 `buildTranscript`）。
+- **Q1 多密钥管理**：设置 → 连接 的「多密钥管理…」弹窗——`GET /keys` 清单（名称/ID/角色/作用域/状态）+ 按角色新建（明文只显示一次 + 复制）+ 吊销；未启用多密钥时 503 如实提示。
+- **回归**：`check` 115 模块 / 54 分片；`test:unit` 91/91；`verify:api` 18/18；`selftest` 16/16（14 页导航）；`e2e` **38/38**（新增命令面板、通知中心两探针）；`visual` 基线重建 24 张后一致。
+
 ## 自测
 
 ```bash
 npm run check        # 结构护栏：分层、导入完整性、单文件体量、入口收敛（秒级，无需 GUI）
-npm run e2e          # 端到端：13 页导航（含回滚重跑）/ 详情 / 运行切换 / 新建运行 / 成本 / 供应商全链路（32 项）
+npm run e2e          # 端到端：14 页导航（含回滚重跑/流程库）/ 详情 / 运行切换 / 新建运行 / 成本 / 供应商全链路 / 命令面板 / 通知中心（38 项）
 npm run selftest     # 真实 UI 驱动一次 --mock 运行：列表 → 看板 → 事件 → 产物 → 设置 → 启动/取消（16 项）
 npm run verify:api          # 后端 API 代理：认证头 + SSE 帧 + C10 指引/R62 rewind/审批自动 resume/REST 创建的 REST 路径（18 项，无需 GUI / 无需真后端）
 npm run verify:transitions  # 状态切换：演示→真实运行 / 快速连点切 run / 单通道纪律（11 项）

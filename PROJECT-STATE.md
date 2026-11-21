@@ -49,6 +49,14 @@ Codex CLI 33% → 自定义 CLI 无数据）。目录频繁变化的平台不再
 check **90** 模块 / 46 分片、unit **59/59**、e2e **36/36**、visual **23/23**；Python 后端未改。
 证据与来源见 `docs/MODEL-CATALOG-2026-11-20.md`，明细见 §3.104。
 
+**2026-11-21 Studio 管理与观测补全（P1 批次一）**：flows **流程库页**成为第 14 页（列表/查看/
+校验/删除/从当前 run 另存为流程/用此流程启动，`flow_name` 进新建弹窗且 REST/CLI 两通道）、
+**通知中心**（审批/预算/结束/错误实时增量 → 角标 + 面板 + 跳转 + 失焦系统通知）、
+**Ctrl/Cmd+K 命令面板**（页面/运行含别名/任务三类搜索）、**deriveAgents 补全**（llm_call 聚合
+model/cost，替换硬编码）、对话**导出 .md**、**多密钥管理弹窗**（GET/POST/DELETE /keys）。
+check **115** 模块 / **54** 分片、unit **91/91**、verify:api **18/18**、selftest **16/16**（14 页）、
+e2e **38/38**（新增面板/通知两探针）、visual 重建 **24** 张后一致；Python 后端未改。明细见 §3.107。
+
 **2026-11-21 Studio 对话闭环（P0 批次）**：按 `docs/STUDIO-FEATURE-COMPLETION-2026-11-21.md`
 批次 1 落地，会话模型采用 **conversation = run（1:1）**、零后端改动——「新对话」空态页
 （模板 chips + 焦点落输入框）、输入框三态分流（空态/终态直发创建 run：REST `POST /runs`
@@ -92,7 +100,7 @@ config 解析去重（R66e）、`main.py` 3388→~700 行拆进 `cli/` 九模块
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
-| Studio | `npm run check` **110** 模块 / **50** 样式分片、`test:unit` **91/91**、`verify:api` **18/18**、electron `e2e` **36/36**（13 页导航 + 模型下拉 + 对话检索 + 供应商分层/调用量）、`selftest` **16/16**、`visual` 基线重建后复检 **23/23**（对话闭环批次重建，见 §3.106；R69 档案页基线见 §3.105；R67 重设计基线见 §3.99） |
+| Studio | `npm run check` **115** 模块 / **54** 样式分片、`test:unit` **91/91**、`verify:api` **18/18**、electron `e2e` **38/38**（14 页导航 + 命令面板 + 通知中心 + 对话检索 + 供应商分层）、`selftest` **16/16**、`visual` 基线重建后复检 **24/24**（P1 批次一重建，见 §3.107；对话闭环见 §3.106；R69 档案页基线见 §3.105） |
 | 上线自检 | 本机可验 **9 项全通过**（doctor / 离线冒烟 / REST 认证 200·401 / `/metrics` / 无密钥退 3 / `clean` 干跑 / Studio 三连 / ruff+mypy）；目标机 10 项判据见 `docs/DEPLOY-CHECK-2026-11-13.md` |
 | 收尾 | 交付说明见 **`docs/CLOSURE-2026-11-13.md`**；B 类外部环境项 **5/5 全部闭环**；云主机真实部署验收 10 项中 **7 项闭环**（TLS/SSE、告警规则、日志、密钥、成本、webhook、备份），仅剩独立数据盘与两项 Docker 依赖（§3.77、`docs/DEPLOYMENT-VM-2026-11-13.md`） |
 | Git | `c9c4a60`（R61 真机修复）与 `c9cc47c`（R59–R61）均已推送到 `origin/master`，CI run **43453359080** / **43449592343** 的 **7 个 job 全部 success**（Python 3.10/3.11/3.12/3.13、Windows、Studio、Docker 真隔离）；`ebb9895`（R62）/ `8c6e411`（Studio V6-FE）/ `b712113`（桌面启动器）连同两笔状态回填已于 2026-11-14 推送到 `origin/master`（`92d3854..67aeda4`）；C10 `5cdeea8` 与状态回填 `d76d2ef` 同批推送，**2026-11-15 复核 CI run `43608513108`（head = `d76d2ef`）的 7 个 job 逐一 success**（Python 3.10/3.11/3.12/3.13、Windows·uv、Studio·Node 20、Sandbox·docker 真隔离），`Sync main` run `43608513094` success；上一批 `67aeda4` 的 run `43607497931` 亦 success。验收报告 `docs/ACCEPTANCE-2026-11-12.md`；真实模型评测历史证据为 23 条中 22 通过（`bench/eval-live-2026-11-13.md`，本次未重跑真实模型评测）。**2026-11-15 本轮两笔提交 `5e9bc70`（实现，26 文件 / +1866 −119）/ `bedb7e7`（状态回填）已推送到 `origin/master`**（`d76d2ef..bedb7e7`，`origin/main` 同哈希）；对应 CI run **`43712615843`** 结论 `success`、7 个 job 逐一 success，`Sync main` `43712615752` success |
@@ -3533,6 +3541,25 @@ Studio `check` 100 模块 / 47 分片、`test:unit` 69/69、`e2e` 36/36、`visua
 guidance 消息聚合三组用例）；`verify:api` **18/18**（新增 guidance 直发对账、审批自动 resume 409、
 REST 创建单次恰好一条 POST、分流判定四断言）；`selftest` **16/16**、`e2e` **36/36**；
 `visual:update` 重建 **23** 张基线后复检一致。
+
+### 3.107 Studio 管理与观测补全 P1 批次一（2026-11-21）
+
+批次 2 先落地投入产出比最高的六项，**Python 后端一行未改**（全部走既有 REST/CLI 契约）：
+
+| 模块 | 内容 |
+| --- | --- |
+| `features/flows-page/`（新）+ `styles/features/flows-page.css`（新） | F+ 流程库第 14 页：列表（错误徽标）、查看（图视图节点表 + YAML）、新建/导入（validate→save）、删除、从当前 run 另存为流程（tasks→FlowSpec）、用此流程启动（预填弹窗）；未连 API 诚实空态 |
+| `features/new-run/{index,flow-options}.js` + `launch.js` + `rest-launch.js` + `main.js` | flow_name：弹窗高级区下拉（GET /flows，只列校验通过的）→ REST `options.flow_name` / CLI `--flow`；C3 其余能力开关因 CLI 无参数暂不暴露 |
+| `features/notifications/`（新）+ `realtime.js` + `boot.js` | P1 通知中心：appendEvents 增量钩子 → 面板/角标/跳转（审批→门禁、结束→对话等）/ 失焦 HTML5 系统通知（localStorage 可关）；去重键 watchDir+event+ts+id，历史回放不触发 |
+| `features/command-palette/`（新）+ `boot.js` | B4 Ctrl/Cmd+K：页面（14）/运行（含 runMeta 别名）/当前 run 任务三类搜索，↑↓+Enter 键盘操作 |
+| `app/data.js` + `realtime.js` | G1 deriveAgents(tasks, events)：llm_call 按角色聚合 model（最高频）与 cost，替换 `'—'/0` 硬编码；两条快照链路都传事件 |
+| `conversation/toolbar.js` + `main.js conversation:saveMd` + `preload.js` | A6 导出 .md：buildTranscript → 保存对话框 → showItemInFolder |
+| `features/settings/{connection,keys-modal}.js`（keys-modal 新） | Q1 多密钥管理：GET/POST/DELETE /keys；创建后明文单次展示 + 复制；未启用多密钥 503 如实提示 |
+| e2e/selftest | pages 数组 +'flows'（14 页断言）；e2e 新增 20b 命令面板、20c 通知中心两探针 |
+
+**验证**：`check` 115 模块 / 54 分片；`test:unit` 91/91；`verify:api` 18/18；`selftest` **16/16**（14 页）；
+`e2e` **38/38**；`visual:update` 重建 **24** 张基线后复检一致。批次 2 剩余项（工具试跑页、schedule
+启停（需 CLI 子命令）、产物版本 diff、快捷键自定义、O2-O3、D2-D3、F1-F2、L1-L2 等）留待后续。
 
 ---
 
