@@ -1,5 +1,6 @@
 /**
- * 新建运行弹窗：目标 / 项目 / Mock / 自动模式 / 模型选择。
+ * 新建运行弹窗：目标 / 项目 / Mock / 自动模式 / 模型选择 / 附件（C2）。
+ * 启动编排（C1：REST 优先、CLI 兜底）统一走 ./launch.js。
  */
 import { BUILTIN_PROVIDERS, findProvider } from '../../contracts/providers.js';
 
@@ -13,13 +14,16 @@ import { MODES, MODE_ORDER, currentMode, setMode } from '../../lib/mode.js';
 import { closeModal, showModal } from '../../ui/modal.js';
 import { toast } from '../../ui/toast.js';
 
-import { waitForStartedRun } from './run-launch.js';
+import { createAttachmentArea } from '../attachments/index.js';
+import { launchRun } from './launch.js';
+import { fillProviderOptions, normalizeApiProviders } from './provider-options.js';
 function openNewRunModal(opts = {}){
   // 记忆上次的模式选择；首次默认**真实模式**——Mock 产物是固定 Todo 夹具，与目标无关
   const saved = localStorage.getItem('agentcrew:nrMock');
   const mockDefault = saved == null ? !!(S.settings && S.settings.defaultMock) : saved === '1';
   // 执行模式（自动执行 / 计划审查 / 只读规划），读上次选择，默认 agent
   const modeDefault = currentMode();
+  let attachments = null;
   showModal(h('div',{},
     h('h3',{class:'modal-title'},'启动新运行'),
     h('div',{class:'nr-form'},
@@ -38,6 +42,10 @@ function openNewRunModal(opts = {}){
         h('div',{id:'nr-demo-hint',class:'nr-demo-hint',style:'display:none'},
           'Demo 模式：使用内置示例目标，无需手动输入'),
         h('div',{id:'nr-goal-error',class:'nr-field-error',role:'alert'})),
+
+      // C2：随目标附带的图片（与 composer 附件区共用组件；CLI --image / REST images）
+      h('div',{class:'nr-row',id:'nr-attach-row'},
+        h('label',{class:'nr-label'},'随目标附带的图片（可选，≤4 张，单张 ≤2.6MB）')),
 
       // 模型选择
       h('div',{class:'nr-row',id:'nr-model-area'},
@@ -125,14 +133,8 @@ function openNewRunModal(opts = {}){
         startBtn.disabled=true; startBtn.textContent='启动中…';
         try {
           localStorage.setItem('agentcrew:nrMock', mockOn ? '1' : '0');
-          // C-6：快照必须在 startRun **之前**取——spawn 返回时 CLI 可能已经建好
-          // run 目录，事后取快照会把新 run 算进 before。
-          let before = new Set();
-          const previousDir = S.watchDir;
-          try {
-            before = new Set(((await window.studio.listRuns())||[]).map(x=>x.dir));
-          } catch { /* 列表读不到：退化为「不判重」，仍可由 proc:run-dir 精确定位 */ }
-          const started = await window.studio.startRun({
+          // C1：启动编排统一走 launch.js（REST 优先 / CLI 兜底 / 绝不双发）
+          const via = await launchRun({
             goal: useDemo ? '' : goal,
             demo: useDemo,
             mock: mockOn,
@@ -141,25 +143,27 @@ function openNewRunModal(opts = {}){
             model: aliasR.value || null,
             maxCost: costR.value,
             maxLlmCalls: callsR.value,
+            images: attachments ? attachments.get().map((it) => it.path) : null,
             // 慢速 mock：拉长每次模拟 LLM 调用，留出观察与取消窗口
-            env: (mockOn && $('#nr-slow').checked) ? { AGENTCREW_MOCK_LATENCY_MS: '2000' } : null,
+            slow: mockOn && $('#nr-slow').checked,
           });
+          S.newChat = false;   // A1：启动成功即退出新对话态
           closeModal();
-          toast('success','已启动', mockOn ? 'Mock 运行已提交…' : '真实模型运行已提交，耗时数分钟…');
-          // 主进程发现目录后会发 proc:run-dir；低频扫描仅作为事件丢失时的兜底。
-          waitForStartedRun({
-            key: started && started.key,
-            before,
-            previousDir,
-          }).then(result => {
-            if (result.timedOut) toast('info','已启动','未检测到新的 run 目录，请在运行列表中手动切换');
-            else if (result.error) toast('error','切换失败', String(result.error.message || result.error));
-          });
+          if (via === 'rest-unknown') {
+            toast('info', '请在运行列表确认', 'API 响应超时，run 可能已创建；本次不会重复提交');
+          }
         } catch(e) {
           startBtn.disabled=false; startBtn.textContent='启动';
           toast('error','启动失败', String(e.message||e));
         }
       }},'启动'))));
+
+  // C2：挂载附件区（弹窗内选图，与 composer 共用）
+  const attachRow = $('#nr-attach-row');
+  if (attachRow) {
+    attachments = createAttachmentArea();
+    attachRow.appendChild(attachments.node);
+  }
 
   // 从底部命令输入框进来：预填目标，光标落到末尾（用户仍可在弹窗里改）
   if (opts && opts.goal) {
@@ -249,7 +253,8 @@ function openNewRunModal(opts = {}){
   const nrModel = $('#nr-model');
   const nrModelCustom = $('#nr-model-custom');
   const nrPreview = $('#nr-model-preview');
-  BUILTIN_PROVIDERS.forEach(p => nrProvider.appendChild(h('option', { value: p.key }, p.label)));
+  // 先分清「大模型」与「Agent 智能体」：前者是模型 API，后者是 CLI 执行引擎
+  fillProviderOptions(nrProvider, BUILTIN_PROVIDERS.filter(p => p.type !== 'internal'));
 
   const updateNrPreview = () => {
     const c = (nrModelCustom.value || '').trim();
@@ -295,10 +300,8 @@ function openNewRunModal(opts = {}){
       const data = await apiFetch('/providers');
       if (!target.isConnected) return;
       const list = (data && data.providers) || [];
-      if (list.length) {
-        target.innerHTML = '<option value="">自动（设置默认）</option>';
-        list.forEach(p => target.appendChild(h('option', { value: p.name }, p.name)));
-      }
+      const normalized = normalizeApiProviders(list);
+      if (normalized.length) fillProviderOptions(target, normalized);
     } catch (e) { console.log('[apiFetch] providers fallback:', e.message); }
   })();
 }
