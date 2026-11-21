@@ -198,6 +198,21 @@ function run(win) {
     const eventRows = await js('document.querySelectorAll(".event-row, [data-event]").length');
     const hasFilter = await js('!!document.querySelector(".ev-filter-bar, #ev-filter-bar")');
     check('11. 事件日志页面（列表+筛选）', Number(eventRows) > 0 && hasFilter, `${eventRows} 条事件, 筛选=${hasFilter}`);
+
+    // ── 11b. 事件页跟随实时开关（L2）：关 → 切页再回 → 仍关 → 恢复开 ──
+    const followBefore = await js('document.querySelector("#ev-follow")?.textContent || ""');
+    await js('document.querySelector("#ev-follow")?.click()');
+    await js(`document.querySelector('.nav-item[data-nav="dashboard"]')?.click()`);
+    await sleep(300);
+    await js(`document.querySelector('.nav-item[data-nav="events"]')?.click()`);
+    await sleep(300);
+    const followPersist = await js('document.querySelector("#ev-follow")?.textContent || ""');
+    await js('document.querySelector("#ev-follow")?.click()');
+    const followRestored = await js('document.querySelector("#ev-follow")?.textContent || ""');
+    check('11b. 事件页跟随实时开关（切换/重进保持/恢复）',
+      followBefore.includes('开') && followPersist.includes('关') && followRestored.includes('开'),
+      `${followBefore} → ${followPersist} → ${followRestored}`);
+
     await shot('08-事件日志页面');
 
     // ── 12. 产物页面 ──

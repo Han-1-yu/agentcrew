@@ -10,6 +10,27 @@ import { switchNav } from '../../app/router.js';
 import { renderAgentAudit } from './agent-audit.js';
 import { exportEvents } from './export.js';
 
+const FOLLOW_KEY = 'agentcrew:ev-follow';
+
+function followEnabled() {
+  try { return localStorage.getItem(FOLLOW_KEY) !== '0'; } catch { return true; }
+}
+
+function setFollowEnabled(on) {
+  try { localStorage.setItem(FOLLOW_KEY, on ? '1' : '0'); } catch { /* 忽略 */ }
+}
+
+function followLabel() { return `跟随实时：${followEnabled() ? '开' : '关'}`; }
+
+/** 新事件在最上面；跟随态把 #main 滚到列表顶部，关掉则保持用户当前位置。 */
+function scrollToNewest() {
+  const main = document.getElementById('main');
+  const list = $('#ev-full-list');
+  if (!main || !list) return;
+  const top = list.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
+  main.scrollTop = Math.max(0, top - 8);
+}
+
 function allEventTypes() {
   return [...new Set((S.dash.events || []).map(e => e.event))].sort();
 }
@@ -74,6 +95,15 @@ function renderEventsPage(container) {
       h('input', { id: 'ev-search', type: 'text', placeholder: '搜索事件…', value: S.eventSearch || '',
         style: 'width:200px;padding:6px 10px;border:1px solid var(--border-input);border-radius:6px;font-size:12px;font-family:inherit',
         oninput: ev => { S.eventSearch = ev.target.value; S.evPage = 1; renderEventsList(); } }),
+      h('button', { class: 'btn', id: 'ev-follow', type: 'button', 'aria-pressed': followEnabled() ? 'true' : 'false',
+        title: '实时事件到达时自动滚到最新；关闭后保持当前阅读位置',
+        onclick: (ev) => {
+          const next = !followEnabled();
+          setFollowEnabled(next);
+          ev.currentTarget.textContent = followLabel();
+          ev.currentTarget.setAttribute('aria-pressed', next ? 'true' : 'false');
+          if (next) scrollToNewest();
+        } }, followLabel()),
       h('button', { class: 'btn', onclick: () => exportEvents() }, '导出 JSON'),
       h('button', { class: 'btn', onclick: () => switchNav('dashboard') }, '返回'))));
 
@@ -146,7 +176,11 @@ function renderEventsList() {
 function refreshEventsView() {
   if (S.nav !== 'events') return;
   renderFilterButtons(syncEventFilters());
+  const main = document.getElementById('main');
+  const before = main ? main.scrollTop : 0;
   renderEventsList();
+  if (followEnabled()) scrollToNewest();
+  else if (main) main.scrollTop = before;
 }
 
 function summarizeEvent(e) {
