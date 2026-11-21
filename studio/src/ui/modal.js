@@ -14,11 +14,13 @@ function focusables(root) {
 
 function modalElement() { return $('#modal'); }
 
-function showModal(node) {
+function showModal(node, { wide = false } = {}) {
   if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
   const m = modalElement();
   const mask = $('#modal-mask');
   if (m.classList.contains('hidden')) returnFocus = document.activeElement;
+  // 档案编辑器需要双列表单；确认框 / 新建运行仍是默认宽度。
+  m.classList.toggle('modal-wide', !!wide);
   m.innerHTML = '';
   m.appendChild(node);
   m.tabIndex = -1;

@@ -289,6 +289,67 @@ function run(win) {
     check('P15. 负预算保存后被夹到 0', Number(p15d.saved) === 0,
       `saved=${p15d.saved}（期望 0）；原值=${p15d.before}`);
 
+
+    // ── P16. 执行体档案：新建编辑器与导入弹窗（只开不存，验证表单/预览/关闭） ──
+    await js(`document.querySelector('.nav-item[data-nav="profiles"]')?.click()`);
+    await sleep(900);
+    await js(`(() => {
+      window.__pfErrs = [];
+      window.addEventListener('error', (e) => window.__pfErrs.push(String(e.message)));
+      const btn = [...document.querySelectorAll('.pf-head-actions .btn')]
+        .find(b => b.textContent.includes('新建档案'));
+      if (btn) btn.click();
+    })()`);
+    await sleep(350);
+    await shot('probe-profiles-editor');
+    const p16 = await js(`(async () => {
+      const head = document.querySelector('.pf-page-head');
+      const actions = [...document.querySelectorAll('.pf-head-actions .btn')].map(b => b.textContent.trim());
+      const modal = document.getElementById('modal');
+      const wide = modal.classList.contains('modal-wide');
+      const fields = ['key','title','description','model','path_scope','cost_ceiling_usd','temperature']
+        .filter(name => !!modal.querySelector('[data-field="' + name + '"]'));
+      const previewRows = modal.querySelectorAll('.pf-preview-rows dt').length;
+      const toolCount = modal.querySelectorAll('[data-tool]').length;
+      const templateCount = modal.querySelectorAll('.pf-chip-btn').length;
+      modal.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await new Promise(r => setTimeout(r, 320));
+      const closed = modal.classList.contains('hidden') || !modal.classList.contains('show');
+
+      const importBtn = [...document.querySelectorAll('.pf-head-actions .btn')]
+        .find(b => b.textContent.includes('导入'));
+      importBtn.click();
+      await new Promise(r => setTimeout(r, 220));
+      const importOpen = !!modal.querySelector('.pf-import-text');
+      const importActions = [...modal.querySelectorAll('.modal-actions .btn')].map(b => b.textContent.trim());
+      modal.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await new Promise(r => setTimeout(r, 300));
+
+      // IPC 只读链路：dry-run 不写盘，验证保存校验 / 用量 / 工具目录三条通道。
+      // 探针跑在真实用户设置上；若 pythonCmd 指向缺依赖的解释器，CLI 会直接
+      // 起不来——临时切回自动探测（项目 .venv），结束后原样恢复。
+      const beforePython = (await window.studio.getSettings()).settings.pythonCmd || '';
+      await window.studio.setSettings({ pythonCmd: '' });
+      const dry = await window.studio.agentsSave({
+        text: JSON.stringify({ key: 'probe-temp', title: '探针档案' }), dryRun: true });
+      const usage = await window.studio.agentsUsage({ limit: 3 });
+      const tools = await window.studio.agentsTools();
+      await window.studio.setSettings({ pythonCmd: beforePython });
+
+      return JSON.stringify({ hasHead: !!head, actions, wide, fields, previewRows, toolCount,
+        templateCount, closed, importOpen, importActions, errs: window.__pfErrs || [],
+        dryOk: !!(dry && dry.ok && dry.data && dry.data.dry_run),
+        usageOk: !!(usage && usage.ok && usage.data && Array.isArray(Object.values(usage.data.profiles || {}))),
+        toolsOk: !!(tools && tools.ok && Array.isArray((tools.data || {}).tools)) });
+    })()`);
+    let p16d = {}; try { p16d = JSON.parse(p16); } catch {}
+    check('P16. 执行体档案编辑器（宽模态/字段/预览/模板）与导入弹窗',
+      p16d.hasHead && p16d.wide && p16d.fields && p16d.fields.length === 7
+      && p16d.previewRows >= 4 && p16d.toolCount >= 2 && p16d.templateCount >= 4
+      && p16d.closed && p16d.importOpen && (p16d.importActions || []).includes('先校验')
+      && p16d.dryOk && p16d.usageOk && p16d.toolsOk && (p16d.errs || []).length === 0,
+      JSON.stringify(p16d));
+
     // ── 汇总 ──
     const failed = checks.filter(c => !c.pass);
     const summary = { when: new Date().toISOString(), allPass: failed.length === 0,
