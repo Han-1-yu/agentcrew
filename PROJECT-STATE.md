@@ -8,7 +8,16 @@
 
 ## 0. 一句话现状
 
-**最新一轮（2026-11-21）：Studio P2-P3 壳层（对话分组可折叠 / 演示状态收进「开发者」）**
+**最新一轮（2026-11-21）：Studio §5 对话页内联审批卡**
+—— 对话流里出现「等待人工审批」时，那条系统消息下面直接长出审批卡：卡里列出待裁决的
+审批单 id 与动作（计划卡点给「批准执行 / 取消运行」，交付卡点给「接受交付 / 放弃交付」），
+批准 / 接受后自动 `POST /runs/{id}/resume`，续跑失败（409 别的进程在跑）如实显示原因并给
+「重试恢复」。裁决与续跑收口到新的 `features/approvals/flow.js`，动作表 / 状态文案 / 内联
+可用性判定进纯函数 `lib/approval.js`，门禁页与对话页共用一份、不再各写一套。**未连后端 API
+时不伪造按钮**，降级成「去门禁页处理」。`check` 139 模块 / 56 分片、`test:unit` 167/167、
+`verify:api` 21/21、`e2e` **52/52**、`selftest` 16/16、`visual` 24/24。明细见 §3.117。
+
+**同日（2026-11-21）：Studio P2-P3 壳层（对话分组可折叠 / 演示状态收进「开发者」）**
 —— 侧栏「对话」分组标题变成折叠开关（caret + `aria-expanded` + localStorage 记忆），
 收起后搜索框、筛选 chips、列表、「显示更多」整块让位给上方的任务列表，展开即复原
 （列表元素始终在 DOM 里，只是不占位）；账户菜单只留账户与工作区信息（数据源显示真实 /
@@ -179,7 +188,7 @@ config 解析去重（R66e）、`main.py` 3388→~700 行拆进 `cli/` 九模块
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
-| Studio | `npm run check` **136** 模块 / **55** 样式分片、`test:unit` **161/161**、`verify:api` **21/21**、electron `e2e` **51/51**（15 页导航 + 命令面板 + 通知中心 + 对话检索 + 供应商分层 + 工具试跑页头 + 任务详情产物摘要 + 产物操作条 + 快捷键录制 + 输出目录统计 + 事件范围筛选 + 定时任务表单与触发历史 + 侧栏折叠与开发者菜单）、`selftest` **16/16**（15 页导航）、`visual` 基线重建后复检 **24/24**（P2-P3 重建，见 §3.116；N1-N2 见 §3.115；L1 见 §3.114） |
+| Studio | `npm run check` **139** 模块 / **56** 样式分片、`test:unit` **167/167**、`verify:api` **21/21**、electron `e2e` **52/52**（15 页导航 + 命令面板 + 通知中心 + 对话检索 + 供应商分层 + 工具试跑页头 + 任务详情产物摘要 + 产物操作条 + 快捷键录制 + 输出目录统计 + 事件范围筛选 + 定时任务表单与触发历史 + 侧栏折叠与开发者菜单 + 内联审批降级）、`selftest` **16/16**（15 页导航）、`visual` 基线重建后复检 **24/24**（§5 重建，见 §3.117；P2-P3 见 §3.116；N1-N2 见 §3.115） |
 | 上线自检 | 本机可验 **9 项全通过**（doctor / 离线冒烟 / REST 认证 200·401 / `/metrics` / 无密钥退 3 / `clean` 干跑 / Studio 三连 / ruff+mypy）；目标机 10 项判据见 `docs/DEPLOY-CHECK-2026-11-13.md` |
 | 收尾 | 交付说明见 **`docs/CLOSURE-2026-11-13.md`**；B 类外部环境项 **5/5 全部闭环**；云主机真实部署验收 10 项中 **7 项闭环**（TLS/SSE、告警规则、日志、密钥、成本、webhook、备份），仅剩独立数据盘与两项 Docker 依赖（§3.77、`docs/DEPLOYMENT-VM-2026-11-13.md`） |
 | Git | `c9c4a60`（R61 真机修复）与 `c9cc47c`（R59–R61）均已推送到 `origin/master`，CI run **43453359080** / **43449592343** 的 **7 个 job 全部 success**（Python 3.10/3.11/3.12/3.13、Windows、Studio、Docker 真隔离）；`ebb9895`（R62）/ `8c6e411`（Studio V6-FE）/ `b712113`（桌面启动器）连同两笔状态回填已于 2026-11-14 推送到 `origin/master`（`92d3854..67aeda4`）；C10 `5cdeea8` 与状态回填 `d76d2ef` 同批推送，**2026-11-15 复核 CI run `43608513108`（head = `d76d2ef`）的 7 个 job 逐一 success**（Python 3.10/3.11/3.12/3.13、Windows·uv、Studio·Node 20、Sandbox·docker 真隔离），`Sync main` run `43608513094` success；上一批 `67aeda4` 的 run `43607497931` 亦 success。验收报告 `docs/ACCEPTANCE-2026-11-12.md`；真实模型评测历史证据为 23 条中 22 通过（`bench/eval-live-2026-11-13.md`，本次未重跑真实模型评测）。**2026-11-15 本轮两笔提交 `5e9bc70`（实现，26 文件 / +1866 −119）/ `bedb7e7`（状态回填）已推送到 `origin/master`**（`d76d2ef..bedb7e7`，`origin/main` 同哈希）；对应 CI run **`43712615843`** 结论 `success`、7 个 job 逐一 success，`Sync main` `43712615752` success |
@@ -4048,6 +4057,54 @@ F2 的 MANIFEST 真实数据只在本机 completed run 上人工核对（`202611
 `selftest` 16/16；`visual:update` 重建 24 张后 `visual` 24/24。
 - **未覆盖**：折叠状态的重启保持没有单独断言（e2e 只验单次写入与复原）；窄屏
   （≤1100px）下的折叠布局未截图断言。
+
+### 3.117 Studio §5：对话页内联审批卡（2026-11-21）
+
+**起点**：run 挂在人工审批上时，对话流里只有一行「等待人工审批」+ 一个「去审批」按钮，
+点了会整页切到门禁页。人在对话里看到「T-FINAL 已交付，等你确认」，却要离开上下文去裁决，
+回来还得自己找位置——审批这件最需要「看着内容决定」的动作，反而是最不方便的。
+
+**落点**：
+- `studio/src/lib/approval.js`（纯函数，门禁页与对话页共用）：
+  - `APPROVAL_ACTIONS`（计划 = 批准执行 / 取消运行；交付 = 接受交付 / 放弃交付）与
+    `actionsFor(checkpoint)`；
+  - `statusLabel`（pending / decided / consumed）、`decisionLabel`（decision 动作的中文）；
+  - `shouldAutoResume(action)`：只有 approve / accept 要接续跑（cancel / abort 是让 run
+    按决定收尾）；
+  - `pendingOf(items)`：只留 `status === 'pending'` —— 已消费的单再点会被后端拒；
+  - `runIdFrom(run, watchDir)`：run_id 优先、兼容 Windows 路径、`watchDir` 兜底；
+  - `inlineApprovalMode({realMode, apiBaseUrl, runId, approvals})` → `offline` / `empty` /
+    `ready`，把「什么时候能就地裁决」变成可断言的三态。
+- `studio/src/features/approvals/flow.js`：`loadApprovals` / `decideApproval` /
+  `retryResume`。`decideApproval` 的 `onState(text, tone)` 由调用方决定呈现——门禁页映射成
+  `gate-full-verdict` 的三种 class，内联卡写进卡内状态条；**两处的裁决与续跑是同一段代码**。
+  续跑失败不吞：把 `explainRewindError` 的文案交给调用方，同时返回 `error` 让调用方决定要不要
+  给重试按钮。
+- `studio/src/features/approvals/inline.js`：`inlineApprovalCard({ runId, checkpoint })`。
+  标题「等待人工审批 · 计划卡点 / 交付卡点」；`ready` 时逐单渲染 id + 动作按钮，裁决后
+  row 标 `is-done` / `is-decided`，续跑失败追加「重试恢复」；`empty` 说明「没有待裁决的
+  审批单（可能已在别处处理）」；`offline` 只给「去门禁页处理」，**不伪造按钮**。
+- `studio/src/lib/messages.js`：`approval_requested` 的消息带
+  `approval: { requestId, checkpoint }`；`run_paused` 不重复标记——两者紧挨着出现，都标记
+  会让同一段审批加载两次。
+- `studio/src/features/conversation/view.js`：`renderSystem` 在带 `approval` 的消息下挂卡。
+- `studio/src/features/gates-page/approvals.js`：动作表 / 状态文案 / runId 解析改为复用
+  `lib/approval.js`，裁决与重试改走 `features/approvals/flow.js`（删掉页内那份实现）。
+- `styles/features/approvals-inline.css`（新分片，`styles/index.css` 已引入）：卡身沿用系统
+  消息的安静底色，左侧 2px 强调条区分，状态条按 tone 变色。
+
+**边界**：内联卡只覆盖「对话页当前选中的 run」（runId 从 `S.dash` 推）；历史 run 若不在
+选中态则卡片退化为门禁页入口。审批单不支持在卡里编辑意见 / 附言（决定只有动作）。裁决后
+对话流不会自动补一条「已裁决」——那要等 SSE 的 `approval_decided` 事件到，属于既有实时通道
+行为，本轮未改。
+
+**验证**：`check` **139 模块 / 56 分片**；`test:unit` **167/167**（新增 `approval` 六例：
+动作表、状态文案与未知值、是否自动续跑、pending 过滤、runId 兼容、内联三态）；`verify:api`
+21/21；`e2e` **52/52**（新增 20f：`buildMessages` 给 `approval_requested` 打上
+`ap_1`/`plan` 标记，内联卡在演示态（无 API）渲染标题「计划卡点」+ 降级说明 + 跳转按钮，
+且**没有任何伪造的裁决行**）；`selftest` 16/16；`visual:update` 重建 24 张后 `visual` 24/24。
+- **未覆盖**：真实裁决 → 自动 resume 的闭环仍靠门禁页 e2e 与后端 API 测试覆盖；e2e 连的是
+  演示态，内联卡的 `ready` 分支只由单测（`inlineApprovalMode`）与门禁页共用逻辑兜底。
 
 ---
 
