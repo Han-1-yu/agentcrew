@@ -30,7 +30,9 @@ function openModelSwitcher() {
   const currentProvider = current.includes(':') ? current.split(':')[0] : '';
   const ui = { q: '', cat: 'all' };
   // 默认折叠除当前供应商外的全部分组
-  const collapsed = new Set(BUILTIN_PROVIDERS.filter(p => p.key !== currentProvider).map(p => p.key));
+  // 模型切换器只列大模型供应商：Agent 智能体是执行引擎，不属于「模型」
+  const llmProviders = BUILTIN_PROVIDERS.filter(p => p.type === 'llm');
+  const collapsed = new Set(llmProviders.filter(p => p.key !== currentProvider).map(p => p.key));
 
   const modal = $('#modal');
   const finish = () => { closeModal(); setTimeout(() => modal.classList.remove('msw-modal'), 220); };
@@ -69,7 +71,7 @@ function openModelSwitcher() {
     const q = ui.q.trim().toLowerCase();
     groupsEl.innerHTML = '';
     let anyVisible = false;
-    for (const p of BUILTIN_PROVIDERS) {
+    for (const p of llmProviders) {
       if (ui.cat !== 'all' && p.category !== ui.cat) continue;
       const allModels = getEffectiveProviderModels(p);
       if (!allModels.length) continue; // 无模型的供应商（如 cli）不显示

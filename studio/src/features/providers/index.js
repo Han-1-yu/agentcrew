@@ -1,45 +1,82 @@
 /**
- * 供应商页：搜索 + 分类筛选 + 卡片列表 + 添加入口。
+ * 供应商页：先分「大模型供应商 / Agent 智能体」，再按分类与名称排序。
+ *
+ * 三条边界（对齐后端 PROVIDER_PRESETS）：
+ * - 只有大模型供应商参与默认模型 / 模型切换；Agent 智能体是 CLI 执行引擎；
+ * - mock 是离线测试替身，不属于供应商，页面不展示；
+ * - 排序规则固定：大模型在前 → 国内/国际/聚合/本地 → 同组按名称，Agent 按名称。
  */
-import { BUILTIN_PROVIDERS, findProvider } from '../../contracts/providers.js';
+import { BUILTIN_PROVIDERS, findProvider, providerType } from '../../contracts/providers.js';
 
 import { apiFetch } from '../../lib/api.js';
 import { $, h } from '../../lib/dom.js';
+import { sortProviders } from '../../lib/providers.js';
 import { S } from '../../lib/store.js';
 
 import { isStaleRender } from '../../ui/states.js';
 
-import { ev } from '../../app/mock.js';
 import { switchNav } from '../../app/router.js';
 
 import { buildProviderCard } from './card.js';
 import { openAddProviderModal } from './forms.js';
 import { openModelSwitcher } from './models.js';
+
+const CAT_ORDER = ['national', 'international', 'aggregator', 'local', 'specialized'];
+const CAT_LABELS = { national: '国内', international: '国际', aggregator: '聚合', local: '本地' };
+const TYPE_ORDER = [
+  { key: 'all', label: '全部' },
+  { key: 'llm', label: '大模型' },
+  { key: 'agent', label: 'Agent 智能体' },
+];
+
+function sectionMeta(type) {
+  if (type === 'agent') {
+    return {
+      title: 'Agent 智能体',
+      desc: '真实 CLI 执行引擎：自带工具循环与认证，不是模型 API；按编程 Agent Token 份额排序（2026-11-18 观测样本）。',
+    };
+  }
+  return {
+    title: '大模型供应商',
+    desc: '提供 chat/completions 接口；按 OpenRouter 作者请求份额排序（2026-11-09 当周，公开代理指标）。',
+  };
+}
+
 async function renderProvidersPage(container) {
   const token = S.navToken;
   container.appendChild(h('div', { class: 'page-head prov-head' },
     h('div', { style: 'display:flex;align-items:center;gap:10px' },
-      h('h2', {}, '供应商管理'),
+      h('h2', {}, '供应商与智能体'),
       h('span', { class: 'conn-indicator demo', id: 'prov-source-badge' }, '加载中…')),
     h('div', { style: 'display:flex;gap:8px' },
       h('button', { class: 'btn', type: 'button', onclick: () => openModelSwitcher() }, '切换模型'),
       h('button', { class: 'btn btn-primary', id: 'prov-add-preset', type: 'button' }, '从预设添加'))));
 
-  // 搜索 + 分类筛选工具条
-  S.provFilter = S.provFilter || { q: '', cat: 'all' };
-  const toolBar = h('div', { class: 'prov-toolbar' },
-    h('input', {
-      id: 'prov-search', class: 'prov-search', type: 'text',
-      placeholder: '搜索供应商（名称 / 别名）…', value: S.provFilter.q || '',
-    }),
-    h('div', { class: 'prov-cat-bar', id: 'prov-cat-bar' }),
-    h('span', { class: 'prov-count', id: 'prov-count' }));
-  container.appendChild(toolBar);
+  S.provFilter = S.provFilter || {};
+  const filterState = S.provFilter;
+  filterState.q = filterState.q || '';
+  filterState.cat = filterState.cat || 'all';
+  filterState.type = filterState.type || 'all';
+
+  const typeBar = h('div', { class: 'prov-type-bar', id: 'prov-type-bar', role: 'tablist', 'aria-label': '条目类型' });
+  const catBar = h('div', { class: 'prov-cat-bar', id: 'prov-cat-bar', role: 'group', 'aria-label': '大模型分类' });
+  const sortHint = h('span', { class: 'prov-sort-hint', id: 'prov-sort-hint' });
+  const toolbar = h('div', { class: 'prov-toolbar prov-toolbar-v2' },
+    h('div', { class: 'prov-toolbar-row' },
+      h('input', {
+        id: 'prov-search', class: 'prov-search', type: 'text',
+        placeholder: '搜索供应商（名称 / 别名）…', value: filterState.q,
+      }),
+      typeBar,
+      h('span', { class: 'prov-count', id: 'prov-count' })),
+    h('div', { class: 'prov-toolbar-sub' }, catBar, sortHint));
+  container.appendChild(toolbar);
 
   const listEl = h('div', { class: 'prov-list', id: 'prov-list' });
   container.appendChild(listEl);
+  container.appendChild(h('p', { class: 'prov-foot-note' },
+    'Mock 是离线测试替身，不属于供应商，已从列表隐藏；需要离线演练时在「新建运行」里勾选 Mock。'));
 
-  // 骨架屏
   const skeleton = h('div', { class: 'prov-skeleton' });
   for (let i = 0; i < 4; i++) skeleton.appendChild(h('div', { class: 'skeleton prov-skel-card' }));
   listEl.appendChild(skeleton);
@@ -63,16 +100,18 @@ async function renderProvidersPage(container) {
       name: p.key, label: p.label, kind: 'builtin',
       base_url: p.base_url, api_key_env: p.api_key_env || '',
       suggested_models: p.suggested_models || [],
-      category: p.category, search_aliases: p.search_aliases || [],
+      category: p.category, family: p.family,
+      search_aliases: p.search_aliases || [],
       api_key_url: p.api_key_url, endpoint_candidates: p.endpoint_candidates,
+      command: p.command, agentic: p.agentic, type: p.type,
     }));
     source = base ? 'watch' : 'demo';
   }
   badge.className = 'conn-indicator ' + (source === 'api' ? 'live' : source === 'watch' ? 'watch' : 'demo');
   badge.textContent = source === 'api' ? '后端 API' : source === 'watch' ? '文件监听' : '演示模式';
 
-  // 内置/常量来源时，对每个有 api_key_env 的 provider 查询配置状态（只回布尔）
-  const enriched = await Promise.all(providers.map(async (p) => {
+  // 补齐元数据 + 判定类型；internal（mock）直接丢掉，不进入任何列表
+  const enriched = (await Promise.all(providers.map(async (p) => {
     const envName = p.api_key_env || '';
     let status = 'none';
     if (envName && window.studio.providerKeyStatus) {
@@ -83,84 +122,140 @@ async function renderProvidersPage(container) {
     } else if (p.key_configured != null) {
       status = p.key_configured ? 'configured' : 'missing';
     }
-    // 元数据回填（API 已带则保留；缺失时从内置常量补齐）
     const preset = findProvider(p.name);
+    const family = p.family || (preset && preset.family) || 'openai_compat';
+    const type = preset ? preset.type : providerType({ key: p.name, family });
     return {
-      ...p, _status: status, _builtin: p.kind !== 'custom',
+      ...p,
+      _status: status,
+      _builtin: p.kind !== 'custom',
+      type,
+      family,
       label: p.label || (preset && preset.label) || p.name,
       category: p.category || (preset && preset.category) || 'specialized',
-      family: p.family || (preset && preset.family) || 'openai_compat',
-      suggested_models: Array.isArray(p.suggested_models) && p.suggested_models.length
-        ? p.suggested_models : (preset && preset.suggested_models) || [],
+      // 有内置预设时以「已核对的前端目录」为准；后端静态预设里的旧模型不再覆盖它
+      suggested_models: (preset && preset.suggested_models && preset.suggested_models.length)
+        ? preset.suggested_models
+        : (Array.isArray(p.suggested_models) ? p.suggested_models : []),
       search_aliases: p.search_aliases || (preset && preset.search_aliases) || [],
       api_key_url: p.api_key_url != null ? p.api_key_url : (preset && preset.api_key_url) || null,
       endpoint_candidates: p.endpoint_candidates != null ? p.endpoint_candidates : (preset && preset.endpoint_candidates) || null,
+      command: p.command || (preset && preset.command) || null,
+      agentic: p.agentic != null ? p.agentic : !!(preset && preset.agentic),
+      // 调用量是前端展示元数据，API 不返回；从内置目录补齐
+      usage: p.usage || (preset && preset.usage) || null,
     };
-  }));
+  }))).filter(p => p.type !== 'internal');
 
-  // 上面两次 await 期间用户可能已经切页：占位区被清空，全局 ID 选择器会拿到
-  // null（或更糟——写进新版页面造成重复按钮）。过期就直接放弃这次渲染。
   if (isStaleRender(token, container)) return;
 
-  // ── 分类筛选按钮 ──
-  const catBar = $('#prov-cat-bar');
-  const catOrder = [
-    ['all', '全部'], ['aggregator', '聚合'], ['national', '国内'],
-    ['international', '国际'], ['local', '本地'], ['specialized', '专用'],
-  ];
-  const catBtns = {};
-  for (const [val, label] of catOrder) {
-    const b = h('button', {
-      class: 'prov-cat-btn' + (S.provFilter.cat === val ? ' active' : ''),
-      type: 'button', 'data-cat': val,
+  // ── 类型 tabs + 分类 chips ──
+  const typeBtns = {};
+  for (const t of TYPE_ORDER) {
+    const btn = h('button', {
+      class: 'prov-type-btn', type: 'button', role: 'tab', 'data-type': t.key,
+      'aria-selected': 'false',
+      onclick: () => { filterState.type = t.key; renderTypeBar(); renderCatBar(); renderProvList(); },
+    }, h('span', {}, t.label), h('span', { class: 'prov-type-n' }, ''));
+    typeBtns[t.key] = btn;
+    typeBar.appendChild(btn);
+  }
+  for (const cat of ['all', ...CAT_ORDER.slice(0, 4)]) {
+    catBar.appendChild(h('button', {
+      class: 'prov-cat-btn', type: 'button', 'data-cat': cat,
       onclick: (ev) => {
-        S.provFilter.cat = val;
+        filterState.cat = cat;
         catBar.querySelectorAll('.prov-cat-btn').forEach(x => x.classList.remove('active'));
         ev.currentTarget.classList.add('active');
         renderProvList();
       },
-    }, label);
-    catBtns[val] = b;
-    catBar.appendChild(b);
+    }, cat === 'all' ? '全部分类' : CAT_LABELS[cat]));
   }
 
-  // ── 搜索输入（200ms 防抖）──
   let searchTimer = null;
   $('#prov-search').addEventListener('input', (e) => {
     clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => { S.provFilter.q = e.target.value; renderProvList(); }, 200);
+    searchTimer = setTimeout(() => { filterState.q = e.target.value; renderProvList(); }, 200);
   });
 
-  // ── 列表渲染（搜索 + 分类 AND 过滤）──
+  function renderTypeBar() {
+    for (const t of TYPE_ORDER) {
+      const btn = typeBtns[t.key];
+      const n = t.key === 'all' ? enriched.length : enriched.filter(p => p.type === t.key).length;
+      btn.classList.toggle('active', filterState.type === t.key);
+      btn.setAttribute('aria-selected', filterState.type === t.key ? 'true' : 'false');
+      btn.querySelector('.prov-type-n').textContent = String(n);
+    }
+  }
+
+  function renderCatBar() {
+    const agentOnly = filterState.type === 'agent';
+    catBar.classList.toggle('is-disabled', agentOnly);
+    catBar.querySelectorAll('.prov-cat-btn').forEach((b) => {
+      b.disabled = agentOnly;
+      b.classList.toggle('active', !agentOnly && b.dataset.cat === filterState.cat);
+    });
+    if (filterState.type === 'agent') {
+      sortHint.textContent = '排序：按编程 Agent Token 份额（2026-11-18 观测样本）';
+    } else if (filterState.type === 'llm') {
+      sortHint.textContent = '排序：按 OpenRouter 请求份额（2026-11-09 周）→ 未上榜按分类/常用/名称';
+    } else {
+      sortHint.textContent = '排序：大模型（按 OpenRouter 请求份额）→ Agent 智能体（按 Token 份额）';
+    }
+  }
+
   function applyFilter() {
-    const q = (S.provFilter.q || '').trim().toLowerCase();
-    const cat = S.provFilter.cat || 'all';
-    return enriched.filter(p => {
-      if (cat !== 'all' && p.category !== cat) return false;
+    const q = (filterState.q || '').trim().toLowerCase();
+    const cat = filterState.cat || 'all';
+    return enriched.filter((p) => {
+      if (filterState.type !== 'all' && p.type !== filterState.type) return false;
+      // 分类只筛大模型；Agent 没有国内/聚合这类业务分类
+      if (filterState.type !== 'agent' && cat !== 'all' && p.category !== cat) return false;
       if (!q) return true;
       const hay = [p.name, p.label, p.key, ...(p.search_aliases || [])]
         .filter(Boolean).join(' ').toLowerCase();
       return hay.includes(q);
     });
   }
+
+  function renderSection(type, items) {
+    const meta = sectionMeta(type);
+    const list = h('div', { class: 'prov-section-list' });
+    for (const p of items) list.appendChild(buildProviderCard(p, testDebounce));
+    return h('section', { class: 'prov-section', 'data-kind': type },
+      h('div', { class: 'prov-section-head' },
+        h('h3', {}, meta.title),
+        h('span', { class: 'prov-section-n' }, String(items.length)),
+        h('span', { class: 'prov-section-desc' }, meta.desc)),
+      list);
+  }
+
   function renderProvList() {
     const list = $('#prov-list');
     if (!list) return;
-    const filtered = applyFilter();
+    const filtered = sortProviders(applyFilter());
     list.innerHTML = '';
     const countEl = $('#prov-count');
+    const filtering = !!(filterState.q || filterState.cat !== 'all' || filterState.type !== 'all');
     if (countEl) {
-      countEl.textContent = (S.provFilter.q || S.provFilter.cat !== 'all')
-        ? `${filtered.length} 个匹配 / 共 ${enriched.length} 个供应商`
-        : `${enriched.length} 个供应商`;
+      countEl.textContent = filtering
+        ? `${filtered.length} 个匹配 / 共 ${enriched.length} 个条目`
+        : ''; // 默认视图的数量已由类型 tabs 给出，不重复一次
     }
     if (!filtered.length) {
       list.appendChild(h('div', { class: 'prov-empty' },
-        h('h3', {}, '无匹配供应商'),
-        h('p', {}, '尝试调整搜索关键词或分类筛选。')));
+        h('h3', {}, '无匹配条目'),
+        h('p', {}, '尝试调整搜索关键词、类型或分类筛选。')));
       return;
     }
-    for (const p of filtered) list.appendChild(buildProviderCard(p, testDebounce));
+    if (filterState.type === 'all') {
+      const llm = filtered.filter(p => p.type === 'llm');
+      const agents = filtered.filter(p => p.type === 'agent');
+      if (llm.length) list.appendChild(renderSection('llm', llm));
+      if (agents.length) list.appendChild(renderSection('agent', agents));
+    } else {
+      list.appendChild(renderSection(filterState.type, filtered));
+    }
   }
 
   listEl.innerHTML = '';
@@ -171,8 +266,10 @@ async function renderProvidersPage(container) {
       h('button', { class: 'btn btn-primary', onclick: () => switchNav('settings') }, '到设置页配置后端地址')));
     return;
   }
+  renderTypeBar();
+  renderCatBar();
   renderProvList();
   $('#prov-add-preset').addEventListener('click', openAddProviderModal);
 }
 
-export { renderProvidersPage };
+export { renderProvidersPage, sectionMeta };

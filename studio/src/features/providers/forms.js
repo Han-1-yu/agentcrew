@@ -106,12 +106,19 @@ function copyYaml(fields) {
 
 function openAddProviderModal() {
   const presets = [
-    ...BUILTIN_PROVIDERS.map(p => ({ key: p.key, label: p.label, base_url: p.base_url || '', api_key_env: p.api_key_env || '' })),
-    { key: '__custom', label: '空白自定义', base_url: '', api_key_env: '' },
+    ...BUILTIN_PROVIDERS.filter(p => p.type !== 'internal')
+      .map(p => ({ key: p.key, label: p.label, type: p.type, base_url: p.base_url || '', api_key_env: p.api_key_env || '' })),
+    { key: '__custom', label: '空白自定义', type: 'llm', base_url: '', api_key_env: '' },
   ];
+  const presetGroup = (label, type) => {
+    const items = presets.filter(p => p.type === type);
+    return items.length ? h('optgroup', { label }, ...items.map(p => h('option', { value: p.key }, p.label))) : null;
+  };
   const sel = h('select', { id: 'ap-preset', class: 'ap-field' },
     h('option', { value: '' }, '选择预设…'),
-    ...presets.map(p => h('option', { value: p.key }, p.label)));
+    presetGroup('大模型供应商', 'llm'),
+    presetGroup('Agent 智能体', 'agent'),
+    h('option', { value: '__custom' }, '空白自定义'));
   const f = buildProviderFormFields({ mode: 'custom', name: '', base_url: '', api_key_env: '', models: [] });
 
   sel.addEventListener('change', () => {
