@@ -8,7 +8,16 @@
 
 ## 0. 一句话现状
 
-**最新一轮（2026-11-21）：Studio F1/F2 任务图实时高亮 + 任务抽屉产物摘要**
+**最新一轮（2026-11-21）：Studio J1-J3 产物版本对比 / Markdown 渲染 / 单文件另存**
+—— 产物页的预览头变成操作条：有 rewind 快照时出现「版本」选择器，选中任一
+`history/rewind-NNN/` 里的同路径版本，就在预览区画行级 diff（零依赖 LCS，
+两万行以上的超大文件退化为「整段替换」并标注）；`.md/.markdown` 默认渲染、可一键
+切回源码高亮；新增 `artifact:saveAs` IPC，把单文件另存到用户选定位置（只复制不移动）。
+纯函数 `lib/artifact-versions.js` + 七例单测；`check` 126 模块 / 55 分片、
+`test:unit` 133/133、`verify:api` 21/21、`e2e` 41/41、`selftest` 16/16、`visual` 24/24。
+明细见 §3.112。
+
+**同日（2026-11-21）：Studio F1/F2 任务图实时高亮 + 任务抽屉产物摘要**
 —— 看板不再等 500ms 快照才变色：`task_transition` 事件到达时就把目标节点就地切换
 `class` 与状态 chip（不重建 SVG、不加动画），布局与节点增删仍由快照兜齐；任务详情
 抽屉新增「输入 / 输出产物」段，优先读 `artifacts/MANIFEST.json`、缺省回退
@@ -132,7 +141,7 @@ config 解析去重（R66e）、`main.py` 3388→~700 行拆进 `cli/` 九模块
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
-| Studio | `npm run check` **124** 模块 / **55** 样式分片、`test:unit` **126/126**、`verify:api` **21/21**、electron `e2e` **41/41**（15 页导航 + 命令面板 + 通知中心 + 对话检索 + 供应商分层 + 工具试跑页头 + 任务详情产物摘要）、`selftest` **16/16**（15 页导航）、`visual` 基线重建后复检 **24/24**（F1/F2 重建，见 §3.111；E3 对比 diff 见 §3.110；Q2 工具试跑页见 §3.109） |
+| Studio | `npm run check` **126** 模块 / **55** 样式分片、`test:unit` **133/133**、`verify:api` **21/21**、electron `e2e` **41/41**（15 页导航 + 命令面板 + 通知中心 + 对话检索 + 供应商分层 + 工具试跑页头 + 任务详情产物摘要 + 产物操作条）、`selftest` **16/16**（15 页导航）、`visual` 基线重建后复检 **24/24**（J1-J3 重建，见 §3.112；F1/F2 见 §3.111；E3 见 §3.110；Q2 见 §3.109） |
 | 上线自检 | 本机可验 **9 项全通过**（doctor / 离线冒烟 / REST 认证 200·401 / `/metrics` / 无密钥退 3 / `clean` 干跑 / Studio 三连 / ruff+mypy）；目标机 10 项判据见 `docs/DEPLOY-CHECK-2026-11-13.md` |
 | 收尾 | 交付说明见 **`docs/CLOSURE-2026-11-13.md`**；B 类外部环境项 **5/5 全部闭环**；云主机真实部署验收 10 项中 **7 项闭环**（TLS/SSE、告警规则、日志、密钥、成本、webhook、备份），仅剩独立数据盘与两项 Docker 依赖（§3.77、`docs/DEPLOYMENT-VM-2026-11-13.md`） |
 | Git | `c9c4a60`（R61 真机修复）与 `c9cc47c`（R59–R61）均已推送到 `origin/master`，CI run **43453359080** / **43449592343** 的 **7 个 job 全部 success**（Python 3.10/3.11/3.12/3.13、Windows、Studio、Docker 真隔离）；`ebb9895`（R62）/ `8c6e411`（Studio V6-FE）/ `b712113`（桌面启动器）连同两笔状态回填已于 2026-11-14 推送到 `origin/master`（`92d3854..67aeda4`）；C10 `5cdeea8` 与状态回填 `d76d2ef` 同批推送，**2026-11-15 复核 CI run `43608513108`（head = `d76d2ef`）的 7 个 job 逐一 success**（Python 3.10/3.11/3.12/3.13、Windows·uv、Studio·Node 20、Sandbox·docker 真隔离），`Sync main` run `43608513094` success；上一批 `67aeda4` 的 run `43607497931` 亦 success。验收报告 `docs/ACCEPTANCE-2026-11-12.md`；真实模型评测历史证据为 23 条中 22 通过（`bench/eval-live-2026-11-13.md`，本次未重跑真实模型评测）。**2026-11-15 本轮两笔提交 `5e9bc70`（实现，26 文件 / +1866 −119）/ `bedb7e7`（状态回填）已推送到 `origin/master`**（`d76d2ef..bedb7e7`，`origin/main` 同哈希）；对应 CI run **`43712615843`** 结论 `success`、7 个 job 逐一 success，`Sync main` `43712615752` success |
@@ -3776,6 +3785,49 @@ id 自然序、摘要口径、空表不抛）；`e2e` **39/39**、`selftest` **1
 run、`selftest` 的迁移时序不可控），靠钩子位置（事件入口第一行）+ 3 秒内快照兜底；
 F2 的 MANIFEST 真实数据只在本机 completed run 上人工核对（`20261121-213845-8f0c`
 的 23 条 entries 全部带 `produced_by_task`）。
+
+### 3.112 Studio J1-J3：产物版本对比 / Markdown 渲染 / 单文件另存（2026-11-21）
+
+**起点**：产物页只能看「当前那一份」——回滚过的产物在 `history/rewind-NNN/` 里留了
+旧版本，但 UI 完全看不到；`.md` 产物只能读源码；想拿走单个文件只能导出整个 ZIP。
+
+**J1（版本对比）**：
+- `studio/main.js`：新增 `listArtifactSnapshots`——扫 `<run>/history/` 下
+  `rewind-\d+` 目录，读各自 `rewind.json`（`created_at / target / instruction /
+  artifacts[]`，条目形状对齐 `agentcrew/crew/rewind.py::_snapshot`），新的在前。
+  没回滚过就返回空清单，不当错误。`readArtifact` 抽成 `readArtifactAt(baseDir,
+  relPath)`，快照版本复用同一套路径穿越校验、2MB 截断与图像回 base64 规则。
+- `studio/src/lib/artifact-versions.js`（纯函数）：`snapshotVersionsFor(snapshots,
+  path)` 挑出含该路径的快照（带时间/大小/任务）；`lineDiff(before, after)` 用
+  LCS 表出行级差异 `{rows(kind:same|add|del, aNo, bNo), added, removed,
+  truncated}`；`splitLines` 把 CRLF 归一、结尾换行不算一行（否则每份文件尾巴都出
+  一条幽灵差异）；`diffSummary` 一致时只说「两份内容一致」。
+  - DP 单元格超 100 万（约两万行 × 五十行）时退化为「整段替换」并标 `truncated`，
+    不在渲染进程里卡死。
+- `studio/src/features/artifacts/versions.js`：版本下拉（`当前版本` + 每个快照）与
+  统一视图 diff 渲染（双行号列 + `+ / −` 标记，绿/红安静底色，整块可滚动）。
+
+**J2（Markdown 渲染）**：`.md / .markdown` 默认走 `lib/markdown.js` 渲染
+（`.art-markdown` 排版），按钮一键切回原有语法高亮源码；非 Markdown 文件不显示该按钮。
+
+**J3（单文件另存）**：`artifact:saveAs` IPC + `dialog.showSaveDialog`，源文件仍在
+`artifacts/` 里（只复制、不移动、不删），返回 `{canceled}` 或 `{path, sizeBytes}`；
+路径校验与 `readArtifact` 同一边界。
+
+**边界**：版本对比只覆盖「rewind 快照里登记过的产物」——同路径没被回滚过的文件没有
+历史版本可选；diff 是**只读统一视图**，不做并排双栏、不做行内字符级 diff、不可编辑；
+另存只写用户选定位置，不动 run 目录。Markdown 渲染只覆盖 `lib/markdown.js` 支持的
+子集（标题/列表/表格/代码块/行内强调），HTML 一律转义。
+
+**验证**：`check` **126 模块 / 55 分片**（新增 `lib/artifact-versions.js` 与
+`features/artifacts/versions.js`）；`test:unit` **133/133**（新增 `artifact-versions`
+七例：同内容零差异、尾换行不制造差异、CRLF 归一、增删行号与计数、纯新增、大文件退化
+`truncated`、快照版本筛选）；`verify:api` 21/21；`e2e` **41/41**（第 12 项加「预览
+操作条含另存为」断言）；`selftest` 16/16；`visual:update` 重建 24 张后 `visual` 24/24。
+**未覆盖**：本机所有 run 都没有 `history/`（未做过回滚），J1 的「真实快照版本列表 +
+  diff」没有端到端自动化；快照目录形状以 `rewind.py` 的写入代码与 Studio rewind 页
+  的文案（`features/rewind/page.js:109`）为准，未造假数据入库。J3 的保存对话框无法在
+  自动化里确认（系统对话框），只验到按钮与 IPC 存在。
 
 ---
 

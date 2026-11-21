@@ -155,6 +155,25 @@ CLI 入口；本页把「清单 / 开关口径 / 单工具试跑」搬到桌面�
 - **边界**：F1 的真实 SSE 迁移没有自动化断言（e2e 不跑真 run），靠「事件入口第一行」
   + 3 秒内快照兜底；F2 只列路径与大小，不预览内容。
 
+## V12-FE 产物版本对比 / Markdown 渲染 / 单文件另存（P1 批次二续，2026-11-21）
+
+按 `docs/STUDIO-FEATURE-COMPLETION-2026-11-21.md` 的 J1 / J2 / J3 落地。
+
+- **J1 版本对比**：预览头出现「版本」下拉（`当前版本` + 每次 rewind 快照里同路径那份）。
+  选中后在预览区画行级 diff：双行号列 + `+ / −` 标记，绿 / 红安静底色。计算是零依赖
+  LCS（`lib/artifact-versions.js`），DP 单元格超 100 万退化为「整段替换」并标注，不在
+  渲染进程里卡死。快照清单走新 IPC `artifact:snapshots`（读
+  `<run>/history/rewind-NNN/rewind.json`，没回滚过返回空清单）。
+- **J2 Markdown**：`.md / .markdown` 默认走 `lib/markdown.js` 渲染，按钮一键切回语法
+  高亮源码；非 Markdown 文件不显示该按钮。
+- **J3 另存为**：`artifact:saveAs` IPC + 系统保存对话框，只复制不移动；路径校验与
+  `readArtifact` 同一套边界（`readArtifact` 已抽成 `readArtifactAt` 复用）。
+- **回归**：`check` **126 模块 / 55 分片**；`test:unit` **133/133**（新增
+  `artifact-versions` 七例）；`verify:api` 21/21；`selftest` 16/16；`e2e` **41/41**
+  （第 12 项加「预览操作条含另存为」）；`visual:update` 重建 24 张后一致。
+- **边界**：本机 run 都没有 `history/`（未做过回滚），J1 的真实快照列表与 diff 没有端到端
+  自动化；J3 的系统保存对话框无法在自动化里确认。
+
 ## 自测
 
 ```bash
