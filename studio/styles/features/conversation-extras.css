@@ -1,0 +1,82 @@
+/* A1/A3/A5：新对话空态、中途指引气泡、输入图片缩略图。
+   与 features/conversation.css 同域，后加载覆盖其基础气泡样式。 */
+
+/* ---- A1 新对话空态 ---- */
+.new-chat-wrap { justify-content: center; }
+.new-chat-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  padding: 56px 24px 24px;
+  max-width: 640px;
+  margin: 0 auto;
+}
+.new-chat-chip {
+  border: 1px solid var(--border, var(--ink-12));
+  border-radius: var(--r-pill, 999px);
+  background: var(--bg-card, transparent);
+  color: var(--text-sub);
+  font-size: var(--fs-xs, 12px);
+  padding: 7px 14px;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease, border-color .15s ease;
+}
+.new-chat-chip:hover { background: var(--accent-bg-soft); color: var(--text); border-color: var(--accent-border-soft); }
+
+/* ---- A3 指引气泡：右对齐、弱化的强调底（区别于系统蓝实底目标气泡） ---- */
+.conv-user-bubble.conv-guidance {
+  background: var(--accent-bg);
+  color: var(--text);
+  border: 1px solid var(--accent-border-soft);
+}
+.conv-guidance-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 11px;
+}
+.conv-guidance-tag {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--on-solid, #fff);
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+.conv-guidance-target { color: var(--text-ter); }
+.conv-guidance-chip { margin-left: auto; color: var(--text-ter); white-space: nowrap; }
+.conv-guidance-pending .conv-guidance-chip { color: var(--warn); }
+.conv-guidance-consumed .conv-guidance-chip { color: var(--success-text); }
+.conv-guidance-withdrawn .conv-guidance-chip,
+.conv-guidance-expired .conv-guidance-chip { color: var(--text-ter); }
+.conv-guidance-withdrawn .conv-user-goal,
+.conv-guidance-expired .conv-user-goal { opacity: .6; }
+.conv-user-bubble.conv-guidance .conv-ts { color: var(--text-ter); }
+
+/* ---- A5 输入图片缩略图 ---- */
+.conv-user-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.conv-user-img img {
+  display: block;
+  width: 76px;
+  height: 76px;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, .4);
+  background: var(--bg-subtle);
+}
+.conv-user-img-ph {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, .18);
+  font-size: 11px;
+}

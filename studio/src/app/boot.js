@@ -40,6 +40,14 @@ async function boot(){
 
 async function bootSequence(){
   $('#btn-new-run').addEventListener('click',openNewRunModal);
+  // A1：侧栏「新对话」→ 空态对话页，焦点落输入框；发送即直发创建 run
+  const btnNewChat = $('#btn-new-chat');
+  if (btnNewChat) btnNewChat.addEventListener('click', () => {
+    S.newChat = true;
+    switchNav('conversation');
+    const el = document.getElementById('cmp-input');
+    if (el) el.focus();
+  });
   // 侧栏搜索：直接打开运行切换下拉（下拉里已带项目筛选）
   const btnSearch = $('#btn-search');
   if (btnSearch) btnSearch.addEventListener('click',(e)=>{ e.stopPropagation(); toggleRunDropdown(); });

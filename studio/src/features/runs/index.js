@@ -1,10 +1,12 @@
 /**
  * 运行列表与切换：下拉分组、加载快照、切换当前 run。
+ * 侧栏「对话」全量列表（B1）见 ./sidebar.js，两者共用一次 listRuns IPC。
  */
 import { RUN_STATUS_COLOR } from '../../contracts/enums.js';
 
 import { $, h } from '../../lib/dom.js';
 import { fmtDateTime, simplifyGoal } from '../../lib/format.js';
+import { runMetaKey } from '../../lib/run-meta.js';
 import { S, persistState } from '../../lib/store.js';
 
 import { emptyState, errorState, loadingState } from '../../ui/states.js';
@@ -16,6 +18,8 @@ import { resetRealtime, updateConnIndicator } from '../../app/realtime.js';
 
 import { renderDashboard } from '../dashboard/index.js';
 import { openCompareModal } from './compare.js';
+import { pruneRunMetaAfterDelete } from './meta-store.js';
+import { renderSidebarConversation } from './sidebar.js';
 async function loadRunList() {
   const listEl = $('#run-dropdown-list');
   if (!listEl) return;
@@ -66,24 +70,7 @@ async function loadRunList() {
             onclick: async (e) => {
               e.stopPropagation();
               if (!confirm(`确认删除运行「${simplifyGoal(r.goal || r.runId)}」？\n此操作不可恢复。`)) return;
-              try {
-                await window.studio.deleteRun(r.dir);
-                toast('success', '已删除', r.runId || '');
-                if (isActive) {
-                  const remaining = await window.studio.listRuns();
-                  if (remaining && remaining.length) await switchRun(remaining[0].dir);
-                  else {
-                    // 删掉最后一个 run：resetRealtime 会停掉 watcher 与 SSE，
-                    // 否则 500ms 轮询会持续扫已删除目录、指示器也停在「文件监听」。
-                    resetRealtime();
-                    S.watchDir = null; S._eventKeys = null; S.realMode = false;
-                    initMockData();
-                    renderDashboard();
-                    updateConnIndicator();
-                  }
-                }
-                loadRunList();
-              } catch (err) { toast('error', '删除失败', String(err.message || err)); }
+              await deleteRunItem(r);
             } },
             h('svg', { width: 13, height: 13, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' },
               h('polyline', { points: '3 6 5 6 21 6' }),
@@ -105,28 +92,39 @@ async function loadRunList() {
 }
 
 /**
- * 侧栏 Recents 分组：与运行下拉共用同一份 listRuns 结果，只渲染最近 5 条。
- * 点击 = 切换运行（与下拉条目完全同一个动作，不新增数据通道）。
+ * B3+B2：删除运行（下拉与 ••• 菜单共用）。删除成功后裁掉 runMeta 幽灵键；
+ * 删的是当前 run 时按既有兜底链路切走。
+ */
+async function deleteRunItem(r) {
+  const isActive = !!(S.dash.run && S.dash.run.dir === r.dir);
+  try {
+    await window.studio.deleteRun(r.dir);
+    await pruneRunMetaAfterDelete([runMetaKey(r)]);
+    toast('success', '已删除', r.runId || '');
+    if (isActive) {
+      const remaining = await window.studio.listRuns();
+      if (remaining && remaining.length) await switchRun(remaining[0].dir);
+      else {
+        // 删掉最后一个 run：resetRealtime 会停掉 watcher 与 SSE，
+        // 否则 500ms 轮询会持续扫已删除目录、指示器也停在「文件监听」。
+        resetRealtime();
+        S.watchDir = null; S._eventKeys = null; S.realMode = false;
+        initMockData();
+        renderDashboard();
+        updateConnIndicator();
+      }
+    }
+    loadRunList();
+  } catch (err) { toast('error', '删除失败', String(err.message || err)); }
+}
+
+/**
+ * 侧栏「对话」列表（B1）：升级为全量会话列表（时间分组 + 置顶 + 搜索 +
+ * 状态筛选 + 归档 + 本地分页），实现见 ./sidebar.js；与运行下拉共用
+ * 同一份 listRuns IPC 结果，点击 = switchRun（同一动作，不新增数据通道）。
  */
 function renderSidebarRecents(runs) {
-  const list = $('#sb-recents');
-  if (!list) return;
-  list.innerHTML = '';
-  const top = (runs || []).slice(0, 5);
-  if (!top.length) {
-    list.appendChild(h('li', {}, h('span', { class: 'sb-li-text' }, '暂无运行记录')));
-    return;
-  }
-  for (const r of top) {
-    const active = S.dash && S.dash.run && S.dash.run.dir === r.dir;
-    list.appendChild(h('li', {
-      class: 'is-click' + (active ? ' is-active' : ''),
-      title: r.goal || r.runId || '',
-      onclick: () => { closeRunDropdown(); switchRun(r.dir); },
-    },
-      h('span', { class: 'sb-li-dot' }),
-      h('span', { class: 'sb-li-text' }, simplifyGoal(r.goal || r.runId || '未命名'))));
-  }
+  renderSidebarConversation(runs);
 }
 
 function toggleRunDropdown() {
@@ -145,6 +143,8 @@ function closeRunDropdown() {
 }
 
 async function switchRun(dir) {
+  // 新对话态随切 run 退出（A1）：显示的就是被选中的会话
+  S.newChat = false;
   // 停止旧 watch
   if (S.watchDir) {
     try { await window.studio.unwatchRun(S.watchDir); } catch {}
@@ -173,4 +173,4 @@ async function switchRun(dir) {
    主题（light / dark / system）
    ============================================================ */
 
-export { closeRunDropdown, loadRunList, switchRun, toggleRunDropdown };
+export { closeRunDropdown, deleteRunItem, loadRunList, switchRun, toggleRunDropdown };
