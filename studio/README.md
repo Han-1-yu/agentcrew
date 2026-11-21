@@ -208,11 +208,34 @@ CLI 入口；本页把「清单 / 开关口径 / 单工具试跑」搬到桌面�
   行内跳转按钮）；`visual:update` 重建 24 张后一致。
 - **未动**：L2 的「跟随实时」开关此前已实现（localStorage 记忆 + 切页保持）。
 
+## V15-FE 定时任务编辑 / 启停 / 触发历史（N1-N2，2026-11-21）
+
+- **启停**：卡片上多一个「停用 / 启用」按钮，走新 IPC `schedule:setEnabled` → CLI
+  `schedule enable|disable`。前端**不直写** `_schedules/schedules.json`：tick 是另一个
+  进程，两处写同一份文件会互相覆盖。启用会按当下重算 `next_run`（否则停用一周后再打开
+  会立刻补跑一次）；一次性日程的触发时间已过则后端明确拒绝，界面原样转述原因。
+- **编辑**：点卡片上的「编辑」，表单就地换成预填好的那张（目标 / 类型 / 模式 / Mock /
+  时间 / 星期几）。提交时按「先建新、再删旧」闭环——后端没有 update 子命令；删旧失败会
+  说「已新建，旧项没删掉」，而不是笼统报失败。表单控件改为持有引用（同页出现两张表单时
+  id 会打架），并且首屏同步渲染、列表异步加载，不再被一次 python 子进程启动卡住。
+- **触发历史**：`run` 新增 `--trigger-source`，tick 派发时带 `schedule:<id>`，Crew 在
+  `run_started` 旁落一条 `run_triggered`（与 API webhook 的 C8 同形）。卡片据此显示
+  「触发历史：N 次 · 最近 `<run 目录>`」；只扫**最近 30 个 run** 的 ledger，没有记录时
+  明说扫描范围。
+- **新文件**：`lib/schedule-draft.js`（纯函数）、`features/schedules/form.js`、
+  `features/schedules/card.js`（`index.js` 只做页面壳）。
+- **回归**：`check` **136 模块 / 55 分片**；`test:unit` **161/161**（新增 `schedule-draft`
+  六例）；`verify:api` 21/21；`selftest` 16/16；`e2e` **49/49**（新增 2c2 表单结构 +
+  周期切换、2c3 触发历史 IPC）；`visual:update` 重建 24 张后一致。
+- **边界**：启停与编辑的真实点击未进 e2e（会往真实的 `_schedules/schedules.json` 写数据，
+  只验表单渲染与本地校验）；`schedule:history` 的扫描逻辑在 `main.js`，`npm run check`
+  不覆盖它，靠 e2e 2c3 与 CLI 实跑兜底。
+
 ## 自测
 
 ```bash
 npm run check        # 结构护栏：分层、导入完整性、单文件体量、入口收敛（秒级，无需 GUI）
-npm run e2e          # 端到端：15 页导航（含回滚重跑/流程库/工具试跑）/ 详情与产物摘要 / 运行切换 / 新建运行 / 成本 / 供应商全链路 / 命令面板 / 通知中心 / 快捷键录制 / 数据统计 / 事件范围（47 项）
+npm run e2e          # 端到端：15 页导航（含回滚重跑/流程库/工具试跑）/ 详情与产物摘要 / 运行切换 / 新建运行 / 成本 / 供应商全链路 / 命令面板 / 通知中心 / 快捷键录制 / 数据统计 / 事件范围 / 定时任务表单（49 项）
 npm run selftest     # 真实 UI 驱动一次 --mock 运行：列表 → 看板 → 事件 → 产物 → 设置 → 启动/取消（16 项）
 npm run verify:api          # 后端 API 代理：认证头 + SSE 帧 + C10 指引/R62 rewind/审批自动 resume/REST 创建/工具试跑的 REST 路径（21 项，无需 GUI / 无需真后端）
 npm run verify:transitions  # 状态切换：演示→真实运行 / 快速连点切 run / 单通道纪律（11 项）

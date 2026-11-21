@@ -8,7 +8,18 @@
 
 ## 0. 一句话现状
 
-**最新一轮（2026-11-21）：Studio L1 事件页时间范围与事件跳转**
+**最新一轮（2026-11-21）：Studio N1-N2 定时任务编辑 / 启停 / 触发历史**
+—— 定时任务从「只能新建和删除」补齐三件事：**启停**（CLI 新增 `schedule enable|disable`，
+启用时按当前时刻重算 `next_run`，避免停用一周后重新启用就补跑一次；一次性日程的 `at`
+已过则明确拒绝而不是排成「立刻触发」）；**编辑**（后端没有 update 子命令，前端按
+「预填旧值 + 建新删旧」闭环，删旧失败会如实说「新的一条已生效、旧的还在」）；
+**触发历史**（`run` 新增 `--trigger-source`，tick 派发时带 `schedule:<id>`，Crew 在
+`run_started` 旁落一条 `run_triggered`，卡片显示「触发 N 次 · 最近哪个 run」）。
+表单与卡片拆成 `features/schedules/{form,card}.js` + 纯函数 `lib/schedule-draft.js`；
+`check` 136 模块 / 55 分片、`test:unit` 161/161、`verify:api` 21/21、`e2e` 49/49、
+`selftest` 16/16、`visual` 24/24；Python 全量 **3632 passed / 0 failed**。明细见 §3.115。
+
+**同日（2026-11-21）：Studio L1 事件页时间范围与事件跳转**
 —— 事件页的筛选从「类型 + 搜索」扩成三件套：时间范围以**最新一条事件**为基准
 （回看历史 run 用 now 会把整场过滤掉），可选全部 / 5 / 30 / 60 分钟；每条事件右侧
 出现跳转按钮，带 `task_id` 的直接开任务详情，其余跳到对话页。纯函数
@@ -155,12 +166,12 @@ config 解析去重（R66e）、`main.py` 3388→~700 行拆进 `cli/` 九模块
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | **阶段 3 后最新全量 3626 passed / 0 failed / 6 skipped / 0 error**（194 文件 / 97 批次 / 503.4s，Windows 本机 `scripts/test.py --batch 2 --retries 4 --retry-failed 3 --keep-pycache`）。上一轮 R69 后为 3612 passed（530.5s）；R68 后为 3588 passed（484.8s）；R67 后为 3576 passed（513.5s）。6 个 skip 沿用跑器结果，其中 4 个 docker 真容器用例由 CI 覆盖 |
-| 静态检查 | 阶段 3 后重跑 `ruff check agentcrew/ main.py scripts/persistence.py`：**All checks passed**；`mypy agentcrew/ main.py`：**161 文件零错误**（Windows / Python 3.12.16） |
+| 全量测试 | **N1-N2 后最新全量 3632 passed / 0 failed / 6 skipped / 0 error**（194 文件 / 49 批次 / 435.9s，Windows 本机 `scripts/test.py`）。阶段 3 后为 3626 passed（503.4s）；R69 后为 3612 passed（530.5s）；R68 后为 3588 passed（484.8s）。6 个 skip 沿用跑器结果，其中 4 个 docker 真容器用例由 CI 覆盖 |
+| 静态检查 | N1-N2 后重跑 `ruff check agentcrew/ tests/`：**All checks passed**；`mypy agentcrew`：**160 文件零错误**（Windows / Python 3.12.16） |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
-| Studio | `npm run check` **133** 模块 / **55** 样式分片、`test:unit` **155/155**、`verify:api` **21/21**、electron `e2e` **47/47**（15 页导航 + 命令面板 + 通知中心 + 对话检索 + 供应商分层 + 工具试跑页头 + 任务详情产物摘要 + 产物操作条 + 快捷键录制 + 输出目录统计 + 事件范围筛选）、`selftest` **16/16**（15 页导航）、`visual` 基线重建后复检 **24/24**（L1 重建，见 §3.114；O1-O3 见 §3.113；J1-J3 见 §3.112） |
+| Studio | `npm run check` **136** 模块 / **55** 样式分片、`test:unit` **161/161**、`verify:api` **21/21**、electron `e2e` **49/49**（15 页导航 + 命令面板 + 通知中心 + 对话检索 + 供应商分层 + 工具试跑页头 + 任务详情产物摘要 + 产物操作条 + 快捷键录制 + 输出目录统计 + 事件范围筛选 + 定时任务表单与触发历史）、`selftest` **16/16**（15 页导航）、`visual` 基线重建后复检 **24/24**（N1-N2 重建，见 §3.115；L1 见 §3.114；O1-O3 见 §3.113） |
 | 上线自检 | 本机可验 **9 项全通过**（doctor / 离线冒烟 / REST 认证 200·401 / `/metrics` / 无密钥退 3 / `clean` 干跑 / Studio 三连 / ruff+mypy）；目标机 10 项判据见 `docs/DEPLOY-CHECK-2026-11-13.md` |
 | 收尾 | 交付说明见 **`docs/CLOSURE-2026-11-13.md`**；B 类外部环境项 **5/5 全部闭环**；云主机真实部署验收 10 项中 **7 项闭环**（TLS/SSE、告警规则、日志、密钥、成本、webhook、备份），仅剩独立数据盘与两项 Docker 依赖（§3.77、`docs/DEPLOYMENT-VM-2026-11-13.md`） |
 | Git | `c9c4a60`（R61 真机修复）与 `c9cc47c`（R59–R61）均已推送到 `origin/master`，CI run **43453359080** / **43449592343** 的 **7 个 job 全部 success**（Python 3.10/3.11/3.12/3.13、Windows、Studio、Docker 真隔离）；`ebb9895`（R62）/ `8c6e411`（Studio V6-FE）/ `b712113`（桌面启动器）连同两笔状态回填已于 2026-11-14 推送到 `origin/master`（`92d3854..67aeda4`）；C10 `5cdeea8` 与状态回填 `d76d2ef` 同批推送，**2026-11-15 复核 CI run `43608513108`（head = `d76d2ef`）的 7 个 job 逐一 success**（Python 3.10/3.11/3.12/3.13、Windows·uv、Studio·Node 20、Sandbox·docker 真隔离），`Sync main` run `43608513094` success；上一批 `67aeda4` 的 run `43607497931` 亦 success。验收报告 `docs/ACCEPTANCE-2026-11-12.md`；真实模型评测历史证据为 23 条中 22 通过（`bench/eval-live-2026-11-13.md`，本次未重跑真实模型评测）。**2026-11-15 本轮两笔提交 `5e9bc70`（实现，26 文件 / +1866 −119）/ `bedb7e7`（状态回填）已推送到 `origin/master`**（`d76d2ef..bedb7e7`，`origin/main` 同哈希）；对应 CI run **`43712615843`** 结论 `success`、7 个 job 逐一 success，`Sync main` `43712615752` success |
@@ -3937,6 +3948,64 @@ F2 的 MANIFEST 真实数据只在本机 completed run 上人工核对（`202611
 `selftest` 16/16；`visual:update` 重建 24 张后 `visual` 24/24。**未覆盖**：时间范围切换
 后的行数变化没有单独断言（e2e 只验控件与入口存在）；跳转按钮的真实点击未做（会切页
 打断后续用例）。
+
+### 3.115 Studio N1-N2：定时任务编辑 / 启停 / 触发历史（2026-11-21）
+
+**起点**：定时任务页只有「新建」和「删除」两个动作。想改目标只能删了重建；想临时
+停掉一条日程没有开关（只能删）；想知道「这条日程到底跑起来过没有」也没有任何线索。
+
+**落点**：
+- **N1 后端**：`agentcrew/cli/schedule.py` 新增 `set_enabled(output_dir, id, enabled, now=)`：
+  - 启用时**必须重算** `next_run` —— 停用期间日历照走，沿用旧值会让重新启用的周期日程
+    立刻补跑一次（停用一周后尤其明显）。
+  - 停用只翻开关、不动 `next_run`，列表里保留「本来该什么时候跑」用于审计。
+  - 一次性日程的 `at` 已过就**明确拒绝**（`ValueError`：「触发时间已过，请删除后重建」），
+    不把它排成「立刻触发」。
+  - `cli/parser.py` + `cli/catalog.py`：`schedule enable|disable <id> --json`，输出
+    `{"schedule": {...}}`，找不到 id 走既有 `_fail`（退出码 3）。
+- **N1 前端**：`features/schedules/` 拆成三个文件（原来单文件已接近体量上限）：
+  - `lib/schedule-draft.js`（纯函数）：`localValue`（秒级 ISO → `datetime-local` 的分钟级，
+    非法值留白）、`draftFromSchedule`（编辑预填，非法 mode 落回 agent）、`payloadFromDraft`
+    （**once 只带 at、recurring 只带 daily+weekdays**，校验口径与后端 `add_schedule` 一致）、
+    `whenLabel` / `stateOf`（状态胶囊能区分「已触发」与「已停用」）。
+  - `form.js`：新建/编辑共用一张卡。表单控件**持有引用**不再 `getElementById`（编辑态与
+    新建态同页时 id 会打架）。编辑提交 = 先 `scheduleAdd` 再 `scheduleRemove`；删旧失败时
+    toast 说「已新建，旧项没删掉」，不笼统报失败。
+  - `card.js`：状态胶囊 + 规则说明 + **启停 / 编辑 / 删除**。启停走
+    `schedule:setEnabled` → CLI 子命令，**前端不直写 `schedules.json`**（tick 是另一个进程，
+    两处直写会互相覆盖；一次性 at 已过时后端拒绝，原因原样转述）。
+  - `index.js`：表单在挂载时**同步渲染**，列表异步加载 —— 首屏不再被一次 python 子进程
+    启动卡住（e2e 曾因此判 `formOk=false`）。刷新列表不再重置表单，避免清掉正在填的内容。
+- **N2 触发历史**：`run` 新增 `--trigger-source`（`cli/parser.py`）→ `_cmd_run` 传给
+  `Crew(trigger_source=...)` → `Crew.run()` 在 `run_started` 旁落 `run_triggered`
+  （与 API webhook 的 C8 同形事件，`data.source`）；`schedule._run_args` 追加
+  `--trigger-source schedule:<id>`。默认不传时不写这条事件，ledger 形状与改造前一致。
+  Studio 新增 `schedule:history` IPC：扫**最近 30 个 run** 的 `ledger.jsonl`，找出
+  `data.source` 以 `schedule:` 开头的行，按 `scheduleId` 归并，卡片显示
+  「触发历史：N 次 · 最近 `<run 目录>`」；没有记录时明说「最近 30 个运行里没有记录」。
+
+**边界**：编辑是「建新删旧」而非原地更新（后端没有 update 子命令，语义上等价于换一条；
+旧 id 会消失，引用旧 id 的外部脚本需重新读列表）；触发历史只看最近 30 个 run（历史里
+有 300+ run 时全扫会让打开页面变成磁盘风暴），且只认 `run_triggered` 事件——更早的
+（N2 之前派发的）run 没有来源标记，因此不会出现在历史里。
+
+**验证**：
+- Python：`test_schedule.py` 新增 5 例（停用保留 next_run 且 tick 不命中、周期重新启用
+  重算、一次性 at 已过被拒、未知 id 返回 None、`_run_args` 带 `schedule:<id>`）；
+  `test_crew.py` 新增 1 例（`trigger_source` 落 `run_triggered`，且不传时不留该事件）。
+  全量 **3632 passed / 0 failed / 6 skipped**（194 文件 / 49 批次 / 435.9s）；`ruff` +
+  `mypy agentcrew`（160 文件）全绿。
+- Studio：`check` **136 模块 / 55 分片**；`test:unit` **161/161**（新增
+  `schedule-draft` 六例：分钟截断、编辑预填、once/recurring 字段互斥、校验口径、状态胶囊、
+  规则文案）；`verify:api` 21/21；`e2e` **49/49**（新增 2c2 表单结构 + 周期切换出 7 个
+  星期几胶囊 + 空目标被本地校验拦下，2c3 `schedule:history` 返回数组结构）；`selftest`
+  16/16；`visual:update` 重建 24 张后 `visual` 24/24。
+- CLI 实跑：`schedule add → disable（保留 next_run）→ enable（重算到下一个工作日 09:00）`
+  与 `run --trigger-source schedule:sched_smoke` 后 ledger 里读出
+  `{"event": "run_triggered", "data": {"source": "schedule:sched_smoke"}}`。
+- **未覆盖**：启停与编辑的真实点击未进 e2e（会往用户真实 `_schedules/schedules.json`
+  写数据，只验到表单渲染与本地校验）；触发历史的扫描逻辑在 `main.js` 里，`npm run check`
+  不覆盖 `main.js`，靠 e2e 的 2c3 与上述 CLI 实跑兜底。
 
 ---
 
