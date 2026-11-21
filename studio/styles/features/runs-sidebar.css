@@ -1,0 +1,77 @@
+/* B1/B2：侧栏「对话」全量列表（搜索 / 筛选 chips / 时间分组 / 条目菜单按钮）。
+   复用 layout/sidebar.css 的 .sb-task-search / .sb-task-chip / .sb-list 基础样式。 */
+
+.sb-run-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 4px 8px 6px;
+}
+
+.sb-run-filters { display: flex; gap: 3px; flex-wrap: wrap; }
+
+/* 时间分组头（今天 / 昨天 / 近 7 天 / 更早 / 置顶） */
+.sb-run-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px 2px;
+  font-size: 11px;
+  color: var(--text-ter);
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+
+/* 会话条目 */
+.sb-run-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding-left: 10px !important;
+  position: relative;
+}
+
+.sb-run-dot { width: 6px; height: 6px; opacity: 1; }
+
+.sb-run-item.is-archived .sb-li-text { opacity: .55; }
+
+.sb-run-pin {
+  flex: 0 0 auto;
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--accent-text);
+}
+
+.sb-run-menu {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-ter);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--dur-1) ease, background var(--dur-1) ease, color var(--dur-1) ease;
+}
+
+.sb-run-item:hover .sb-run-menu,
+.sb-run-menu:focus-visible { opacity: 1; }
+
+.sb-run-menu:hover { background: var(--ink-12); color: var(--text); }
+
+/* 会话条目文本留出 ⋯ 按钮的空间 */
+.sb-run-item .sb-li-text {
+  padding-right: 22px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
