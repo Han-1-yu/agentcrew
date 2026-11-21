@@ -88,8 +88,13 @@
     </div>
 
     <!-- 对话列表（B1）：全量会话，时间分组 + 置顶 + 搜索 + 状态筛选 + 归档 -->
-    <div class="sb-group sb-group-recents">
-      <div class="sb-group-label">对话</div>
+    <!-- P2：这个分组可以整块收起（只留标题），把高度让给上方任务列表。 -->
+    <div class="sb-group sb-group-recents" id="sb-recents-group">
+      <button class="sb-group-label sb-group-toggle" type="button" id="sb-recents-toggle"
+              aria-expanded="true" aria-controls="sb-recents" title="收起 / 展开对话列表">
+        <span class="sb-group-caret" aria-hidden="true">▾</span>
+        <span>对话</span>
+      </button>
       <div class="sb-run-tools" id="sb-run-tools">
         <input id="sb-run-search" class="sb-run-search" type="text" placeholder="搜索对话（别名 / 目标 / ID）…" aria-label="搜索对话" />
         <div class="sb-run-filters" id="sb-run-filters"></div>

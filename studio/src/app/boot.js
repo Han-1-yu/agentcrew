@@ -21,7 +21,7 @@ import { loadRealRun } from './data.js';
 import { initMockData, startSim } from './mock.js';
 import { initRealtime, onWatchLedger, onWatchSnapshot } from './realtime.js';
 import { switchNav } from './router.js';
-import { applyTheme, cycleTheme, openUserMenu, renderChrome } from './shell.js';
+import { applyTheme, cycleTheme, initSidebarRecents, openUserMenu, renderChrome } from './shell.js';
 import { matches, normalizeSpec, resolveShortcuts } from '../lib/shortcuts.js';
 /** 首屏加载遮罩：getSettings / detectPython / listRuns / loadRealRun 都是异步 IPC，
  *  期间界面是一副「空闲 / 0 Agents / 0 任务」的静态骨架，看起来像数据丢了。
@@ -68,6 +68,8 @@ async function bootSequence(){
   $('#btn-notify').addEventListener('click', openNotificationPanel);
   $('#btn-user').addEventListener('click',openUserMenu);
   $('#btn-theme').addEventListener('click', cycleTheme);
+  // P2：对话列表分组折叠（状态存 localStorage，只影响占位）
+  initSidebarRecents();
   $('#tb-workspace').addEventListener('click',(e)=>{ e.stopPropagation(); toggleRunDropdown(); });
   document.addEventListener('click',(e)=>{ if(!e.target.closest('#run-dropdown')&&!e.target.closest('#tb-workspace')) closeRunDropdown(); });
   $$('.nav-item').forEach(b=>b.addEventListener('click',()=>switchNav(b.dataset.nav)));

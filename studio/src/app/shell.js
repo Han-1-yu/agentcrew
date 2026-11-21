@@ -165,6 +165,7 @@ function renderSidebarTasks() {
 /* ============================================================
    演示边界状态
    ============================================================ */
+const RECENTS_COLLAPSED_KEY = 'agentcrew:sb-recents-collapsed';
 const THEME_ORDER = ['light', 'dark', 'system'];
 const THEME_ICONS = {
   light: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>',
@@ -217,24 +218,87 @@ async function cycleTheme() {
   }
 }
 
+/* ============================================================
+   侧栏：对话列表分组可折叠（P2）
+   ------------------------------------------------------------
+   折叠只影响视觉占位，不改任何数据与渲染逻辑：列表元素仍在 DOM 里，
+   展开后立刻是之前的内容（侧栏重渲染只刷 #sb-recents 的子节点）。
+   状态存 localStorage —— 它是纯观感偏好，不值得进 settings.json 的白名单。
+   ============================================================ */
+function setRecentsCollapsed(collapsed) {
+  const group = document.getElementById('sb-recents-group');
+  const btn = document.getElementById('sb-recents-toggle');
+  if (group) group.classList.toggle('is-collapsed', !!collapsed);
+  if (btn) btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+}
+
+function initSidebarRecents() {
+  let collapsed = false;
+  try { collapsed = localStorage.getItem(RECENTS_COLLAPSED_KEY) === '1'; } catch { /* 隐私模式下忽略 */ }
+  setRecentsCollapsed(collapsed);
+  const btn = document.getElementById('sb-recents-toggle');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    const next = btn.getAttribute('aria-expanded') === 'true';  // 当前展开 → 收起
+    setRecentsCollapsed(next);
+    try { localStorage.setItem(RECENTS_COLLAPSED_KEY, next ? '1' : '0'); } catch { /* 存不下也不影响本次 */ }
+  });
+}
+
+/* ============================================================
+   账户菜单 / 开发者子菜单（P3）
+   ------------------------------------------------------------
+   「演示边界状态」是开发期调试开关，放账户菜单里会让人以为它和账户有关。
+   账户菜单只留账户与工作区信息，演示状态收进「开发者」子菜单。
+   ============================================================ */
+const DEMO_STATES = [
+  ['running', '正常运行（模拟推进）'], ['planning', '正在规划'],
+  ['budget_warn', '预算预警（90%）'], ['budget_exhausted', '预算耗尽'],
+  ['paused', '用户暂停'], ['failed', '运行失败'],
+  ['gates_failed', '门禁失败'], ['completed', '运行完成'], ['empty', '无运行记录'],
+];
+
+function openDeveloperMenu() {
+  showModal(h('div', {},
+    h('h3', { class: 'modal-title' }, '开发者 · 演示边界状态'),
+    h('div', { class: 'confirm-text', style: 'color:var(--text-ter)' },
+      '只切换演示数据（--mock）的边界状态，不触碰真实运行的 ledger、产物与设置。'),
+    h('div', { style: 'margin:10px 0;font-weight:600;font-size:13px' }, '演示边界状态：'),
+    ...DEMO_STATES.map(([k, label]) => h('button', {
+      class: 'btn', style: 'display:flex;width:100%;margin-bottom:6px;justify-content:flex-start',
+      'data-demo-state': k,
+      onclick: () => { closeModal(); applyDemoState(k); },
+    }, label)),
+    h('div', { class: 'modal-actions' },
+      h('button', { class: 'btn', type: 'button', onclick: openUserMenu }, '返回账户'),
+      h('button', { class: 'btn', type: 'button', onclick: closeModal }, '关闭'))));
+}
+
 function openUserMenu(){
-  const states=[['running','正常运行（模拟推进）'],['planning','正在规划'],['budget_warn','预算预警（90%）'],['budget_exhausted','预算耗尽'],
-    ['paused','用户暂停'],['failed','运行失败'],['gates_failed','门禁失败'],['completed','运行完成'],['empty','无运行记录']];
   showModal(h('div',{},
-    h('h3',{class:'modal-title'},'账户与演示'),
+    h('h3',{class:'modal-title'},'账户'),
     h('div',{class:'confirm-text',style:'color:var(--text-ter)'},'工作区：'+(S.settings&&S.settings.outputDir||'默认')),
-    h('div',{style:'margin:10px 0;font-weight:600;font-size:13px'},'演示边界状态：'),
-    ...states.map(([k,label])=>h('button',{class:'btn',style:'display:flex;width:100%;margin-bottom:6px;justify-content:flex-start',onclick:()=>{closeModal();applyDemoState(k);}},label)),
-    h('div',{class:'modal-actions'},h('button',{class:'btn',onclick:closeModal},'关闭'))));
+    h('div',{class:'sb-row',style:'margin-top:8px'},
+      h('span',{class:'sb-label'},'数据源'),
+      h('span',{class:'sb-value'},S.realMode?'真实运行':'演示数据')),
+    h('div',{class:'confirm-text',style:'color:var(--text-ter);margin-top:6px'},
+      '演示边界状态属于开发调试，收在「开发者」子菜单里。'),
+    h('div',{class:'modal-actions'},
+      h('button',{class:'btn',type:'button',onclick:openDeveloperMenu},'开发者工具'),
+      h('button',{class:'btn',type:'button',onclick:closeModal},'关闭'))));
 }
 
 export {
+  DEMO_STATES,
   THEME_ICONS,
   THEME_LABEL,
   THEME_ORDER,
   applyTheme,
   cycleTheme,
   effectiveTheme,
+  initSidebarRecents,
+  openDeveloperMenu,
   openUserMenu,
   renderChrome,
+  setRecentsCollapsed,
 };

@@ -83,6 +83,25 @@
   font-size: var(--fs-sm); font-weight: 600; letter-spacing: 0;
   color: var(--text-ter);
 }
+/* P2：分组标题做成可点的折叠开关（对话列表可收起，把高度让给任务列表）。
+   默认态保持原样：只有 caret 与 hover 是新线索，别的分组不受影响。 */
+.sb-group-toggle {
+  display: flex; align-items: center; gap: 4px; width: 100%;
+  padding: 0 10px; margin-bottom: 7px;
+  border: none; background: none; cursor: pointer; text-align: left;
+  font-family: inherit; font-size: var(--fs-sm); font-weight: 600;
+  color: var(--text-ter); transition: color var(--dur-1) ease;
+}
+.sb-group-toggle:hover { color: var(--text-sub); }
+.sb-group-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
+.sb-group-caret { display: inline-block; font-size: 9px; line-height: 1; transition: transform var(--dur-1) ease; }
+/* 收起：只保留标题行，搜索/筛选/列表/更多全部让位 */
+.sb-group-recents.is-collapsed { min-height: 0; flex: 0 0 auto; }
+.sb-group-recents.is-collapsed .sb-group-caret { transform: rotate(-90deg); }
+.sb-group-recents.is-collapsed #sb-run-tools,
+.sb-group-recents.is-collapsed #sb-recents,
+.sb-group-recents.is-collapsed #sb-run-more { display: none; }
+
 .sb-proj { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px; color: var(--text); }
 .sb-proj > svg { flex: 0 0 auto; color: var(--text-ter); }
 .sb-proj-name {

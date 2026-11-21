@@ -675,6 +675,50 @@ function run(win) {
       !!(notifOpen && /通知中心/.test(notifTitle) && notifBody && notifClosed),
       JSON.stringify({ notifOpen, notifTitle, notifBody, notifClosed }));
 
+    // ── 20d. P2 侧栏对话分组折叠：收起后列表让位，展开复原 ──
+    const recentsCollapse = await js(`(() => {
+      const btn = document.getElementById('sb-recents-toggle');
+      const group = document.getElementById('sb-recents-group');
+      const tools = document.getElementById('sb-run-tools');
+      const list = document.getElementById('sb-recents');
+      if (!btn || !group || !tools || !list) return { ok: false };
+      // 量搜索/筛选区（常驻且非空）而不是列表：演示态下对话列表可能本来就是空的。
+      const before = tools.getBoundingClientRect().height;
+      btn.click();
+      const collapsed = group.classList.contains('is-collapsed');
+      const ariaOff = btn.getAttribute('aria-expanded') === 'false';
+      const hidden = getComputedStyle(list).display === 'none'
+        && tools.getBoundingClientRect().height === 0;
+      const stored = localStorage.getItem('agentcrew:sb-recents-collapsed');
+      btn.click();
+      const restored = !group.classList.contains('is-collapsed')
+        && tools.getBoundingClientRect().height > 0
+        && getComputedStyle(list).display !== 'none';
+      return { ok: true, before, collapsed, ariaOff, hidden, stored, restored };
+    })()`);
+    check('20d. 侧栏对话分组可折叠（收起隐藏列表 / aria 同步 / 展开复原）',
+      !!(recentsCollapse && recentsCollapse.ok && recentsCollapse.before > 0
+        && recentsCollapse.collapsed && recentsCollapse.ariaOff && recentsCollapse.hidden
+        && recentsCollapse.stored === '1' && recentsCollapse.restored),
+      JSON.stringify(recentsCollapse));
+
+    // ── 20e. P3 账户菜单与开发者子菜单分离 ──
+    await js(`document.getElementById('btn-user')?.click()`);
+    await sleep(400);
+    const accountTitle = await js(`document.querySelector('#modal .modal-title')?.textContent || ''`);
+    const accountNoDemo = await js(`document.querySelectorAll('#modal [data-demo-state]').length === 0`);
+    await js(`Array.from(document.querySelectorAll('#modal .modal-actions .btn')).find(b => /开发者/.test(b.textContent))?.click()`);
+    await sleep(400);
+    const devTitle = await js(`document.querySelector('#modal .modal-title')?.textContent || ''`);
+    const devStates = await js(`document.querySelectorAll('#modal [data-demo-state]').length`);
+    await js(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+    await sleep(300);
+    const devClosed = await js(`(() => { const m = document.getElementById('modal'); return m ? m.classList.contains('hidden') : false; })()`);
+    check('20e. 账户菜单不含演示状态，演示状态收进「开发者」子菜单',
+      !!(/账户/.test(accountTitle) && !/演示/.test(accountTitle) && accountNoDemo
+        && /开发者/.test(devTitle) && devStates === 9 && devClosed),
+      JSON.stringify({ accountTitle, accountNoDemo, devTitle, devStates, devClosed }));
+
     // ── 21. 对话页检索 / 类型筛选 / 产物预览 ──
     await js(`document.querySelector('.nav-item[data-nav="conversation"]')?.click()`);
     await sleep(900);
