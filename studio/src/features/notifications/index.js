@@ -9,6 +9,7 @@
 import { RUN_META } from '../../contracts/enums.js';
 import { h } from '../../lib/dom.js';
 import { fmtBudgetUsage } from '../../lib/format.js';
+import { mutedCategory, normalizePrefs, shouldNotifySystem } from '../../lib/notify-prefs.js';
 import { S } from '../../lib/store.js';
 
 import { closeModal, showModal } from '../../ui/modal.js';
@@ -22,15 +23,6 @@ const INTERESTING = new Set([
 ]);
 
 const MAX_ITEMS = 100;
-const STORE_KEY = 'agentcrew:notif-system';
-
-function systemEnabled() {
-  try { return localStorage.getItem(STORE_KEY) !== '0'; } catch { return true; }
-}
-
-function setSystemEnabled(on) {
-  try { localStorage.setItem(STORE_KEY, on ? '1' : '0'); } catch { /* 忽略 */ }
-}
 
 /** 事件 → 展示与跳转；未知形状退化为通用文案。 */
 function describe(e) {
@@ -82,8 +74,10 @@ function updateBadge() {
 
 /** 窗口失焦时发系统通知（HTML5 Notification 在 Electron 里走 OS 通道）。 */
 function systemNotify(items) {
-  if (!systemEnabled() || !items.length) return;
-  if (typeof document !== 'undefined' && document.hasFocus && document.hasFocus()) return;
+  if (!items.length) return;
+  const focused = typeof document !== 'undefined' && document.hasFocus ? document.hasFocus() : false;
+  // O2：开关 / 最低级别 / 静默时段都在 lib/notify-prefs 里判定，窗口聚焦时直接不发。
+  if (!shouldNotifySystem(S.settings && S.settings.notifyPrefs, items[0], { focused })) return;
   try {
     const n = new Notification(`AgentCrew Studio · ${items[0].title}`, {
       body: items.length === 1 ? String(items[0].body || '')
@@ -98,6 +92,8 @@ function systemNotify(items) {
 function notifyFromEvents(events) {
   for (const e of events || []) {
     if (!e || !INTERESTING.has(String(e.event))) continue;
+    // O2：该类被静音时，面板、toast、系统通知一并不再产生（历史条目保留）
+    if (mutedCategory(S.settings && S.settings.notifyPrefs, e.event)) continue;
     const key = eventKey(e);
     if ((S.notifs || []).some((n) => n.key === key)) continue;
     const info = describe(e);
@@ -149,16 +145,21 @@ function openNotificationPanel() {
         h('span', { class: 'notif-item-ts' }, n.ts ? String(n.ts).replace('T', ' ').slice(0, 19) : '')),
       n.read ? null : h('span', { class: 'notif-item-dot' })));
   }
+  const prefsNow = () => normalizePrefs(S.settings && S.settings.notifyPrefs);
   const sysToggle = h('button', {
     class: 'btn btn-sm', type: 'button',
     title: '窗口失焦时是否发系统通知',
-    onclick: () => {
-      const next = !systemEnabled();
-      setSystemEnabled(next);
-      sysToggle.textContent = `系统通知：${next ? '开' : '关'}`;
-      toast('info', '已更新', `窗口失焦时系统通知${next ? '开启' : '关闭'}`);
+    onclick: async () => {
+      const cur = prefsNow();
+      const next = { ...cur, system: !cur.system };
+      try {
+        const saved = await window.studio.setSettings({ notifyPrefs: next });
+        S.settings = saved || Object.assign({}, S.settings, { notifyPrefs: next });
+        sysToggle.textContent = `系统通知：${next.system ? '开' : '关'}`;
+        toast('info', '已更新', `窗口失焦时系统通知${next.system ? '开启' : '关闭'}`);
+      } catch (e) { toast('error', '保存失败', String((e && e.message) || e)); }
     },
-  }, `系统通知：${systemEnabled() ? '开' : '关'}`);
+  }, `系统通知：${prefsNow().system ? '开' : '关'}`);
 
   showModal(h('div', {},
     h('h3', { class: 'modal-title' }, '通知中心'),

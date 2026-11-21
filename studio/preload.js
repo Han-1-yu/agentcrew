@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld('studio', {
   // 设置与探测
   getSettings: () => invoke('settings:get'),
   setSettings: (next) => invoke('settings:set', next),
+  exportSettings: () => invoke('settings:export'),
+  importSettings: () => invoke('settings:import'),
   detectPython: (candidate) => invoke('python:detect', candidate),
   agentsConfig: () => invoke('agents:config'),
   agentsExport: () => invoke('agents:export'),
@@ -40,6 +42,8 @@ contextBridge.exposeInMainWorld('studio', {
   scheduleTick: () => invoke('schedule:tick'),
   // 运行列表 / 快照 / 事件
   listRuns: () => invoke('runs:list'),
+  outputUsage: () => invoke('data:usage'),
+  trashArchivedRuns: (dirs) => invoke('data:trashArchive', dirs),
   loadRun: (dir) => invoke('run:load', dir),
   ledgerHistory: (dir, maxLines) => invoke('ledger:history', dir, maxLines),
   // 子进程

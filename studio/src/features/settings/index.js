@@ -11,10 +11,12 @@ import { buildAboutGroup } from './about.js';
 import { buildAgentsGroup } from './agents.js';
 import { buildAppearanceGroup } from './appearance.js';
 import { buildConnectionGroup } from './connection.js';
+import { buildDataGroup } from './data.js';
 import { buildEnvironmentGroup } from './environment.js';
 import { collectSettings } from './fields.js';
 import { buildGatewayGroup } from './gateway.js';
 import { buildModelBudgetGroup } from './model-budget.js';
+import { buildNotificationsGroup } from './notifications.js';
 import { buildShortcutsGroup } from './shortcuts.js';
 
 function buildPageHead(cfg) {
@@ -48,7 +50,9 @@ async function renderSettingsPage(container) {
   wrap.appendChild(buildGatewayGroup(cfg));
   wrap.appendChild(buildAgentsGroup());
   wrap.appendChild(buildConnectionGroup(cfg));
+  wrap.appendChild(buildNotificationsGroup(cfg));
   wrap.appendChild(buildShortcutsGroup(cfg));
+  wrap.appendChild(buildDataGroup());
   wrap.appendChild(buildAppearanceGroup(cfg));
   wrap.appendChild(buildAboutGroup());
 }

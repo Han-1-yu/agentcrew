@@ -152,3 +152,10 @@
 .shortcut-conflict { font-size: var(--fs-xs); line-height: 1.6; margin-top: var(--sp-2); color: var(--text-ter); }
 .shortcut-conflict.is-error { color: var(--warn-text); }
 
+/* ---- 数据管理（O3） ---- */
+.data-runs { display: flex; flex-direction: column; gap: 1px; margin-top: 6px; }
+.data-run-row { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
+  font-size: var(--fs-xs); color: var(--text-sub); padding: 2px 0; }
+.data-run-head { color: var(--text-ter); padding-bottom: 4px; border-bottom: 0.5px solid var(--border-weak); }
+.data-run-size { flex: 0 0 auto; color: var(--text-ter); font-variant-numeric: tabular-nums; }
+

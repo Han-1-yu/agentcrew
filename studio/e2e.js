@@ -266,6 +266,36 @@ function run(win) {
     const shortcutBtns = await js(`document.querySelectorAll('.shortcut-row button').length`);
     check('13a. 设置页快捷键组可自定义（录制 / 恢复默认）', Number(shortcutRows) === 3 && Number(shortcutBtns) === 6,
       JSON.stringify({ shortcutRows, shortcutBtns }));
+    // O2：通知偏好（系统通知开关 + 静默时段 + 级别三选）
+    const notifyFields = await js(`(() => ({
+      system: !!document.querySelector('#set-notify-system'),
+      from: !!document.querySelector('#set-notify-from'),
+      to: !!document.querySelector('#set-notify-to'),
+      levels: document.querySelectorAll('#set-notify-level option').length,
+      mutes: document.querySelectorAll('#set-notify-mute-approvals, #set-notify-mute-budget, #set-notify-mute-runs').length,
+    }))()`);
+    check('13a1. 设置页通知偏好（开关 / 静默时段 / 最低级别 / 类目静音）',
+      !!(notifyFields && notifyFields.system && notifyFields.from && notifyFields.to
+        && Number(notifyFields.levels) === 3 && Number(notifyFields.mutes) === 3),
+      JSON.stringify(notifyFields));
+    // O3：数据管理（占用统计按钮 / 导出导入设置）
+    const dataGroup = await js(`(() => {
+      const titles = [...document.querySelectorAll('.settings-group-title')].map((t) => t.textContent);
+      const btns = [...document.querySelectorAll('.settings-group button')].map((b) => b.textContent.trim());
+      return { hasGroup: titles.includes('数据管理'), refresh: btns.includes('刷新统计'),
+        exportBtn: btns.includes('导出设置'), importBtn: btns.includes('导入设置') };
+    })()`);
+    check('13a3. 设置页数据管理（占用统计 / 导出 / 导入）',
+      !!(dataGroup && dataGroup.hasGroup && dataGroup.refresh && dataGroup.exportBtn && dataGroup.importBtn),
+      JSON.stringify(dataGroup));
+    // 真扫一次输出目录：确认 data:usage IPC 能回来（不是只看按钮在不在）
+    const scanClick = await js(`(() => {
+      const b = [...document.querySelectorAll('.settings-group button')].find((x) => x.textContent.trim() === '刷新统计');
+      if (!b) return false; b.click(); return true;
+    })()`);
+    await sleep(4000);
+    const scanText = await js(`(document.querySelector('.data-summary') || {}).textContent || ''`);
+    check('13a4. 输出目录占用统计可用', !!scanClick && /个 run/.test(String(scanText)), String(scanText).slice(0, 120));
 
     // 13b. O1：把命令面板录成 Alt+P → 保存 → 按 Alt+P 真能打开（再恢复默认）
     const recordRes = await js(`(() => {

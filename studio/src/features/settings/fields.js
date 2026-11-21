@@ -4,7 +4,31 @@
  */
 import { $, $$ } from '../../lib/dom.js';
 
+import { normalizePrefs } from '../../lib/notify-prefs.js';
 import { readNumber, readUrl, showFieldError } from '../../lib/validate.js';
+
+/** O2：通知偏好（开关已即时保存，这里带上时段与级别一并提交）。 */
+function collectNotifyPrefs(cfg) {
+  const mute = {};
+  for (const id of ['approvals', 'budget', 'runs']) {
+    const el = $(`#set-notify-mute-${id}`);
+    mute[id] = !!(el && el.checked);
+  }
+  const raw = {
+    system: $('#set-notify-system') ? $('#set-notify-system').checked : true,
+    quietFrom: $('#set-notify-from') ? $('#set-notify-from').value : '',
+    quietTo: $('#set-notify-to') ? $('#set-notify-to').value : '',
+    minLevel: $('#set-notify-level') ? $('#set-notify-level').value : 'all',
+    mute,
+  };
+  const prefs = normalizePrefs(raw);
+  // 只填一头视为无效：保留上一次已保存的值，不悄悄清空用户的时段
+  if ((raw.quietFrom && !raw.quietTo) || (!raw.quietFrom && raw.quietTo)) {
+    const prev = normalizePrefs(cfg && cfg.notifyPrefs);
+    return { system: prefs.system, quietFrom: prev.quietFrom, quietTo: prev.quietTo, minLevel: prefs.minLevel, mute: prefs.mute };
+  }
+  return prefs;
+}
 
 /** 快捷键组：每行 `data-action` / `data-spec`（录制或恢复默认后即时更新）。 */
 function collectShortcuts() {
@@ -54,6 +78,7 @@ function collectSettings(cfg) {
       affinityMode: (cfg && cfg.affinityMode) || 'off',
       affinityTtlDays: ttl.value,
       shortcuts: collectShortcuts(),
+      notifyPrefs: collectNotifyPrefs(cfg),
     };
     return { values, error: cost.error || ttl.error || api.error };
   } catch (e) {

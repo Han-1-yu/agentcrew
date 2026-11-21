@@ -80,6 +80,8 @@ function defaultSettings() {
     runMeta: {},
     // O1：快捷键覆盖 { [action]: 'Mod+K' }；空表=全用 lib/shortcuts.js 的默认值
     shortcuts: {},
+    // O2：通知偏好 { system, quietFrom, quietTo, minLevel }
+    notifyPrefs: { system: true, quietFrom: '', quietTo: '', minLevel: 'all', mute: {} },
   };
 }
 
@@ -782,6 +784,119 @@ async function saveArtifactAs(runDir, relPath) {
   return { canceled: false, path: r.filePath, sizeBytes: st.size };
 }
 
+// ---------- O3：数据管理（占用统计 / 归档清理 / 设置导出导入） ----------
+
+/** 目录递归大小（符号链接不跟随：只统计普通文件）。 */
+function dirSizeBytes(dir) {
+  let total = 0;
+  const stack = [dir];
+  while (stack.length) {
+    const cur = stack.pop();
+    let ents = [];
+    try { ents = fs.readdirSync(cur, { withFileTypes: true }); } catch { continue; }
+    for (const ent of ents) {
+      const full = path.join(cur, ent.name);
+      if (ent.isDirectory()) stack.push(full);
+      else if (ent.isFile()) { try { total += fs.statSync(full).size; } catch { /* 读不到就当 0 */ } }
+    }
+  }
+  return total;
+}
+
+/** 输出目录里每个 run 的体积与状态（归档标记来自 settings.runMeta）。 */
+async function outputUsage() {
+  const root = path.resolve(settings.outputDir || '');
+  let names = [];
+  try {
+    names = fs.readdirSync(root, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && !d.name.startsWith('.'))
+      .map((d) => d.name)
+      .sort()
+      .reverse(); // 目录名以时间戳开头：新的在前
+  } catch (e) {
+    return { root, totalBytes: 0, count: 0, runs: [], error: `输出目录不可读：${String(e.message || e)}` };
+  }
+  const runs = [];
+  let totalBytes = 0;
+  for (const name of names) {
+    const full = path.join(root, name);
+    const sizeBytes = dirSizeBytes(full);
+    totalBytes += sizeBytes;
+    const m = readJsonTolerant(path.join(full, 'run.json'));
+    const data = (m.ok && m.data) || {};
+    const meta = (settings.runMeta || {})[name] || {};
+    let mtime = 0;
+    try { mtime = fs.statSync(full).mtimeMs; } catch { /* 忽略 */ }
+    runs.push({
+      dir: full,
+      name,
+      sizeBytes,
+      status: String(data.status || ''),
+      archived: !!meta.archived,
+      mtime,
+    });
+    // 每量完一个 run 让出一次事件循环：几百个 run 时窗口不会假死
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  return { root, totalBytes, count: runs.length, runs };
+}
+
+/**
+ * 清理已归档 run：**走系统回收站**（shell.trashItem），不 rm。
+ * 只接受输出目录内的路径，且必须被标记为 archived、不在运行中，否则拒收。
+ */
+async function trashArchivedRuns(dirs) {
+  const root = path.resolve(settings.outputDir || '');
+  const trashed = [];
+  const errors = [];
+  for (const raw of Array.isArray(dirs) ? dirs : []) {
+    const full = path.resolve(String(raw || ''));
+    if (!full.startsWith(root + path.sep)) { errors.push({ dir: String(raw), error: '不在输出目录内，拒绝清理' }); continue; }
+    const name = path.basename(full);
+    const meta = (settings.runMeta || {})[name] || {};
+    if (!meta.archived) { errors.push({ dir: name, error: '未归档，拒绝清理（请先在会话列表归档）' }); continue; }
+    const m = readJsonTolerant(path.join(full, 'run.json'));
+    const status = String((m.ok && m.data && m.data.status) || '');
+    if (status === 'running') { errors.push({ dir: name, error: '运行中，拒绝清理' }); continue; }
+    try {
+      await shell.trashItem(full);
+      trashed.push(name);
+    } catch (e) { errors.push({ dir: name, error: String(e.message || e) }); }
+  }
+  return { trashed, errors };
+}
+
+/** 导出当前设置到用户选定的 JSON 文件（不含任何密钥：settings 里本就没有）。 */
+async function exportSettingsFile() {
+  const r = await dialog.showSaveDialog(win, {
+    title: '导出设置',
+    defaultPath: 'agentcrew-studio-settings.json',
+    filters: [{ name: 'JSON', extensions: ['json'] }],
+  });
+  if (r.canceled || !r.filePath) return { canceled: true };
+  fs.writeFileSync(r.filePath, JSON.stringify(settings, null, 2), 'utf8');
+  return { canceled: false, path: r.filePath };
+}
+
+/** 从 JSON 导入设置：只收默认设置里声明过的键，其余忽略。 */
+async function importSettingsFile() {
+  const r = await dialog.showOpenDialog(win, {
+    title: '导入设置',
+    properties: ['openFile'],
+    filters: [{ name: 'JSON', extensions: ['json'] }],
+  });
+  if (r.canceled || !r.filePaths || !r.filePaths.length) return { canceled: true };
+  let data = null;
+  try { data = JSON.parse(fs.readFileSync(r.filePaths[0], 'utf8')); }
+  catch (e) { throw new Error(`不是合法的 JSON：${String(e.message || e)}`); }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('设置文件必须是一个 JSON 对象');
+  const allowed = new Set(Object.keys(defaultSettings()));
+  const patch = {};
+  for (const [k, v] of Object.entries(data)) if (allowed.has(k)) patch[k] = v;
+  const saved = saveSettings(patch);
+  return { canceled: false, applied: Object.keys(patch).length, settings: saved, path: r.filePaths[0] };
+}
+
 // C4：随 run 输入图片（<runDir>/context/images/）的预览读取。
 // 文件名白名单 <NN>.<ext>，杜绝路径穿越；平台只写这个目录，名字形状固定。
 const IMAGE_MIME_BY_EXT = {
@@ -1102,6 +1217,10 @@ function registerIpc() {
   ipcMain.handle('python:detect', async (_e, candidate) => detectPython(candidate || null));
 
   ipcMain.handle('runs:list', () => scanRuns(settings.outputDir));
+  ipcMain.handle('data:usage', () => outputUsage());
+  ipcMain.handle('data:trashArchive', (_e, dirs) => trashArchivedRuns(dirs));
+  ipcMain.handle('settings:export', () => exportSettingsFile());
+  ipcMain.handle('settings:import', () => importSettingsFile());
   ipcMain.handle('run:load', (_e, dir) => readRunSnapshot(String(dir)));
   ipcMain.handle('ledger:history', (_e, dir, maxLines) =>
     ledgerHistory(path.join(String(dir), 'ledger.jsonl'), Number(maxLines) || 400));
