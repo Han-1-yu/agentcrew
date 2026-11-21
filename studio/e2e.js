@@ -234,16 +234,19 @@ function run(win) {
     const artItems = await js('document.querySelectorAll(".art-file").length');
     const artButtons = await js('[...document.querySelectorAll(".art-file")].every(el => el.tagName === "BUTTON")');
     let previewOk = false;
+    let artTools = false;
     if (Number(artItems) > 0) {
       await js('document.querySelector(".art-file")?.click()');
       await sleep(500);
       previewOk = !!(await js(`(() => {
-        const p = document.querySelector('.art-preview-content, .art-preview img');
+        const p = document.querySelector('.art-preview-content, .art-preview img, .art-markdown');
         return p && !String(p.textContent || '').includes('加载中…');
       })()`));
+      // J3：预览头部的操作条（另存为）随文件一起出现
+      artTools = !!(await js('!!document.querySelector(".art-preview-acts .art-save-as")'));
     }
-    check('12. 产物页面显示可预览文件列表', Number(artItems) > 0 && !!artButtons && previewOk,
-      `${artItems} 个产物, 键盘按钮=${artButtons}, 预览=${previewOk}`);
+    check('12. 产物页面显示可预览文件列表', Number(artItems) > 0 && !!artButtons && previewOk && artTools,
+      `${artItems} 个产物, 键盘按钮=${artButtons}, 预览=${previewOk}, 另存为=${artTools}`);
     await shot('09-产物页面');
 
     // ── 13. 设置页面 ──

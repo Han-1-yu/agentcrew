@@ -688,9 +688,14 @@ function listArtifacts(runDir) {
 }
 
 function readArtifact(runDir, relPath) {
-  const artDir = path.resolve(runDir, 'artifacts');
-  const full = path.resolve(artDir, relPath);
-  if (full !== artDir && !full.startsWith(artDir + path.sep)) throw new Error('非法的产物路径');
+  return readArtifactAt(path.resolve(runDir, 'artifacts'), relPath);
+}
+
+/** 在给定根目录下读一个文本/图像文件（产物页与快照版本共用同一套规则）。 */
+function readArtifactAt(baseDir, relPath) {
+  const root = path.resolve(baseDir);
+  const full = path.resolve(root, relPath);
+  if (full !== root && !full.startsWith(root + path.sep)) throw new Error('非法的产物路径');
   const st = fs.statSync(full); // 不存在时抛出，由调用方兜底
   const MAX = 2 * 1024 * 1024;
   const ext = path.extname(relPath).toLowerCase();
@@ -715,6 +720,64 @@ function readArtifact(runDir, relPath) {
     fs.readSync(fd, buf, 0, buf.length, 0);
   } finally { fs.closeSync(fd); }
   return { binary: false, content: buf.toString('utf8'), sizeBytes: st.size, truncated, path: relPath };
+}
+
+// ---------- J1：rewind 快照的产物版本 ----------
+
+const SNAPSHOT_RE = /^rewind-\d+$/;
+
+/** `<run>/history/rewind-NNN/` 的版本清单（新的在前），附每份登记的产物路径。 */
+function listArtifactSnapshots(runDir) {
+  const root = path.join(String(runDir), 'history');
+  let names = [];
+  try {
+    names = fs.readdirSync(root, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && SNAPSHOT_RE.test(d.name))
+      .map((d) => d.name)
+      .sort();
+  } catch {
+    return { snapshots: [] }; // 没回滚过就是空清单，不是错误
+  }
+  const snapshots = names.map((name) => {
+    const m = readJsonTolerant(path.join(root, name, 'rewind.json'));
+    const data = (m.ok && m.data) || {};
+    const artifacts = Array.isArray(data.artifacts)
+      ? data.artifacts.map((a) => ({
+        path: a.path || '', task: a.task || '', kind: a.kind || '', sizeBytes: a.size_bytes || 0,
+      }))
+      : [];
+    return {
+      name,
+      createdAt: data.created_at || '',
+      target: data.target || '',
+      instruction: data.instruction || '',
+      artifacts,
+      error: m.ok ? null : String(m.error || 'rewind.json 读取失败'),
+    };
+  }).reverse();
+  return { snapshots };
+}
+
+/** 读快照里的某个文件（同一套白名单与截断规则，根目录换成快照的 artifacts）。 */
+function readSnapshotArtifact(runDir, name, relPath) {
+  if (!SNAPSHOT_RE.test(String(name))) throw new Error('非法的快照名');
+  return readArtifactAt(path.join(String(runDir), 'history', String(name), 'artifacts'), relPath);
+}
+
+/** J3：把某个产物另存到用户选定的路径（只读源文件，不移动）。 */
+async function saveArtifactAs(runDir, relPath) {
+  const base = path.resolve(String(runDir), 'artifacts');
+  const full = path.resolve(base, String(relPath));
+  if (full !== base && !full.startsWith(base + path.sep)) throw new Error('非法的产物路径');
+  const st = fs.statSync(full);
+  const r = await dialog.showSaveDialog(win, {
+    title: '另存产物',
+    defaultPath: path.basename(String(relPath)),
+    filters: [{ name: '所有文件', extensions: ['*'] }],
+  });
+  if (r.canceled || !r.filePath) return { canceled: true };
+  fs.copyFileSync(full, r.filePath);
+  return { canceled: false, path: r.filePath, sizeBytes: st.size };
 }
 
 // C4：随 run 输入图片（<runDir>/context/images/）的预览读取。
@@ -1131,6 +1194,10 @@ function registerIpc() {
 
   ipcMain.handle('artifacts:list', (_e, dir) => listArtifacts(String(dir)));
   ipcMain.handle('artifact:read', (_e, dir, relPath) => readArtifact(String(dir), String(relPath)));
+  ipcMain.handle('artifact:snapshots', (_e, dir) => listArtifactSnapshots(String(dir)));
+  ipcMain.handle('artifact:readSnapshot', (_e, dir, name, relPath) =>
+    readSnapshotArtifact(String(dir), String(name), String(relPath)));
+  ipcMain.handle('artifact:saveAs', (_e, dir, relPath) => saveArtifactAs(String(dir), String(relPath)));
   ipcMain.handle('images:list', (_e, dir) => listRunImages(String(dir)));
   ipcMain.handle('images:read', (_e, dir, name) => readRunImage(String(dir), String(name)));
   // A5：composer / 新建弹窗的附件区——选图（返回路径与元数据）与

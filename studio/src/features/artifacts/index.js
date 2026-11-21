@@ -2,8 +2,10 @@
  * 产物页：目录选择 + 代码预览 + 语法着色 + 导出。
  */
 import { artifactExportOutcome, artifactIcon, groupArtifacts, normalizeArtifactList } from '../../lib/artifacts.js';
+import { snapshotVersionsFor } from '../../lib/artifact-versions.js';
 import { $$, h } from '../../lib/dom.js';
 import { fmtBytes } from '../../lib/format.js';
+import { renderMarkdown } from '../../lib/markdown.js';
 import { S } from '../../lib/store.js';
 
 import { emptyState, errorState, isStaleRender, loadingState } from '../../ui/states.js';
@@ -12,9 +14,11 @@ import { toast } from '../../ui/toast.js';
 import { switchNav } from '../../app/router.js';
 
 import { openTaskDetail } from '../detail/panel.js';
+import { renderDiffInto, timeText, versionBar } from './versions.js';
 const ARTIFACT_ICONS = {
   code: '📄', doc: '📄', test: '🧪', report: '📊', config: '⚙️', other: '📦',
 };
+const MD_RE = /\.(md|markdown)$/i;
 let previewSeq = 0;
 
 async function renderArtifactsPage(container) {
@@ -65,6 +69,12 @@ async function renderArtifactsPage(container) {
     listEl.appendChild(errorState('产物清单加载失败', String(e.message || e), reload));
     return;
   }
+  // rewind 快照（J1）：没有 history/ 就是空清单，不影响正常预览。
+  let snapshots = [];
+  if (window.studio.listArtifactSnapshots) {
+    try { ({ snapshots } = await window.studio.listArtifactSnapshots(S.dash.run.dir)); } catch { snapshots = []; }
+    if (isStaleRender(token, container)) return;
+  }
   // await 期间可能已经切页：不再往已卸载的 DOM 继续渲染。
   if (isStaleRender(token, container)) return;
   listEl.innerHTML = '';
@@ -95,7 +105,7 @@ async function renderArtifactsPage(container) {
       const item = h('button', { class: 'art-file', type: 'button', onclick: async () => {
         $$('.art-file').forEach(x => x.classList.remove('active'));
         item.classList.add('active');
-        await previewArtifact(preview, f);
+        await previewArtifact(preview, f, snapshots);
       }},
         h('span', { class: 'art-file-icon', innerHTML: artifactIcon(f.kind) }),
         h('span', { class: 'art-file-name', title: f.path }, (f.path || '').split('/').pop()),
@@ -106,14 +116,25 @@ async function renderArtifactsPage(container) {
   preview.appendChild(emptyState('选择左侧文件查看内容'));
 }
 
-async function previewArtifact(preview, f) {
+async function previewArtifact(preview, f, snapshots = []) {
   const seq = ++previewSeq;
+  const versions = snapshotVersionsFor(snapshots, f.path);
+  const isMd = MD_RE.test(f.path || '');
+  const state = { version: '', rendered: isMd };
   preview.innerHTML = '';
+  const body = h('div', { class: 'art-preview-body' });
+  const draw = () => { drawArtifact(seq, body, f, versions, state); };
   preview.appendChild(h('div', { class: 'art-preview-head' },
     h('span', { class: 'art-preview-path' }, f.path || ''),
     h('span', { class: 'art-preview-meta' },
       `${fmtBytes(f.sizeBytes)} · ${f.role || '—'} · ${f.task || '—'}`),
-    h('div', { style: 'display:flex;gap:4px' },
+    h('div', { class: 'art-preview-acts' },
+      versionBar(versions, state, draw),
+      isMd ? h('button', { class: 'btn btn-sm art-view-toggle', type: 'button',
+        onclick: () => { state.rendered = !state.rendered; draw(); } },
+        state.rendered ? '源码' : '渲染') : null,
+      h('button', { class: 'btn btn-sm art-save-as', type: 'button', title: '把当前版本另存到本地',
+        onclick: () => saveArtifactCopy(f) }, '另存为'),
       // 直接打开即可：openDetailPanel 会先清空抽屉。此前调用的
       // closeTaskDetail 全仓未定义（且 closeDetailPanel 的 220ms 延时收起
       // 会把刚打开的面板又藏起来），点这个按钮必抛 ReferenceError。
@@ -121,27 +142,70 @@ async function previewArtifact(preview, f) {
       h('button', { class: 'btn btn-sm', title: '在文件管理器中显示',
         onclick: () => { const p = S.dash.run.dir + '\\' + (f.path || '').replace(/\//g, '\\'); window.studio.revealFile(p); } },
         h('span', { class: 'art-reveal-label', innerHTML: `${artifactIcon('folder')} 显示` })))));
-  const content = h('pre', { class: 'art-preview-content' });
-  content.textContent = '加载中…';
-  preview.appendChild(content);
+  preview.appendChild(body);
+  draw();
+}
+
+async function saveArtifactCopy(f) {
   try {
+    const r = await window.studio.saveArtifactAs(S.dash.run.dir, f.path);
+    if (r && r.canceled) toast('info', '已取消', '未另存文件');
+    else toast('success', '已另存', String((r && r.path) || ''));
+  } catch (e) { toast('error', '另存失败', String(e.message || e)); }
+}
+
+/**
+ * 画当前版本或 diff：`state.version` 非空时拿快照与当前做行级对比；
+ * 否则按 `state.rendered` 决定 Markdown 渲染还是语法高亮源码。
+ */
+async function drawArtifact(seq, body, f, versions, state) {
+  const alive = () => seq === previewSeq && body.isConnected;
+  body.innerHTML = '';
+  body.appendChild(h('div', { class: 'dp-text dim' }, '加载中…'));
+  try {
+    if (state.version) {
+      const [now, old] = await Promise.all([
+        window.studio.readArtifact(S.dash.run.dir, f.path),
+        window.studio.readSnapshotArtifact(S.dash.run.dir, state.version, f.path),
+      ]);
+      if (!alive()) return;
+      body.innerHTML = '';
+      const v = versions.find((x) => x.name === state.version) || {};
+      renderDiffInto(body, {
+        before: old && old.content != null ? String(old.content) : '',
+        after: now && now.content != null ? String(now.content) : '',
+        beforeLabel: [state.version, v.createdAt ? timeText(v.createdAt) : ''].filter(Boolean).join(' · '),
+        afterLabel: '当前',
+      });
+      return;
+    }
     const r = await window.studio.readArtifact(S.dash.run.dir, f.path);
-    // 快速连点不同文件时，旧请求晚到不能覆盖当前预览。
-    if (seq !== previewSeq || !content.isConnected) return;
+    if (!alive()) return;
+    body.innerHTML = '';
     if (r && r.image && r.dataBase64) {
       const img = h('img', { alt: f.path || '图像产物' });
       img.src = `data:${r.mime};base64,${r.dataBase64}`;
       img.style.maxWidth = '100%';
       img.style.borderRadius = '6px';
-      content.replaceWith(img);
+      body.appendChild(img);
       return;
     }
     const text = r && r.content != null ? String(r.content) : (r && typeof r === 'string' ? r : '');
-    if (!text) { content.textContent = '（空文件或二进制）'; return; }
+    if (!text) { body.appendChild(h('div', { class: 'art-preview-content' }, '（空文件或二进制）')); return; }
     const truncated = text.length > 100000 ? text.slice(0, 100000) + '\n…（已截断，共 ' + text.length + ' 字符）' : text;
+    if (state.rendered) {
+      const md = h('div', { class: 'art-markdown' });
+      md.innerHTML = renderMarkdown(truncated);
+      body.appendChild(md);
+      return;
+    }
+    const content = h('pre', { class: 'art-preview-content' });
     content.innerHTML = highlightCode(truncated, f.path || '');
+    body.appendChild(content);
   } catch (e) {
-    if (seq === previewSeq && content.isConnected) content.textContent = '读取失败：' + String(e.message || e);
+    if (!alive()) return;
+    body.innerHTML = '';
+    body.appendChild(h('div', { class: 'art-preview-content' }, '读取失败：' + String(e.message || e)));
   }
 }
 

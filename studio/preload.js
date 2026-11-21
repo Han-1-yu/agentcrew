@@ -55,6 +55,9 @@ contextBridge.exposeInMainWorld('studio', {
   // 产物
   listArtifacts: (dir) => invoke('artifacts:list', dir),
   readArtifact: (dir, relPath) => invoke('artifact:read', dir, relPath),
+  listArtifactSnapshots: (dir) => invoke('artifact:snapshots', dir),
+  readSnapshotArtifact: (dir, name, relPath) => invoke('artifact:readSnapshot', dir, name, relPath),
+  saveArtifactAs: (dir, relPath) => invoke('artifact:saveAs', dir, relPath),
   exportArtifacts: (dir) => invoke('artifacts:export', dir),
   loadStreams: (dir) => invoke('streams:load', dir),
   // C4：随 run 输入图片（context/images/）

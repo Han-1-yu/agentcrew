@@ -32,12 +32,51 @@
   padding: 8px 16px; border-bottom: 0.5px solid var(--border-weak); background: var(--bg-subtle); }
 .art-preview-path { font-size: var(--fs-sm); font-weight: 500; color: var(--text); font-family: var(--font-mono); }
 .art-preview-meta { font-size: var(--fs-xs); color: var(--text-ter); }
+.art-preview-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .art-preview-content {
   flex: 1; overflow: auto; margin: 0; padding: var(--sp-4) var(--sp-5);
   background: var(--bg-panel);
   font-family: var(--font-mono); font-size: var(--fs-sm); line-height: 1.65;
   color: var(--text); white-space: pre-wrap; word-break: break-all;
 }
+.art-preview-acts { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.art-version { font-size: var(--fs-xs); color: var(--text-ter); display: inline-flex; align-items: center; gap: 4px; }
+.art-version-select { font-size: var(--fs-xs); color: var(--text); background: var(--bg-panel);
+  border: 0.5px solid var(--border-weak); border-radius: 5px; padding: 2px 4px; max-width: 220px; }
+
+/* Markdown 渲染视图（J2） */
+.art-markdown { flex: 1; overflow: auto; padding: var(--sp-4) var(--sp-5); background: var(--bg-panel);
+  font-size: var(--fs-sm); line-height: 1.75; color: var(--text); }
+.art-markdown h1, .art-markdown h2, .art-markdown h3 { margin: 12px 0 6px; font-weight: 600; line-height: 1.35; }
+.art-markdown h1 { font-size: 1.35em; }
+.art-markdown h2 { font-size: 1.18em; }
+.art-markdown h3 { font-size: 1.05em; }
+.art-markdown p { margin: 6px 0; }
+.art-markdown code { font-family: var(--font-mono); font-size: 0.94em; background: var(--bg-subtle); padding: 1px 4px; border-radius: 3px; }
+.art-markdown pre { background: var(--bg-subtle); padding: 10px 12px; border-radius: 6px; overflow: auto; }
+.art-markdown pre code { background: none; padding: 0; }
+.art-markdown ul, .art-markdown ol { margin: 6px 0; padding-left: 20px; }
+.art-markdown table { border-collapse: collapse; margin: 8px 0; font-size: 0.95em; }
+.art-markdown th, .art-markdown td { border: 0.5px solid var(--border-weak); padding: 4px 8px; text-align: left; }
+.art-markdown a { color: var(--accent); }
+
+/* 行级 diff（J1） */
+.art-diff-head { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 6px var(--sp-5); border-bottom: 0.5px solid var(--border-weak); background: var(--bg-subtle); }
+.art-diff-sum { font-size: var(--fs-xs); font-family: var(--font-mono); color: var(--text); }
+.art-diff-path { font-size: var(--fs-xs); color: var(--text-ter); }
+.art-diff-rows { flex: 1; overflow: auto; padding: 6px 0; background: var(--bg-panel);
+  font-family: var(--font-mono); font-size: var(--fs-sm); line-height: 1.55; }
+.art-diff-row { display: flex; gap: 0; white-space: pre-wrap; word-break: break-all; }
+.art-diff-no { flex: 0 0 42px; text-align: right; padding-right: 8px; color: var(--text-ter);
+  font-variant-numeric: tabular-nums; user-select: none; }
+.art-diff-mark { flex: 0 0 16px; text-align: center; color: var(--text-ter); user-select: none; }
+.art-diff-text { flex: 1; padding-right: 12px; color: var(--text); }
+.art-diff-row.is-add { background: var(--success-bg-quiet); }
+.art-diff-row.is-add .art-diff-mark, .art-diff-row.is-add .art-diff-no { color: var(--success); }
+.art-diff-row.is-del { background: var(--danger-bg-quiet, rgba(255, 90, 90, 0.08)); }
+.art-diff-row.is-del .art-diff-mark, .art-diff-row.is-del .art-diff-no { color: var(--danger, #e5534b); }
+.art-diff-row.is-same .art-diff-text { color: var(--text-sub); }
 
 /* ---- 语法高亮 ---- */
 /* 语法高亮 */
