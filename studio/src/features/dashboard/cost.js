@@ -4,6 +4,7 @@
 
 import { ROLE_META } from '../../contracts/enums.js';
 import { openTaskDetail } from '../detail/panel.js';
+import { aggregateCostByModel } from '../../lib/cost-breakdown.js';
 import { $, h } from '../../lib/dom.js';
 import { fmtTokens, trunc } from '../../lib/format.js';
 import { S } from '../../lib/store.js';
@@ -39,6 +40,14 @@ function renderCostPanel() {
     .sort((a, b) => (b.result.cost_usd || 0) - (a.result.cost_usd || 0))
     .slice(0, 5);
 
+  // D3：按模型 / 供应商聚合。llm_call 是唯一带 model 的成本事件；
+  // 供应商推不出时留空，不按模型名硬猜。
+  const models = aggregateCostByModel(S.dash.events || [], {
+    defaultModel: (run?.config_snapshot || {}).default_model || run?.model || '',
+    limit: 6,
+  });
+  const modelDelta = Math.abs(models.total - totalCost);
+
   panel.innerHTML = '';
   panel.appendChild(h('div', { class: 'cost-grid' },
     // 总览卡片
@@ -71,7 +80,27 @@ function renderCostPanel() {
         h('span', { class: 'cost-task-id' }, t.id),
         h('span', { class: 'cost-task-title' }, trunc(t.title, 24)),
         h('span', { class: 'cost-task-val' }, `$${(t.result.cost_usd || 0).toFixed(4)}`))),
-      topTasks.length === 0 ? h('div', { class: 'cost-empty' }, '暂无任务成本数据') : null)));
+      topTasks.length === 0 ? h('div', { class: 'cost-empty' }, '暂无任务成本数据') : null),
+    // 按模型分布（占满一行，避免 3 列网格塞第 4 块后错位）
+    h('div', { class: 'cost-by-model' },
+      h('div', { class: 'cost-section-title' },
+        models.rows.length ? `按模型分布 · 合计 $${models.total.toFixed(4)}` : '按模型分布'),
+      ...models.rows.map((r) => {
+        const label = r.provider ? `${r.provider} / ${r.model}` : r.model;
+        const w = (r.cost / models.max * 100).toFixed(1);
+        return h('div', { class: 'cost-model-row' },
+          h('span', { class: 'cost-model-name', title: label }, label),
+          h('div', { class: 'cost-model-bar' }, h('div', { class: 'cost-model-fill', style: `width:${w}%` })),
+          h('span', { class: 'cost-model-calls' }, `${r.calls} 次`),
+          h('span', { class: 'cost-model-val' }, `$${r.cost.toFixed(4)}`));
+      }),
+      models.rows.length === 0 ? h('div', { class: 'cost-empty' }, '本次运行还没有 LLM 调用记录') : null,
+      models.restCount ? h('div', { class: 'cost-model-note' }, `另有 ${models.restCount} 个模型未展开`) : null,
+      // 守恒核对：正常应与 run.json stats 一致；ledger 被截断或数据缺失时如实提示。
+      models.rows.length && modelDelta > 0.00005
+        ? h('div', { class: 'cost-model-note' },
+          `ledger 合计 $${models.total.toFixed(4)} · run.json 统计 $${totalCost.toFixed(4)}`)
+        : null)));
 }
 
 export { renderCostPanel };

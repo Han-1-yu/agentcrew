@@ -23,4 +23,12 @@
 .cost-task-title { font-size: var(--fs-sm); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cost-task-val { font-size: var(--fs-xs); color: var(--text-sub); text-align: right; font-variant-numeric: tabular-nums; }
 .cost-empty { font-size: var(--fs-sm); color: var(--text-ter); padding: 12px 0; text-align: center; }
+.cost-by-model { padding: 1rem; grid-column: 1 / -1; border-top: 0.5px solid var(--border-weak); }
+.cost-model-row { display: grid; grid-template-columns: minmax(160px, 240px) 1fr 56px 70px; align-items: center; gap: 8px; margin-bottom: 6px; }
+.cost-model-name { font-size: var(--fs-sm); font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cost-model-bar { height: 4px; background: var(--ink-08); border-radius: var(--r-pill); overflow: hidden; }
+.cost-model-fill { height: 100%; border-radius: var(--r-pill); background: var(--accent); transition: width var(--dur-2) ease; }
+.cost-model-calls { font-size: var(--fs-xs); color: var(--text-ter); text-align: right; font-variant-numeric: tabular-nums; }
+.cost-model-val { font-size: var(--fs-xs); color: var(--text-sub); text-align: right; font-variant-numeric: tabular-nums; }
+.cost-model-note { font-size: var(--fs-xs); color: var(--text-ter); margin-top: 6px; }
 @media (max-width: 1024px) { .cost-grid { grid-template-columns: 1fr; } }
