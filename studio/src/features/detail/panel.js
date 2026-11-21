@@ -8,6 +8,7 @@ import { $, h } from '../../lib/dom.js';
 import { artifactIcon } from '../../lib/artifacts.js';
 import { fmtBytes, fmtClock, fmtCost, fmtDur, fmtTokens, trunc } from '../../lib/format.js';
 import { S } from '../../lib/store.js';
+import { summarizeTaskArtifacts } from '../../lib/task-artifacts.js';
 
 import { toast } from '../../ui/toast.js';
 
@@ -59,6 +60,51 @@ $('#detail-panel').addEventListener('keydown', (event) => {
   else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
 });
 
+/**
+ * F2：输入 / 输出产物摘要。异步拿到 MANIFEST entries 后，与任务和依赖一起折成
+ * 可读清单；只列路径与大小，不做预览（预览在产物页）。
+ */
+function renderArtifactSummary(box, task, tasks, entries) {
+  const sum = summarizeTaskArtifacts(task, tasks, entries);
+  const outLines = [];
+  if (sum.outputs.files.length) {
+    for (const f of sum.outputs.files.slice(0, 6)) {
+      outLines.push(h('div', { class: 'dp-text dp-art-line' },
+        h('span', { class: 'dp-art-ico', innerHTML: artifactIcon('doc') }),
+        ` ${f.path}${f.sizeBytes != null ? ' · ' + fmtBytes(f.sizeBytes) : ''}`));
+    }
+    if (sum.outputs.files.length > 6) {
+      outLines.push(h('div', { class: 'dp-text dim' }, `…另有 ${sum.outputs.files.length - 6} 个`));
+    }
+  } else {
+    outLines.push(h('div', { class: 'dp-text dim' },
+      sum.pending ? '待产出（任务还没完成）' : '没有记录到产物'));
+  }
+  const inLines = [];
+  if (sum.inputs.from.length) {
+    inLines.push(h('div', { class: 'dp-art-group' },
+      `输入 · ${sum.inputs.files.length} 个文件 · 来自 ${sum.inputs.from.map((x) => x.id).join('、')}`));
+    for (const f of sum.inputs.files.slice(0, 4)) {
+      inLines.push(h('div', { class: 'dp-text dp-art-line' },
+        h('span', { class: 'dp-art-ico', innerHTML: artifactIcon('doc') }), ` ${f.path}`));
+    }
+    if (sum.inputs.files.length > 4) {
+      inLines.push(h('div', { class: 'dp-text dim' }, `…另有 ${sum.inputs.files.length - 4} 个`));
+    }
+  } else {
+    inLines.push(h('div', { class: 'dp-art-group' }, '输入 · 无上游任务'));
+  }
+  box.replaceChildren(
+    h('div', { class: 'dp-art-group' },
+      `输出 · ${sum.outputs.files.length} 个文件${sum.outputs.source === 'manifest' ? '（MANIFEST）' : ''}`),
+    ...outLines,
+    ...inLines,
+    sum.missing.length
+      ? h('div', { class: 'dp-text', style: 'color:var(--warn-text)' },
+        `契约要求未产出：${sum.missing.join('、')}`)
+      : null);
+}
+
 function openTaskDetail(taskId){
   const t=S.dash.tasks.find(x=>x.id===taskId); if(!t)return;
   S.detail={kind:'task',id:taskId};
@@ -67,6 +113,7 @@ function openTaskDetail(taskId){
   const up=(t.dependencies||[]).map(d=>S.dash.tasks.find(x=>x.id===d)).filter(Boolean);
   const down=S.dash.tasks.filter(x=>(x.dependencies||[]).includes(t.id));
   const res=t.result;
+  const artBox=h('div',{class:'dp-art-sum'},h('div',{class:'dp-text dim'},'加载产物清单…'));
   openDetailPanel(h('div',{style:'display:flex;flex-direction:column;height:100%'},
     h('div',{class:'dp-head'},
       h('div',{class:'dp-title-row'},
@@ -89,9 +136,7 @@ function openTaskDetail(taskId){
         metaCell('返工次数',`${t.rework_count||0}/${t.max_reworks}`),
         metaCell('超时',`${t.timeout_seconds||300}s`),
         metaCell('优先级',`P${t.priority||5}`))),
-      sec('输出产物', res&&res.artifacts&&res.artifacts.length
-        ? h('div',{},res.artifacts.map(a=>h('div',{class:'dp-text dp-art-line',style:'margin:2px 0'},h('span',{class:'dp-art-ico',innerHTML:artifactIcon('doc')}),` ${a.path} · ${fmtBytes(a.size_bytes)}`)))
-        : h('div',{class:'dp-text dim'},'待生成')),
+      sec('输入 / 输出产物', artBox),
       t.error?sec('最近错误',h('div',{class:'dp-text',style:'color:var(--error)'},t.error)):null,
       res&&(res.tokens_used||res.duration_ms)?sec('执行统计',h('div',{class:'dp-meta-grid'},
         metaCell('Token',fmtTokens(res.tokens_used||0)),
@@ -134,6 +179,18 @@ function openTaskDetail(taskId){
               renderDashboard();
             }},'人工处理'),
             h('button',{class:'btn btn-sm',type:'button',title:'R62：回滚到该任务并重跑（需连接后端 API）',onclick:()=>openRewindDialog(t.id)},'从此恢复')))));
+
+  // F2：产物清单走主进程 IPC（MANIFEST.json）；mock / 未连后端时退回任务自带字段。
+  const allTasks = S.dash.tasks || [];
+  const fill = (entries) => { if (artBox.isConnected) renderArtifactSummary(artBox, t, allTasks, entries); };
+  const dir = S.dash.run && S.dash.run.dir;
+  if (S.realMode && dir && window.studio.listArtifacts) {
+    window.studio.listArtifacts(dir)
+      .then((payload) => fill((payload && payload.entries) || []))
+      .catch(() => fill([]));
+  } else {
+    fill([]);
+  }
   renderAgents();
 }
 function openAgentDetail(roleId){

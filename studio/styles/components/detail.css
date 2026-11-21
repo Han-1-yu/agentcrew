@@ -47,6 +47,20 @@
 .dp-art-line { display: flex; align-items: center; gap: 6px; }
 .dp-art-ico { display: inline-flex; color: var(--text-ter); flex: 0 0 auto; }
 
+/* F2：输入 / 输出产物摘要 */
+.dp-art-sum { display: flex; flex-direction: column; gap: 3px; }
+.dp-art-group {
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--text-ter);
+  margin-top: 4px;
+}
+.dp-art-sum .dp-art-line {
+  font-size: var(--fs-xs);
+  color: var(--text-sub);
+  word-break: break-all;
+}
+
 /* 键值对：值是主角，用等宽数字 */
 .dp-meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
 .dp-meta-grid .k { font-size: var(--fs-xs); color: var(--text-ter); }

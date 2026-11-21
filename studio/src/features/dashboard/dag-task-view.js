@@ -144,7 +144,7 @@ function renderTaskDAG(svg, tasks, layout = null) {
     body.appendChild(s('text',{class:'node-role',x:34,y:avatarY+3,'font-size':10}, rm.full));
     const chipW = isRetry?48:42;
     body.appendChild(s('rect',{class:'node-chip',x:NW-chipW-10,y:avatarY-8,width:chipW,height:16,rx:3}));
-    body.appendChild(s('text',{class:'node-on-solid',x:NW-chipW/2-10,y:avatarY+3,'font-size':9,'font-weight':600,'text-anchor':'middle'}, isRetry?'重试中':meta.label));
+    body.appendChild(s('text',{class:'node-on-solid node-chip-label',x:NW-chipW/2-10,y:avatarY+3,'font-size':9,'font-weight':600,'text-anchor':'middle'}, isRetry?'重试中':meta.label));
 
     if ((t.rework_count||0)>0)
       body.appendChild(s('text',{class:'node-retry',x:NW-12,y:36,'font-size':9,'text-anchor':'end'},`↻${t.rework_count}`));

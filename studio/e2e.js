@@ -101,8 +101,11 @@ function run(win) {
 
     // ── 4. 任务详情面板 ──
     // 注意：此 Chromium 运行时 SVG 元素没有 .click() 方法，须用 dispatchEvent 派发真实点击
+    // 任务详情必须从「任务视图」节点进入：默认是 Agent 视图，点开会进 Agent 详情。
+    await js(`document.querySelector('#dag-mode-switch [data-dag-mode="task"]')?.click()`);
+    await sleep(300);
     const clickRes = await js(`(() => {
-      const node = document.querySelector('.dag-node, .task-row, [data-task-id]');
+      const node = document.querySelector('.dag-node[data-task], .task-row, [data-task-id]');
       if (!node) return { clicked: false };
       try { node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return { clicked: true, tag: node.tagName }; }
       catch (e) { return { clicked: true, error: String(e && e.stack || e) }; }
@@ -112,6 +115,12 @@ function run(win) {
     const detailOpen = await js(`!!document.querySelector('#detail-panel:not(.hidden)')`);
     check('4. 点击任务节点打开详情面板', clickRes && clickRes.clicked && !clickRes.error && detailOpen,
       `点击=${clickRes && clickRes.clicked} 面板=${detailOpen}${clickRes && clickRes.error ? ' 异常=' + clickRes.error.split('\n')[0] : ''}`);
+    await sleep(400);
+    // F2：产物摘要（异步拉 MANIFEST 后出组标题）；F1：节点 chip 有稳定的可寻址类名
+    const artSumOk = await js(`!!document.querySelector('#detail-panel .dp-art-sum') && !!document.querySelector('#detail-panel .dp-art-group')`);
+    check('4b. 任务详情含输入/输出产物摘要', !!artSumOk, JSON.stringify({ artSumOk }));
+    const chipOk = await js(`!!document.querySelector('#dag-svg .dag-node .node-chip-label')`);
+    check('4c. DAG 节点状态 chip 有稳定类名（F1 就地切换的寻址点）', !!chipOk, JSON.stringify({ chipOk }));
     await shot('03-任务详情面板');
     await js(`document.querySelector('#detail-close')?.click()`);
     await sleep(350);

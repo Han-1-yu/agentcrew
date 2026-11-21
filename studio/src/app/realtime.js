@@ -12,38 +12,14 @@ import { updateConnIndicator } from '../ui/conn-indicator.js';
 import { renderEvents } from '../features/dashboard/events.js';
 import { refreshEventsView } from '../features/events/index.js';
 import { appendStreamDelta, bindStreamPanel, resetStreamPanel } from '../features/dashboard/stream.js';
+import { applyTaskTransitionLive } from '../features/dashboard/dag-live.js';
 import { appendConversationDelta, refreshConversation } from '../features/conversation/index.js';
 import { notifyFromEvents } from '../features/notifications/index.js';
 
 import { deriveAgents, deriveGates, enrichRun, mapRealTask, currentLoadSeq } from './data.js';
 import { canRetry, sseRetryDelay } from './realtime-retry.js';
-/* 事件去重：文件监听会把整份 ledger 再回放一遍，SSE 重连也可能重发，
-   直接 push 会让事件页凭空多出一倍条目（审计卡最先暴露这一点）。 */
-function eventKey(e) {
-  return `${e.ts || ''}|${e.event || ''}|${JSON.stringify(e.data || {})}`;
-}
+import { eventKey, nearDuplicate } from './realtime-dedup.js';
 
-/* 跨通道语义键：SSE 帧的 data 是裸业务 dict、ts 是渲染端本地时间，ledger 行
-   是 {ts, event, data} 包装，原键在两种来源间必然失配。用「事件语义 + 3 秒窗口」
-   识别同一事件，避免双通道/重连时条目翻倍；窗口只看最近 12 条。 */
-function semanticKey(e) {
-  const d = e.data || {};
-  return [e.event || '', d.task_id || d.taskId || '', d.to_status || d.to || d.status || '',
-    d.from_status || d.from || '', d.checkpoint || '', d.id || d.approval_id || '',
-    d.reason || ''].join('|');
-}
-
-function nearDuplicate(e) {
-  const list = (S.dash && S.dash.events) || [];
-  const key = semanticKey(e);
-  const t = Date.parse(e.ts || '') || 0;
-  for (let i = list.length - 1, n = 0; i >= 0 && n < 12; i--, n++) {
-    const prev = list[i];
-    if (semanticKey(prev) !== key) continue;
-    if (Math.abs(t - (Date.parse(prev.ts || '') || 0)) <= 3000) return true;
-  }
-  return false;
-}
 
 function appendEvents(events) {
   if (!S.dash || !events || !events.length) return 0;
@@ -272,6 +248,9 @@ function onWatchLedger(payload) {
 /* SSE 实时事件处理 */
 function handleRealtimeEvent(evt) {
   if (!S.dash) return;
+  // F1：状态迁移先就地切节点（只改 class/chip，不重建 SVG）；
+  // 节点增删、进度条、连线热度等仍由下面的 500ms 快照刷新兜齐。
+  if (evt.event === 'task_transition') applyTaskTransitionLive(evt.data);
   appendEvents([evt]);
   scheduleRenderEvents();
   // 状态变更类事件触发快照刷新（防抖 500ms）
