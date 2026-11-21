@@ -45,8 +45,8 @@ function run(win) {
     check('1. 应用启动且侧边栏导航就绪', booted);
     await sleep(1500);
 
-    // ── 2. 14 页导航（含 R62 回滚重跑 + F+ 流程库）──
-    const pages = ['conversation', 'dashboard', 'tasks', 'dag', 'agents', 'profiles', 'gates', 'rewind', 'artifacts', 'events', 'providers', 'schedules', 'flows', 'settings'];
+    // ── 2. 15 页导航（含 R62 回滚重跑 + F+ 流程库 + Q2 工具试跑）──
+    const pages = ['conversation', 'dashboard', 'tasks', 'dag', 'agents', 'profiles', 'gates', 'rewind', 'artifacts', 'events', 'providers', 'schedules', 'flows', 'tools', 'settings'];
     const pageResults = {};
     for (const page of pages) {
       await js(`document.querySelector('.nav-item[data-nav="${page}"]')?.click()`);
@@ -55,7 +55,7 @@ function run(win) {
       pageResults[page] = visible;
     }
     const allPagesOk = pages.every(p => pageResults[p]);
-    check('2. 14 页导航全部可切换且 active 状态正确', allPagesOk, JSON.stringify(pageResults));
+    check('2. 15 页导航全部可切换且 active 状态正确', allPagesOk, JSON.stringify(pageResults));
     // F3 防回归：每个 nav-item 都有可见文字
     const navTextOk = await js(`Array.from(document.querySelectorAll('.nav-item')).every(b => b.textContent.trim().length > 0)`);
     check('2b. 侧边栏每个导航按钮含可见文字', !!navTextOk);
@@ -73,7 +73,11 @@ function run(win) {
     await js(`document.querySelector('.nav-item[data-nav="flows"]')?.click()`);
     await sleep(700);
     const flowsOk = await js(`!!document.querySelector('#placeholder-view .page-head h2') && document.querySelector('#placeholder-view .page-head h2').textContent.includes('流程库')`);
-    check('2c. 执行体档案 / 定时任务 / 流程库 页内容渲染', !!(profilesOk && schedulesOk && flowsOk), JSON.stringify({ profilesOk, schedulesOk, flowsOk }));
+    // Q2 工具试跑：未连后端时页头出标题 + 诚实空态，不伪造清单
+    await js(`document.querySelector('.nav-item[data-nav="tools"]')?.click()`);
+    await sleep(700);
+    const toolsOk = await js(`!!document.querySelector('#placeholder-view .page-head h2') && document.querySelector('#placeholder-view .page-head h2').textContent.includes('工具试跑')`);
+    check('2c. 执行体档案 / 定时任务 / 流程库 / 工具试跑 页内容渲染', !!(profilesOk && schedulesOk && flowsOk && toolsOk), JSON.stringify({ profilesOk, schedulesOk, flowsOk, toolsOk }));
 
     // 2d. 对话页：消息流渲染（用户目标气泡 + 任务气泡）
     await js(`document.querySelector('.nav-item[data-nav="conversation"]')?.click()`);

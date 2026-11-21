@@ -1,0 +1,205 @@
+/* Q2：工具试跑页与试跑弹窗。 */
+
+.tool-toolsbar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+
+/* 开关口径 chips：一行能看全「为什么清单里没有某个工具」 */
+.tool-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.tool-chip {
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 0.5px solid transparent;
+  white-space: nowrap;
+}
+
+.tool-chip.ok {
+  background: var(--success-bg-quiet);
+  color: var(--success-text);
+  border-color: var(--success-bg);
+}
+
+.tool-chip.warn {
+  background: var(--warn-bg-soft);
+  color: var(--warn-text);
+  border-color: var(--warn-border-soft);
+}
+
+.tool-chip.mute {
+  background: var(--bg-subtle);
+  color: var(--text-ter);
+}
+
+.tool-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tool-card {
+  border: 0.5px solid var(--border, var(--ink-12));
+  border-radius: var(--r-md, 16px);
+  background: var(--bg-panel);
+  padding: 12px 14px;
+}
+
+.tool-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.tool-card-name {
+  font-weight: 600;
+  font-size: var(--fs-body, 15px);
+}
+
+.tool-card-badge {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  color: var(--text-sub);
+}
+
+.tool-card-badge.file {
+  background: var(--success-bg-quiet);
+  color: var(--success-text);
+}
+
+.tool-card-badge.network {
+  background: var(--warn-bg-soft);
+  color: var(--warn-text);
+}
+
+.tool-card-badge.sandbox {
+  background: var(--error-bg-quiet);
+  color: var(--error-text);
+}
+
+.tool-card-meta {
+  color: var(--text-ter);
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
+}
+
+.tool-card-desc {
+  margin-top: 8px;
+  color: var(--text-sub);
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+}
+
+.tool-card-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+/* 试跑弹窗 */
+.tool-trial-modal .tool-desc {
+  color: var(--text-sub);
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  margin: 6px 0 10px;
+}
+
+.tool-args-hint {
+  color: var(--text-ter);
+  font-size: var(--fs-xs);
+  margin-bottom: 6px;
+}
+
+.tool-args-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  padding: 10px 12px;
+  border-radius: var(--r-sm, 10px);
+  border: 0.5px solid var(--border, var(--ink-12));
+  background: var(--bg-inset, var(--bg-panel));
+  color: var(--text);
+  resize: vertical;
+}
+
+.tool-args-actions {
+  display: flex;
+  gap: 6px;
+  margin: 8px 0 4px;
+}
+
+.tool-run-box {
+  margin-top: 10px;
+  max-height: 34vh;
+  overflow: auto;
+}
+
+.tool-run-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: var(--fs-sm);
+  padding: 6px 0;
+}
+
+.tool-run-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-ter);
+  flex: 0 0 auto;
+}
+
+.tool-run-summary.ok .tool-run-dot { background: var(--success); }
+.tool-run-summary.err .tool-run-dot { background: var(--error); }
+
+.tool-run-summary.ok { color: var(--success-text); }
+.tool-run-summary.err { color: var(--error-text); }
+
+.tool-run-meta {
+  color: var(--text-ter);
+  font-size: var(--fs-xs);
+}
+
+.tool-run-output {
+  margin: 6px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--r-sm, 10px);
+  background: var(--bg-inset, var(--ink-6));
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 30vh;
+  overflow: auto;
+}
+
+.tool-run-error {
+  margin-top: 6px;
+  color: var(--error-text);
+  font-size: var(--fs-xs);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.tool-run-pending {
+  color: var(--text-ter);
+  font-size: var(--fs-xs);
+  padding: 6px 0;
+}

@@ -17,6 +17,7 @@ import { renderProvidersPage } from '../features/providers/index.js';
 import { renderSettingsPage } from '../features/settings/index.js';
 import { renderSchedulesPage } from '../features/schedules/index.js';
 import { renderFlowsPage } from '../features/flows-page/index.js';
+import { renderToolsPage } from '../features/tools-page/index.js';
 import { renderProfilesPage } from '../features/profiles/index.js';
 import { renderRewindPage } from '../features/rewind/page.js';
 function switchNav(key){
@@ -75,6 +76,7 @@ function switchNav(key){
   if(key==='providers'){ renderProvidersPage(ph); return; }
   if(key==='schedules'){ renderSchedulesPage(ph); return; }
   if(key==='flows'){ renderFlowsPage(ph); return; }
+  if(key==='tools'){ renderToolsPage(ph); return; }
   if(key==='profiles'){ renderProfilesPage(ph); return; }
   if(key==='conversation'){ renderConversationPage(ph); return; }
   const p={title:key,desc:'该页面开发中。'};

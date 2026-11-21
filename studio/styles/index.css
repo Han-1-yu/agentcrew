@@ -52,6 +52,7 @@
 @import './features/runs.css';
 @import './features/runs-sidebar.css';
 @import './features/flows-page.css';
+@import './features/tools-page.css';
 @import './features/notifications.css';
 @import './features/palette.css';
 @import './features/keys-modal.css';

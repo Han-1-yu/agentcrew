@@ -104,6 +104,33 @@ async function run() {
         send(202, { run_id: 'RUN-X', status: 'running' });
         return;
       }
+      // Q2：工具试跑页的两个端点（清单 + 单工具试跑）
+      if (url === '/tools' && method === 'GET') {
+        send(200, {
+          tools_enabled: true, code_exec_enabled: false,
+          sandbox_backend: 'local', search_provider: '', trial_dir: '_tool_trial',
+          tools: [{
+            name: 'read_file', description: '读文件', kind: 'file',
+            input_schema: {
+              type: 'object',
+              properties: { path: { type: 'string' } },
+              required: ['path'],
+            },
+          }],
+        });
+        return;
+      }
+      if (url === '/tools/read_file/test' && method === 'POST') {
+        send(200, {
+          tool: 'read_file', ok: true, result: 'hello', error: null,
+          duration_ms: 1.2, sandbox: '_tool_trial/t1',
+        });
+        return;
+      }
+      if (url === '/tools/web_fetch/test' && method === 'POST') {
+        send(409, { error: '工具执行未开启' });
+        return;
+      }
       send(404, {});
     });
   });
@@ -212,11 +239,29 @@ async function run() {
         && resolveComposerIntent({ hasRun: true, runStatus: 'planning', realMode: true }) === 'stop'
         && resolveComposerIntent({ hasRun: true, runStatus: 'completed', realMode: true }) === 'create'
         && resolveComposerIntent({ hasRun: true, runStatus: 'running', realMode: false }) === 'create');
+
+    // ---- Q2 工具试跑页新增三断言 ----
+    const toolList = await call('/tools');
+    check('GET /tools → 清单与开关口径可读',
+      toolList.ok === true && toolList.data && toolList.data.tools[0].name === 'read_file'
+        && toolList.data.tools_enabled === true
+        && toolList.data.trial_dir === '_tool_trial', toolList);
+
+    const trial = await call('/tools/read_file/test', json({ args: { path: 'workspace/a.txt' } }));
+    const trialReq = requests.find((r) => r.method === 'POST' && r.url === '/tools/read_file/test');
+    check('POST /tools/{name}/test → 200 且 args 原样透传',
+      trial.ok === true && trial.data.ok === true
+        && !!trialReq && trialReq.body.includes('workspace/a.txt'), trial);
+
+    const refused = await call('/tools/web_fetch/test', json({ args: {} }));
+    check('工具执行未开启 → 409 如实带回（不装成功）',
+      refused.ok === false && refused.status === 409, refused);
   } else {
     check('Key 加密保存（本机不支持 safeStorage，跳过认证链）', true, 'skipped');
     check('带 Key → REST 返回数据（跳过）', true, 'skipped');
     for (const name of ['指引列表', '指引写入', '指引撤回', '压缩拒绝', '回滚预览',
-      'guidance 直发对账', '审批自动 resume 409', 'REST 创建单发', '输入框分流判定']) {
+      'guidance 直发对账', '审批自动 resume 409', 'REST 创建单发', '输入框分流判定',
+      '工具清单', '工具试跑', '工具未开启 409']) {
       check(`${name}（跳过）`, true, 'skipped');
     }
   }
