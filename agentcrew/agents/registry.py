@@ -192,11 +192,13 @@ class AgentFactory:
     async def consult(
         self, role_key: str, question: str, *, from_role: str = "",
         context: str = "",
+        history: list[dict[str, str]] | None = None,
     ) -> str:
         """让 ``role_key`` 对 ``question`` 作一次轻量作答（R5）。
 
         ``context``（R6）是提问方的任务背景，原样透传给被问角色的
         :meth:`~agentcrew.agents.base_agent.BaseAgent.consult`。
+        ``history``（R68）是该配对的近期问答历史，同样原样透传。
 
         多执行体角色（``TeamAgent``）没有自己的提示词——取它的 primary 成员来
         回答，而不是让整支队伍做一次聚合执行（那是任务级行为，成本高一个量级）。
@@ -213,7 +215,8 @@ class AgentFactory:
         consult_fn = getattr(agent, "consult", None)
         if consult_fn is None:  # 理论上不会发生；不静默炸掉提问方
             return "（该角色暂不支持咨询：请按最合理的默认值继续。）"
-        return await consult_fn(question, from_role=from_role, context=context)
+        return await consult_fn(
+            question, from_role=from_role, context=context, history=history)
 
     def switch_agent(
         self, role_key: str, profile: str, *, duty: Duty = Duty.PRIMARY,

@@ -573,71 +573,193 @@ def _cmd_switch(args: argparse.Namespace) -> int:
 
 
 def _cmd_agents(args: argparse.Namespace) -> int:
-    """列出 agent 档案与角色绑定；``--json`` 给 Studio 的绑定矩阵用。
+    """执行体档案的浏览与管理入口（R69）。
 
-    数据来自「Settings + RoleCatalog + RunPlan」三层，和真正跑任务时的解析
-    完全同源——UI 看到的编排必须就是执行时会用的编排。
+    读：默认列表；``--json`` 给 Studio 的绑定矩阵与档案页；``--yaml`` 导出片段。
+    写：``--save``（YAML 文件或 stdin）、``--delete``。
+    运维：``--check`` 配置诊断、``--usage`` 跨 run 用量。
+
+    读路径与执行期完全同源（Settings + RoleCatalog + 绑定解析），保证 UI 看到
+    的编排就是跑任务时会用的编排；写路径只碰 ``agents.d/<key>.yaml``，不重写
+    ``agentcrew.yaml``。
     """
-    from agentcrew.agents.plan import binding_for, resolve_plan
-    from agentcrew.config import Settings
     from agentcrew.crew.crew import build_catalog
+    from agentcrew.profiles.service import (
+        delete_profile,
+        diagnose,
+        export_yaml,
+        profile_payload,
+        save_profiles,
+        usage_report,
+    )
+    from agentcrew.profiles.store import ProfileStoreError
 
     try:
-        settings = Settings.load()
+        settings = _settings_from(args)
     except (OSError, ValueError) as exc:
+        if getattr(args, "check", False):
+            return _print_diagnostics(
+                None, None, load_error=str(exc), as_json=bool(args.json))
         return _fail(f"配置错误：{exc}")
-    catalog = build_catalog(settings)
-    plan = resolve_plan(settings, catalog, "preview")
 
-    roles: list[dict[str, Any]] = []
-    for spec in catalog.all():
-        binding = binding_for(spec, settings)
-        roles.append({
-            "role": spec.key,
-            "title": spec.title,
-            "agents": [{"ref": b.ref, "duty": b.duty.value, "weight": b.weight}
-                       for b in binding.agents],
-            "aggregation": (binding.aggregation.model_dump(mode="json")
-                            if binding.aggregation else None),
-            "resolved": [a.model_dump(mode="json") for a in plan.for_role(spec.key)],
-        })
-    payload = {
-        "profiles": [p.model_dump(mode="json") for p in settings.agent_profiles.values()],
-        "roles": roles,
-    }
-    if args.json:
-        import json as _json
-        print(_json.dumps(payload, ensure_ascii=False))
+    if getattr(args, "save", None):
+        source = "<stdin>" if args.save == "-" else str(args.save)
+        try:
+            text = (sys.stdin.read() if args.save == "-"
+                    else Path(args.save).read_text(encoding="utf-8"))
+        except OSError as exc:
+            return _fail(f"无法读取档案文件：{exc}")
+        try:
+            result = save_profiles(
+                text, settings, build_catalog(settings),
+                force=bool(getattr(args, "force", False)),
+                dry_run=bool(getattr(args, "dry_run", False)),
+                source=source)
+        except ProfileStoreError as exc:
+            return _fail(str(exc))
+        if getattr(args, "json", False):
+            print(json.dumps(result, ensure_ascii=False))
+            return EXIT_CODES["ok"]
+        verb = "校验通过（未写盘）" if result["dry_run"] else "已保存"
+        _out(Console(), f"{verb}：{'、'.join(result['saved'])}"
+                        f"（新建 {len(result['created'])}、覆盖 {len(result['updated'])}）")
+        for warning in result["warnings"]:
+            _out(Console(), f"  注意：{warning}")
+        for key, path in result["files"].items():
+            _out(Console(), f"  {key} → {path}")
         return EXIT_CODES["ok"]
 
-    # 导出：生成可直接粘贴进 agentcrew.yaml 的 agents/roles 片段（复用 yaml 依赖）
+    if getattr(args, "delete", None):
+        try:
+            result = delete_profile(
+                str(args.delete), settings, build_catalog(settings),
+                force=bool(getattr(args, "force", False)))
+        except ProfileStoreError as exc:
+            return _fail(str(exc))
+        if getattr(args, "json", False):
+            print(json.dumps(result, ensure_ascii=False))
+            return EXIT_CODES["ok"]
+        _out(Console(), f"已删除 {result['deleted']}（移入 {result['trash']}）")
+        if result["warning"]:
+            _out(Console(), f"  注意：{result['warning']}")
+        return EXIT_CODES["ok"]
+
+    if getattr(args, "usage", False):
+        report = usage_report(
+            Path(args.output_dir) if getattr(args, "output_dir", None)
+            else settings.output_dir,
+            limit=int(getattr(args, "limit", 30) or 30))
+        if getattr(args, "json", False):
+            print(json.dumps(report, ensure_ascii=False))
+            return EXIT_CODES["ok"]
+        console = Console()
+        _out(console, f"扫描最近 {report['scanned_runs']} / {report['total_runs']} 个 run")
+        rows = report["profiles"]
+        if not rows:
+            _out(console, "没有 LLM 调用记录（ledger 里还没有 llm_call 事件）")
+            return EXIT_CODES["ok"]
+        for key in sorted(rows, key=lambda k: -rows[k]["calls"]):
+            item = rows[key]
+            _out(console, f"  {key:<20} {item['calls']:>5} 次调用 · "
+                          f"${item['cost_usd']:.4f} · {item['runs']} 个 run · "
+                          f"最近 {item['last_used'] or '—'}")
+        return EXIT_CODES["ok"]
+
+    if getattr(args, "check", False):
+        try:
+            catalog = build_catalog(settings)
+        except (OSError, ValueError) as exc:
+            return _print_diagnostics(
+                settings, None, load_error=str(exc), as_json=bool(args.json))
+        return _print_diagnostics(settings, catalog, as_json=bool(args.json))
+
     if getattr(args, "yaml", False):
-        import yaml as _yaml
-        export = {
-            "agents": {
-                "profiles": {
-                    key: {k: v for k, v in p.model_dump(mode="json").items() if k != "key" and v not in (None, "", [])}
-                    for key, p in settings.agent_profiles.items()
-                }
-            }
-        }
-        if settings.role_agents:
-            export["roles"] = {
-                role: {k: v for k, v in ra.model_dump(mode="json", exclude_none=True).items() if k != "aggregation" or v is not None}
-                for role, ra in settings.role_agents.items()
-            }
-        print(_yaml.safe_dump(export, allow_unicode=True, sort_keys=False))
+        try:
+            text = export_yaml(settings, keys=getattr(args, "key", None))
+        except ProfileStoreError as exc:
+            return _fail(str(exc))
+        print(text, end="")
+        return EXIT_CODES["ok"]
+
+    catalog = build_catalog(settings)
+    payload = profile_payload(settings, catalog)
+    # 诊断跟 --json 一起返回：页面加载一次就拿到「档案 + 绑定 + 问题」，
+    # 不必再排一次进程启动。问题多时按 error/warning/info 分级。
+    diagnostics = diagnose(settings, catalog)
+    payload["diagnostics"] = diagnostics
+    payload["summary"].update({
+        "errors": diagnostics["summary"]["errors"],
+        "warnings": diagnostics["summary"]["warnings"],
+    })
+    if getattr(args, "key", None):
+        wanted = set(args.key)
+        payload["profiles"] = [
+            item for item in payload["profiles"] if item["key"] in wanted]
+
+    if args.json:
+        # 兼容旧 `agents --json` 的 resolved 字段：CLI 属于入口层，可以 import
+        # agents；档案服务本身留在纯配置层，避免反向依赖。
+        from agentcrew.agents.plan import resolve_plan
+
+        try:
+            plan = resolve_plan(settings, catalog, "preview")
+        except (ValueError, KeyError):
+            plan = None
+        for role in payload["roles"]:
+            role["resolved"] = (
+                [item.model_dump(mode="json") for item in plan.for_role(role["role"])]
+                if plan is not None else [])
+        print(json.dumps(payload, ensure_ascii=False))
         return EXIT_CODES["ok"]
 
     console = Console()
     profiles = payload["profiles"]
     _out(console, f"执行体档案 {len(profiles)} 个：" +
          ("、".join(p["key"] for p in profiles) if profiles else "（未配置）"))
-    for item in roles:
+    for item in payload["roles"]:
         if not item["agents"]:
             continue
         chain = " + ".join(f"{a['ref']}:{a['duty']}" for a in item["agents"])
         mode = (item["aggregation"] or {}).get("mode", "single")
         _out(console, f"  {item['role']:<18} {chain}（汇总：{mode}）")
+    for warning in diagnostics["warnings"]:
+        _out(console, f"  ! {warning['message']}")
+    if diagnostics["summary"]["errors"]:
+        _out(console, f"  × {diagnostics['summary']['errors']} 个错误，"
+                      "用 agents --check 查看明细")
     return EXIT_CODES["ok"]
+
+
+def _print_diagnostics(
+    settings: Settings | None,
+    catalog: Any,
+    *,
+    load_error: str = "",
+    as_json: bool = False,
+) -> int:
+    """``agents --check``：配置能否启动、每份档案有什么问题。"""
+    from agentcrew.profiles.service import config_path, diagnose
+    from agentcrew.profiles.store import effective_profiles_dir
+
+    if settings is not None and settings.profiles_dir is not None:
+        directory = Path(settings.profiles_dir)
+    else:
+        directory = effective_profiles_dir(config_path=config_path())
+    result = diagnose(
+        settings, catalog, load_error=load_error, directory=directory)
+    if as_json:
+        print(json.dumps(result, ensure_ascii=False))
+        return EXIT_CODES["ok"] if not result["summary"]["errors"] else EXIT_CODES["config"]
+    console = Console()
+    summary = result["summary"]
+    _out(console, f"错误 {summary['errors']} · 警告 {summary['warnings']} · "
+                  f"提示 {summary['infos']}")
+    for level, title in (("errors", "错误"), ("warnings", "警告"), ("infos", "提示")):
+        for item in result[level]:
+            where = item["profile"] or item["role"] or ""
+            prefix = f"[{where}] " if where else ""
+            _out(console, f"  {title} {prefix}{item['message']}")
+            if item["hint"]:
+                _out(console, f"        → {item['hint']}")
+    return EXIT_CODES["ok"] if not summary["errors"] else EXIT_CODES["config"]
 

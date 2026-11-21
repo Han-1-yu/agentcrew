@@ -57,3 +57,16 @@ def test_max_cost_rejects_non_finite():
     for bad in (math.nan, math.inf, -math.inf):
         assert validate_run_options({"max_cost_usd": bad}) == (
             "options.max_cost_usd 必须是 >= 0 的有限数")
+
+
+def test_peer_history_turns_range_and_type_check():
+    assert validate_run_options({"peer_consult_history_turns": 0}) is None
+    assert validate_run_options({"peer_consult_history_turns": 5}) is None
+    assert validate_run_options({"peer_consult_history_turns": 6}) == (
+        "options.peer_consult_history_turns 必须落在 0~5 之间（0 = 不带历史）")
+    assert validate_run_options({"peer_consult_history_turns": -1}) == (
+        "options.peer_consult_history_turns 必须落在 0~5 之间（0 = 不带历史）")
+    assert validate_run_options({"peer_consult_history_turns": "3"}) == (
+        "options.peer_consult_history_turns 必须是整数")
+    assert validate_run_options({"peer_consult_history_turns": True}) == (
+        "options.peer_consult_history_turns 必须是整数")

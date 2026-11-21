@@ -172,19 +172,23 @@ async def test_consult_provider_error_does_not_raise(env):
 class _FakeFactory:
     def __init__(self, roles: dict[str, str]) -> None:
         self.roles = roles
-        self.calls: list[tuple[str, str, str]] = []
+        self.calls: list[tuple[str, str, str, str, list]] = []
 
     def has_role(self, key: str) -> bool:
         return key in self.roles
 
-    async def consult(self, role, question, *, from_role="", context=""):
-        self.calls.append((from_role, role, question, context))
+    async def consult(self, role, question, *, from_role="", context="",
+                       history=None):
+        self.calls.append(
+            (from_role, role, question, context, list(history or [])))
         return self.roles[role]
 
 
-def _router(tmp_path, factory, *, max_messages=8):
+def _router(tmp_path, factory, *, max_messages=8, history_turns=3):
     ledger = Ledger(tmp_path / "r.jsonl", run_id="R")
-    return PeerRouter(factory, ledger, max_messages=max_messages), ledger
+    return PeerRouter(
+        factory, ledger, max_messages=max_messages,
+        history_turns=history_turns), ledger
 
 
 async def test_router_rejects_self_and_unknown(tmp_path):
@@ -231,6 +235,69 @@ async def test_router_zero_quota_blocks_everything(tmp_path):
 
     assert "配额已用尽" in await router.ask("backend_dev", "architect", "q")
     assert factory.calls == []
+
+
+# ── R68：咨询多轮历史 ──────────────────────────────────────────────────────
+
+
+async def test_router_carries_history_for_same_pair(tmp_path):
+    """同一配对第二次咨询，带上一轮问答历史。"""
+    factory = _FakeFactory({"architect": "字段叫 TodoItem。"})
+    router, _ = _router(tmp_path, factory, history_turns=3)
+
+    await router.ask("backend_dev", "architect", "字段叫什么？")
+    await router.ask("backend_dev", "architect", "那索引呢？")
+
+    assert len(factory.calls) == 2
+    second = factory.calls[1]
+    assert second[4] == [
+        {"question": "字段叫什么？", "reply": "字段叫 TodoItem。"}]
+
+
+async def test_router_history_isolated_by_pair(tmp_path):
+    """不同配对之间不串历史：新配对第一次咨询历史为空。"""
+    factory = _FakeFactory({"architect": "a", "reviewer": "b"})
+    router, _ = _router(tmp_path, factory, history_turns=3)
+
+    await router.ask("backend_dev", "architect", "问题一")
+    await router.ask("qa_engineer", "reviewer", "问题二")
+
+    assert factory.calls[1][4] == []
+
+
+async def test_router_history_keeps_only_recent_turns(tmp_path):
+    """轮数上限生效：history_turns=1 时只留最近一轮。"""
+    factory = _FakeFactory({"architect": "答"})
+    router, _ = _router(tmp_path, factory, history_turns=1)
+
+    await router.ask("backend_dev", "architect", "第一轮")
+    await router.ask("backend_dev", "architect", "第二轮")
+    await router.ask("backend_dev", "architect", "第三轮")
+
+    third = factory.calls[2]
+    assert [item["question"] for item in third[4]] == ["第二轮"]
+
+
+async def test_router_history_disabled_when_zero(tmp_path):
+    """history_turns=0：不攒历史，第二次咨询历史为空（退回 R6 行为）。"""
+    factory = _FakeFactory({"architect": "答"})
+    router, _ = _router(tmp_path, factory, history_turns=0)
+
+    await router.ask("backend_dev", "architect", "第一轮")
+    await router.ask("backend_dev", "architect", "第二轮")
+
+    assert factory.calls[1][4] == []
+
+
+async def test_router_dedupe_does_not_write_history(tmp_path):
+    """去重命中的是缓存，不算一轮新咨询，不进历史。"""
+    factory = _FakeFactory({"architect": "字段叫 TodoItem"})
+    router, _ = _router(tmp_path, factory, history_turns=3)
+
+    await router.ask("backend_dev", "architect", "同一个问题")
+    await router.ask("backend_dev", "architect", "同一个问题")
+
+    assert factory.calls[0][4] == []
 
 
 # ── AgentFactory：setter 必须刷到缓存实例 ──────────────────────────────────
@@ -289,9 +356,9 @@ async def test_end_to_end_peer_consult_feeds_reply_back(env):
                              ledger=env["ledger"], project_goal="目标")
     factory = _FakeFactory({"architect": "unused"})
 
-    async def consult(role, question, *, from_role="", context=""):
+    async def consult(role, question, *, from_role="", context="", history=None):
         return await architect.consult(
-            question, from_role=from_role, context=context)
+            question, from_role=from_role, context=context, history=history)
 
     factory.consult = consult
     router = PeerRouter(factory, env["ledger"], max_messages=4)
@@ -335,6 +402,55 @@ async def test_consult_without_context_keeps_old_prompt(env):
     assert user.startswith("来自 backend_dev 的提问：")
 
 
+async def test_consult_inserts_history_messages(env):
+    """历史按 user/assistant 交替插在系统提示词与当前问题之间。"""
+    provider = _ScriptedProvider(["继续沿用该命名。"])
+    _install(env["models"], provider)
+    agent = GenericAgent(_role("architect", "架构师"), models=env["models"],
+                         store=env["store"], ledger=env["ledger"],
+                         project_goal="目标")
+
+    history = [{"question": "字段叫什么？", "reply": "字段叫 TodoItem。"}]
+    await agent.consult("那索引呢？", from_role="backend_dev", history=history)
+
+    messages = provider.seen[0]
+    assert [m["role"] for m in messages] == ["system", "user", "assistant", "user"]
+    assert "上一轮提问" in messages[1]["content"]
+    assert "字段叫什么？" in messages[1]["content"]
+    assert messages[2]["content"] == "字段叫 TodoItem。"
+    assert "那索引呢？" in messages[3]["content"]
+
+
+async def test_consult_history_truncates_long_entries(env):
+    """超长历史条目按常量截断，答复不占满咨询预算。"""
+    provider = _ScriptedProvider(["答"])
+    _install(env["models"], provider)
+    agent = GenericAgent(_role("architect", "架构师"), models=env["models"],
+                         store=env["store"], ledger=env["ledger"],
+                         project_goal="目标")
+    long_q = "问" * 500
+    long_a = "答" * 800
+    await agent.consult("当前问题", from_role="backend_dev",
+                        history=[{"question": long_q, "reply": long_a}])
+
+    messages = provider.seen[0]
+    assert len(messages[1]["content"].split("：\n", 1)[1]) == 300
+    assert len(messages[2]["content"]) == 500
+
+
+async def test_consult_history_skips_empty_entries(env):
+    """空问题或空答复的历史条目跳过，不污染消息序列。"""
+    provider = _ScriptedProvider(["答"])
+    _install(env["models"], provider)
+    agent = GenericAgent(_role("architect", "架构师"), models=env["models"],
+                         store=env["store"], ledger=env["ledger"],
+                         project_goal="目标")
+    await agent.consult("当前问题", from_role="backend_dev",
+                        history=[{"question": "", "reply": "x"},
+                                 {"question": "q", "reply": ""}])
+    assert [m["role"] for m in provider.seen[0]] == ["system", "user"]
+
+
 # ── 配置 ──────────────────────────────────────────────────────────────────
 
 
@@ -364,6 +480,23 @@ def test_peer_switch_visible_in_snapshot(tmp_path, monkeypatch):
 
     assert snapshot["peer_dialogue_enabled"] is False
     assert snapshot["max_peer_messages"] == 8
+
+
+def test_peer_history_turns_default(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTCREW_OUTPUT_DIR", str(tmp_path / "o"))
+    assert Settings.load().peer_consult_history_turns == 3
+
+
+def test_peer_history_turns_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTCREW_OUTPUT_DIR", str(tmp_path / "o"))
+    monkeypatch.setenv("AGENTCREW_PEER_CONSULT_HISTORY_TURNS", "2")
+    assert Settings.load().peer_consult_history_turns == 2
+
+
+def test_peer_history_turns_in_snapshot(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTCREW_OUTPUT_DIR", str(tmp_path / "o"))
+    snapshot = Settings.load().config_snapshot()
+    assert snapshot["peer_consult_history_turns"] == 3
 
 
 # ── 端到端装配：Crew 真的把路由下发到生产 run ─────────────────────────────

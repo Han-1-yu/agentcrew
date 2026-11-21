@@ -8,8 +8,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import Enum
-from typing import Literal
+from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -288,3 +289,25 @@ def _check_path_scopes(
                 raise BindingError(
                     f"角色 {role_key} 的路径域重叠：{scope} 同时属于 {owner} 与 {bound.ref}")
             scopes[scope] = bound.ref
+
+
+class _RoleBindingSource(Protocol):
+    """``binding_for`` 需要的最小角色形状（避免反向 import RoleSpec）。"""
+
+    key: str
+    agents: list[BoundAgent]
+    aggregation: Aggregation | None
+
+
+def resolve_binding(
+    spec: _RoleBindingSource, role_agents: Mapping[str, RoleAgents],
+) -> RoleAgents:
+    """取一个角色的绑定：显式 ``role_agents`` 覆盖角色内联声明。
+
+    与 :func:`agentcrew.agents.plan.binding_for` 同一语义；放在 roles 层是为了
+    让不含 LLM 调用的配置服务（如执行体档案诊断）不必 import agents 层。
+    """
+    override = role_agents.get(spec.key)
+    if override is not None and override.agents:
+        return override
+    return RoleAgents(agents=list(spec.agents), aggregation=spec.aggregation)

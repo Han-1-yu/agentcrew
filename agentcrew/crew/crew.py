@@ -845,12 +845,14 @@ class Crew(CrewAssembly):
                     self._make_consult_recorder(run)
                     if self._settings.peer_consult_capture_enabled else None
                 ),
+                history_turns=self._settings.peer_consult_history_turns,
             )
             ledger.emit(
                 "peer_dialogue_enabled",
                 run_id=record.run_id,
                 max_messages=self._settings.max_peer_messages,
                 capture=self._settings.peer_consult_capture_enabled,
+                history_turns=self._settings.peer_consult_history_turns,
             )
         # R4：DeferredPrompter 需要 run 目录才能读写审批单；run_id 直到
         # CheckpointStore.create 时才生成，只能在装配阶段注入。其它 Prompter

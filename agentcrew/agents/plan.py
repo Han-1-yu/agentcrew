@@ -19,6 +19,7 @@ from agentcrew.roles.binding import (
     BindingError,
     Duty,
     RoleAgents,
+    resolve_binding,
     validate_bindings,
 )
 from agentcrew.roles.catalog import RoleCatalog
@@ -68,11 +69,12 @@ class RunPlan(BaseModel):
 
 
 def binding_for(spec: RoleSpec, settings: Settings) -> RoleAgents:
-    """取一个角色的绑定：``agentcrew.yaml`` 覆盖 ``roles.d`` 里的内联声明。"""
-    override = settings.role_agents.get(spec.key)
-    if override is not None and override.agents:
-        return override
-    return RoleAgents(agents=list(spec.agents), aggregation=spec.aggregation)
+    """取一个角色的绑定：``agentcrew.yaml`` 覆盖 ``roles.d`` 里的内联声明。
+
+    实际规则在 :func:`agentcrew.roles.binding.resolve_binding`，这里保留旧签名
+    供 crew / cli 使用；roles 层是纯数据层，不反向依赖 agents。
+    """
+    return resolve_binding(spec, settings.role_agents)
 
 
 def profile_for(settings: Settings, ref: str) -> AgentProfile:
@@ -112,8 +114,21 @@ def resolve_plan(
     resume 时必须按"切换后的样子"重建计划，否则切了等于没切。
     """
     plan = RunPlan(run_id=run_id)
+    # 档案文件损坏时给出「哪份文件坏了」，而不是只在报错里说「未定义」——
+    # 后者会让用户去翻配置找拼写错误，实际问题是文件没加载成功。
+    broken = {
+        str(failure.get("key")): failure
+        for failure in settings.profile_errors
+        if failure.get("key")
+    }
     for spec in catalog.all():
         binding = (overrides or {}).get(spec.key) or binding_for(spec, settings)
+        for bound in binding.agents:
+            failure = broken.get(bound.ref)
+            if failure is not None and bound.ref not in settings.agent_profiles:
+                raise BindingError(
+                    f"角色 {spec.key} 绑定的执行体 {bound.ref} 加载失败："
+                    f"{failure.get('file')}：{failure.get('message')}")
         validate_bindings(spec.key, binding, settings.agent_profiles, spec.allowed_tools)
         if not binding.agents:
             # 未绑定：维持原行为——角色直接用一个默认执行体

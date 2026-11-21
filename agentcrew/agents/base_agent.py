@@ -238,6 +238,11 @@ _MESSAGE_SECTION = """\
 #: 队友拿到长篇大论反而会把它当交付物模板抄。
 _CONSULT_MAX_TOKENS = 1024
 
+#: R68：咨询历史单条截断。历史只是衔接上下文，不是交付物；一条超长答复
+#: 不该把后续咨询的预算吃掉。问题/答复分别设上限，超龄轮次由路由侧裁掉。
+_CONSULT_HISTORY_Q_LIMIT = 300
+_CONSULT_HISTORY_A_LIMIT = 500
+
 
 def _consult_context_hint(task: Task) -> str:
     """R6：给被咨询方的「提问方任务背景」——短到不占预算，又够对方判断。
@@ -1128,7 +1133,8 @@ class BaseAgent(ABC):
         )
 
     async def consult(
-        self, question: str, *, from_role: str = "", context: str = ""
+        self, question: str, *, from_role: str = "", context: str = "",
+        history: list[dict[str, str]] | None = None,
     ) -> str:
         """被其他角色点名咨询时的一次轻量作答（R5 真协作通道）。
 
@@ -1141,6 +1147,10 @@ class BaseAgent(ABC):
         没有它时队友只能看见一句孤立的问题，只能反问基础信息；带上之后第一次
         就能问到点上。由 :class:`~agentcrew.agents.peer.PeerRouter` 从
         contextvar 读出并透传，调用方不用手动拼。
+
+        ``history``（R68）是同一配对的近期问答（``{"question", "reply"}`` 列表），
+        按 user/assistant 交替插在系统提示词与当前问题之间，让被咨询方接上上一轮
+        的结论，不必反复追问基础信息。空或缺省时消息序列与 R6 逐字一致。
 
         离线 mock 通道没有 consult 夹具（``MockProvider`` 只认
         plan/review/execute），此时返回一句占位说明而不是抛错：演示 run 不该
@@ -1165,8 +1175,25 @@ class BaseAgent(ABC):
             user_content = f"来自 {asker} 的提问：\n{question_text}"
         messages: list[Message] = [
             {"role": "system", "content": _consult_system_prompt(self.spec)},
-            {"role": "user", "content": user_content},
         ]
+        # R68：近期问答历史插在系统提示词与当前问题之间；空条目跳过，单条截断。
+        for item in history or ():
+            prior_q = str(item.get("question") or "").strip()
+            prior_a = str(item.get("reply") or "").strip()
+            if not prior_q or not prior_a:
+                continue
+            messages.append({
+                "role": "user",
+                "content": (
+                    f"来自 {asker} 的上一轮提问：\n"
+                    f"{prior_q[:_CONSULT_HISTORY_Q_LIMIT]}"
+                ),
+            })
+            messages.append({
+                "role": "assistant",
+                "content": prior_a[:_CONSULT_HISTORY_A_LIMIT],
+            })
+        messages.append({"role": "user", "content": user_content})
         try:
             completion = await self._models.call(
                 alias,

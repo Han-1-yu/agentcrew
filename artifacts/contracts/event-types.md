@@ -114,6 +114,8 @@
   |---|---|---|---|
   | `run_id` | string | 是 | run 目录名。 |
   | `max_messages` | integer | 是 | 本次 run 的真实咨询次数上限。 |
+  | `capture` | boolean | 是 | 是否把成功咨询沉淀进经验库（`peer_consult_capture_enabled`）。 |
+  | `history_turns` | integer | 是 | 同一配对携带的近期问答轮数（R68；`0` = 不带历史，退回 R6 行为）。 |
 
 > R4 的 `approval_decided` **只走 `on_event`（SSE / 看板）**，由 `ApiServer._decide_approval` 在 HTTP 写入裁决后推送，不写 `ledger.jsonl`；裁决本身的权威记录是 `approvals.jsonl`。`run_paused` 与两条审批事件同名也会推给 `on_event`，供 `RunState.status` 更新为 `awaiting_approval`。
 

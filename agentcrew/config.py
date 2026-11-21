@@ -114,6 +114,7 @@ _ENV_TO_FIELD: dict[str, str] = {
     "AGENTCREW_MAX_DELEGATION_DEPTH": "max_delegation_depth",
     "AGENTCREW_MAX_DYNAMIC_TASKS": "max_dynamic_tasks",
     "AGENTCREW_PEER_CONSULT_CAPTURE_ENABLED": "peer_consult_capture_enabled",
+    "AGENTCREW_PEER_CONSULT_HISTORY_TURNS": "peer_consult_history_turns",
     "AGENTCREW_SUPERVISOR_REVIEW_ENABLED": "supervisor_review_enabled",
     "AGENTCREW_MAX_SUBTASK_CORRECTIONS": "max_subtask_corrections",
     "AGENTCREW_SUPERVISOR_SCOPE": "supervisor_scope",
@@ -137,6 +138,9 @@ _ROLE_MODEL_ENV_PREFIX = "AGENTCREW_MODEL_"
 #: ``agentcrew.yaml`` 顶层标量字段（spec §17.3）。
 _YAML_SCALAR_KEYS = (
     "max_concurrency", "context_budget_tokens", "gate", "roles_dir",
+    # R69：执行体档案目录（``agents.d``）。显式配置优先；未配置时取配置文件
+    # 同级的 ``agents.d/``（存在才加载）——与 roles_dir 同一条「目录即数据」路径。
+    "profiles_dir",
     # R3：两个能力开关都是顶层标量，走与 max_concurrency 同一条读取/合并路径。
     "tools_enabled", "code_exec_enabled", "entity_memory_enabled",
     # C2：沙箱后端与其资源上限（docker 模式下才生效）。
@@ -164,7 +168,7 @@ _YAML_SCALAR_KEYS = (
     # C5：文档 RAG。
     "docs_rag_enabled", "docs_rag_limit", "docs_rag_vector_weight",
     # R5：跨角色咨询的能力开关与配额。
-    "peer_dialogue_enabled", "max_peer_messages",
+    "peer_dialogue_enabled", "max_peer_messages", "peer_consult_history_turns",
     # R6：动态委派的治理参数。
     "delegation_mode", "max_delegation_depth", "max_dynamic_tasks",
     # R44：执行体级熔断（默认关）。
@@ -451,6 +455,50 @@ def _yaml_agent_profiles(
     }
 
 
+def _merge_profile_dir(values: dict[str, object], path: Path) -> None:
+    """把 ``agents.d/*.yaml`` 合并进 ``agent_profiles``（同名覆盖 YAML 定义）。
+
+    R69：执行体档案此前只能手写进 ``agentcrew.yaml``，Studio 也因此只能只读。
+    单档案一文件后，UI 的增删改可以只碰一个文件，不重写主配置、不丢注释。
+
+    目录解析顺序：显式 ``profiles_dir`` → 配置文件同级的 ``agents.d/``。
+    显式配置的目录缺失视为空目录（用户可能刚填了路径）；默认目录缺失则
+    完全不改变既有行为。
+
+    单个档案文件损坏**不阻断配置加载**：可加载的档案照常生效，问题逐条记进
+    ``profile_errors``，由 ``agents --check`` / Studio 诊断页展示。这样一份写坏
+    的档案不会让整个平台起不来，也不会让用户失去用 UI 修复它的入口——真正
+    绑定到缺失档案的角色仍会在启动期被 ``validate_bindings`` 拒绝，fail-loud
+    的边界没有放松。
+    """
+    from agentcrew.profiles.store import effective_profiles_dir, scan_profiles_dir
+
+    configured = values.get("profiles_dir")
+    if configured is not None and not isinstance(configured, (str, Path)):
+        raise ValueError(
+            f"配置文件 profiles_dir 必须是路径字符串：{path}")
+    directory = effective_profiles_dir(configured, config_path=path)
+    # 未显式配置且目录不存在时不写入字段：默认安装（没有 agents.d）的
+    # Settings 与快照保持不变，只有真正用了文件化档案才多这一项。
+    if configured or directory.is_dir():
+        values["profiles_dir"] = str(directory)
+    if not directory.is_dir():
+        return
+    entries, issues = scan_profiles_dir(directory)
+    if issues:
+        values["profile_errors"] = [
+            {"file": str(issue.file), "key": issue.key, "message": issue.message}
+            for issue in issues
+        ]
+    if not entries:
+        return
+    raw_profiles = values.get("agent_profiles")
+    merged: dict[str, Any] = dict(raw_profiles) if isinstance(raw_profiles, dict) else {}
+    for key, entry in entries.items():
+        merged[key] = entry.profile.model_dump(mode="json")
+    values["agent_profiles"] = merged
+
+
 def _yaml_models_section(
     models: Mapping[str, Any], values: dict[str, object], path: Path,
 ) -> None:
@@ -508,7 +556,11 @@ def _yaml_values(
     path = (Path(config_path) if config_path is not None
             else Path(os.environ.get("AGENTCREW_CONFIG") or "agentcrew.yaml"))
     if not path.is_file():
-        return {}
+        # 即使没有 agentcrew.yaml 也允许用 agents.d/ 维护执行体档案：
+        # 目录是独立数据源，不该被主配置是否存在绑住。
+        values: dict[str, object] = {}
+        _merge_profile_dir(values, path)
+        return values
     # YAML 语法错误抛的是 yaml.YAMLError（ScannerError / ParserError / ComposerError），
     # 不是 ValueError / OSError。CLI 的每个子命令都按 ``except (OSError, ValueError)``
     # 收口配置错误，不在这里收敛就会让一次手改坏缩进变成全命令栈崩（连 --help 和
@@ -520,7 +572,7 @@ def _yaml_values(
     if not isinstance(data, dict):
         raise ValueError(f"配置文件必须是 YAML 映射：{path}")
     unknown = unknown_yaml_keys(data)
-    values: dict[str, object] = {
+    values = {
         key: data[key] for key in _YAML_SCALAR_KEYS if data.get(key) is not None
     }
     # A6：配置版本号 —— 高于当前支持的版本直接报错（不静默吞掉未知字段）。
@@ -530,6 +582,9 @@ def _yaml_values(
     agent_profiles = _yaml_agent_profiles(data, path)
     if agent_profiles is not None:
         values["agent_profiles"] = agent_profiles
+    # R69：文件化档案（agents.d/）覆盖同名 YAML 定义；也把生效目录记进
+    # Settings，UI / CLI 不必各自再猜一次写到哪里。
+    _merge_profile_dir(values, path)
     roles_cfg = _yaml_mapping(data, "roles", path)
     if roles_cfg is not None:
         values["role_agents"] = roles_cfg
@@ -700,6 +755,20 @@ class Settings(BaseModel):
     role_agents: dict[str, RoleAgents] = Field(default_factory=dict)
     """角色 → 执行体绑定（覆盖 roles.d 里的内联声明）：role → RoleAgents。"""
     roles_dir: Path | None = None
+    config_path: Path | None = Field(default=None, exclude=True, repr=False)
+    """本次配置的来源文件（不落快照）：诊断 / 档案写回需要知道同名定义在哪。"""
+    profile_errors: list[dict[str, Any]] = Field(default_factory=list, exclude=True)
+    """加载失败的档案文件（R69）：``[{file, key, message}]``。
+
+    不参与 run 快照；供 ``agents --json/--check`` 与 Studio 诊断展示。
+    """
+    profiles_dir: Path | None = None
+    """执行体档案目录（R69）：``agents.d/*.yaml`` 的根。
+
+    加载时目录内档案覆盖 ``agents.profiles`` 的同名定义；``Settings.load`` 会把
+    实际生效目录写回该字段（未配置时 = 配置文件同级的 ``agents.d/``），
+    Studio 据此显示「保存到哪里」。纯路径，不参与调度判定。
+    """
     provider_overrides: dict[str, dict] = Field(default_factory=dict)
     custom_providers: dict[str, dict] = Field(default_factory=dict)
     """用户自定义 provider 注册表（A1）：名字 → ProviderPreset 形状的映射。
@@ -1229,6 +1298,18 @@ class Settings(BaseModel):
     跨角色问答是 token 膨胀的入口——一组互相求证的角色能把预算烧光。超出配额
     后提问方拿到的是一句「配额已用尽，请按已掌握信息继续」，路由不会抛错。
     """
+    peer_consult_history_turns: int = Field(default=3, ge=0, le=5)
+    """R68：同一配对跨角色咨询携带的近期问答轮数（默认 3；``0`` = 不带历史）。
+
+    此前被咨询方每次只看到「背景 + 当前问题」，像第一次见提问方，长对话里会
+    反复追问基础信息。开启后，路由在同一 ``(提问方, 目标角色)`` 配对上保留最近
+    N 轮问答，作为 user/assistant 交替历史塞进咨询调用；换一个配对不串历史，
+    历史只在本次 run 内存活、不落盘、不进经验库。
+
+    预算防护：轮数上限 5；每条问题/答复在进提示词前截断（见
+    :meth:`BaseAgent.consult`）。``0`` 时退回 R6 行为——只带任务背景，不带任何
+    历史。依赖 ``peer_dialogue_enabled``（没开咨询就没有历史可攒）。
+    """
     delegation_mode: Literal["any", "manager_only"] = "any"
     """R6：谁能发起动态委派（``<subtask>`` 围栏建任务），默认 ``any`` = 现状。
 
@@ -1723,6 +1804,10 @@ class Settings(BaseModel):
         values: dict[str, object] = {}
         _merge(values, _yaml_values())
         _merge(values, _env_values())
+        # 来源文件不参与配置合并，只供诊断 / 档案写回定位同名定义；显式
+        # ``config_path`` 仍可在测试或变体里覆盖。
+        values["config_path"] = Path(
+            os.environ.get("AGENTCREW_CONFIG") or "agentcrew.yaml").resolve()
         _merge(values, cli_overrides)
         return cls.model_validate(values)
 

@@ -175,3 +175,25 @@ models:
 #   AGENTCREW_API_RATE_LIMIT_* / AGENTCREW_TRUSTED_PROXIES
 #   AGENTCREW_LLM_REQUEST_TIMEOUT_SECONDS / AGENTCREW_REDACT_*
 #   AGENTCREW_OTEL_* / OPENAI_API_KEY 等各 provider 密钥
+
+# ── 执行体档案（可选）─────────────────────────────────────────────────────
+# 一份档案也可以单独放成 agents.d/<key>.yaml（文件名即 key）。同名时
+# agents.d 覆盖这里的定义；Studio 的「执行体档案」页只写 agents.d，
+# 不重写本文件。完整字段与用法见 docs/PROFILES-2026-11-20.md。
+# profiles_dir: agents.d
+# agents:
+#   profiles:
+#     fast-writer:
+#       title: 快速写手
+#       description: 短文档、摘要与改写；优先速度与成本
+#       capabilities: [text, summary]
+#       model: deepseek:deepseek-chat
+#       tools: [read_file, grep]
+#       path_scope: ["docs/"]
+#       cost_ceiling_usd: 0.05
+#       run_cost_ceiling_usd: 0.5
+#       max_rpm: 30
+# roles:
+#   technical_writer:
+#     agents:
+#       - { ref: fast-writer, duty: primary }

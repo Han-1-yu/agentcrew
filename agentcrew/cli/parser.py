@@ -156,10 +156,29 @@ def build_parser() -> argparse.ArgumentParser:
     for _flow_parser in (p_flow_v, p_flow_l):
         _flow_parser.add_argument(
             "--output-dir", metavar="DIR", help="output 目录（定位 _flows/）")
-    p_agents = sub.add_parser("agents", help="列出执行体档案与角色绑定（--json 供 Studio 读取）")
+    p_agents = sub.add_parser(
+        "agents", help="执行体档案：浏览 / 保存 / 删除 / 诊断 / 用量（--json 供 Studio 读取）")
     p_agents.add_argument("--json", action="store_true", help="输出机器可读 JSON")
     p_agents.add_argument("--yaml", action="store_true",
                           help="导出可复用的 agentcrew.yaml 片段（agents.profiles + roles 绑定）")
+    p_agents.add_argument("--key", action="append", default=None, metavar="KEY",
+                          help="只处理指定档案（可重复；配合 --yaml / 列表）")
+    p_agents.add_argument("--save", metavar="FILE",
+                          help="从 YAML 文件新建/更新档案（- = 从 stdin 读取；支持批量）")
+    p_agents.add_argument("--delete", metavar="KEY", dest="delete",
+                          help="删除 agents.d 里的档案（移入 .trash，可恢复）")
+    p_agents.add_argument("--check", action="store_true",
+                          help="诊断配置：错误 / 警告 / 提示逐条列出")
+    p_agents.add_argument("--usage", action="store_true",
+                          help="按执行体汇总最近 run 的调用量、成本与最近使用")
+    p_agents.add_argument("--limit", type=int, default=30, metavar="N",
+                          help="--usage 扫描的 run 数量上限（默认 30）")
+    p_agents.add_argument("--force", action="store_true",
+                          help="覆盖同名档案 / 删除仍被绑定的档案")
+    p_agents.add_argument("--dry-run", action="store_true",
+                          help="配合 --save：只校验并报告，不写盘")
+    p_agents.add_argument("--output-dir", default=None,
+                          help="output 目录（--usage 扫描 ledger 时使用）")
     p_switch = sub.add_parser("switch", help="给一个 run 写入执行体切换（下次 resume 生效）")
     p_switch.add_argument("run_id")
     p_switch.add_argument("role")

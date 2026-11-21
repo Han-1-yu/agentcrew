@@ -27,3 +27,7 @@ htmlcov/
 
 # 临时诊断日志（scripts/test.py / pytest 重定向产生的运行期文件）
 .*.log
+
+# 执行体档案的本地备份与回收站（档案本身应纳入版本控制）
+agents.d/.trash/
+agents.d/*.bak

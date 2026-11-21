@@ -47,6 +47,7 @@ class PeerRouter:
         *,
         max_messages: int = 8,
         on_consult: Callable[[str, str, str, str], None] | None = None,
+        history_turns: int = 3,
     ) -> None:
         """``factory`` 需提供 ``has_role`` / ``consult``（见 ``AgentFactory``）。
 
@@ -57,13 +58,20 @@ class PeerRouter:
         ``(提问方, 目标角色, 问题, 答复)``。它存在的唯一原因是分层：``agents``
         层被架构约束禁止 import ``knowledge``，所以「把问答沉淀进经验库」必须
         由上层（Crew）以回调形式注入。
+
+        ``history_turns``（R68）：同一 ``(提问方, 目标角色)`` 配对上保留的近期
+        问答轮数；``0`` = 不攒历史（退回 R6 行为）。历史只在本次 run 内存活，
+        不落盘、不跨 run、不进经验库。
         """
         self._factory = factory
         self._ledger = ledger
         self._max_messages = max(0, int(max_messages))
         self._on_consult = on_consult
+        self._history_turns = max(0, int(history_turns))
         self._used = 0
         self._cache: dict[tuple[str, str, str], str] = {}
+        #: ``(提问方, 目标角色)`` → 最近若干轮 ``{"question", "reply"}``。
+        self._history: dict[tuple[str, str], list[dict[str, str]]] = {}
 
     # ── 观测 ──────────────────────────────────────────────────────────────
 
@@ -128,11 +136,19 @@ class PeerRouter:
             )
 
         self._used += 1
+        pair = (from_role, target)
+        # R68：带上该配对的近期问答历史（快照拷贝，下游改动不回写内存）。
+        history = [dict(item) for item in self._history.get(pair, ())]
         reply = await self._factory.consult(
             target, question, from_role=from_role,
-            context=CONSULT_CONTEXT.get(),
+            context=CONSULT_CONTEXT.get(), history=history,
         )
         self._cache[key] = reply
+        if self._history_turns > 0:
+            turns = self._history.setdefault(pair, [])
+            turns.append({"question": question, "reply": reply})
+            # 只留最近 N 轮；超龄的最早一轮先出队。
+            del turns[:-self._history_turns]
         if self._on_consult is not None:
             try:
                 self._on_consult(from_role, target, question, reply)

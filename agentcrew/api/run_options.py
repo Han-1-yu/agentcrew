@@ -36,6 +36,8 @@ ALLOWED_RUN_OPTIONS: frozenset[str] = frozenset({
     "approval_mode",
     # R5：允许按 run 打开跨角色咨询并收紧配额。
     "peer_dialogue_enabled", "max_peer_messages",
+    # R68：咨询携带的近期问答轮数（0 = 不带历史）。
+    "peer_consult_history_turns",
     # R6：咨询沉淀与动态委派治理。
     "peer_consult_capture_enabled", "delegation_mode",
     "max_delegation_depth", "max_dynamic_tasks",
@@ -230,6 +232,9 @@ _VALIDATORS: dict[str, _ValueCheck] = {
     "docs_rag_limit": _int_check(
         "docs_rag_limit", lower=0, upper=50,
         range_text="0~50 之间（0 = 不注入）"),
+    "peer_consult_history_turns": _int_check(
+        "peer_consult_history_turns", lower=0, upper=5,
+        range_text="0~5 之间（0 = 不带历史）"),
     "docs_rag_vector_weight": _vector_weight_check,
     "webhook_max_retries": _int_check(
         "webhook_max_retries", upper=_MAX_WEBHOOK_RETRIES),
