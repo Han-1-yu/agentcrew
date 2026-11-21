@@ -1,0 +1,71 @@
+/* A5 附件区（composer / 新建运行弹窗共用）。 */
+
+.att-area {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 0;
+}
+
+.att-area.has-images { padding: 2px 0; }
+
+.att-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  color: var(--text-sec);
+  font-size: 12px;
+  padding: 3px 9px;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+
+.att-add:hover { background: var(--bg-hover, var(--accent-soft, rgba(0,0,0,.05))); color: var(--text-pri); }
+.att-add.is-full { opacity: .45; cursor: not-allowed; }
+
+.att-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.att-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card, var(--bg-subtle));
+  padding: 3px 6px 3px 10px;
+  font-size: 12px;
+  color: var(--text-sec);
+}
+
+.att-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-pri);
+}
+
+.att-chip-size { color: var(--text-ter); font-variant-numeric: tabular-nums; }
+
+.att-chip-x {
+  border: 0;
+  background: transparent;
+  color: var(--text-ter);
+  border-radius: 6px;
+  padding: 0 4px;
+  cursor: pointer;
+  line-height: 1.2;
+}
+
+.att-chip-x:hover { color: var(--error); background: var(--bg-hover, rgba(0,0,0,.06)); }
+
+/* compact：composer 脚注里占一行，弱化为贴边工具条 */
+.att-area.att-compact .att-add { border: 0; background: transparent; padding: 2px 4px; }

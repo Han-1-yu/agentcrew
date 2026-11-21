@@ -34,6 +34,12 @@
           <path d="m10.5 10.5 3.2 3.2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
         </svg>
       </button>
+      <button class="icon-btn" id="btn-new-chat" type="button" title="新对话（A1：空白对话页直发）" aria-label="新对话">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path d="M13.2 7.4c0 2.9-2.3 5.2-5.2 5.2-.9 0-1.7-.2-2.5-.6L2.8 13l.9-2.6c-.4-.9-.7-1.9-.7-3C3 4.5 5.3 2.2 8.2 2.2s5 2.3 5 5.2Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+          <path d="M8.2 5.3v4.2M6.1 7.4h4.2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+        </svg>
+      </button>
     </div>
 
     <!-- 新建运行：主入口，与底部命令输入框同源 -->
@@ -79,10 +85,15 @@
       </div>
     </div>
 
-    <!-- 最近运行 -->
+    <!-- 对话列表（B1）：全量会话，时间分组 + 置顶 + 搜索 + 状态筛选 + 归档 -->
     <div class="sb-group sb-group-recents">
-      <div class="sb-group-label">最近运行</div>
+      <div class="sb-group-label">对话</div>
+      <div class="sb-run-tools" id="sb-run-tools">
+        <input id="sb-run-search" class="sb-run-search" type="text" placeholder="搜索对话（别名 / 目标 / ID）…" aria-label="搜索对话" />
+        <div class="sb-run-filters" id="sb-run-filters"></div>
+      </div>
       <ul class="sb-list" id="sb-recents"></ul>
+      <button class="sb-more" type="button" id="sb-run-more" hidden>显示更多</button>
     </div>
 
     <!-- 底部：运行元信息 + 设置 -->
@@ -256,26 +267,33 @@
           placeholder="描述目标，AgentCrew 会自动编排 Agent 依赖与执行顺序…"></textarea>
         <div class="composer-foot">
           <div class="cf-left">
-            <button class="cf-add" id="cmp-add" type="button" title="打开完整新建运行表单" aria-label="更多选项">+</button>
+            <div class="cf-att" id="cmp-att"></div>
             <button class="cf-tag" id="cmp-access" type="button" title="新建运行默认执行模式（自动执行）">
               <i aria-hidden="true"></i><span id="cmp-access-label">Full access</span>
             </button>
           </div>
           <div class="cf-right">
-            <button class="cf-model" id="cmp-model" type="button" title="当前默认模型">
+            <button class="cf-model" id="cmp-model" type="button" title="切换模型"
+              aria-haspopup="menu" aria-expanded="false" aria-controls="cmp-model-menu">
               <span id="cmp-model-name">AgentCrew</span>
-              <svg width="9" height="9" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+              <svg class="cf-model-chev" width="9" height="9" viewBox="0 0 12 12" fill="none" aria-hidden="true">
                 <path d="M3 4.6 6 7.6 9 4.6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
               </svg>
             </button>
-            <button class="cf-send" id="cmp-send" type="button" title="启动运行（⌘/Ctrl + Enter）" aria-label="启动运行">
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <button class="cf-send" id="cmp-send" type="button" title="发送（⌘/Ctrl + Enter）" aria-label="发送">
+              <svg class="cf-send-ico" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                 <path d="M8 12.6V3.6M8 3.6 4.2 7.4M8 3.6l3.8 3.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              <svg class="cf-stop-ico" width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <rect x="2.6" y="2.6" width="10.8" height="10.8" rx="2.2" fill="currentColor"/>
               </svg>
             </button>
           </div>
         </div>
       </div>
+
+      <!-- 快速切换模型：点输入卡里的模型名向上弹出，内容由 composer/model-menu.js 渲染 -->
+      <div class="cmm hidden" id="cmp-model-menu" role="menu" aria-label="快速切换模型"></div>
     </div>
   </div>
 </div>
