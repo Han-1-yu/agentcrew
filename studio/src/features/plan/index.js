@@ -141,6 +141,14 @@ function renderPlanPage(container) {
       '真实模式下计划为只读。如需修改，请通过 CLI 或 API 编辑计划后重新加载。'));
   }
 
+  // E1：计划卡点挂起时给「去审批」直达入口（审批卡在门禁页，批准后自动恢复）
+  if (isReal && run.status === 'awaiting_approval') {
+    container.appendChild(h('div', { class: 'plan-readonly-banner', style: 'color:var(--warn)' },
+      '计划已完成并挂起，等待人工审批（I1：批准后自动恢复执行）。',
+      h('button', { class: 'btn btn-sm', type: 'button', style: 'margin-left:10px',
+        onclick: () => switchNav('gates') }, '去审批')));
+  }
+
   // 统计栏
   const stats = h('div', { class: 'plan-stats' });
   container.appendChild(stats);

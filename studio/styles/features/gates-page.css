@@ -31,3 +31,7 @@
 /* 门禁详情页操作 */
 .gate-full-actions { display: flex; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 0.5px solid var(--border-weak); }
 .gate-full-readonly { font-size: var(--fs-xs); color: var(--text-ter); margin-top: 10px; padding-top: 10px; border-top: 0.5px solid var(--border-weak); }
+
+/* I1：审批后自动 resume 的状态文案 */
+.gate-resume-ok { color: var(--success-text); }
+.gate-resume-warn { color: var(--warn); }

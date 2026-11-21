@@ -17,6 +17,7 @@ const http = require('http');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { pathToFileURL } = require('url');
 const { app, safeStorage } = require('electron');
 const { createBackendApi } = require('../backend-api');
 
@@ -90,6 +91,19 @@ async function run() {
         });
         return;
       }
+      // P0 批次 1：审批闭环（I1 自动 resume）与 REST 创建通道（C1）的线上契约
+      if (url === '/runs/R1/approvals' && method === 'POST') {
+        send(200, { id: 'AP-1', checkpoint: 'plan', status: 'decided', decision: { action: 'approve' } });
+        return;
+      }
+      if (url === '/runs/R1/resume' && method === 'POST') {
+        send(409, { error: 'run 已在运行中' });
+        return;
+      }
+      if (url === '/runs' && method === 'POST') {
+        send(202, { run_id: 'RUN-X', status: 'running' });
+        return;
+      }
       send(404, {});
     });
   });
@@ -157,10 +171,52 @@ async function run() {
     check('rewind dry_run → 影响集可读',
       rewound.ok === true && rewound.data && rewound.data.affected.length === 2
         && rewound.data.dry_run === true, rewound);
+
+    // ---- P0 批次 1 新增三断言 ----
+    // A3/C10：guidance 直发对账——202 拿到 id 后，ledger 的 guidance_injected
+    // 命中附加层时只更新气泡 chip（consumedTask），不产生重复 system 消息。
+    const { buildMessages } = await import(
+      pathToFileURL(path.join(__dirname, '../src/lib/messages.js')).href);
+    const agg = buildMessages(
+      [{ ts: 't', event: 'guidance_injected', data: { ids: ['GD-2'], count: 1, task_id: 'T-004' } }],
+      [], {}, { guidance: [{ id: 'GD-2', text: '改绿色', ts: 't0', status: 'pending' }] });
+    const bubble = agg.msgs.find((m) => m.subtype === 'guidance');
+    check('guidance 直发对账：气泡吸收 chip 命中 T-004 且无重复 system 消息',
+      !!bubble && bubble.consumedTask === 'T-004'
+        && agg.msgs.filter((m) => m.type === 'system').length === 0, agg.msgs);
+
+    // I1：审批 → 自动 resume 的线上路径；resume 409 必须带回 status（UI 据此
+    // 显示「已裁决，待恢复」+ 重试按钮，不假装成功）。
+    const decided = await call('/runs/R1/approvals',
+      json({ request_id: 'AP-1', decision: { action: 'approve' }, decided_by: 'studio' }));
+    check('POST 审批裁决 → 200',
+      decided.ok === true && decided.status === 200, decided);
+    const resumed = await call('/runs/R1/resume', json({}));
+    check('审批后自动 resume → 409 如实带回（不假装成功）',
+      resumed.ok === false && resumed.status === 409, resumed);
+
+    // C1：REST 创建 run——单次 launch 恰好一条 POST /runs（绝不双发）。
+    const created = await call('/runs', json({
+      goal: '做点什么', options: { mock: true }, images: [],
+    }));
+    const postRuns = requests.filter((r) => r.method === 'POST' && r.url === '/runs');
+    check('REST 创建 → 202 且单次恰好一条 POST /runs',
+      created.ok === true && created.status === 202 && postRuns.length === 1
+        && created.data && created.data.run_id === 'RUN-X', { created, postRuns: postRuns.length });
+
+    // A2：输入框分流判定（纯函数，主进程可直测）。
+    const { resolveComposerIntent } = await import(
+      pathToFileURL(path.join(__dirname, '../src/lib/composer-intent.js')).href);
+    check('分流判定：running→guidance / planning→stop / 终态→create',
+      resolveComposerIntent({ hasRun: true, runStatus: 'running', realMode: true }) === 'guidance'
+        && resolveComposerIntent({ hasRun: true, runStatus: 'planning', realMode: true }) === 'stop'
+        && resolveComposerIntent({ hasRun: true, runStatus: 'completed', realMode: true }) === 'create'
+        && resolveComposerIntent({ hasRun: true, runStatus: 'running', realMode: false }) === 'create');
   } else {
     check('Key 加密保存（本机不支持 safeStorage，跳过认证链）', true, 'skipped');
     check('带 Key → REST 返回数据（跳过）', true, 'skipped');
-    for (const name of ['指引列表', '指引写入', '指引撤回', '压缩拒绝', '回滚预览']) {
+    for (const name of ['指引列表', '指引写入', '指引撤回', '压缩拒绝', '回滚预览',
+      'guidance 直发对账', '审批自动 resume 409', 'REST 创建单发', '输入框分流判定']) {
       check(`${name}（跳过）`, true, 'skipped');
     }
   }

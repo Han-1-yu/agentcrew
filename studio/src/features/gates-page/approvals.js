@@ -1,18 +1,22 @@
 /**
- * R4 人工审批单（durable human-in-the-loop）。
+ * R4 人工审批单（durable human-in-the-loop）+ I1 自动恢复 + I2 裁决上下文。
  *
  * 后端把审批请求持久化在 <run_dir>/approvals.jsonl，run 以 awaiting_approval
- * 挂起；这里通过 REST 在**另一个进程/界面**里读取并裁决，引擎侧随后 resume
- * 从原卡点继续。演示模式 / 未配置 API 时只显示空态，不伪造审批动作。
+ * 挂起；这里通过 REST 在**另一个进程/界面**里读取并裁决。批准 / 接受后自动
+ * 调 POST /runs/{id}/resume（I1）——409（他进程占用）不假装成功，显示状态与
+ * 手动重试按钮。审批卡带上下文（I2）：计划卡点给任务/角色数与「查看计划」，
+ * 交付卡点给产物摘要与「查看产物」，让人看着内容裁决。
  *
- * 端点：GET /runs/{id}/approvals、POST /runs/{id}/approvals
- * 复用既有 .btn / .gate-full-card / .page-head 样式，不新增样式分片。
+ * 端点：GET/POST /runs/{id}/approvals、POST /runs/{id}/resume
  */
 import { h } from '../../lib/dom.js';
 import { apiFetch } from '../../lib/api.js';
+import { explainRewindError } from '../../lib/rewind.js';
 import { S } from '../../lib/store.js';
 import { emptyState } from '../../ui/states.js';
 import { toast } from '../../ui/toast.js';
+import { switchNav } from '../../app/router.js';
+import { postResume } from '../rewind/index.js';
 
 /** run 目录名（去掉盘符与上级路径），与后端 _validated_run_id 同口径。 */
 function currentRunId() {
@@ -28,8 +32,38 @@ const ACTIONS = {
 const STATUS_LABEL = {
   pending: '等待裁决', decided: '已裁决，待 resume', consumed: '已消费',
 };
+const AUTO_RESUME_ACTIONS = new Set(['approve', 'accept']);
 
-async function decide(rid, item, action) {
+/* ---- I2：裁决上下文（数据全部来自已在内存的 S.dash，不发额外请求） ---- */
+
+function approvalContext(item) {
+  const dash = S.dash || {};
+  const tasks = dash.tasks || [];
+  if (item.checkpoint === 'plan') {
+    if (!tasks.length) return null;
+    const roles = new Set(tasks.map((t) => t.role));
+    return {
+      text: `本次计划共 ${tasks.length} 个任务，涉及 ${roles.size} 个角色`,
+      action: { label: '查看计划', onclick: () => switchNav('tasks') },
+    };
+  }
+  if (item.checkpoint === 'delivery') {
+    const arts = (dash.events || []).filter((e) => e.event === 'artifact_written' && e.data && e.data.path);
+    const finalTask = tasks.find((t) => t.id === 'T-FINAL');
+    const bits = [`交付卡点：T-FINAL ${finalTask ? finalTask.status : '—'}，本次已产出 ${arts.length} 个产物`];
+    if (arts.length) bits.push(`最近：${arts.slice(-2).map((e) => String(e.data.path).split('/').pop()).join('、')}`);
+    return {
+      text: bits.join(' · '),
+      action: { label: '查看产物', onclick: () => switchNav('artifacts') },
+    };
+  }
+  return null;
+}
+
+async function decide(rid, item, action, resumeSlot, retryBtn) {
+  const showResume = (text, cls) => {
+    if (resumeSlot) { resumeSlot.textContent = text; resumeSlot.className = cls; }
+  };
   try {
     await apiFetch(`/runs/${encodeURIComponent(rid)}/approvals`, {
       method: 'POST',
@@ -40,7 +74,21 @@ async function decide(rid, item, action) {
         decided_by: 'studio',
       }),
     });
-    toast('success', '已裁决', `${item.id} → ${action}；用 resume 从卡点继续`);
+    toast('success', '已裁决', `${item.id} → ${action}`);
+    if (!AUTO_RESUME_ACTIONS.has(action)) {
+      showResume(`已裁决（${action}），run 将按该决定收尾`, 'gate-full-verdict');
+      return;
+    }
+    // I1：批准 / 接受后自动恢复。409 = run 正被别的进程 resume，如实呈现。
+    showResume('已裁决，正在恢复运行…', 'gate-full-verdict');
+    try {
+      await postResume(rid);
+      showResume('已恢复运行，从卡点继续', 'gate-full-verdict gate-resume-ok');
+      toast('success', '已恢复', 'run 已从审批卡点继续执行');
+    } catch (err) {
+      showResume(`已裁决，待恢复：${explainRewindError(err)}`, 'gate-full-verdict gate-resume-warn');
+      if (retryBtn) retryBtn.classList.remove('hidden');
+    }
   } catch (err) {
     toast('error', '裁决失败', String(err.detail || err.message || err));
   }
@@ -69,23 +117,49 @@ async function load(box, rid) {
   const list = h('div', { class: 'gates-full-list' });
   box.appendChild(list);
   for (const item of items) {
+    const ctx = approvalContext(item);
+    const resumeSlot = h('div', { class: 'gate-full-verdict' }, '');
+    const retryBtn = h('button', {
+      class: 'btn btn-sm hidden', type: 'button', title: '再次尝试恢复运行',
+      onclick: async () => {
+        retryBtn.disabled = true;
+        showResumeIn(resumeSlot, '正在恢复运行…');
+        try {
+          await postResume(rid);
+          showResumeIn(resumeSlot, '已恢复运行，从卡点继续', 'gate-full-verdict gate-resume-ok');
+          retryBtn.classList.add('hidden');
+        } catch (err) {
+          showResumeIn(resumeSlot, `仍未能恢复：${explainRewindError(err)}`, 'gate-full-verdict gate-resume-warn');
+        }
+        retryBtn.disabled = false;
+      },
+    }, '重试恢复');
+
     const row = h('div', { class: 'gate-full-card' },
       h('div', { class: 'gate-full-head' },
         h('span', { class: 'gate-full-id' }, item.id),
         h('span', { class: 'gate-full-name' }, item.checkpoint === 'plan' ? '计划卡点' : '交付卡点'),
         h('span', { class: 'gate-full-status' }, STATUS_LABEL[item.status] || item.status)),
-      h('div', { class: 'gate-full-verdict' },
-        item.decision && item.decision.action
-          ? `裁决：${item.decision.action}${item.decided_by ? `（${item.decided_by}）` : ''}`
-          : '尚未裁决'));
+      ctx ? h('div', { class: 'gate-full-verdict' },
+        ctx.text + ' ',
+        h('button', { class: 'btn btn-sm', type: 'button', onclick: ctx.action.onclick }, ctx.action.label))
+        : h('div', { class: 'gate-full-verdict' },
+          item.decision && item.decision.action
+            ? `裁决：${item.decision.action}${item.decided_by ? `（${item.decided_by}）` : ''}`
+            : '尚未裁决'),
+      resumeSlot);
+
     if (item.status === 'pending') {
       const actions = h('div', { class: 'gate-full-actions' });
       for (const [action, label] of (ACTIONS[item.checkpoint] || [])) {
         actions.appendChild(h('button', {
           class: `btn btn-sm ${action === 'cancel' || action === 'abort' ? 'btn-danger' : 'btn-primary'}`,
           onclick: async () => {
-            await decide(rid, item, action);
-            if (box.isConnected) await load(box, rid);
+            // 不整卡重载：resume 的进行时/结果写进 resumeSlot，让用户看到闭环；
+            // 列表状态下次进入本页自然刷新。
+            await decide(rid, item, action, resumeSlot, retryBtn);
+            actions.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+            if (retryBtn && !retryBtn.classList.contains('hidden')) actions.appendChild(retryBtn);
           },
         }, label));
       }
@@ -93,6 +167,12 @@ async function load(box, rid) {
     }
     list.appendChild(row);
   }
+}
+
+function showResumeIn(slot, text, cls) {
+  if (!slot) return;
+  slot.textContent = text;
+  slot.className = cls || 'gate-full-verdict';
 }
 
 /** 在门禁页顶部挂一个审批单区块；返回容器便于调用方持有。 */
