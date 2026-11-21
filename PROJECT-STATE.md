@@ -8,7 +8,16 @@
 
 ## 0. 一句话现状
 
-**最新一轮（2026-11-21）：阶段 3 持久化分级 + 审计 P3-1 收口**
+**最新一轮（2026-11-21）：Studio Q2 工具试跑页**
+—— 第 15 页把 R24 工具实验台搬到桌面端：`GET /tools` 清单 + 开关口径 chips（解释
+「为什么清单里缺 run_python / web_search」）+ 单工具沙箱试跑（入参模板只填必填，
+200+`ok=false` 与 409/400 请求错误分开叙述，输出纯文本进 `pre`）。Python 后端零改动；
+`check` 119/55、`test:unit` 108/108、`verify:api` 21/21、`e2e` 39/39、`selftest` 16/16、
+`visual` 24/24。明细见 §3.109。
+
+**同日收尾：R65 阶段 3**（见下）与**在途工作入库**（R68/R69/供应商/对话页共 4 笔）。
+
+**最新后端（2026-11-21）：阶段 3 持久化分级 + 审计 P3-1 收口**
 —— `Ledger` 的 fsync 从「每条一次」变成可配三档（`each` 默认不变 / `batch` 每 N 条 /
 `none`），**三种策略都在 `close()` 强制收口**，默认逐条 fsync 的语义一分不降；实测
 `batch` 吞吐 362 → 1780 events/s（4.9×，`bench/persistence-2026-11-21.md`）。
@@ -108,7 +117,7 @@ config 解析去重（R66e）、`main.py` 3388→~700 行拆进 `cli/` 九模块
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
-| Studio | `npm run check` **115** 模块 / **54** 样式分片、`test:unit` **91/91**、`verify:api` **18/18**、electron `e2e` **38/38**（14 页导航 + 命令面板 + 通知中心 + 对话检索 + 供应商分层）、`selftest` **16/16**、`visual` 基线重建后复检 **24/24**（P1 批次一重建，见 §3.107；对话闭环见 §3.106；R69 档案页基线见 §3.105） |
+| Studio | `npm run check` **119** 模块 / **55** 样式分片、`test:unit` **108/108**、`verify:api` **21/21**、electron `e2e` **39/39**（15 页导航 + 命令面板 + 通知中心 + 对话检索 + 供应商分层 + 工具试跑页头）、`selftest` **16/16**（15 页导航）、`visual` 基线重建后复检 **24/24**（Q2 工具试跑页重建，见 §3.109；P1 批次一见 §3.107；对话闭环见 §3.106；R69 档案页见 §3.105） |
 | 上线自检 | 本机可验 **9 项全通过**（doctor / 离线冒烟 / REST 认证 200·401 / `/metrics` / 无密钥退 3 / `clean` 干跑 / Studio 三连 / ruff+mypy）；目标机 10 项判据见 `docs/DEPLOY-CHECK-2026-11-13.md` |
 | 收尾 | 交付说明见 **`docs/CLOSURE-2026-11-13.md`**；B 类外部环境项 **5/5 全部闭环**；云主机真实部署验收 10 项中 **7 项闭环**（TLS/SSE、告警规则、日志、密钥、成本、webhook、备份），仅剩独立数据盘与两项 Docker 依赖（§3.77、`docs/DEPLOYMENT-VM-2026-11-13.md`） |
 | Git | `c9c4a60`（R61 真机修复）与 `c9cc47c`（R59–R61）均已推送到 `origin/master`，CI run **43453359080** / **43449592343** 的 **7 个 job 全部 success**（Python 3.10/3.11/3.12/3.13、Windows、Studio、Docker 真隔离）；`ebb9895`（R62）/ `8c6e411`（Studio V6-FE）/ `b712113`（桌面启动器）连同两笔状态回填已于 2026-11-14 推送到 `origin/master`（`92d3854..67aeda4`）；C10 `5cdeea8` 与状态回填 `d76d2ef` 同批推送，**2026-11-15 复核 CI run `43608513108`（head = `d76d2ef`）的 7 个 job 逐一 success**（Python 3.10/3.11/3.12/3.13、Windows·uv、Studio·Node 20、Sandbox·docker 真隔离），`Sync main` run `43608513094` success；上一批 `67aeda4` 的 run `43607497931` 亦 success。验收报告 `docs/ACCEPTANCE-2026-11-12.md`；真实模型评测历史证据为 23 条中 22 通过（`bench/eval-live-2026-11-13.md`，本次未重跑真实模型评测）。**2026-11-15 本轮两笔提交 `5e9bc70`（实现，26 文件 / +1866 −119）/ `bedb7e7`（状态回填）已推送到 `origin/master`**（`d76d2ef..bedb7e7`，`origin/main` 同哈希）；对应 CI run **`43712615843`** 结论 `success`、7 个 job 逐一 success，`Sync main` `43712615752` success |
@@ -3623,6 +3632,46 @@ main.py scripts/` 全绿；`mypy agentcrew/ main.py` **161 文件零错误**；�
 **仍未做（阶段 4–6 原样挂着）**：Crew/CLI/API 拆分与体量门禁、README 减重与
 LICENSE/SECURITY/CONTRIBUTING、`scripts/quality_eval.py` 与发布门槛；审计 P1-2
 （`POST /runs` 同步装配超时）仍需真实 provider 分步时延复测。
+
+---
+
+### 3.109 Studio Q2：工具试跑页（2026-11-21）
+
+**起点**：R24 工具实验台的后端（`agentcrew/tools/lab.py`：`GET /tools`、`POST /tools/{name}/test`）
+从 R24 起就绪，但只有 CLI 入口；Studio 批次 2 的 Q2 一直挂在交接表上。本轮零后端改动，
+把「清单 / 开关口径 / 单工具试跑」补成第 15 页。
+
+**落点**：
+- `studio/src/lib/tool-lab.js`（纯函数，node:test 可直测）：`argsTemplate` 按 `input_schema`
+  **只预填必填字段**（可选项留空——模板塞满空串会让用户以为已经填好）、`parseArgs` 把
+  JSON 错误转成可读文案、`formatDuration` 毫秒/秒两档、`statusChips` 负责把四个开关
+  摊平成「为什么清单里没有某个工具」、`resultSummary` 区分「通过 / 工具自身失败」。
+- `studio/src/features/tools-page/{index,dialog}.js`：页头 + 口径 chips + 工具卡片
+  （名称 / 类别徽标 / 必填摘要 / 说明）；试跑弹窗 90s 超时，结果区三路信源——
+  200+`ok=true` 通过、200+`ok=false` 工具失败、409/400/404 请求被拒（**不把「没允许跑」
+  画成「跑了但失败」**）；输出走文本节点进 `pre`，零 `innerHTML`，可复制。
+- `studio/styles/features/tools-page.css`：卡片与结果面板；`local` 沙箱标黄（有沙箱与
+  没沙箱是两回事），`docker` 标绿。
+- 接线：`index.html` 导航第 15 项、`router.js` 分支、`styles/index.css` 分片导入、
+  `e2e.js` / `selftest.js` 页数组扩到 15 页、e2e 2c 新增页头渲染断言、
+  `tools/verify-api-bridge.js` 假后端补 `GET /tools` / 两个 `POST /tools/{name}/test`
+  （含 409）三断言。
+
+**边界（照抄后端，不粉饰）**：`tools_enabled=false` 时清单照列但按钮禁用 + 弹窗顶部
+说明「试跑会被 409 拒绝」；未连 API 给配置指引空态；`code_exec_enabled=false` /
+未配置搜索时 chips 明写「不列 run_python / run_tests」「不列 web_search」，不让用户
+以为页面漏了工具。**未覆盖**：真实 API + 真实沙箱下的页面视觉（`verify:api` 用的是
+假后端，e2e/selftest 跑在未连 API 的诚实空态；真实模型/沙箱试跑仍由 CLI 与 §3.93 的
+bench 覆盖）。
+
+**验证**：`check` **119 模块 / 55 分片**（+3 模块 +1 分片，体量与分层合规）；
+`test:unit` **108/108**（新增 `tool-lab` 八例）；`verify:api` **21/21**；
+`e2e` **39/39**（15 页导航 + 工具试跑页头）；`selftest` **16/16**；
+`visual:update` 重建 24 张后 `visual` 复检 24/24。前端 README 增加 V9-FE 节。
+
+**批次 2 剩余**（按交接表的投入产出顺序）：E3 计划 diff、F1/F2 依赖图与关键路径、
+J1–J3 筛选条与工具/门禁时间线、O1–O3 YAML 契约与无轨迹模式；中型项 Q3/Q4
+（工具调用聚合页、artifact diff）仍按原优先级排队。
 
 ---
 

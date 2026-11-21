@@ -10,10 +10,10 @@
 ## 1. 一分钟现状
 
 - 会话模型已定为 **conversation = run（1:1）**（方案 §3.1 决策 A）：会话列表/重命名/置顶/归档是 run 的前端元数据层（settings.json `runMeta`），运行中追问走 guidance、分支/重做走 rewind。**不要再提独立会话实体**。
-- 批次 1（P0 对话闭环）**全部完成**；批次 2（P1）完成六项（flows 流程库页、通知中心、Ctrl+K、deriveAgents、导出 .md、Key 管理）；批次 3（P2 + 新后端端点）**未动**。
-- 当前基线：`check` 115 模块 / 54 分片、`test:unit` 91/91、`verify:api` 18/18、`selftest` 16/16（14 页）、`e2e` 38/38、`visual` 24 张重建后一致。全部验证命令见 §4。
-- 提交链（本两轮共 9 笔）：`192eacb→3f46232→146b37a→74eb813→17c0360→72f5ab3→35406cf`（P0）+ `129fbc8→86d9681`（P1 批次一）。
-- ⚠️ 工作区仍有约 60 个**与本轮无关的未提交改动**（agentcrew/*.py、providers/profiles 页等，属更早会话的在途工作）——不要顺手提交或还原它们；每笔提交只 `git add` 自己动过的文件。
+- 批次 1（P0 对话闭环）**全部完成**；批次 2（P1）完成七项（flows 流程库页、通知中心、Ctrl+K、deriveAgents、导出 .md、Key 管理、**Q2 工具试跑页**）；批次 3（P2 + 新后端端点）**未动**。
+- 当前基线：`check` **119 模块 / 55 分片**、`test:unit` **108/108**、`verify:api` **21/21**、`selftest` 16/16（**15 页**）、`e2e` **39/39**（15 页导航 + 工具试跑页头）、`visual` 24 张重建后一致。全部验证命令见 §4。
+- 提交链：P0 `192eacb→…→35406cf`；P1 批次一 `129fbc8→86d9681→f611382→7ee52f6→d128fbd→74e9eea→1821796`；Q2 见 `PROJECT-STATE.md` §3.109 的提交记录。
+- 原「约 60 个无关在途改动」已于 2026-11-21 按轮次入库（R68 / R69 后端与前端 / 供应商分层 / 对话页 / 文档共 4 笔），工作区干净；接手时若要改文档仍按「只 add 自己的文件」执行。
 
 ---
 
@@ -39,7 +39,7 @@
 
 | # | 项 | 内容 | 依赖 / 落点 | 验收 |
 | --- | --- | --- | --- | --- |
-| 1 | **Q2 工具试跑面板** | `GET /tools` 清单 + `POST /tools/{name}/test` 沙箱试跑；展示 code_exec 本地/docker 口径与 web_search 启用态 | 后端全现成；可做 `features/tools-page` 独立页（e2e/selftest pages +1）或 profiles 子 tab。独立页需同步 `e2e.js`/`selftest.js` pages 数组与视觉基线 | 未连 API 给诚实空态；试跑失败原样展示后端错误 |
+| 1 | ~~**Q2 工具试跑面板**~~ ✅ 2026-11-21 | `GET /tools` 清单 + `POST /tools/{name}/test` 沙箱试跑；口径 chips 解释「清单为什么缺 run_python / web_search」；结果区分 200+`ok=false` 与 409/400/404 | 独立页 `features/tools-page/{index,dialog}.js` + `lib/tool-lab.js`；pages 数组与视觉基线已同步（`PROJECT-STATE.md` §3.109） | 未连 API 给诚实空态；试跑失败原样展示后端错误 ✅ |
 | 2 | **J1-J3 产物增强** | J1 版本对比：`history/rewind-NNN/` 快照 → 版本选择器 + 行级 diff（零依赖 LCS）；J2 Markdown 渲染切换（`lib/markdown.js` 已有）；J3 单文件另存为（main.js 增 `artifact:saveAs` IPC + 保存对话框） | 快照目录形状先读 `features/rewind/page.js:109` 附近与 `agentcrew` rewind 实现 | diff 只读不可编辑；另存走 outputDir 边界外的新对话框（不能用 `shell:openPath` 的边界） |
 | 3 | **N1-N2 定时任务编辑/启停/历史** | 编辑=预填表单+删旧项（前端闭环）；启停需 CLI 增 `schedule enable/disable` 子命令（`Schedule.enabled` 字段已有）；触发历史=`run_triggered` 事件匹配 | **唯一需要动 Python 的 P1 项**：`agentcrew/cli/schedule.py` + `tests/test_schedule.py` 用例；**不要** main.js 直写 schedules.json（与 tick 并发写冲突，方案 §N1 明令） | CLI 子命令有 `--json`；前端启停开关调 IPC 后刷新列表 |
 | 4 | **O1 快捷键自定义** | `boot.js:67-87` 硬编码 → settings.shortcuts 映射（如 `{palette:'Ctrl+K', newRun:'Ctrl+N'}`） | settings 白名单需加 `shortcuts` 键（照抄 runMeta 的放行方式）；冲突检测两键一用 | 改键后立即生效、重启保持；非法键名行内报错 |
@@ -108,7 +108,7 @@ env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS ./node_modules/electron/dist/electro
 cd E:/agentcrew && python scripts/test.py    # 崩溃隔离跑器；基线 3612 passed / 0 failed
 ```
 
-**验收基线（截至本文）：115 模块 / 54 分片、unit 91/91、verify:api 18/18、selftest 16/16、e2e 38/38、visual 24/24。** 任何一项做完都要不低于此基线（新增能力要带新增用例）。
+**验收基线（截至 2026-11-21 Q2）：119 模块 / 55 分片、unit 108/108、verify:api 21/21、selftest 16/16（15 页）、e2e 39/39、visual 24/24。** 任何一项做完都要不低于此基线（新增能力要带新增用例）。
 
 ---
 
@@ -132,7 +132,7 @@ cd E:/agentcrew && python scripts/test.py    # 崩溃隔离跑器；基线 3612 
 
 1. 先跑一遍 §4 全套验证，确认起点是绿的（任何红先修环境再看代码）。
 2. 顺手项（半小时级）：D2 预算 toast → D3 成本聚合 → H1 模板扩充 → L2 follow toggle。
-3. 中型项：Q2 工具试跑页（含 pages +1 流程）→ E3 计划 diff → F1-F2 → J1-J3 → O1/O2/O3。
+3. 中型项：~~Q2 工具试跑页~~（✅ 2026-11-21）→ E3 计划 diff → F1-F2 → J1-J3 → O1/O2/O3。
 4. 需拍板/核实的：H2（读 service.py 后回填结论）、§5 内联审批（建议先抽 decide+resume 公共函数）。
 5. N1 是唯一动 Python 的 P1 项，单独一笔提交（CLI + tests/test_schedule.py + 前端开关）。
 6. 批次 3 一律契约先行（API_ROUTES + openapi.yaml + test_api_contract.py），每项独立提交。

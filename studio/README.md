@@ -98,21 +98,45 @@ Electron userData 目录的 `settings.json`，可在「设置」里手动修改�
 - **Q1 多密钥管理**：设置 → 连接 的「多密钥管理…」弹窗——`GET /keys` 清单（名称/ID/角色/作用域/状态）+ 按角色新建（明文只显示一次 + 复制）+ 吊销；未启用多密钥时 503 如实提示。
 - **回归**：`check` 115 模块 / 54 分片；`test:unit` 91/91；`verify:api` 18/18；`selftest` 16/16（14 页导航）；`e2e` **38/38**（新增命令面板、通知中心两探针）；`visual` 基线重建 24 张后一致。
 
+## V9-FE 工具试跑页（P1 批次二，2026-11-21）
+
+按 `docs/STUDIO-FEATURE-COMPLETION-2026-11-21.md` §Q2 落地。R24 工具实验台的后端
+（`agentcrew/tools/lab.py`：`GET /tools`、`POST /tools/{name}/test`）一直在，此前只有
+CLI 入口；本页把「清单 / 开关口径 / 单工具试跑」搬到桌面端，Python 后端一行未改。
+
+- **工具试跑页**（第 15 页）：`GET /tools` 的清单按卡片列出（名称、类别徽标「文件 /
+  网络 / 沙箱」、必填/可选入参摘要、说明），顶部一排口径 chips 回答「为什么清单里没有
+  某个工具」——工具执行未开启 / 代码执行未开启（不列 `run_python` / `run_tests`）/
+  未配置搜索（不列 `web_search`）/ `local` 沙箱标黄（有沙箱和没沙箱是两回事）/ 沙箱目录。
+- **试跑弹窗**：按 `input_schema` 只预填**必填**字段的 JSON 模板（可选项留空，避免模板
+  看起来「已经填好」）+ 重置模板 / 格式化；`POST /tools/{name}/test` 90s 超时、每次在
+  `<output>/_tool_trial/` 下新建独立沙箱；结果区区分三种信源——200+`ok=true` 通过、
+  200+`ok=false` 工具自身失败、409/400/404 请求被拒（不把「没允许跑」画成「跑了但失败」）；
+  输出纯文本进 `pre`（零 `innerHTML`），可一键复制。
+- **未连后端**：页头仍出标题，正文给诚实空态（配置后端地址的指引），不伪造清单。
+- **回归**：`check` 119 模块 / 55 分片；`test:unit` **108/108**（新增 `tool-lab`
+  八例：入参模板只填必填、JSON 解析错误可读、耗时两档、类别中文、口径 chips 说明
+  「清单为什么缺工具」、`ok=false` 与请求错误分开叙述）；`verify:api` **21/21**
+  （新增 `GET /tools` 清单可读、`POST /tools/{name}/test` args 原样透传、工具未开启
+  409 如实带回）；`selftest` 16/16（15 页导航）；`e2e` **39/39**（导航 15 页 + 2c
+  新增「工具试跑」页头渲染）；`visual:update` 重建 24 张后一致。
+
 ## 自测
 
 ```bash
 npm run check        # 结构护栏：分层、导入完整性、单文件体量、入口收敛（秒级，无需 GUI）
-npm run e2e          # 端到端：14 页导航（含回滚重跑/流程库）/ 详情 / 运行切换 / 新建运行 / 成本 / 供应商全链路 / 命令面板 / 通知中心（38 项）
+npm run e2e          # 端到端：15 页导航（含回滚重跑/流程库/工具试跑）/ 详情 / 运行切换 / 新建运行 / 成本 / 供应商全链路 / 命令面板 / 通知中心（39 项）
 npm run selftest     # 真实 UI 驱动一次 --mock 运行：列表 → 看板 → 事件 → 产物 → 设置 → 启动/取消（16 项）
-npm run verify:api          # 后端 API 代理：认证头 + SSE 帧 + C10 指引/R62 rewind/审批自动 resume/REST 创建的 REST 路径（18 项，无需 GUI / 无需真后端）
+npm run verify:api          # 后端 API 代理：认证头 + SSE 帧 + C10 指引/R62 rewind/审批自动 resume/REST 创建/工具试跑的 REST 路径（21 项，无需 GUI / 无需真后端）
 npm run verify:transitions  # 状态切换：演示→真实运行 / 快速连点切 run / 单通道纪律（11 项）
-npm run visual              # 视觉回归：把 e2e 的 16 张截图与本机基线比对（版式/配色变了会失败）
+npm run visual              # 视觉回归：把 e2e 的 24 张截图与本机基线比对（版式/配色变了会失败）
 ```
 
 `verify:api` 自带一个要求 Bearer 认证的假后端，覆盖的是**可选的 HTTP API 通道**（e2e / selftest
-都跑在默认的「CLI + 文件监听」路径上，碰不到它）。当前 13 项里，除认证头注入与 SSE 命名帧外，
+都跑在默认的「CLI + 文件监听」路径上，碰不到它）。当前 21 项里，除认证头注入与 SSE 命名帧外，
 还逐条验证 `GET/POST /runs/{id}/guidance`、`DELETE .../guidance/{item_id}`、运行中压缩返回 409、
-`POST /runs/{id}/rewind` 的 dry-run 影响集——调用时必须按 preload 的形状传 `{ path, options }`，
+`POST /runs/{id}/rewind` 的 dry-run 影响集、`GET /tools` 与 `POST /tools/{name}/test`（含
+「工具执行未开启 → 409」不被包装成成功）——调用时必须按 preload 的形状传 `{ path, options }`，
 否则 method / body 会被当成默认值。若宿主环境注入了 `ELECTRON_RUN_AS_NODE=1`，
 Electron 会退化成纯 Node 并在 `main.js` 报 `app.getPath undefined`——先清掉该变量再跑任何 Electron 脚本。
 
