@@ -211,6 +211,11 @@ function run(win) {
     const eventRows = await js('document.querySelectorAll(".event-row, [data-event]").length');
     const hasFilter = await js('!!document.querySelector(".ev-filter-bar, #ev-filter-bar")');
     check('11. 事件日志页面（列表+筛选）', Number(eventRows) > 0 && hasFilter, `${eventRows} 条事件, 筛选=${hasFilter}`);
+    // L1：时间范围选择器 + 事件行可直接跳到任务/对话
+    const rangeOpts = await js('document.querySelectorAll("#ev-range option").length');
+    const jumpBtns = await js('document.querySelectorAll(".ev-full-item .ev-jump-btn").length');
+    check('11a. 事件页时间范围与跳转入口', Number(rangeOpts) === 4 && Number(jumpBtns) >= 1,
+      JSON.stringify({ rangeOpts, jumpBtns }));
 
     // ── 11b. 事件页跟随实时开关（L2）：关 → 切页再回 → 仍关 → 恢复开 ──
     const followBefore = await js('document.querySelector("#ev-follow")?.textContent || ""');

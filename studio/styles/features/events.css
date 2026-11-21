@@ -23,7 +23,7 @@
 
 /* 自然高度：主区域统一滚动 */
 .ev-full-list { padding: 2px 0; }
-.ev-full-item { border-bottom: 0.5px solid var(--ink-04); }
+.ev-full-item { border-bottom: 0.5px solid var(--ink-04); position: relative; }
 .ev-full-main {
   display: flex; align-items: center; gap: var(--sp-3);
   width: 100%;
@@ -114,3 +114,22 @@
   .ev-audit-row { grid-template-columns: 70px 1fr auto; }
   .ev-audit-role, .ev-audit-reason { display: none; }
 }
+
+/* ---- L1：时间范围 + 事件跳转 ---- */
+.ev-range-select {
+  height: 30px; padding: 0 8px;
+  border: 1px solid var(--border-input); border-radius: 6px;
+  background: var(--bg-panel); color: var(--text); font-size: 12px; font-family: inherit;
+}
+.ev-full-main { padding-right: 104px; }
+.ev-full-jump {
+  position: absolute; right: var(--sp-4); top: 5px;
+  display: flex; gap: 4px; opacity: 0.55; transition: opacity var(--dur-1) ease;
+}
+.ev-full-item:hover .ev-full-jump, .ev-full-item.expanded .ev-full-jump { opacity: 1; }
+.ev-jump-btn {
+  padding: 2px 6px; border: 0.5px solid var(--border-weak); border-radius: var(--r-sm);
+  background: var(--bg-panel); color: var(--text-sub);
+  font-size: var(--fs-xs); font-family: inherit; cursor: pointer;
+}
+.ev-jump-btn:hover { color: var(--accent); border-color: var(--accent); }

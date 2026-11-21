@@ -1,5 +1,6 @@
 /* 事件日志页：类型筛选、可恢复展开态、分页与实时增量刷新。 */
 import { $, $$, h } from '../../lib/dom.js';
+import { filterEvents, jumpTargets } from '../../lib/event-view.js';
 import { fmtClock } from '../../lib/format.js';
 import { S } from '../../lib/store.js';
 
@@ -7,10 +8,17 @@ import { emptyState } from '../../ui/states.js';
 
 import { switchNav } from '../../app/router.js';
 
+import { openTaskDetail } from '../detail/panel.js';
 import { renderAgentAudit } from './agent-audit.js';
 import { exportEvents } from './export.js';
 
 const FOLLOW_KEY = 'agentcrew:ev-follow';
+const RANGES = [
+  { value: 0, label: '全部时间' },
+  { value: 5, label: '最近 5 分钟' },
+  { value: 30, label: '最近 30 分钟' },
+  { value: 60, label: '最近 1 小时' },
+];
 
 function followEnabled() {
   try { return localStorage.getItem(FOLLOW_KEY) !== '0'; } catch { return true; }
@@ -95,6 +103,9 @@ function renderEventsPage(container) {
       h('input', { id: 'ev-search', type: 'text', placeholder: '搜索事件…', value: S.eventSearch || '',
         style: 'width:200px;padding:6px 10px;border:1px solid var(--border-input);border-radius:6px;font-size:12px;font-family:inherit',
         oninput: ev => { S.eventSearch = ev.target.value; S.evPage = 1; renderEventsList(); } }),
+      h('select', { id: 'ev-range', class: 'ev-range-select', title: '时间范围：相对最新一条事件',
+        onchange: (ev) => { S.eventRange = Number(ev.target.value) || 0; S.evPage = 1; renderEventsList(); } },
+        ...RANGES.map((r) => h('option', { value: r.value, selected: Number(S.eventRange || 0) === r.value }, r.label))),
       h('button', { class: 'btn', id: 'ev-follow', type: 'button', 'aria-pressed': followEnabled() ? 'true' : 'false',
         title: '实时事件到达时自动滚到最新；关闭后保持当前阅读位置',
         onclick: (ev) => {
@@ -120,10 +131,10 @@ function renderEventsPage(container) {
 function renderEventsList() {
   const listEl = $('#ev-full-list');
   if (!listEl) return;
-  const q = String(S.eventSearch || '').toLowerCase();
-  const evs = [...(S.dash.events || [])].reverse()
-    .filter(e => S.eventFilter.has(e.event))
-    .filter(e => !q || JSON.stringify(e).toLowerCase().includes(q));
+  // L1：类型 + 搜索 + 时间范围统一在 lib/event-view 里过滤（倒序由它负责）
+  const evs = filterEvents(S.dash.events || [], {
+    types: S.eventFilter, query: S.eventSearch, rangeMinutes: S.eventRange,
+  });
   listEl.innerHTML = '';
   if (!evs.length) {
     const all = S.dash.events || [];
@@ -134,6 +145,8 @@ function renderEventsList() {
           S.eventSearch = '';
           const search = $('#ev-search'); if (search) search.value = '';
           S.eventFilter = new Set(allEventTypes());
+          S.eventRange = 0;
+          const range = $('#ev-range'); if (range) range.value = '0';
           S.evPage = 1;
           $$('.ev-filter-btn').forEach(b => {
             b.classList.add('active');
@@ -161,7 +174,12 @@ function renderEventsList() {
         h('span', { class: 'ev-full-type' }, e.event),
         h('span', { class: 'ev-full-task' }, e.data?.task_id || ''),
         h('span', { class: 'ev-full-role' }, e.data?.role || ''),
-        h('span', { class: 'ev-full-summary' }, summarizeEvent(e))));
+        h('span', { class: 'ev-full-summary' }, summarizeEvent(e))),
+      h('span', { class: 'ev-full-jump' },
+        ...jumpTargets(e).map((t) => h('button', {
+          class: 'ev-jump-btn', type: 'button', title: `跳到${t.label}`,
+          onclick: () => { if (t.kind === 'task') openTaskDetail(t.id); else switchNav('conversation'); },
+        }, t.label))));
     if (expanded) item.appendChild(h('pre', { class: 'ev-full-detail' }, JSON.stringify(e, null, 2)));
     listEl.appendChild(item);
   }
