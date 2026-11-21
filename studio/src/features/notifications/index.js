@@ -8,6 +8,7 @@
  */
 import { RUN_META } from '../../contracts/enums.js';
 import { h } from '../../lib/dom.js';
+import { fmtBudgetUsage } from '../../lib/format.js';
 import { S } from '../../lib/store.js';
 
 import { closeModal, showModal } from '../../ui/modal.js';
@@ -44,10 +45,12 @@ function describe(e) {
       return { title: `审批已裁决（${d.action || '—'}）`, body: `run ${runId}${suffix}`, nav: 'gates' };
     case 'run_paused':
       return { title: '运行挂起（审批/断点）', body: `run ${runId}${suffix}`, nav: 'gates' };
-    case 'budget_warning':
-      return { title: '预算预警（已用 90%）', body: `run ${runId}${suffix}`, nav: 'dashboard' };
+    case 'budget_warning': {
+      const pct = Math.round((Number(d.pct) || Number(d.threshold) || 0.9) * 100);
+      return { title: `预算预警（已用 ${pct}%）`, body: `run ${runId} · ${fmtBudgetUsage(d)}${suffix}`, nav: 'dashboard' };
+    }
     case 'budget_exhausted':
-      return { title: '预算耗尽，运行优雅收尾', body: `run ${runId}${suffix}`, nav: 'dashboard' };
+      return { title: '预算耗尽，运行优雅收尾', body: `run ${runId} · ${fmtBudgetUsage(d, true)}${suffix}`, nav: 'dashboard' };
     case 'run_finished': {
       const rm = RUN_META[d.status] || RUN_META.idle;
       return { title: `运行结束（${rm.label}）`, body: `run ${runId}${suffix}`, nav: 'conversation' };
@@ -110,6 +113,11 @@ function notifyFromEvents(events) {
     };
     S.notifs = [item, ...(S.notifs || [])].slice(0, MAX_ITEMS);
     updateBadge();
+    // D2：预算类事件除进面板外再弹一次 toast。去重已在上面按 key 完成，
+    // 后端 `_maybe_emit_budget_warning` 也保证整场只发一条，不会重复弹。
+    if (e.event === 'budget_warning' || e.event === 'budget_exhausted') {
+      toast(e.event === 'budget_warning' ? 'warn' : 'error', info.title, info.body, 8000);
+    }
     systemNotify([item]);
   }
 }

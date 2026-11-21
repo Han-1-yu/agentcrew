@@ -19,6 +19,16 @@ function fmtClock(ts){ const d=parseTs(ts); return d?d.toTimeString().slice(0,8)
 function fmtDateTime(ts){ const d=parseTs(ts); if(!d)return'—'; const p=x=>String(x).padStart(2,'0'); return `${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; }
 function relTime(ts){ const d=parseTs(ts); if(!d)return''; const diff=(Date.now()-d.getTime())/1000; if(diff<5)return'刚刚'; if(diff<60)return`${Math.floor(diff)} 秒前`; if(diff<3600)return`${Math.floor(diff/60)} 分钟前`; if(diff<86400)return`${Math.floor(diff/3600)} 小时前`; return `${Math.floor(diff/86400)} 天前`; }
 function trunc(s,n){ s=String(s==null?'':s); return s.length>n?s.slice(0,n)+'…':s; }
+/* 预算事件文案（D2）：budget_warning 用 current_cost_usd/limit_usd，
+   budget_exhausted 用 used/limit；缺上限时只报已知的一半，不编造。 */
+function fmtBudgetUsage(d, exhausted) {
+  const src = d || {};
+  const used = Number(exhausted ? src.used : src.current_cost_usd) || 0;
+  const limit = Number(exhausted ? src.limit : src.limit_usd) || 0;
+  if (exhausted) return limit ? `已用 $${used.toFixed(2)} / 上限 $${limit.toFixed(2)}` : `已用 $${used.toFixed(2)}`;
+  const pct = Math.round((Number(src.pct) || Number(src.threshold) || 0.9) * 100);
+  return limit ? `已用 $${used.toFixed(2)} / $${limit.toFixed(2)}（${pct}%）` : `已用 ${pct}%`;
+}
 /* 从完整项目目标中提取简洁标题：取冒号/句号前的核心短语 */
 function simplifyGoal(goal){
   if(!goal) return '未命名项目';
@@ -37,6 +47,7 @@ function simplifyGoal(goal){
 }
 
 export {
+  fmtBudgetUsage,
   fmtBytes,
   fmtClock,
   fmtCost,
