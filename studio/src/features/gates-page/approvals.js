@@ -7,32 +7,23 @@
  * 手动重试按钮。审批卡带上下文（I2）：计划卡点给任务/角色数与「查看计划」，
  * 交付卡点给产物摘要与「查看产物」，让人看着内容裁决。
  *
+ * §5 起裁决 + 自动续跑收口到 `features/approvals/flow.js`：对话页的内联审批卡
+ * 走同一条路径，动作表与状态文案来自 `lib/approval.js`，两处不会各写一份。
+ *
  * 端点：GET/POST /runs/{id}/approvals、POST /runs/{id}/resume
  */
 import { h } from '../../lib/dom.js';
-import { apiFetch } from '../../lib/api.js';
+import { actionsFor, runIdFrom, statusLabel } from '../../lib/approval.js';
 import { explainRewindError } from '../../lib/rewind.js';
 import { S } from '../../lib/store.js';
 import { emptyState } from '../../ui/states.js';
-import { toast } from '../../ui/toast.js';
 import { switchNav } from '../../app/router.js';
-import { postResume } from '../rewind/index.js';
+import { decideApproval, loadApprovals, retryResume } from '../approvals/flow.js';
 
 /** run 目录名（去掉盘符与上级路径），与后端 _validated_run_id 同口径。 */
 function currentRunId() {
-  const run = (S.dash && S.dash.run) || {};
-  const raw = run.run_id || run.dir || S.watchDir || '';
-  return String(raw).replace(/\\/g, '/').split('/').filter(Boolean).pop() || '';
+  return runIdFrom((S.dash && S.dash.run) || {}, S.watchDir);
 }
-
-const ACTIONS = {
-  plan: [['approve', '批准执行'], ['cancel', '取消运行']],
-  delivery: [['accept', '接受交付'], ['abort', '放弃交付']],
-};
-const STATUS_LABEL = {
-  pending: '等待裁决', decided: '已裁决，待 resume', consumed: '已消费',
-};
-const AUTO_RESUME_ACTIONS = new Set(['approve', 'accept']);
 
 /* ---- I2：裁决上下文（数据全部来自已在内存的 S.dash，不发额外请求） ---- */
 
@@ -61,37 +52,21 @@ function approvalContext(item) {
 }
 
 async function decide(rid, item, action, resumeSlot, retryBtn) {
-  const showResume = (text, cls) => {
-    if (resumeSlot) { resumeSlot.textContent = text; resumeSlot.className = cls; }
-  };
-  try {
-    await apiFetch(`/runs/${encodeURIComponent(rid)}/approvals`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        request_id: item.id,
-        decision: { action },
-        decided_by: 'studio',
-      }),
-    });
-    toast('success', '已裁决', `${item.id} → ${action}`);
-    if (!AUTO_RESUME_ACTIONS.has(action)) {
-      showResume(`已裁决（${action}），run 将按该决定收尾`, 'gate-full-verdict');
-      return;
-    }
-    // I1：批准 / 接受后自动恢复。409 = run 正被别的进程 resume，如实呈现。
-    showResume('已裁决，正在恢复运行…', 'gate-full-verdict');
-    try {
-      await postResume(rid);
-      showResume('已恢复运行，从卡点继续', 'gate-full-verdict gate-resume-ok');
-      toast('success', '已恢复', 'run 已从审批卡点继续执行');
-    } catch (err) {
-      showResume(`已裁决，待恢复：${explainRewindError(err)}`, 'gate-full-verdict gate-resume-warn');
-      if (retryBtn) retryBtn.classList.remove('hidden');
-    }
-  } catch (err) {
-    toast('error', '裁决失败', String(err.detail || err.message || err));
-  }
+  const result = await decideApproval({
+    runId: rid,
+    item,
+    action,
+    // 门禁页的呈现点是卡内一行状态：tone 映射到既有 class，视觉与改造前一致。
+    onState: (text, tone) => {
+      const cls = tone === 'ok' ? 'gate-full-verdict gate-resume-ok'
+        : tone === 'warn' ? 'gate-full-verdict gate-resume-warn'
+          : 'gate-full-verdict';
+      showResumeIn(resumeSlot, text, cls);
+    },
+  });
+  // 续跑失败才给「重试恢复」；裁决本身失败时按钮保持可用，让人重新点。
+  if (result.ok && result.error && retryBtn) retryBtn.classList.remove('hidden');
+  return result;
 }
 
 async function load(box, rid) {
@@ -102,21 +77,20 @@ async function load(box, rid) {
     h('span', { class: 'gate-full-id' }, rid)));
   let payload;
   try {
-    payload = await apiFetch(`/runs/${encodeURIComponent(rid)}/approvals`);
+    payload = await loadApprovals(rid);
   } catch (err) {
     if (token === S.navToken) box.appendChild(emptyState('审批单不可读', String(err.detail || err.message || err)));
     return;
   }
   // 等审批单回来时用户可能已经切页，别再往已卸载的容器写内容。
   if (token !== S.navToken) return;
-  const items = (payload && payload.approvals) || [];
-  if (!items.length) {
+  if (!payload.length) {
     box.appendChild(emptyState('暂无审批单', '本次运行没有需要人工裁决的节点。'));
     return;
   }
   const list = h('div', { class: 'gates-full-list' });
   box.appendChild(list);
-  for (const item of items) {
+  for (const item of payload) {
     const ctx = approvalContext(item);
     const resumeSlot = h('div', { class: 'gate-full-verdict' }, '');
     const retryBtn = h('button', {
@@ -125,7 +99,7 @@ async function load(box, rid) {
         retryBtn.disabled = true;
         showResumeIn(resumeSlot, '正在恢复运行…');
         try {
-          await postResume(rid);
+          await retryResume(rid);
           showResumeIn(resumeSlot, '已恢复运行，从卡点继续', 'gate-full-verdict gate-resume-ok');
           retryBtn.classList.add('hidden');
         } catch (err) {
@@ -139,7 +113,7 @@ async function load(box, rid) {
       h('div', { class: 'gate-full-head' },
         h('span', { class: 'gate-full-id' }, item.id),
         h('span', { class: 'gate-full-name' }, item.checkpoint === 'plan' ? '计划卡点' : '交付卡点'),
-        h('span', { class: 'gate-full-status' }, STATUS_LABEL[item.status] || item.status)),
+        h('span', { class: 'gate-full-status' }, statusLabel(item.status))),
       ctx ? h('div', { class: 'gate-full-verdict' },
         ctx.text + ' ',
         h('button', { class: 'btn btn-sm', type: 'button', onclick: ctx.action.onclick }, ctx.action.label))
@@ -151,7 +125,7 @@ async function load(box, rid) {
 
     if (item.status === 'pending') {
       const actions = h('div', { class: 'gate-full-actions' });
-      for (const [action, label] of (ACTIONS[item.checkpoint] || [])) {
+      for (const [action, label] of actionsFor(item.checkpoint)) {
         actions.appendChild(h('button', {
           class: `btn btn-sm ${action === 'cancel' || action === 'abort' ? 'btn-danger' : 'btn-primary'}`,
           onclick: async () => {

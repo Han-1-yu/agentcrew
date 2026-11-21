@@ -48,6 +48,7 @@
 @import './features/conversation-extras.css';
 @import './features/conversation-tools.css';
 @import './features/conversation-markdown.css';
+@import './features/approvals-inline.css';
 @import './features/result.css';
 @import './features/runs.css';
 @import './features/runs-sidebar.css';

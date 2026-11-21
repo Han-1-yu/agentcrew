@@ -1,0 +1,28 @@
+/* 对话页内联审批卡（§5）：挂在「等待人工审批」系统消息下面，就地裁决。
+   视觉上属于系统消息的延展，所以沿用对方的安静底色，只靠左侧强调条区分。 */
+
+.conv-approval {
+  margin: 6px 0 2px 14px;
+  max-width: 640px;
+  padding: 8px 12px;
+  background: var(--bg-panel);
+  border: 0.5px solid var(--border);
+  border-left: 2px solid var(--warn, var(--warning));
+  border-radius: var(--r-md);
+}
+.conv-approval-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.conv-approval-title { font-size: var(--fs-sm); font-weight: 600; color: var(--text); }
+.conv-approval-meta { font-size: var(--fs-xs); color: var(--text-ter); font-family: var(--font-mono); }
+.conv-approval-note { font-size: var(--fs-xs); color: var(--text-ter); line-height: 1.6; }
+
+.conv-approval-list { display: flex; flex-direction: column; gap: 6px; }
+.conv-approval-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.conv-approval-row.is-done { opacity: 0.6; }
+.conv-approval-row.is-decided { opacity: 0.85; }
+.conv-approval-id { font-size: var(--fs-xs); color: var(--text-sub); font-family: var(--font-mono); }
+
+.conv-approval-actions { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.conv-approval-state { margin-top: 6px; font-size: var(--fs-xs); color: var(--text-ter); }
+.conv-approval-state[data-tone="ok"] { color: var(--success-text); }
+.conv-approval-state[data-tone="warn"] { color: var(--warn-text); }
+.conv-approval-state[data-tone="busy"] { color: var(--text-sub); }

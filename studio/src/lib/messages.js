@@ -45,7 +45,12 @@ function buildMessages(events, tasks, run, extra) {
       const s = d.status || run.status || '';
       msgs.push({ type: 'system', ts: e.ts, order, kind: s === 'completed' ? 'done' : (s === 'failed' ? 'error' : ''), text: `运行结束${s ? '（' + s + '）' : ''}` });
     } else if (name === 'run_paused' || name === 'approval_requested') {
-      msgs.push({ type: 'system', ts: e.ts, order, kind: 'warn', text: '等待人工审批' });
+      // §5：审批单在对话里就地可裁决。只有 approval_requested 带 id 与 checkpoint
+      // （run_paused 紧挨着它出现，给同一张卡会造成两处重复加载）。
+      const approval = name === 'approval_requested'
+        ? { requestId: String(d.approval_id || ''), checkpoint: String(d.checkpoint || '') }
+        : null;
+      msgs.push({ type: 'system', ts: e.ts, order, kind: 'warn', text: '等待人工审批', approval });
     } else if (name === 'approval_decided') {
       const act = String(d.action || '');
       const verdict = { approve: '批准执行', accept: '接受交付', cancel: '取消运行', abort: '放弃交付' }[act] || act;

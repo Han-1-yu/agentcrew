@@ -8,6 +8,8 @@ import { renderMarkdown } from '../../lib/markdown.js';
 
 import { toast } from '../../ui/toast.js';
 
+import { inlineApprovalCard } from '../approvals/inline.js';
+
 import { decorateCodeBlocks, renderArtifact, renderGate, renderNote, renderTool } from './items.js';
 
 function messageKey(m) {
@@ -175,8 +177,13 @@ function renderSystem(m, query) {
     actions.push({ title: '去审批（门禁页，批准后自动恢复）', icon: iconOpen(), onclick: () => gotoPage('gates') });
   }
   actions.push({ title: '复制这条提示', icon: iconCopy(), onclick: () => copyMessage(m.text || '', '提示已复制') });
+  // §5：带审批单的系统消息下面挂内联审批卡（裁决 + 自动续跑都在卡里闭环）。
+  const card = m.approval ? inlineApprovalCard({
+    checkpoint: m.approval.checkpoint,
+  }) : null;
   return h('div', { class: 'conv-msg conv-system' },
-    h('div', { class: 'conv-system-main' }, bubble, actionBar(actions)));
+    h('div', { class: 'conv-system-main' }, bubble, actionBar(actions)),
+    card);
 }
 
 function agentMeta(m, task) {

@@ -719,6 +719,38 @@ function run(win) {
         && /开发者/.test(devTitle) && devStates === 9 && devClosed),
       JSON.stringify({ accountTitle, accountNoDemo, devTitle, devStates, devClosed }));
 
+    // ── 20f. §5 内联审批：消息标记 + 未连 API 时的降级卡片 ──
+    //      e2e 连的是演示态（没有后端 API），所以这里验「能识别审批消息」与
+    //      「降级不伪造按钮」；真实裁决闭环由 lib/approval 单测与门禁页 e2e 覆盖。
+    const inlineApproval = await js(`(async () => {
+      const { buildMessages } = await import('./src/lib/messages.js');
+      const { inlineApprovalCard } = await import('./src/features/approvals/inline.js');
+      const events = [
+        { ts: '2026-11-21T10:00:00Z', run_id: 'r', event: 'run_started', data: { goal: 'g' } },
+        { ts: '2026-11-21T10:01:00Z', run_id: 'r', event: 'approval_requested',
+          data: { approval_id: 'ap_1', checkpoint: 'plan' } },
+      ];
+      const { msgs } = buildMessages(events, [], { project_goal: 'g' }, {});
+      const sys = msgs.find((m) => m.approval);
+      const card = inlineApprovalCard({ checkpoint: sys && sys.approval.checkpoint });
+      document.getElementById('placeholder-view')?.appendChild(card);
+      const title = !!card.querySelector('.conv-approval-title');
+      const meta = (card.querySelector('.conv-approval-meta') || {}).textContent || '';
+      const offlineNote = !!card.querySelector('.conv-approval-note');
+      const gotoBtn = !!(card.querySelector('.conv-approval-actions .btn'));
+      const noFakeRows = card.querySelectorAll('.conv-approval-row').length === 0;
+      card.remove();
+      return {
+        marked: !!(sys && sys.approval.requestId === 'ap_1' && sys.approval.checkpoint === 'plan'),
+        title, meta, offlineNote, gotoBtn, noFakeRows,
+      };
+    })()`);
+    check('20f. §5 内联审批：approval_requested 带标记，未连 API 时降级为跳转门禁页',
+      !!(inlineApproval && inlineApproval.marked && inlineApproval.title
+        && /计划卡点/.test(inlineApproval.meta || '')
+        && inlineApproval.offlineNote && inlineApproval.gotoBtn && inlineApproval.noFakeRows),
+      JSON.stringify(inlineApproval));
+
     // ── 21. 对话页检索 / 类型筛选 / 产物预览 ──
     await js(`document.querySelector('.nav-item[data-nav="conversation"]')?.click()`);
     await sleep(900);
