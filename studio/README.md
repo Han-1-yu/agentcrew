@@ -134,11 +134,32 @@ CLI 入口；本页把「清单 / 开关口径 / 单工具试跑」搬到桌面�
 - **回归**：`check` 120 模块 / 55 分片；`test:unit` **115/115**（新增 `task-diff` 八例）；
   `verify:api` 21/21；`selftest` 16/16；`e2e` 39/39；`visual:update` 重建 24 张后一致。
 
+## V11-FE 任务图实时高亮 + 抽屉产物摘要（P1 批次二收尾，2026-11-21）
+
+按 `docs/STUDIO-FEATURE-COMPLETION-2026-11-21.md` 的 F1 / F2 落地。
+
+- **F1 就地切换**：`task_transition` 事件到达时不再等 500ms 快照——`dag-live.js`
+  在 `#dag-svg` 里按 `data-task` 找节点，只改 `class` / `data-status` / chip 文案，
+  **不重建 SVG、不加动画**；节点增删、连线热度、布局仍由快照兜齐。看板不在前台时
+  只改内存里的任务状态。状态 chip 的 `<text>` 加了 `node-chip-label` 类作为稳定寻址点。
+- **F2 产物摘要**：任务详情原「输出产物」段换成「输入 / 输出产物」——优先读
+  `artifacts/MANIFEST.json`（按 `produced_by_task` 归到任务），mock / 老 run 没有
+  MANIFEST 时退回 `result.artifacts`；依赖任务的产物按上游任务聚合并去重。顺带修掉
+  `result.artifacts` 是空白字符串时被当成 1 个产物、渲染 `undefined` 的老 bug。
+- **体量**：事件去重键（逐字键 / 跨通道语义键 / 3 秒窗口去重）拆到
+  `src/app/realtime-dedup.js`，`realtime.js` 回到 320 行上限内，行为不变。
+- **回归**：`check` **124 模块 / 55 分片**；`test:unit` **126/126**（新增 `task-live`
+  四例、`task-artifacts` 七例）；`verify:api` 21/21；`selftest` 16/16；`e2e` **41/41**
+  （新增 4b 抽屉产物摘要、4c 节点 chip 类名，第 4 项改为先切「任务视图」再点节点）；
+  `visual:update` 重建 24 张后一致。
+- **边界**：F1 的真实 SSE 迁移没有自动化断言（e2e 不跑真 run），靠「事件入口第一行」
+  + 3 秒内快照兜底；F2 只列路径与大小，不预览内容。
+
 ## 自测
 
 ```bash
 npm run check        # 结构护栏：分层、导入完整性、单文件体量、入口收敛（秒级，无需 GUI）
-npm run e2e          # 端到端：15 页导航（含回滚重跑/流程库/工具试跑）/ 详情 / 运行切换 / 新建运行 / 成本 / 供应商全链路 / 命令面板 / 通知中心（39 项）
+npm run e2e          # 端到端：15 页导航（含回滚重跑/流程库/工具试跑）/ 详情与产物摘要 / 运行切换 / 新建运行 / 成本 / 供应商全链路 / 命令面板 / 通知中心（41 项）
 npm run selftest     # 真实 UI 驱动一次 --mock 运行：列表 → 看板 → 事件 → 产物 → 设置 → 启动/取消（16 项）
 npm run verify:api          # 后端 API 代理：认证头 + SSE 帧 + C10 指引/R62 rewind/审批自动 resume/REST 创建/工具试跑的 REST 路径（21 项，无需 GUI / 无需真后端）
 npm run verify:transitions  # 状态切换：演示→真实运行 / 快速连点切 run / 单通道纪律（11 项）

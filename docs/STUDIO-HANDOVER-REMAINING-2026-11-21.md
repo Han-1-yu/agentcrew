@@ -11,7 +11,7 @@
 
 - 会话模型已定为 **conversation = run（1:1）**（方案 §3.1 决策 A）：会话列表/重命名/置顶/归档是 run 的前端元数据层（settings.json `runMeta`），运行中追问走 guidance、分支/重做走 rewind。**不要再提独立会话实体**。
 - 批次 1（P0 对话闭环）**全部完成**；批次 2（P1）完成七项（flows 流程库页、通知中心、Ctrl+K、deriveAgents、导出 .md、Key 管理、**Q2 工具试跑页**）；批次 3（P2 + 新后端端点）**未动**。
-- 当前基线：`check` **119 模块 / 55 分片**、`test:unit` **108/108**、`verify:api` **21/21**、`selftest` 16/16（**15 页**）、`e2e` **39/39**（15 页导航 + 工具试跑页头）、`visual` 24 张重建后一致。全部验证命令见 §4。
+- 当前基线：`check` **124 模块 / 55 分片**、`test:unit` **126/126**、`verify:api` **21/21**、`selftest` 16/16（**15 页**）、`e2e` **41/41**（15 页导航 + 工具试跑页头 + 任务详情产物摘要）、`visual` 24 张重建后一致。全部验证命令见 §4。
 - 提交链：P0 `192eacb→…→35406cf`；P1 批次一 `129fbc8→86d9681→f611382→7ee52f6→d128fbd→74e9eea→1821796`；Q2 见 `PROJECT-STATE.md` §3.109 的提交记录。
 - 原「约 60 个无关在途改动」已于 2026-11-21 按轮次入库（R68 / R69 后端与前端 / 供应商分层 / 对话页 / 文档共 4 笔），工作区干净；接手时若要改文档仍按「只 add 自己的文件」执行。
 
@@ -48,7 +48,7 @@
 | 7 | **D2 预算 90% toast** | `budget_warning` 事件已有 → toast + 通知中心条目（事件源钩子已就绪，`INTERESTING` 已含 budget_warning） | 无依赖，半小时工作量 | 跑 mock 预算场景可见一次（去重生效，不重复弹） |
 | 8 | **D3 成本按模型聚合** | `dashboard/cost.js` 增按 model/provider 分组（llm_call 含 model，G1 已示范聚合写法） | 无依赖 | 与 run.json stats 的总成本守恒 |
 | 9 | ~~**E3 计划 diff**~~ ✅ 2026-11-21 | `runs/compare.js` 指标对比 → 下方新增任务级表格（新增/移除/变更，比标题·角色·状态·优先级·依赖） | `lib/task-diff.js` 纯函数 + 八例单测；`passed`/`succeeded` 归一（`PROJECT-STATE.md` §3.110） | 对比弹窗可见任务差异行 ✅（自动化点击未做，见 §3.110 边界） |
-| 10 | **F1-F2 任务图** | F1 running 节点实时高亮（SSE `task_transition` 已接；**不加逐帧动画**，只切 class）；F2 节点抽屉补输入/输出产物摘要 | 无依赖 | 运行 mock run 节点颜色随状态变化；抽屉显示产物条目 |
+| 10 | ~~**F1-F2 任务图**~~ ✅ 2026-11-21 | F1 running 节点实时高亮（SSE `task_transition` 已接；**不加逐帧动画**，只切 class）；F2 节点抽屉补输入/输出产物摘要 | `lib/task-live.js` + `features/dashboard/dag-live.js`、`lib/task-artifacts.js` 纯函数 + 十一例单测；事件去重键拆到 `app/realtime-dedup.js`（`PROJECT-STATE.md` §3.111） | 节点 class/chip 就地切换 ✅；抽屉显示输入/输出条目 ✅（真实 SSE 高亮无自动化断言，见 §3.111 边界） |
 | 11 | **H1 profiles 模板扩充** | `features/profiles/templates.js` 3 个 → 写作/复核/代码执行/数据分析分类预设 | 纯本地数据 | 模板可导入为档案 |
 | 12 | **H2 绑定矩阵直写（待核实）** | 若 `agents --save` 支持 bindings 则直写，否则保留 YAML 复制 | **先读** `agentcrew/profiles/service.py` 与 CLI `agents` 参数面（方案 §8.2 未核实项） | 核实结论写回本表与 PROJECT-STATE |
 | 13 | **L1-L2 事件页** | L1 时间范围筛选 + 事件→「跳到对话/任务」定位；L2 follow toggle（实时滚动锁） | 无依赖 | 筛选后计数正确；开关生效且刷新后保持 |
@@ -108,7 +108,7 @@ env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS ./node_modules/electron/dist/electro
 cd E:/agentcrew && python scripts/test.py    # 崩溃隔离跑器；基线 3612 passed / 0 failed
 ```
 
-**验收基线（截至 2026-11-21 E3）：120 模块 / 55 分片、unit 115/115、verify:api 21/21、selftest 16/16（15 页）、e2e 39/39、visual 24/24。** 任何一项做完都要不低于此基线（新增能力要带新增用例）。
+**验收基线（截至 2026-11-21 F1/F2）：124 模块 / 55 分片、unit 126/126、verify:api 21/21、selftest 16/16（15 页）、e2e 41/41、visual 24/24。** 任何一项做完都要不低于此基线（新增能力要带新增用例）。
 
 ---
 
@@ -132,7 +132,7 @@ cd E:/agentcrew && python scripts/test.py    # 崩溃隔离跑器；基线 3612 
 
 1. 先跑一遍 §4 全套验证，确认起点是绿的（任何红先修环境再看代码）。
 2. 顺手项（半小时级）：D2 预算 toast → D3 成本聚合 → H1 模板扩充 → L2 follow toggle。
-3. 中型项：~~Q2 工具试跑页~~（✅ 2026-11-21）→ ~~E3 计划 diff~~（✅ 2026-11-21，§3.110）→ F1-F2 任务图实时高亮与抽屉产物摘要 → J1-J3 → O1/O2/O3。
+3. 中型项：~~Q2 工具试跑页~~（✅ 2026-11-21）→ ~~E3 计划 diff~~（✅ 2026-11-21，§3.110）→ ~~F1-F2 任务图实时高亮与抽屉产物摘要~~（✅ 2026-11-21，§3.111）→ J1-J3 → O1/O2/O3。
 4. 需拍板/核实的：H2（读 service.py 后回填结论）、§5 内联审批（建议先抽 decide+resume 公共函数）。
 5. N1 是唯一动 Python 的 P1 项，单独一笔提交（CLI + tests/test_schedule.py + 前端开关）。
 6. 批次 3 一律契约先行（API_ROUTES + openapi.yaml + test_api_contract.py），每项独立提交。

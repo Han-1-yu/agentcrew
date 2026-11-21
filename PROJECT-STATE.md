@@ -8,7 +8,15 @@
 
 ## 0. 一句话现状
 
-**最新一轮（2026-11-21）：Studio E3 运行对比的任务级 diff**
+**最新一轮（2026-11-21）：Studio F1/F2 任务图实时高亮 + 任务抽屉产物摘要**
+—— 看板不再等 500ms 快照才变色：`task_transition` 事件到达时就把目标节点就地切换
+`class` 与状态 chip（不重建 SVG、不加动画），布局与节点增删仍由快照兜齐；任务详情
+抽屉新增「输入 / 输出产物」段，优先读 `artifacts/MANIFEST.json`、缺省回退
+`result.artifacts`，依赖任务的产物按上游任务聚合。纯函数 `lib/task-live.js` /
+`lib/task-artifacts.js` + 十一例单测；`check` 124 模块 / 55 分片、`test:unit` 126/126、
+`verify:api` 21/21、`e2e` 41/41（15 页）、`selftest` 16/16、`visual` 24/24。明细见 §3.111。
+
+**同日（2026-11-21）：Studio E3 运行对比的任务级 diff**
 —— 「运行对比」弹窗此前只比指标，现在按任务 id 对齐两份 `tasks.json`，给出
 新增 / 移除 / 变更（标题·角色·状态·优先级·依赖）四类行；`passed` 与 `succeeded`
 归一比较，避免同义状态制造假差异。纯函数 `lib/task-diff.js` + 八例单测；
@@ -124,7 +132,7 @@ config 解析去重（R66e）、`main.py` 3388→~700 行拆进 `cli/` 九模块
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
-| Studio | `npm run check` **120** 模块 / **55** 样式分片、`test:unit` **115/115**、`verify:api` **21/21**、electron `e2e` **39/39**（15 页导航 + 命令面板 + 通知中心 + 对话检索 + 供应商分层 + 工具试跑页头）、`selftest` **16/16**（15 页导航）、`visual` 基线重建后复检 **24/24**（E3 对比 diff 重建，见 §3.110；Q2 工具试跑页见 §3.109） |
+| Studio | `npm run check` **124** 模块 / **55** 样式分片、`test:unit` **126/126**、`verify:api` **21/21**、electron `e2e` **41/41**（15 页导航 + 命令面板 + 通知中心 + 对话检索 + 供应商分层 + 工具试跑页头 + 任务详情产物摘要）、`selftest` **16/16**（15 页导航）、`visual` 基线重建后复检 **24/24**（F1/F2 重建，见 §3.111；E3 对比 diff 见 §3.110；Q2 工具试跑页见 §3.109） |
 | 上线自检 | 本机可验 **9 项全通过**（doctor / 离线冒烟 / REST 认证 200·401 / `/metrics` / 无密钥退 3 / `clean` 干跑 / Studio 三连 / ruff+mypy）；目标机 10 项判据见 `docs/DEPLOY-CHECK-2026-11-13.md` |
 | 收尾 | 交付说明见 **`docs/CLOSURE-2026-11-13.md`**；B 类外部环境项 **5/5 全部闭环**；云主机真实部署验收 10 项中 **7 项闭环**（TLS/SSE、告警规则、日志、密钥、成本、webhook、备份），仅剩独立数据盘与两项 Docker 依赖（§3.77、`docs/DEPLOYMENT-VM-2026-11-13.md`） |
 | Git | `c9c4a60`（R61 真机修复）与 `c9cc47c`（R59–R61）均已推送到 `origin/master`，CI run **43453359080** / **43449592343** 的 **7 个 job 全部 success**（Python 3.10/3.11/3.12/3.13、Windows、Studio、Docker 真隔离）；`ebb9895`（R62）/ `8c6e411`（Studio V6-FE）/ `b712113`（桌面启动器）连同两笔状态回填已于 2026-11-14 推送到 `origin/master`（`92d3854..67aeda4`）；C10 `5cdeea8` 与状态回填 `d76d2ef` 同批推送，**2026-11-15 复核 CI run `43608513108`（head = `d76d2ef`）的 7 个 job 逐一 success**（Python 3.10/3.11/3.12/3.13、Windows·uv、Studio·Node 20、Sandbox·docker 真隔离），`Sync main` run `43608513094` success；上一批 `67aeda4` 的 run `43607497931` 亦 success。验收报告 `docs/ACCEPTANCE-2026-11-12.md`；真实模型评测历史证据为 23 条中 22 通过（`bench/eval-live-2026-11-13.md`，本次未重跑真实模型评测）。**2026-11-15 本轮两笔提交 `5e9bc70`（实现，26 文件 / +1866 −119）/ `bedb7e7`（状态回填）已推送到 `origin/master`**（`d76d2ef..bedb7e7`，`origin/main` 同哈希）；对应 CI run **`43712615843`** 结论 `success`、7 个 job 逐一 success，`Sync main` `43712615752` success |
@@ -3712,6 +3720,62 @@ id 自然序、摘要口径、空表不抛）；`e2e` **39/39**、`selftest` **1
 `visual:update` 重建 24 张后 `visual` 24/24。**未覆盖**：对比弹窗的自动化点击
 （入口需要「≥2 个 run」的真实用户数据，e2e 不伪造该前提）；UI 接线靠 `check` 的
 导入完整性与人工走查兜底。
+
+### 3.111 Studio F1/F2：任务图实时高亮 + 任务抽屉产物摘要（2026-11-21）
+
+**起点**：看板的状态迁移靠 `handleRealtimeEvent` 里 500ms 防抖快照「整块重载」——
+事件到了要等半秒才变色，连续迁移时肉眼像卡住；任务详情抽屉只有一个「输出产物」
+格子，且 `tasks.json` 的 `result.artifacts` 常被序列化成**空白字符串**，旧代码按
+`.length` 当真值判断，于是把 `" "` 当成 1 个产物、渲染出 `undefined`。
+
+**F1（实时高亮）**：
+- `studio/src/lib/task-live.js`（纯函数）：`transitionPatch(data)` 把事件压成最小
+  patch——`to_status` 优先、缺省回落 `status`，只带事件里真出现的 `attempts/error`
+  （不把缺失字段写成 `undefined`）；空白 error、非法状态返回 `null`，绝不写坏任务。
+- `features/dashboard/dag-live.js`：`applyTaskTransitionLive(evtData)` 在
+  `#dag-svg` 里按 `data-task` 找节点，只改 `class`（`running` 等）、`data-status`
+  与 chip 文案；**不重建 SVG、不加动画、不动布局**——节点增删、连线热度、进度条
+  仍由既有 500ms 快照兜齐。看板不在前台（找不到节点）时只改 `S.dash.tasks` 的内存值，
+  下次渲染自然正确。
+- `dag-task-view.js` 给状态 chip 的 `<text>` 加了 `node-chip-label` 类，作为就地
+  切换的稳定寻址点（原来只能按文本匹配）。
+- `app/realtime.js` 在 `appendEvents` 之前挂一行 hook。为守住 320 行的模块上限，
+  把事件去重键（逐字 `eventKey` + 跨通道 `semanticKey` + 3 秒窗口 `nearDuplicate`）
+  整体拆到 `app/realtime-dedup.js`——纯计算 + 只读 `S.dash`，行为一字未变。
+
+**F2（抽屉产物摘要）**：
+- `studio/src/lib/task-artifacts.js`（纯函数）：`expectedPaths`（契约 `deliverables`
+  兼容字符串/对象）、`resultArtifacts`（`result.artifacts` 归一，**字符串一律当没有**）、
+  `entriesFor`（MANIFEST 条目按任务过滤）、`summarizeTaskArtifacts` 折成
+  `{outputs:{files,source}, inputs:{files,from}, missing, pending}`。
+  - **来源优先级**：真 run 有 `MANIFEST.json`（带 `produced_by_task`）就用它；
+    mock / 老 run 没有 MANIFEST 时才退回 `result.artifacts`，并标 `source: 'result'`。
+  - **输入**：依赖任务的产物按上游任务聚合并去重（`from` 带任务 id 与标题）。
+  - **契约缺口**：只在任务到达终态后把「声明了却没产出」列成 `missing`；
+    未完成时报 `pending`，避免把在跑的任务误报成违约。
+- `features/detail/panel.js`：原「输出产物」段换成「输入 / 输出产物」摘要盒
+  （`renderArtifactSummary`），异步走 `window.studio.listArtifacts(dir)` 取 MANIFEST
+  entries，失败回退空清单；输出最多列 6 个、输入最多 4 个，超出给「…另有 N 个」。
+- `styles/components/detail.css`：`.dp-art-sum` / `.dp-art-group` 等安静排版。
+
+**边界**：F1 只同步**状态外观**，不重排布局、不做迁移动画（布局归快照）；多任务
+同帧连续迁移时中间态可能被后一帧覆盖（视觉效果正确，审计以事件列表为准）。F2 只列
+路径与大小，不预览内容（预览在产物页）；MANIFEST 缺失时无法区分「产物过期被删」与
+「从未登记」。
+
+**验证**：`check` **124 模块 / 55 分片**（新增 `dag-live` / `task-live` /
+`task-artifacts` / `realtime-dedup`，`realtime.js` 回到上限内）；
+`test:unit` **126/126**（新增 `task-live` 四例：`to_status` 优先与回落、只带出现的
+字段、非法状态返回 `null`、`applyTransition` 返回 from/to；`task-artifacts` 七例：
+字符串 artifacts 当空、数组归一、MANIFEST 优先与输入聚合、回退 `result`、契约缺口
+只在终态报、无依赖时 `from` 为空、`entriesFor` 过滤）；
+`verify:api` **21/21**；`e2e` **41/41**——新增 4b（抽屉含输入/输出摘要）与 4c（task
+节点 chip 有稳定类名），并把第 4 项改为**先切「任务视图」再点节点**（默认 Agent 视图
+点开的是 Agent 详情，旧断言靠运气）；`selftest` **16/16**；`visual:update` 重建 24 张
+后 `visual` 24/24。**未覆盖**：F1 的真实 SSE 迁移高亮没有自动化断言（e2e 不跑真
+run、`selftest` 的迁移时序不可控），靠钩子位置（事件入口第一行）+ 3 秒内快照兜底；
+F2 的 MANIFEST 真实数据只在本机 completed run 上人工核对（`20261121-213845-8f0c`
+的 23 条 entries 全部带 `produced_by_task`）。
 
 ---
 
