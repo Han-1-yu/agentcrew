@@ -5,9 +5,10 @@
 重建。设计约束：
 
 - **只追加、不重写**：``atomic_write_text`` 那种「整文件替换」语义在这里是错的，
-  历史事件不允许被覆盖。每行一个独立 JSON 对象，追加后 ``flush()`` +
-  ``os.fsync()``（spec §13.2）——进程被 ``Ctrl-C`` 打断时，最后一条事件要么完整
-  落盘、要么根本不出现。
+  历史事件不允许被覆盖。每行一个独立 JSON 对象，追加后 ``flush()``，默认策略
+  （``each``）再 ``os.fsync()``（spec §13.2）——进程被 ``Ctrl-C`` 打断时，最后
+  一条事件要么完整落盘、要么根本不出现。阶段 3 起策略可分级（``batch`` /
+  ``none`` 换吞吐，run 终局 :meth:`close` 恒收口），见 ``resolve_sync_policy``。
 - **写入严、读取宽**：``emit`` 只写结构合法的行；:meth:`Ledger.events` /
   :meth:`Ledger.count` 则在任何历史状态下都读得出东西——文件不存在（从未 emit
   或 run 目录被清理）视为零事件；空行跳过；无法解析的行（崩溃截断的尾行、写到
@@ -51,6 +52,48 @@ _logger = logging.getLogger(__name__)
 
 #: 坏行警告回显的最大字符数；先 ``redact`` 再截断，避免截出半截密钥。
 _EXCERPT_LIMIT = 200
+
+# ── 阶段 3：fsync 分级（持久化 vs 吞吐的可配置权衡） ────────────────────────
+#
+# ``each``（默认）：逐条 flush + fsync——spec §13.2 的完整承诺，进程被 Ctrl-C
+#   打断时最后一条事件要么完整落盘、要么根本不出现；
+# ``batch``：逐条 flush，每 N 条（``AGENTCREW_LEDGER_FSYNC_BATCH``，默认 32）
+#   或 :meth:`close` 时统一 fsync——高吞吐场景（评测/批量回放）的崩溃窗口
+#   收窄到「最近未满 N 条」；OS 崩溃 / 断电仍可能丢窗口内事件；
+# ``none``：逐条 flush、从不主动 fsync（:meth:`close` 时统一收口一次）——
+#   进程崩溃不丢（OS 页缓存兜底），断电可能丢整个 run 的事件。
+# 三种策略下 ``close()`` 都会把未落盘的事件强制 fsync——run 终局的持久化
+# 承诺不因分级而打折，窗口只存在于 run 进行中。
+FSYNC_POLICIES = frozenset({"each", "batch", "none"})
+DEFAULT_FSYNC_POLICY = "each"
+DEFAULT_FSYNC_BATCH = 32
+
+
+def resolve_sync_policy(explicit: str | None = None) -> tuple[str, int]:
+    """解析 fsync 策略：入参优先，缺省读 ``AGENTCREW_LEDGER_FSYNC``，再缺省 each。
+
+    返回 ``(策略, batch 大小)``；非法值抛 ``ValueError``（fail fast——落盘策略
+    打错字不该被静默当成默认值）。
+    """
+    raw = explicit if explicit is not None else os.environ.get(
+        "AGENTCREW_LEDGER_FSYNC", DEFAULT_FSYNC_POLICY)
+    policy = str(raw).strip().lower()
+    if policy not in FSYNC_POLICIES:
+        raise ValueError(
+            f"ledger fsync 策略非法：{raw!r}（可用：each / batch / none）")
+    batch = DEFAULT_FSYNC_BATCH
+    if policy == "batch":
+        raw_batch = os.environ.get("AGENTCREW_LEDGER_FSYNC_BATCH")
+        if raw_batch:
+            try:
+                batch = int(raw_batch)
+            except ValueError as exc:
+                raise ValueError(
+                    f"AGENTCREW_LEDGER_FSYNC_BATCH 必须是整数，收到 {raw_batch!r}"
+                ) from exc
+            if batch < 1:
+                raise ValueError("AGENTCREW_LEDGER_FSYNC_BATCH 必须 >= 1")
+    return policy, batch
 
 
 def _safe_lines(handle: Any, path: Any) -> Iterator[str]:
@@ -108,6 +151,7 @@ class Ledger:
         run_id: str,
         secrets: Sequence[str] = (),
         observer: Callable[[str, dict[str, Any]], None] | None = None,
+        sync: str | None = None,
     ) -> None:
         """``secrets`` 冻结为元组，之后调用方的列表变更不影响本实例。
 
@@ -117,11 +161,18 @@ class Ledger:
         ``task_started`` / ``tool_call`` / ``gate_result`` 等明细。回调收到的是
         **从写入行重建的 data**——``default`` 兜底对 ``set``/``bytes`` 的脱敏也
         已生效，不会把密钥原值漏给观察者。
+
+        ``sync``（阶段 3）：落盘策略 ``each`` / ``batch`` / ``none``，缺省读
+        ``AGENTCREW_LEDGER_FSYNC``（再缺省 ``each``）。默认行为与改造前逐字
+        一致——评测 / 批量回放等高吞吐路径可用 batch / none 换吞吐，run 终局
+        的 :meth:`close` 恒把未落盘事件强制 fsync。非法值抛 ``ValueError``。
         """
         self._path = Path(path)
         self._run_id = run_id
         self._secrets: tuple[str, ...] = tuple(secrets)
         self._observer = observer
+        self._sync_policy, self._fsync_batch = resolve_sync_policy(sync)
+        self._pending_fsync = 0
         self._closed = False
 
     def emit(self, event: str, **data: Any) -> LedgerEvent:
@@ -166,7 +217,15 @@ class Ledger:
         with open(self._path, "a", encoding="utf-8") as file:
             file.write(line)
             file.flush()
-            os.fsync(file.fileno())
+            # 阶段 3：fsync 分级。each（默认）逐条 fsync，语义与 spec §13.2 一致；
+            # batch/none 推迟 fsync 换吞吐，run 终局由 close() 统一收口。
+            if self._sync_policy == "each":
+                os.fsync(file.fileno())
+            else:
+                self._pending_fsync += 1
+                if self._sync_policy == "batch" and self._pending_fsync >= self._fsync_batch:
+                    os.fsync(file.fileno())
+                    self._pending_fsync = 0
         # 直接返回上面的 record 不够：它里面的 set/bytes/自定义对象仍是原值，
         # 只有序列化器兜底才把它们脱敏。重建自写入行，返回值与文件不可能漂移。
         return LedgerEvent.model_validate_json(line)
@@ -245,11 +304,25 @@ class Ledger:
         """统计 ``event`` 的行数；与 :meth:`events` 同一套宽容规则、同样流式。"""
         return sum(1 for _ in self.events(event))
 
-    def close(self) -> None:
-        """标记关闭；其后的 :meth:`emit` 抛 ``RuntimeError``。可重复调用。
+    def flush(self) -> None:
+        """把尚未 fsync 的事件强制落盘（batch / none 策略的收口动作）。
 
-        读取不受影响：run 结束后正是靠 :meth:`events` / :meth:`count` 重建报告。
+        ``fsync`` 作用在文件 inode 上，与写入时用的句柄无关——新开的追加句柄
+        同样能把 OS 页缓存里的事件推到存储。``each`` 策略下没有积压，此调用
+        是幂等空操作。可重复调用。
         """
+        if self._pending_fsync and self._sync_policy != "each":
+            with open(self._path, "a", encoding="utf-8") as file:
+                os.fsync(file.fileno())
+            self._pending_fsync = 0
+
+    def close(self) -> None:
+        """强制落盘积压事件后标记关闭；其后的 :meth:`emit` 抛 ``RuntimeError``。
+
+        可重复调用（flush 与置位都是幂等的）。读取不受影响：run 结束后正是靠
+        :meth:`events` / :meth:`count` 重建报告。
+        """
+        self.flush()
         self._closed = True
 
 

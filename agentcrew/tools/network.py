@@ -8,8 +8,10 @@
 
 - 只接受 ``http`` / ``https``，端口只允许 80 / 443（不给内网端口探测留口子）；
 - 拒绝内嵌凭据、``localhost`` / ``*.internal`` / ``*.local`` 与字面私网 IP；
-- **真实请求前**解析 DNS，任一解析结果落在私网 / 回环 / 链路本地 / 保留段即拒绝
-  （防 DNS rebinding 与元数据服务 ``169.254.169.254``）；
+- **真实请求前**解析 DNS，任一解析结果落在私网 / 回环 / 链路本地 / 保留段即拒绝；
+- **按校验通过的 IP 直连**（BUG-AUDIT P3-1）：旧实现校验后交回 urllib 再解析一次
+  DNS，两次解析之间是可被 rebinding 利用的 TOCTOU 窗口；现在用同一份解析结果
+  建立连接，TLS 以**原域名**做 SNI 与证书校验（证书仍锚定域名，IP 只是传输地址）；
 - **不跟随重定向** —— 否则一个公网 URL 可以 302 到内网地址绕过上面所有检查；
 - 只接收文本类 Content-Type，响应体硬上限 256 KiB，超时默认 10 秒；
 - ``fetcher`` 可注入同步函数，让单测完全离线（hermetic），也便于接入自定义代理。
@@ -21,13 +23,16 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import http.client
 import ipaddress
 import socket
-from collections.abc import Callable
+import ssl
+from collections.abc import Callable, Sequence
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, build_opener
 
 from pydantic import Field
 
@@ -79,6 +84,29 @@ def _is_forbidden_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     )
 
 
+def _pick_public_ip(infos: Sequence[Any]) -> str:
+    """从 ``getaddrinfo`` 结果挑出用于直连的 IP。
+
+    语义与旧实现一致：**任何一个**解析结果落在非公网段都立即拒绝（攻击者给
+    一个私网 A 记录就该被拦，而不是等下一个）；全部合法时返回第一个可解析的
+    IP —— 连接建立用它，域名只保留给 TLS 的 SNI / 证书校验与 ``Host`` 头。
+    没有任何可解析结果（解析为空 / 全是怪记录）同样拒绝。
+    """
+    chosen: str | None = None
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            continue
+        if _is_forbidden_ip(ip):
+            raise ValueError(f"目标解析到非公网地址 {ip}，已拒绝")
+        if chosen is None:
+            chosen = str(ip)
+    if chosen is None:
+        raise ValueError("目标没有可用的解析结果")
+    return chosen
+
+
 def validate_fetch_url(url: str) -> str | None:
     """词法层 SSRF 校验；返回中文错误文本，``None`` 表示通过（DNS 层另查）。
 
@@ -127,29 +155,46 @@ def validate_fetch_url(url: str) -> str | None:
 def _http_get_text(url: str, timeout: float, max_bytes: int) -> str:
     """同步抓取（在 ``asyncio.to_thread`` 里跑，不阻塞事件循环）。
 
-    DNS 解析结果逐个检查，且用不跟随重定向的 opener；任何失败都抛异常，由
-    :meth:`WebFetchTool.run` 收敛成错误文本回灌，绝不冒泡断掉 Agent。
+    解析、校验、连接用**同一份** DNS 结果（P3-1）：``getaddrinfo`` 的每个结果
+    都过公网校验，然后直接与选中的 IP 建立 TCP 连接——urllib 自行重解析的旧
+    路径留有 rebinding 窗口，已移除。HTTPS 用原域名做 SNI 与证书校验；``Host``
+    头由 ``http.client`` 按原域名生成（虚拟主机不受影响）。HTTP 错误（4xx/5xx）
+    与重定向（3xx）都以 :class:`~urllib.error.HTTPError` 抛出，错误文案与旧
+    opener 路径一致，由 :meth:`WebFetchTool.run` 收敛成错误文本回灌。
     """
     parts = urlsplit(url)
-    port = parts.port or (443 if parts.scheme.lower() == "https" else 80)
+    scheme = parts.scheme.lower()
+    port = parts.port or (443 if scheme == "https" else 80)
     host = parts.hostname or ""
-    for info in socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP):
-        try:
-            ip = ipaddress.ip_address(info[4][0])
-        except ValueError:
-            continue
-        if _is_forbidden_ip(ip):
-            raise ValueError(f"目标解析到非公网地址 {ip}，已拒绝")
+    infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+    ip = _pick_public_ip(infos)
 
-    request = Request(
-        url,
-        headers={
+    sock = socket.create_connection((ip, port), timeout=timeout)
+    sock.settimeout(timeout)
+    if scheme == "https":
+        # 证书校验与 SNI 锚定原域名；IP 只决定底层连接去哪。
+        tls = ssl.create_default_context()
+        sock = tls.wrap_socket(sock, server_hostname=host)
+    conn_cls = http.client.HTTPSConnection if scheme == "https" else http.client.HTTPConnection
+    conn = conn_cls(host, port, timeout=timeout)
+    # 复用已建立（且已通过校验）的连接：sock 非空时 http.client 不会再 connect。
+    conn.sock = sock
+    path = parts.path or "/"
+    if parts.query:
+        path = f"{path}?{parts.query}"
+    try:
+        conn.request("GET", path, headers={
             "User-Agent": "AgentCrew-WebFetch/1.0",
             "Accept": "text/*, application/json, application/xml;q=0.8",
-        },
-    )
-    opener = build_opener(_NoRedirect())
-    with opener.open(request, timeout=timeout) as response:
+            "Connection": "close",
+        })
+        response = conn.getresponse()
+        if 300 <= response.status < 400:
+            raise HTTPError(url, response.status, response.reason,
+                            response.headers, None)
+        if response.status >= 400:
+            raise HTTPError(url, response.status, response.reason,
+                            response.headers, None)
         content_type = (
             response.headers.get("Content-Type", "").split(";")[0].strip().lower()
         )
@@ -159,6 +204,9 @@ def _http_get_text(url: str, timeout: float, max_bytes: int) -> str:
         if content_type and not allowed:
             raise ValueError(f"响应不是文本类型（{content_type}），已拒绝")
         data = response.read(max_bytes + 1)
+    finally:
+        with contextlib.suppress(Exception):
+            conn.close()
     truncated = len(data) > max_bytes
     text = data[:max_bytes].decode("utf-8", errors="replace")
     if truncated:

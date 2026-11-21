@@ -1,11 +1,17 @@
 import json
 import logging
+import os
 from datetime import datetime
 
 import pytest
 from pydantic import ValidationError
 
-from agentcrew.runtime.ledger import Ledger, LedgerEvent
+from agentcrew.runtime.ledger import (
+    DEFAULT_FSYNC_BATCH,
+    Ledger,
+    LedgerEvent,
+    resolve_sync_policy,
+)
 from agentcrew.utils.clock import utc_now
 
 
@@ -350,3 +356,97 @@ def test_observer_defaults_to_none_and_emits_normally(tmp_path):
     ev = lg.emit("task_started", task_id="T-1")
     assert ev.event == "task_started"
     assert list(lg.events()) == [ev]
+
+
+# ── 阶段 3：fsync 分级（each / batch / none） ───────────────────────────────
+
+def _fsync_calls(monkeypatch):
+    """统计 os.fsync 调用次数（真实 fsync 仍执行，保证文件真的落盘）。"""
+    calls = []
+    real_fsync = os.fsync
+
+    def counting(fd):
+        calls.append(fd)
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", counting)
+    return calls
+
+
+def test_resolve_policy_defaults_to_each(monkeypatch):
+    monkeypatch.delenv("AGENTCREW_LEDGER_FSYNC", raising=False)
+    assert resolve_sync_policy() == ("each", DEFAULT_FSYNC_BATCH)
+
+
+def test_resolve_policy_env_and_explicit(monkeypatch):
+    monkeypatch.setenv("AGENTCREW_LEDGER_FSYNC", "batch")
+    monkeypatch.setenv("AGENTCREW_LEDGER_FSYNC_BATCH", "5")
+    assert resolve_sync_policy() == ("batch", 5)
+    assert resolve_sync_policy("none") == ("none", DEFAULT_FSYNC_BATCH)
+
+
+def test_resolve_policy_rejects_bad_values(monkeypatch):
+    monkeypatch.delenv("AGENTCREW_LEDGER_FSYNC", raising=False)
+    with pytest.raises(ValueError, match="策略非法"):
+        resolve_sync_policy("sometimes")
+    monkeypatch.setenv("AGENTCREW_LEDGER_FSYNC", "batch")
+    monkeypatch.setenv("AGENTCREW_LEDGER_FSYNC_BATCH", "0")
+    with pytest.raises(ValueError, match=">= 1"):
+        resolve_sync_policy()
+    monkeypatch.setenv("AGENTCREW_LEDGER_FSYNC_BATCH", "x")
+    with pytest.raises(ValueError, match="必须是整数"):
+        resolve_sync_policy()
+
+
+def test_each_policy_fsyncs_per_emit(tmp_path, monkeypatch):
+    calls = _fsync_calls(monkeypatch)
+    ledger = Ledger(tmp_path / "l.jsonl", run_id="R", sync="each")
+    ledger.emit("a")
+    ledger.emit("b")
+    assert len(calls) == 2
+    ledger.flush()                  # each 无积压，flush 幂等
+    assert len(calls) == 2
+
+
+def test_none_policy_skips_fsync_until_close(tmp_path, monkeypatch):
+    calls = _fsync_calls(monkeypatch)
+    ledger = Ledger(tmp_path / "l.jsonl", run_id="R", sync="none")
+    ledger.emit("a")
+    ledger.emit("b")
+    assert len(calls) == 0          # run 进行中从不 fsync
+    ledger.close()
+    assert len(calls) == 1          # 终局统一收口一次
+    assert ledger.count() == 2      # 事件全部可读
+
+
+def test_batch_policy_fsyncs_every_n(tmp_path, monkeypatch):
+    calls = _fsync_calls(monkeypatch)
+    ledger = Ledger(tmp_path / "l.jsonl", run_id="R", sync="batch")
+    ledger._fsync_batch = 3
+    for i in range(7):
+        ledger.emit("e", i=i)
+    assert len(calls) == 2          # 第 3、6 条各触发一次
+    ledger.close()
+    assert len(calls) == 3          # 收口补最后一次（第 7 条）
+    assert ledger.count() == 7
+
+
+def test_batch_flush_is_idempotent(tmp_path, monkeypatch):
+    calls = _fsync_calls(monkeypatch)
+    ledger = Ledger(tmp_path / "l.jsonl", run_id="R", sync="batch")
+    ledger._fsync_batch = 100
+    ledger.emit("a")
+    ledger.flush()
+    ledger.flush()                  # 已无积压：不再 fsync
+    assert len(calls) == 1
+    ledger.close()
+    assert len(calls) == 1
+
+
+def test_closed_ledger_rejects_emit(tmp_path):
+    ledger = Ledger(tmp_path / "l.jsonl", run_id="R", sync="none")
+    ledger.emit("a")
+    ledger.close()
+    with pytest.raises(RuntimeError, match="已关闭"):
+        ledger.emit("b")
+    assert ledger.count() == 1      # close 的 flush 落了盘，读取不受影响
