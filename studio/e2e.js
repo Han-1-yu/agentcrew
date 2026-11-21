@@ -45,8 +45,8 @@ function run(win) {
     check('1. 应用启动且侧边栏导航就绪', booted);
     await sleep(1500);
 
-    // ── 2. 13 页导航（含 R62 回滚重跑）──
-    const pages = ['conversation', 'dashboard', 'tasks', 'dag', 'agents', 'profiles', 'gates', 'rewind', 'artifacts', 'events', 'providers', 'schedules', 'settings'];
+    // ── 2. 14 页导航（含 R62 回滚重跑 + F+ 流程库）──
+    const pages = ['conversation', 'dashboard', 'tasks', 'dag', 'agents', 'profiles', 'gates', 'rewind', 'artifacts', 'events', 'providers', 'schedules', 'flows', 'settings'];
     const pageResults = {};
     for (const page of pages) {
       await js(`document.querySelector('.nav-item[data-nav="${page}"]')?.click()`);
@@ -55,13 +55,13 @@ function run(win) {
       pageResults[page] = visible;
     }
     const allPagesOk = pages.every(p => pageResults[p]);
-    check('2. 13 页导航全部可切换且 active 状态正确', allPagesOk, JSON.stringify(pageResults));
+    check('2. 14 页导航全部可切换且 active 状态正确', allPagesOk, JSON.stringify(pageResults));
     // F3 防回归：每个 nav-item 都有可见文字
     const navTextOk = await js(`Array.from(document.querySelectorAll('.nav-item')).every(b => b.textContent.trim().length > 0)`);
     check('2b. 侧边栏每个导航按钮含可见文字', !!navTextOk);
     await shot('01-9页导航验证');
 
-    // 2c. 新增页内容渲染：执行体档案 / 定时任务 各出标题（不只 nav 高亮）
+    // 2c. 新增页内容渲染：执行体档案 / 定时任务 / 流程库 各出标题（不只 nav 高亮）
     await js(`document.querySelector('.nav-item[data-nav="profiles"]')?.click()`);
     await sleep(700);
     const profilesOk = await js(`!!document.querySelector('#placeholder-view .page-head h2') && document.querySelector('#placeholder-view .page-head h2').textContent.includes('执行体')`);
@@ -69,7 +69,11 @@ function run(win) {
     await js(`document.querySelector('.nav-item[data-nav="schedules"]')?.click()`);
     await sleep(700);
     const schedulesOk = await js(`!!document.querySelector('#placeholder-view .page-head h2') && document.querySelector('#placeholder-view .page-head h2').textContent.includes('定时任务')`);
-    check('2c. 执行体档案 / 定时任务 页内容渲染', !!(profilesOk && schedulesOk), JSON.stringify({ profilesOk, schedulesOk }));
+    // F+ 流程库：未连后端时是诚实空态（页头仍出标题）
+    await js(`document.querySelector('.nav-item[data-nav="flows"]')?.click()`);
+    await sleep(700);
+    const flowsOk = await js(`!!document.querySelector('#placeholder-view .page-head h2') && document.querySelector('#placeholder-view .page-head h2').textContent.includes('流程库')`);
+    check('2c. 执行体档案 / 定时任务 / 流程库 页内容渲染', !!(profilesOk && schedulesOk && flowsOk), JSON.stringify({ profilesOk, schedulesOk, flowsOk }));
 
     // 2d. 对话页：消息流渲染（用户目标气泡 + 任务气泡）
     await js(`document.querySelector('.nav-item[data-nav="conversation"]')?.click()`);
@@ -259,16 +263,26 @@ function run(win) {
     const provEnhance = await js(`(() => ({
       search: !!document.querySelector('#prov-search'),
       catBtns: document.querySelectorAll('#prov-cat-bar .prov-cat-btn').length,
+      typeBtns: document.querySelectorAll('#prov-type-bar .prov-type-btn').length,
+      sections: document.querySelectorAll('.prov-section').length,
+      llmCards: document.querySelectorAll('.prov-card[data-kind="llm"]').length,
+      agentCards: document.querySelectorAll('.prov-card[data-kind="agent"]').length,
+      mockCard: !!document.querySelector('[data-provider="mock"]'),
       editBtns: document.querySelectorAll('.prov-edit-btn').length,
       count: !!document.querySelector('#prov-count'),
       builtinCount: (typeof BUILTIN_PROVIDERS !== 'undefined') ? BUILTIN_PROVIDERS.length : -1,
     }))()`);
     const enhanceOk = provEnhance && provEnhance.search
-      && Number(provEnhance.catBtns) >= 6
+      && Number(provEnhance.catBtns) >= 5
+      && Number(provEnhance.typeBtns) === 3
+      && Number(provEnhance.sections) >= 2
+      && Number(provEnhance.llmCards) >= 20
+      && Number(provEnhance.agentCards) >= 3
+      && provEnhance.mockCard === false
       && Number(provEnhance.editBtns) >= 1
       && provEnhance.count
       && Number(provEnhance.builtinCount) >= 25;
-    check('13d. 供应商页增强（搜索框 + ≥6 分类按钮 + 编辑按钮 + BUILTIN≥25）', !!enhanceOk,
+    check('13d. 供应商页重构（类型 tabs / 两分区 / 隐藏 Mock / 分类 / 编辑）', !!enhanceOk,
       JSON.stringify(provEnhance));
 
     // 搜索输入实时过滤
@@ -300,6 +314,22 @@ function run(win) {
       `active=${catClick && catClick.active} 卡片=${afterCatCards}`);
     // 切回全部
     await js(`document.querySelector('#prov-cat-bar .prov-cat-btn[data-cat="all"]')?.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}))`);
+    await sleep(300);
+
+    // 类型 tab：只看 Agent 智能体时，不应再出现大模型卡片
+    await js(`document.querySelector('#prov-type-bar .prov-type-btn[data-type="agent"]')?.click()`);
+    await sleep(400);
+    const agentView = await js(`({
+      llm: document.querySelectorAll('.prov-card[data-kind="llm"]').length,
+      agent: document.querySelectorAll('.prov-card[data-kind="agent"]').length,
+      section: document.querySelector('.prov-section-head h3')?.textContent || '',
+      catDisabled: document.querySelector('#prov-cat-bar')?.classList.contains('is-disabled'),
+    })`);
+    check('13i. 类型筛选：Agent 智能体与大模型分开', agentView.llm === 0 && agentView.agent >= 3
+      && /Agent 智能体/.test(agentView.section) && agentView.catDisabled === true,
+      JSON.stringify(agentView));
+    await shot('11d-供应商Agent');
+    await js(`document.querySelector('#prov-type-bar .prov-type-btn[data-type="all"]')?.click()`);
     await sleep(300);
 
     // 编辑按钮打开弹窗 → Esc 关闭
@@ -471,6 +501,99 @@ function run(win) {
     await sleep(200);
     check('19. 侧边栏任务列表（搜索/筛选/分组）', !!(taskSearchOk && taskFiltersOk && taskGroupOk && taskFilteredOk),
       JSON.stringify({ taskSearchOk, taskFiltersOk, taskGroupOk, taskFilteredOk }));
+
+    // ── 20. 命令框快速切换模型下拉（只读：打开 / 当前项 / Esc，不写默认模型）──
+    await js(`document.querySelector('.nav-item[data-nav="dashboard"]')?.click()`);
+    await sleep(700);
+    await js(`document.getElementById('cmp-model')?.click()`);
+    await sleep(350);
+    const menuOpen = await js(`(() => { const m = document.getElementById('cmp-model-menu'); return !!m && !m.classList.contains('hidden'); })()`);
+    const menuRows = Number(await js(`document.querySelectorAll('#cmp-model-menu .cmm-item').length`));
+    const menuChecked = Number(await js(`document.querySelectorAll('#cmp-model-menu .cmm-item[aria-checked="true"]').length`));
+    const menuFocused = await js(`!!document.activeElement?.closest('#cmp-model-menu')`);
+    await shot('15-命令框模型下拉');
+    await js(`document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+    await sleep(250);
+    const menuClosed = await js(`document.getElementById('cmp-model-menu')?.classList.contains('hidden')`);
+    const menuFocusBack = await js(`document.activeElement?.id === 'cmp-model'`);
+    check('20. 命令框模型下拉（打开 / 当前项 / Esc 关闭回焦）',
+      !!(menuOpen && menuRows >= 8 && menuChecked === 1 && menuFocused && menuClosed && menuFocusBack),
+      JSON.stringify({ menuOpen, menuRows, menuChecked, menuFocused, menuClosed, menuFocusBack }));
+
+    // ── 20b. Ctrl+K 命令面板（B4）：打开 / 搜索过滤 / Esc 关闭 ──
+    await js(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }))`);
+    await sleep(450);
+    const paletteOpen = await js(`!!document.getElementById('palette-input') && !document.getElementById('modal').classList.contains('hidden')`);
+    const paletteDefault = Number(await js(`document.querySelectorAll('.palette-item').length`));
+    await js(`(() => { const i = document.getElementById('palette-input'); if (i) { i.value = '产物'; i.dispatchEvent(new Event('input', { bubbles: true })); } })()`);
+    await sleep(250);
+    const paletteFiltered = Number(await js(`document.querySelectorAll('.palette-item').length`));
+    const paletteFirst = await js(`document.querySelector('.palette-item .palette-label')?.textContent || ''`);
+    await js(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+    await sleep(350);
+    const paletteClosed = await js(`(() => { const m = document.getElementById('modal'); return m ? m.classList.contains('hidden') : true; })()`);
+    check('20b. Ctrl+K 命令面板（打开 / 搜索过滤 / Esc 关闭）',
+      !!(paletteOpen && paletteDefault >= 8 && paletteFiltered >= 1 && paletteFiltered < paletteDefault
+        && /产物/.test(paletteFirst) && paletteClosed),
+      JSON.stringify({ paletteOpen, paletteDefault, paletteFiltered, paletteFirst, paletteClosed }));
+    await shot('15b-命令面板');
+
+    // ── 20c. 通知中心（P1）：面板可开合 + 条目区渲染 ──
+    await js(`document.getElementById('btn-notify')?.click()`);
+    await sleep(400);
+    const notifOpen = await js(`!!document.getElementById('modal') && !document.getElementById('modal').classList.contains('hidden')`);
+    const notifTitle = await js(`document.querySelector('#modal .modal-title')?.textContent || ''`);
+    const notifBody = await js(`!!document.querySelector('#modal .notif-list')`);
+    await js(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+    await sleep(300);
+    const notifClosed = await js(`(() => { const m = document.getElementById('modal'); return m ? m.classList.contains('hidden') : true; })()`);
+    check('20c. 通知中心面板（打开 / 标题 / Esc 关闭）',
+      !!(notifOpen && /通知中心/.test(notifTitle) && notifBody && notifClosed),
+      JSON.stringify({ notifOpen, notifTitle, notifBody, notifClosed }));
+
+    // ── 21. 对话页检索 / 类型筛选 / 产物预览 ──
+    await js(`document.querySelector('.nav-item[data-nav="conversation"]')?.click()`);
+    await sleep(900);
+    const convToolbar = await js(`!!document.querySelector('.conv-toolbar') && !!document.getElementById('conv-search')`);
+    const convChips = Number(await js(`document.querySelectorAll('.conv-fchip').length`));
+    const convRows = Number(await js(`document.querySelectorAll('.conv-list > .conv-msg').length`));
+    await js(`(() => { const i = document.getElementById('conv-search'); i.value = '验收'; i.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+    await sleep(600);
+    const hitRows = Number(await js(`document.querySelectorAll('.conv-list > .conv-msg').length`));
+    const hitMarks = Number(await js(`document.querySelectorAll('.conv-list .conv-hit').length`));
+    const hitline = await js(`document.querySelector('.conv-hitline')?.textContent || ''`);
+    await js(`document.querySelector('.conv-search-clear')?.click()`);
+    await sleep(500);
+    const restoredRows = Number(await js(`document.querySelectorAll('.conv-list > .conv-msg').length`));
+    await js(`document.querySelector('.conv-fchip[data-filter="system"]')?.click()`);
+    await sleep(400);
+    const sysOnly = await js(`({ sys: document.querySelectorAll('.conv-list .conv-system').length, user: document.querySelectorAll('.conv-list .conv-user').length })`);
+    await js(`document.querySelector('.conv-fchip[data-filter="all"]')?.click()`);
+    await sleep(300);
+    const convArtifacts = Number(await js(`document.querySelectorAll('.conv-list .conv-artifact').length`));
+    let convPreviewOk = true;
+    if (convArtifacts > 0) {
+      await js(`document.querySelector('.conv-list .conv-artifact')?.click()`);
+      await sleep(800);
+      convPreviewOk = await js(`(() => { const p = document.getElementById('detail-panel'); return !!p && !p.classList.contains('hidden') && !!p.querySelector('.conv-preview') && !!p.querySelector('.conv-preview-code, .conv-preview-md, .conv-preview-img, .conv-preview-empty'); })()`);
+      await shot('16-对话产物预览');
+      await js(`document.getElementById('detail-mask')?.click()`);
+      await sleep(300);
+    }
+    check('21. 对话检索 / 类型筛选 / 产物预览',
+      !!(convToolbar && convChips >= 7 && convRows > 0 && hitRows > 0 && hitRows < convRows && hitMarks > 0
+        && /命中/.test(hitline) && restoredRows === convRows && sysOnly.sys > 0 && sysOnly.user === 0 && convPreviewOk),
+      JSON.stringify({ convToolbar, convChips, convRows, hitRows, hitMarks, hitline, restoredRows, sysOnly, convArtifacts, convPreviewOk }));
+
+    // ── 22. 复制整段对话（Markdown）──
+    const { clipboard } = require('electron');
+    await js(`document.getElementById('conv-copy')?.click()`);
+    await sleep(600);
+    const clip = clipboard.readText();
+    const copiedMarkdown = clip.includes('# ') && clip.includes('## 用户目标') && clip.includes('## ');
+    const copyToast = await js(`[...document.querySelectorAll('.toast')].map(t => t.textContent).join(' | ')`);
+    check('22. 复制整段对话为 Markdown', !!(copiedMarkdown && /已复制对话/.test(copyToast)),
+      JSON.stringify({ length: clip.length, head: clip.slice(0, 60), copyToast }));
 
     // ── 汇总 ──
     const allPass = checks.every((c) => c.pass);

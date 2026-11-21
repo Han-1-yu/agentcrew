@@ -21,13 +21,14 @@ function restCapable() {
  * plan 模式：approval_mode=deferred 把「问人」外包给审批单（服务端会把
  * gate 提为 both：计划 + 交付两个卡点，比 CLI 的 plan 稍宽）。
  */
-function buildRunOptions({ mode, mock, model, maxCost, maxLlmCalls } = {}) {
+function buildRunOptions({ mode, mock, model, maxCost, maxLlmCalls, flowName } = {}) {
   const options = {};
   if (mock) options.mock = true;
   if (model) options.default_model = String(model);
   if (Number(maxCost) > 0) options.max_cost_usd = Number(maxCost);
   if (Number(maxLlmCalls) > 0) options.max_llm_calls = Math.round(Number(maxLlmCalls));
   if (mode === 'plan') options.approval_mode = 'deferred';
+  if (flowName) options.flow_name = String(flowName);
   return options;
 }
 

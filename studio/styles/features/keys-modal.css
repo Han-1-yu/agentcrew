@@ -1,0 +1,47 @@
+/* Q1：多密钥管理弹窗。表格复用 flows-page.css 的 .flow-node-table 基础样式。 */
+
+.keys-dialog { max-width: 720px; }
+
+.keys-list { max-height: 34vh; overflow: auto; margin: 8px 0 14px; }
+
+.keys-table td, .keys-table th { white-space: nowrap; }
+.keys-table td:nth-child(4) { white-space: normal; word-break: break-all; }
+
+.keys-badge {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 999px;
+}
+.keys-badge.on { background: var(--success-bg-quiet); color: var(--success-text); }
+.keys-badge.off { background: var(--error-bg-quiet); color: var(--error-text); }
+
+.keys-subtitle {
+  font-size: var(--fs-sm, 13px);
+  font-weight: 600;
+  color: var(--text);
+  margin: 10px 0 6px;
+}
+
+.keys-create { border-top: 0.5px solid var(--border, var(--ink-12)); padding-top: 10px; }
+.keys-create-actions { margin-top: 8px; }
+
+.keys-created-box {
+  margin-top: 10px;
+  border: 1px solid var(--warn-border, rgba(255,159,10,.38));
+  background: var(--warn-bg-soft);
+  border-radius: var(--r-md, 10px);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.keys-created-warn { font-size: var(--fs-xs, 12px); color: var(--warn); font-weight: 600; }
+
+.keys-created-plain {
+  word-break: break-all;
+  font-size: var(--fs-xs, 12px);
+  background: var(--bg-subtle);
+  border-radius: 8px;
+  padding: 8px 10px;
+}

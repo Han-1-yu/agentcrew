@@ -1,0 +1,60 @@
+/* P1：通知中心面板与条目。角标 #notify-dot 的样式在 topbar/组件层已有。 */
+
+.notif-list {
+  max-height: 52vh;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 340px;
+}
+
+.notif-empty {
+  color: var(--text-ter);
+  font-size: var(--fs-sm, 13px);
+  padding: 16px 4px;
+}
+
+.notif-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: 0.5px solid var(--border, var(--ink-12));
+  border-radius: var(--r-md, 10px);
+  background: var(--bg-card, transparent);
+  padding: 8px 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--dur-1, .15s) ease, border-color var(--dur-1, .15s) ease;
+}
+
+.notif-item:hover { background: var(--accent-bg-faint); border-color: var(--accent-border-soft); }
+
+.notif-item.unread { border-color: var(--accent-border-soft); }
+
+.notif-item-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.notif-item-title { font-size: var(--fs-sm, 13px); font-weight: 600; color: var(--text); }
+.notif-item-body {
+  font-size: var(--fs-xs, 12px);
+  color: var(--text-sub);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.notif-item-ts { font-size: 11px; color: var(--text-ter); font-variant-numeric: tabular-nums; }
+
+.notif-item-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}

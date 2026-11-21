@@ -1,0 +1,102 @@
+/* F+：流程库页。 */
+
+.flow-tools {
+  display: flex;
+  gap: 8px;
+  margin: 10px 0 14px;
+}
+
+.flow-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.flow-card {
+  border: 0.5px solid var(--border, var(--ink-12));
+  border-radius: var(--r-md, 12px);
+  background: var(--bg-card);
+  padding: 12px 14px;
+}
+
+.flow-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.flow-card-name { font-weight: 600; font-size: var(--fs-body); }
+
+.flow-card-meta { color: var(--text-ter); font-size: var(--fs-xs); }
+
+.flow-card-badge {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 999px;
+}
+.flow-card-badge.err { background: var(--error-bg-quiet); color: var(--error-text); }
+.flow-card-badge.ok { background: var(--success-bg-quiet); color: var(--success-text); }
+
+.flow-card-err {
+  margin-top: 6px;
+  font-size: var(--fs-xs);
+  color: var(--error-text);
+  word-break: break-all;
+}
+
+.flow-card-actions { display: flex; gap: 6px; margin-top: 10px; }
+
+/* 查看弹窗 */
+.flow-dialog-body { max-height: 60vh; overflow: auto; }
+.flow-dialog-loading { color: var(--text-ter); padding: 8px 0; }
+
+.flow-desc { color: var(--text-sub); font-size: var(--fs-sm); margin: 8px 0; }
+
+.flow-validate-ok { color: var(--success-text); font-size: var(--fs-xs); margin: 6px 0; }
+.flow-validate-err {
+  color: var(--error-text);
+  font-size: var(--fs-xs);
+  margin: 6px 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.flow-validate-pending { color: var(--text-ter); font-size: var(--fs-xs); }
+.flow-validate-result { min-height: 18px; margin: 8px 0; }
+
+.flow-node-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-xs);
+  margin: 8px 0;
+}
+.flow-node-table th,
+.flow-node-table td {
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 0.5px solid var(--border, var(--ink-12));
+}
+.flow-node-table th { color: var(--text-ter); font-weight: 500; }
+
+.flow-yaml {
+  background: var(--bg-subtle);
+  border: 0.5px solid var(--border, var(--ink-12));
+  border-radius: var(--r-sm, 8px);
+  padding: 10px;
+  font-size: var(--fs-xs);
+  overflow: auto;
+  max-height: 300px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.flow-yaml-input {
+  width: 100%;
+  background: var(--bg-subtle);
+  border: 0.5px solid var(--border, var(--ink-12));
+  border-radius: var(--r-sm, 8px);
+  padding: 10px;
+  font-family: ui-monospace, monospace;
+  font-size: var(--fs-xs);
+  resize: vertical;
+}

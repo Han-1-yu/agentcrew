@@ -1077,6 +1077,10 @@ function registerIpc() {
     for (const imgPath of (Array.isArray(p.images) ? p.images.slice(0, IMAGE_MAX_COUNT) : [])) {
       args.push('--image', String(imgPath));
     }
+    // C3：流程直通（R28）——保存的流程名走 --flow（名字或 .yaml 路径均可）。
+    if (p.flowName && String(p.flowName).trim()) {
+      args.push('--flow', String(p.flowName).trim());
+    }
     args.push('--no-live', '--output-dir', outputDir);
     // spawnCli 恒返回 { key }；启动失败由 proc:error / proc:exit 推送，
     // 原来这里的 if (r.error) 是永远不触发的死分支。
@@ -1407,6 +1411,26 @@ function registerIpc() {
 
   // F4：最近目标列表（也可通过 settings:get 读取）
   ipcMain.handle('goals:recent', () => (Array.isArray(settings.recentGoals) ? settings.recentGoals : []));
+
+  // A6：对话导出 .md 文件（内容来自渲染端 buildTranscript；对话框只落盘）
+  ipcMain.handle('conversation:saveMd', async (_e, arg) => {
+    const p = objArg(arg);
+    const content = String(p.content || '');
+    if (!content.trim()) return { canceled: true };
+    const r = await dialog.showSaveDialog(win, {
+      title: '导出对话为 Markdown',
+      defaultPath: String(p.defaultName || 'agentcrew-conversation.md'),
+      filters: [{ name: 'Markdown', extensions: ['md'] }],
+    });
+    if (r.canceled || !r.filePath) return { canceled: true };
+    try {
+      fs.writeFileSync(r.filePath, content, 'utf8');
+      shell.showItemInFolder(r.filePath);
+      return { saved: r.filePath, size: content.length };
+    } catch (err) {
+      return { ok: false, error: String(err.message || err) };
+    }
+  });
 }
 
 // ---------- 窗口 ----------

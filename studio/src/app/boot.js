@@ -13,6 +13,8 @@ import { openResultPanel } from '../features/result/index.js';
 import { closeDetailPanel } from '../features/detail/panel.js';
 import { initComposer, syncComposer } from '../features/composer/index.js';
 import { openNewRunModal } from '../features/new-run/index.js';
+import { openNotificationPanel } from '../features/notifications/index.js';
+import { openPalette } from '../features/command-palette/index.js';
 import { closeRunDropdown, loadRunList, toggleRunDropdown } from '../features/runs/index.js';
 
 import { loadRealRun } from './data.js';
@@ -62,7 +64,7 @@ async function bootSequence(){
       catch (e) { toast('error', '刷新失败', String(e.message || e)); }
     } else { renderDashboard(); toast('info', '已刷新', '演示数据已重新渲染'); }
   });
-  $('#btn-notify').addEventListener('click',()=>{ $('#notify-dot').classList.add('hidden'); toast('info','通知','暂无新通知'); });
+  $('#btn-notify').addEventListener('click', openNotificationPanel);
   $('#btn-user').addEventListener('click',openUserMenu);
   $('#btn-theme').addEventListener('click', cycleTheme);
   $('#tb-workspace').addEventListener('click',(e)=>{ e.stopPropagation(); toggleRunDropdown(); });
@@ -78,7 +80,8 @@ async function bootSequence(){
       closeDetailPanel(); closeModal(); closeRunDropdown();
       return;
     }
-    // Cmd/Ctrl + N：新建运行（已有弹窗/面板打开时不重复堆叠）
+    // Cmd/Ctrl + K：命令面板（B4）；Cmd/Ctrl + N：新建运行（已有弹窗/面板打开时不重复堆叠）
+    if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){ e.preventDefault(); if(!anyOverlayOpen()) openPalette(); return; }
     if((e.metaKey||e.ctrlKey)&&e.key==='n'){ e.preventDefault(); if(!anyOverlayOpen()) openNewRunModal(); return; }
     // 数字键 1-9：切换导航（弹窗/详情打开时屏蔽，避免在遮罩层背后切页）
     if(!e.metaKey&&!e.ctrlKey&&!e.altKey&&/^[1-9]$/.test(e.key)){

@@ -1,0 +1,84 @@
+/* B4：Ctrl/Cmd+K 命令面板。 */
+
+.palette { display: flex; flex-direction: column; }
+
+.palette-head { display: flex; align-items: center; gap: 10px; }
+
+.palette-input {
+  flex: 1;
+  height: 38px;
+  padding: 0 12px;
+  font-size: var(--fs-body, 13px);
+  font-family: inherit;
+  color: var(--text);
+  background: var(--bg-subtle);
+  border: 0.5px solid var(--border, var(--ink-12));
+  border-radius: var(--r-md, 10px);
+  outline: none;
+}
+.palette-input:focus { border-color: var(--accent-border-med); box-shadow: 0 0 0 3px var(--accent-focus); }
+
+.palette-kbd {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-ter);
+  border: 0.5px solid var(--border, var(--ink-12));
+  border-radius: 6px;
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+
+.palette-list {
+  margin-top: 10px;
+  max-height: 46vh;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.palette-empty { color: var(--text-ter); font-size: var(--fs-sm, 13px); padding: 14px 4px; }
+
+.palette-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  border-radius: var(--r-sm, 8px);
+  padding: 7px 10px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text);
+}
+.palette-item:hover { background: var(--bg-subtle); }
+.palette-item.active { background: var(--accent-bg-soft); }
+
+.palette-kind {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--accent-text);
+  background: var(--accent-bg);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+
+.palette-label {
+  flex: 0 1 auto;
+  font-size: var(--fs-sm, 13px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette-sub {
+  margin-left: auto;
+  flex: 0 1 auto;
+  font-size: var(--fs-xs, 12px);
+  color: var(--text-ter);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 45%;
+}

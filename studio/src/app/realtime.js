@@ -1,13 +1,8 @@
 /**
  * 实时通道：SSE 事件流 + 主进程文件监听，合并到同一条 handleRealtimeEvent 处理。
- *
- * SSE 走主进程代理（apiStreamStart）：后端 R40 发的是「命名事件」帧
- * （`event: task_transition` 等），原生 EventSource.onmessage 一帧都收不到；
- * 而且 R36 起认证默认强制开启，EventSource 无法带 Authorization 头。
- * 主进程解析帧后通过 `sse:frame` 推 { runId, event, data }，这里按 event 分派。
- *
- * 纪律：任一时刻只允许一条实时通道（SSE 或文件 watch）。resetRealtime 会同时
- * 关掉两者，否则断线补过 watch 之后再连上 SSE 就会双通道推同一事件。
+ * SSE 走主进程代理（apiStreamStart）：后端 R40 发「命名事件」帧，原生
+ * EventSource 收不到、也无法带认证头；主进程解析后经 `sse:frame` 推 {runId,event,data}。
+ * 纪律：任一时刻只允许一条实时通道（SSE 或文件 watch），resetRealtime 同时关两者。
  */
 import { parseTs } from '../lib/format.js';
 import { S } from '../lib/store.js';
@@ -18,6 +13,7 @@ import { renderEvents } from '../features/dashboard/events.js';
 import { refreshEventsView } from '../features/events/index.js';
 import { appendStreamDelta, bindStreamPanel, resetStreamPanel } from '../features/dashboard/stream.js';
 import { appendConversationDelta, refreshConversation } from '../features/conversation/index.js';
+import { notifyFromEvents } from '../features/notifications/index.js';
 
 import { deriveAgents, deriveGates, enrichRun, mapRealTask, currentLoadSeq } from './data.js';
 import { canRetry, sseRetryDelay } from './realtime-retry.js';
@@ -28,9 +24,8 @@ function eventKey(e) {
 }
 
 /* 跨通道语义键：SSE 帧的 data 是裸业务 dict、ts 是渲染端本地时间，ledger 行
-   是 {ts, event, data} 包装且内层不含 run_id，原键在两种来源间必然失配。
-   用「事件语义 + 3 秒窗口」识别同一事件，避免双通道/重连时条目翻倍；
-   精确键仍保留，窗口只看最近 12 条，不会误杀稍后的同名重试。 */
+   是 {ts, event, data} 包装，原键在两种来源间必然失配。用「事件语义 + 3 秒窗口」
+   识别同一事件，避免双通道/重连时条目翻倍；窗口只看最近 12 条。 */
 function semanticKey(e) {
   const d = e.data || {};
   return [e.event || '', d.task_id || d.taskId || '', d.to_status || d.to || d.status || '',
@@ -54,19 +49,24 @@ function appendEvents(events) {
   if (!S.dash || !events || !events.length) return 0;
   if (!S._eventKeys) S._eventKeys = new Set((S.dash.events || []).map(eventKey));
   let added = 0;
+  const fresh = [];
   for (const e of events) {
     const key = eventKey(e);
     if (S._eventKeys.has(key) || nearDuplicate(e)) continue;
     S._eventKeys.add(key);
     S.dash.events.push(e);
+    fresh.push(e);
     added += 1;
   }
+  // P1 通知中心：只喂实时增量（历史回放走 loadRealRun，不经过这里）。
+  if (fresh.length) notifyFromEvents(fresh);
   if (added && S.dash.events.length > 2000) {
     S.dash.events = S.dash.events.slice(-2000);
     S._eventKeys = new Set(S.dash.events.map(eventKey));
   }
   return added;
 }
+
 
 /* 后端真实事件名（api/server.py on_event、crew.py、_decide_approval）。
    旧列表里的 task_started / gate_result / budget_warning 等后端从未发布。 */
@@ -257,7 +257,7 @@ function onWatchSnapshot(payload) {
   if (payload.run) S.dash.run = Object.assign(enrichRun(payload.run), { dir: S.watchDir });
   if (payload.tasks) {
     S.dash.tasks = payload.tasks.map(mapRealTask);
-    S.dash.agents = deriveAgents(S.dash.tasks);
+    S.dash.agents = deriveAgents(S.dash.tasks, S.dash.events);
     S.dash.gates = deriveGates(S.dash.tasks);
   }
   refreshDashboard();
@@ -295,7 +295,7 @@ function handleRealtimeEvent(evt) {
             S.dash.run = Object.assign(enrichRun(snap.run), { dir: scheduledDir });
             if (snap.tasks) {
               S.dash.tasks = snap.tasks.map(mapRealTask);
-              S.dash.agents = deriveAgents(S.dash.tasks);
+              S.dash.agents = deriveAgents(S.dash.tasks, S.dash.events);
               S.dash.gates = deriveGates(S.dash.tasks);
             }
             refreshDashboard();

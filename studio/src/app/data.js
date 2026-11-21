@@ -23,9 +23,35 @@ function mapRealTask(t) {
   });
 }
 
+/* G1：从 llm_call 事件按角色聚合模型与成本（此前硬编码 '—'/0）。
+   model 取该角色调用次数最多的别名；cost 为 estimated_cost_usd 之和。 */
+function aggLlmByRole(events) {
+  const agg = {};
+  for (const e of events || []) {
+    if (!e || e.event !== 'llm_call') continue;
+    const d = e.data || {};
+    const role = String(d.role || '');
+    if (!role) continue;
+    const a = agg[role] || (agg[role] = { calls: 0, cost: 0, models: {} });
+    a.calls += 1;
+    a.cost += Number(d.estimated_cost_usd) || 0;
+    if (d.model) a.models[d.model] = (a.models[d.model] || 0) + 1;
+  }
+  return agg;
+}
+
+function mostUsedModel(models) {
+  let best = null, bestN = -1;
+  for (const [m, n] of Object.entries(models || {})) {
+    if (n > bestN) { best = m; bestN = n; }
+  }
+  return best;
+}
+
 /* 从任务列表派生 8 个 Agent 的状态 */
-function deriveAgents(tasks) {
+function deriveAgents(tasks, events) {
   const roles = ['project_manager','product_manager','architect','backend_dev','frontend_dev','qa_engineer','devops_engineer','technical_writer'];
+  const agg = aggLlmByRole(events);
   const agents = {};
   for (const r of roles) {
     const mine = tasks.filter(t => t.role === r);
@@ -39,13 +65,16 @@ function deriveAgents(tasks) {
     else if (mine.length > 0 && done === mine.length) status = 'done';
     else if (blocked) status = 'queued';
     const tokens = mine.reduce((s,t) => s + ((t.result && t.result.tokens_used) || 0), 0);
+    const stat = agg[r];
     agents[r] = {
       status,
       task: running ? running.title : (done > 0 ? '空闲' : '等待中'),
       action: running ? (running.brief || '执行中') : (done > 0 ? `已完成 ${done} 项` : '等待依赖'),
       done, fail,
-      model: '—',
-      tokens, cost: 0,
+      // G1：真实调用量派生；无 llm_call 事件（mock / 尚未开跑）回退占位
+      model: stat ? (mostUsedModel(stat.models) || '—') : '—',
+      calls: stat ? stat.calls : 0,
+      tokens, cost: stat ? stat.cost : 0,
       updated: mine.length ? (mine[mine.length-1].updated_at || nowTs(0)) : nowTs(0),
     };
   }
@@ -153,7 +182,7 @@ function enrichRun(run) {
     S.dash = {
       run: Object.assign(enrichRun(snap.run), { dir }),
       tasks,
-      agents: deriveAgents(tasks),
+      agents: deriveAgents(tasks, events),
       gates: deriveGates(tasks),
       events,
     };

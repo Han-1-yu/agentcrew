@@ -40,7 +40,8 @@ async function launchRun(p) {
       const restImages = images ? await toRestImages(images) : [];
       const payload = await createRunViaRest({
         goal: p.goal, mode: p.mode, mock: p.mock, model: p.model,
-        maxCost: p.maxCost, maxLlmCalls: p.maxLlmCalls, images: restImages,
+        maxCost: p.maxCost, maxLlmCalls: p.maxLlmCalls,
+        flowName: p.flowName, images: restImages,
       });
       const runId = payload && payload.run_id;
       toast('success', '已启动（API）', `run ${runId} 已在服务端创建`);
@@ -75,6 +76,7 @@ async function launchRun(p) {
     model: p.model || null,
     maxCost: p.maxCost || 0,
     maxLlmCalls: p.maxLlmCalls || 0,
+    flowName: p.flowName || null,
     images: images || null,
     env: (p.mock && p.slow) ? { AGENTCREW_MOCK_LATENCY_MS: '2000' } : null,
   });

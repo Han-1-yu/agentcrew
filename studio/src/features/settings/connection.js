@@ -11,6 +11,7 @@ import { S } from '../../lib/store.js';
 import { toast } from '../../ui/toast.js';
 
 import { readUrl } from '../../lib/validate.js';
+import { openKeysModal } from './keys-modal.js';
 
 function keyStatusText() {
   return S.apiKeyConfigured ? '已配置 ✓（留空表示不修改）' : '未配置 ✗ — 后端会拒绝所有请求';
@@ -132,7 +133,14 @@ function buildConnectionGroup(cfg) {
     h('div', { class: 'settings-field' },
       h('label', { for: 'set-api-key' }, 'API Key（本机加密保存，不回显）'),
       h('div', { class: 'set-row' }, keyInput, keySaveBtn, keyClearBtn),
-      keyStatus),
+      keyStatus,
+      // Q1：服务端多密钥库的管理入口（RBAC；未启用多密钥时弹窗内如实提示）
+      h('div', { class: 'set-row' },
+        h('button', {
+          class: 'btn btn-sm', id: 'set-keys-manage', type: 'button',
+          title: '管理服务端密钥库：按角色新建 / 吊销（GET/POST/DELETE /keys）',
+          onclick: openKeysModal,
+        }, '多密钥管理…'))),
     h('div', { class: 'set-conn-mode' }, `当前数据连接模式：${modeText}`));
 }
 

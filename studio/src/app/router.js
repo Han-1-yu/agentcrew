@@ -16,10 +16,13 @@ import { renderPlanPage } from '../features/plan/index.js';
 import { renderProvidersPage } from '../features/providers/index.js';
 import { renderSettingsPage } from '../features/settings/index.js';
 import { renderSchedulesPage } from '../features/schedules/index.js';
+import { renderFlowsPage } from '../features/flows-page/index.js';
 import { renderProfilesPage } from '../features/profiles/index.js';
 import { renderRewindPage } from '../features/rewind/page.js';
 function switchNav(key){
   S.nav=key;
+  // 切页时先收起命令框里挂着的浮层（模型下拉），避免回到本页时它还是打开态
+  window.dispatchEvent(new Event('studio:nav'));
   // 让上一版页面的异步续体失效：页面 render 里捕获 S.navToken，await 之后
   // 用 isStaleRender 比对，切走后不再往已卸载（或新版）的 DOM 写内容。
   S.navToken += 1;
@@ -71,6 +74,7 @@ function switchNav(key){
   if(key==='rewind'){ renderRewindPage(ph); return; }
   if(key==='providers'){ renderProvidersPage(ph); return; }
   if(key==='schedules'){ renderSchedulesPage(ph); return; }
+  if(key==='flows'){ renderFlowsPage(ph); return; }
   if(key==='profiles'){ renderProfilesPage(ph); return; }
   if(key==='conversation'){ renderConversationPage(ph); return; }
   const p={title:key,desc:'该页面开发中。'};

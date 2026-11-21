@@ -1,7 +1,4 @@
-/**
- * 新建运行弹窗：目标 / 项目 / Mock / 自动模式 / 模型选择 / 附件（C2）。
- * 启动编排（C1：REST 优先、CLI 兜底）统一走 ./launch.js。
- */
+// 新建运行弹窗：目标/项目/Mock/模式/模型/附件/流程（C3）；启动编排（C1）走 ./launch.js。
 import { BUILTIN_PROVIDERS, findProvider } from '../../contracts/providers.js';
 
 import { apiFetch } from '../../lib/api.js';
@@ -16,6 +13,7 @@ import { toast } from '../../ui/toast.js';
 
 import { createAttachmentArea } from '../attachments/index.js';
 import { launchRun } from './launch.js';
+import { initFlowOptions } from './flow-options.js';
 import { fillProviderOptions, normalizeApiProviders } from './provider-options.js';
 function openNewRunModal(opts = {}){
   // 记忆上次的模式选择；首次默认**真实模式**——Mock 产物是固定 Todo 夹具，与目标无关
@@ -87,6 +85,13 @@ function openNewRunModal(opts = {}){
             h('label',{class:'nr-label',for:'nr-project'},'项目（可选，用于分组管理）'),
             h('input',{id:'nr-project',class:'nr-input',type:'text',
               placeholder:'例如：shortlink-service'})),
+          // C3（部分）：flow_name 两通道可用（REST options / CLI --flow）；
+          // 其余能力开关（tools/docs_rag/supervisor）CLI 无参数，暂不暴露
+          h('div',{class:'nr-row'},
+            h('label',{class:'nr-label',for:'nr-flow'},'流程（可选，跳过 PM 规划按任务表执行）'),
+            h('select',{id:'nr-flow',class:'nr-select'},
+              h('option',{value:''},'不使用流程（由 PM 现场规划）')),
+            h('div',{id:'nr-flow-hint',class:'nr-hint'})),
           h('div',{class:'nr-adv-grid'},
             h('div',{class:'nr-row'},
               h('label',{class:'nr-label',for:'nr-maxcost'},'预算上限 (USD)'),
@@ -143,6 +148,7 @@ function openNewRunModal(opts = {}){
             model: aliasR.value || null,
             maxCost: costR.value,
             maxLlmCalls: callsR.value,
+            flowName: ($('#nr-flow') && $('#nr-flow').value.trim()) || null,
             images: attachments ? attachments.get().map((it) => it.path) : null,
             // 慢速 mock：拉长每次模拟 LLM 调用，留出观察与取消窗口
             slow: mockOn && $('#nr-slow').checked,
@@ -208,6 +214,8 @@ function openNewRunModal(opts = {}){
   $('#nr-advanced-toggle').addEventListener('click',()=>{
     $('#nr-advanced').classList.toggle('open');
   });
+  // C3：流程下拉（GET /flows；已连 API 才有值，未连保持空选项）
+  void initFlowOptions($('#nr-flow'), { flowName: opts && opts.flowName });
   // 最近使用的目标（F2 已持久化 recentGoals，最多 5 条）
   (async () => {
     const row = $('#nr-recent-row'); if(!row) return;

@@ -91,6 +91,8 @@ contextBridge.exposeInMainWorld('studio', {
   apiKeyClear: () => invoke('api:keyClear'),
   // F4：最近目标
   recentGoals: () => invoke('goals:recent'),
+  // A6：对话导出 .md（主进程保存对话框；内容不落任何中间文件）
+  saveConversationMd: (content, defaultName) => invoke('conversation:saveMd', { content, defaultName }),
   // 主进程推送
   // C-22：频道白名单。此前 on(channel) 接受任意字符串，渲染端一旦被注入
   // 就能监听主进程内部任意频道（信息面扩大）。白名单与 main.js / backend-api.js
