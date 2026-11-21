@@ -291,6 +291,9 @@ scripts\launch-studio.bat
   `EnvironmentFile` 或密钥管理注入，别把 Key 写进仓库。
 - `AGENTCREW_OUTPUT_DIR` 会被解析成绝对路径，配置快照里保留生效值。
 - 三通道写入的完整字段见 `python main.py config export`。
+- 执行体档案还多一层文件源：配置文件同级的 `agents.d/<key>.yaml`（可用
+  `profiles_dir` 改路径）。同名时 `agents.d` 覆盖 `agentcrew.yaml` 的
+  `agents.profiles`；`agents --check` 会列出覆盖关系与坏文件。
 
 ```bash
 # 导出当前合并视图（密钥字段一律脱敏），变更前留档
@@ -394,6 +397,7 @@ G-2 配置即 RCE、G-9 `run_python` 无隔离这三条，是部署方必须自�
 |---|---|---|
 | 必须 | `<output_dir>/` 全部 | run 目录、跨 run 知识库、状态文件、Webhook spool |
 | 必须 | `agentcrew.yaml`、`.env`（或密钥管理里的同一份） | 配置与凭据；注意备份本身也要加密与限权 |
+| 必须（用了档案页） | `agents.d/` 下的 `*.yaml` | 执行体档案；`agents.d/.trash/` 与 `*.bak` 是本地回退副本，可按需备份 |
 | 建议 | 部署目录的 `config export` 快照 | 变更前留档，便于回滚比对 |
 | 不需要 | `.venv/`、`__pycache__/`、`studio/node_modules/` | 可重建 |
 

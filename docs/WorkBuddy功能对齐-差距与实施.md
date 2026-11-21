@@ -114,7 +114,11 @@ WorkBuddy 是云端产品，天然带托管后端；AgentCrew 是本地 CLI + �
 ### 4.1 Skills / Experts 管理页 —— 已补齐 ✅（本轮）
 
 - 新增「执行体档案」页（第 11 页）：浏览执行体档案（模型/工具白名单/写入范围/成本与 RPM 上限）、角色→执行体绑定矩阵（duty/weight/汇总策略）、「导出 YAML 片段」一键复制（可粘贴进 `agentcrew.yaml` 复用）。后端 `agents --yaml` 新增导出；前端 `agents:export` IPC + `profiles` 页。
-- 导入暂以「复制片段 → 手动粘贴进 agentcrew.yaml」落地，不做程序化写配置（写坏 config 风险高于收益，且需要重启才能被 `Settings.load()` 读到）。
+- ~~导入暂以「复制片段 → 手动粘贴进 agentcrew.yaml」落地~~ → **R69 已升级**：
+  新增 `agents.d/<key>.yaml` 一档案一文件存储与 `agents --save/--delete/--check/--usage`，
+  Studio 档案页支持新建/编辑/复制/删除/导入，保存前跑与执行期同一套绑定校验；
+  只写 `agents.d/`、不重写 `agentcrew.yaml`，覆盖前留 `.bak`、删除进 `.trash`。
+  详见 `docs/PROFILES-2026-11-20.md`。
 
 ### 4.2 云端托管 —— 不适用（部署模型不同）
 

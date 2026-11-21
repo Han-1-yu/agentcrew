@@ -1479,6 +1479,11 @@ R4 让工作流能分支、能挂起等人；R5 修的是另一半——**Agent 
 | 配额 `max_peer_messages`（默认 8） | 超出后回「配额已用尽，按已掌握信息继续」 | 互相求证会指数级膨胀预算 |
 | 同一 `(提问方, 目标, 问题)` | 第二次直接复用答案 | 模型拿到答复后常原样再问一遍 |
 
+**多轮衔接（R68）**：同一 `(提问方, 目标角色)` 配对上，路由保留最近
+`peer_consult_history_turns`（默认 3）轮问答，作为 user/assistant 交替历史塞进下一次
+咨询；换配对不串历史，历史只在本次 run 内存活、不落盘、不进经验库，单条问题/答复
+截断以防预算膨胀；`0` = 不带历史，退回 R6 行为。
+
 递归天然只有一层：`consult` 走单次调用、不解析 `<message>`，不会 A 问 B、B 又问 A。
 
 ### 3. 装配
@@ -2185,6 +2190,11 @@ roles:
     aggregation: { mode: primary_with_review, quorum: 1 }
 ```
 
+也可以一档案一文件放在 `agents.d/<key>.yaml`（文件名即 key）。同名时
+**`agents.d` 覆盖 `agentcrew.yaml` 的定义**，被覆盖的事实会在
+`python main.py agents --check` 与 Studio 档案页明确标出。文件化存储的好处是
+改一份档案不会重写主配置、不会丢注释，且可以单独 diff / 回滚。
+
 ### duty 与汇总模式
 
 | duty | 能写产物 | 能出裁决 | 说明 |
@@ -2250,11 +2260,18 @@ roles:
 ```bash
 python main.py roles          # 已绑定的角色会多一行「执行体 ...（汇总：...）」
 python main.py agents         # 执行体档案 + 绑定链
-python main.py agents --json  # 供 Studio 绑定矩阵读取
+python main.py agents --json  # 档案（含来源/被谁用）+ 绑定 + 诊断（供 Studio 读取）
+python main.py agents --check # 错误 / 警告 / 提示逐条列出（坏文件、断链、工具扩权、模型别名）
+python main.py agents --usage # 最近 30 个 run 里每个档案的调用量 / 成本 / 最近使用
+python main.py agents --save - --json   # 从 stdin（YAML 或 JSON）新建/更新，支持批量
+python main.py agents --delete <key>    # 移入 agents.d/.trash，可恢复
+python main.py agents --yaml --key <key># 导出单份档案片段
 ```
 
-Studio 两处入口：
+Studio 三处入口：
 
+- 「执行体档案」页：浏览 / 新建 / 编辑 / 复制 / 删除 / 导入导出，含配置诊断与
+  用量；保存走 `agents --save`，只写 `agents.d/`，覆盖前留 `.bak`；
 - 设置 →「角色与 Agent」矩阵：配置期用，改完点「生成配置片段」复制回 `agentcrew.yaml`；
 - Agents 页每张卡底部的「执行体 / 切换执行体 / 恢复默认」：运行期用，选完点确认即
   `POST /runs/{id}/agents`。只在 run 仍在跑时生效；未连后端或 run 已结束时
@@ -2460,6 +2477,7 @@ YAML 只识别以下键；`output_dir` / `mock` / `log_level` 等请用环境变
 | `approval_mode` | R4：人工审批模式，默认 `interactive`（等价 `AGENTCREW_APPROVAL_MODE`） |
 | `peer_dialogue_enabled` | R5：Agent 间真实咨询开关，默认 `false`（等价 `AGENTCREW_PEER_DIALOGUE_ENABLED`） |
 | `max_peer_messages` | R5：跨角色咨询次数上限，默认 `8`（等价 `AGENTCREW_MAX_PEER_MESSAGES`） |
+| `peer_consult_history_turns` | R68：同一配对咨询携带的近期问答轮数，默认 `3`（`0` = 不带历史；等价 `AGENTCREW_PEER_CONSULT_HISTORY_TURNS`） |
 | `peer_consult_capture_enabled` | R6：咨询沉淀开关，默认 `false` |
 | `delegation_mode` | R6：动态委派权限模式，默认 `any` |
 | `max_delegation_depth` | R6：委派层数上限，默认 `2` |
