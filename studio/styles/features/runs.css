@@ -12,3 +12,66 @@
 .cmp-diff.pos { color: var(--error); }
 .cmp-diff.neg { color: var(--success); }
 .cmp-diff.zero { color: var(--text-ter); }
+
+/* ---- E3 任务级计划 diff ---- */
+.cmp-section { margin-top: 14px; border-top: 0.5px solid var(--border); padding-top: 10px; }
+
+.cmp-section-title {
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--text-ter);
+  margin-bottom: 6px;
+}
+
+.cmp-task-scroll { max-height: 34vh; overflow: auto; }
+
+.cmp-task-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-xs);
+  table-layout: fixed;
+}
+
+.cmp-task-table th {
+  text-align: left;
+  padding: 5px 6px;
+  color: var(--text-ter);
+  font-weight: 500;
+  border-bottom: 0.5px solid var(--border);
+}
+
+.cmp-task-table th:nth-child(2),
+.cmp-task-table th:nth-child(3) { width: 84px; }
+
+.cmp-task-cell {
+  padding: 5px 6px;
+  vertical-align: top;
+  border-bottom: 0.5px solid var(--ink-06);
+  overflow: hidden;
+}
+
+.cmp-task-id { color: var(--text-ter); margin-right: 6px; }
+
+.cmp-task-title {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+}
+
+.cmp-task-status { font-variant-numeric: tabular-nums; color: var(--text-sub); }
+.cmp-task-none { color: var(--text-ter); }
+
+.cmp-task-changes {
+  color: var(--text-sub);
+  line-height: 1.5;
+}
+
+/* 四种行：新增/移除用安静底色，变更用强调色左边框，一致不强调 */
+.cmp-task-row.added { background: var(--success-bg-quiet); }
+.cmp-task-row.removed { background: var(--error-bg-quiet); }
+.cmp-task-row.changed { background: var(--warn-bg-soft); }
+.cmp-task-row.same { background: none; }
+
+.cmp-task-row.changed .cmp-task-changes { color: var(--text); }

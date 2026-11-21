@@ -1,12 +1,59 @@
 /**
- * 运行对比：两个 run 的指标差异表。
+ * 运行对比：两个 run 的指标差异表 + 任务级计划 diff（E3）。
  */
 import { h } from '../../lib/dom.js';
 import { fmtDateTime, fmtTokens, simplifyGoal } from '../../lib/format.js';
 import { S } from '../../lib/store.js';
+import { diffSummary, diffTaskPlans } from '../../lib/task-diff.js';
 
 import { showModal } from '../../ui/modal.js';
 import { toast } from '../../ui/toast.js';
+
+/** 某一侧的任务状态；该侧没有这个任务时给破折号。 */
+function statusCell(task) {
+  if (!task) return h('span', { class: 'cmp-task-none' }, '—');
+  return h('span', { class: 'cmp-task-status' }, task.status || '—');
+}
+
+/**
+ * 任务级 diff 表：id + 标题 / 当前状态 / 对比状态 / 差异说明。
+ *
+ * `added` / `removed` / `changed` / `same` 四种行用 class 区分底色，只读不可编辑
+ * （E3 的验收边界就是「只读展示」——真正改计划走计划审查页）。
+ */
+function cmpTaskTable(diff) {
+  const body = diff.rows.map((row) => h('tr', { class: `cmp-task-row ${row.kind}` },
+    h('td', { class: 'cmp-task-cell' },
+      h('span', { class: 'cmp-task-id mono' }, row.id),
+      h('span', { class: 'cmp-task-title' }, (row.left || row.right || {}).title || '')),
+    h('td', { class: 'cmp-task-cell' }, statusCell(row.left)),
+    h('td', { class: 'cmp-task-cell' }, statusCell(row.right)),
+    h('td', { class: 'cmp-task-cell cmp-task-changes' },
+      row.changes.length ? row.changes.join('；') : '一致')));
+
+  const table = h('table', { class: 'cmp-task-table' },
+    h('thead', {},
+      h('tr', {},
+        h('th', {}, '任务'),
+        h('th', {}, '当前'),
+        h('th', {}, '对比'),
+        h('th', {}, '差异'))),
+    h('tbody', {}, ...body));
+
+  return h('div', { class: 'cmp-section' },
+    h('div', { class: 'cmp-section-title' }, `任务差异 · ${diffSummary(diff)}`),
+    h('div', { class: 'cmp-task-scroll' }, table));
+}
+
+/** 指标表的一行：标签 / 当前值 / 对比值 / 差值。 */
+function metricRow(label, a, b, diff) {
+  return h('div', { class: 'cmp-row' },
+    h('div', { class: 'cmp-label' }, label),
+    h('div', { class: 'cmp-val' }, String(a)),
+    h('div', { class: 'cmp-val' }, String(b)),
+    h('div', { class: 'cmp-diff-cell' }, diff(a, b)));
+}
+
 async function openCompareModal(otherRun) {
   // 加载另一个 run 的快照（run.json + tasks.json）与事件尾部
   let otherData = null;
@@ -34,6 +81,7 @@ async function openCompareModal(otherRun) {
   const otherSuccess = otherData.tasks.filter(t => t.status === 'passed' || t.status === 'succeeded').length;
   const curFailed = curTasks.filter(t => t.status === 'failed').length;
   const otherFailed = otherData.tasks.filter(t => t.status === 'failed').length;
+  const taskDiff = diffTaskPlans(curTasks, otherData.tasks);
 
   const rows = [
     ['状态', cur?.status || '—', otherData.run?.status || '—'],
@@ -58,19 +106,21 @@ async function openCompareModal(otherRun) {
       `${d > 0 ? '+' : ''}${d.toFixed(4)}`);
   };
 
+  const headers = h('div', { class: 'cmp-headers' },
+    h('div', { class: 'cmp-header' }, '指标'),
+    h('div', { class: 'cmp-header cur' }, simplifyGoal(cur?.goal || cur?.run_id || '当前')),
+    h('div', { class: 'cmp-header' }, simplifyGoal(otherRun.goal || otherRun.runId || '对比')),
+    h('div', { class: 'cmp-header' }, '差值'));
+
+  const wrap = h('div', { class: 'cmp-wrap' }, headers);
+  for (const [label, a, b] of rows) {
+    wrap.appendChild(metricRow(label, a, b, diff));
+  }
+  wrap.appendChild(cmpTaskTable(taskDiff));
+
   showModal(h('div', { class: 'cmp-modal' },
     h('h3', { class: 'modal-title' }, '运行对比'),
-    h('div', { class: 'cmp-wrap' },
-    h('div', { class: 'cmp-headers' },
-      h('div', { class: 'cmp-header' }, '指标'),
-      h('div', { class: 'cmp-header cur' }, simplifyGoal(cur?.goal || cur?.run_id || '当前')),
-      h('div', { class: 'cmp-header' }, simplifyGoal(otherRun.goal || otherRun.runId || '对比')),
-      h('div', { class: 'cmp-header' }, '差值')),
-    ...rows.map(([label, a, b]) => h('div', { class: 'cmp-row' },
-      h('div', { class: 'cmp-label' }, label),
-      h('div', { class: 'cmp-val' }, String(a)),
-      h('div', { class: 'cmp-val' }, String(b)),
-      h('div', { class: 'cmp-diff-cell' }, diff(a, b)))))));
+    wrap));
 }
 
 export { openCompareModal };
