@@ -11,7 +11,7 @@
 
 - 会话模型已定为 **conversation = run（1:1）**（方案 §3.1 决策 A）：会话列表/重命名/置顶/归档是 run 的前端元数据层（settings.json `runMeta`），运行中追问走 guidance、分支/重做走 rewind。**不要再提独立会话实体**。
 - 批次 1（P0 对话闭环）**全部完成**；批次 2（P1）完成七项（flows 流程库页、通知中心、Ctrl+K、deriveAgents、导出 .md、Key 管理、**Q2 工具试跑页**）；批次 3（P2 + 新后端端点）**未动**。
-- 当前基线：`check` **126 模块 / 55 分片**、`test:unit` **133/133**、`verify:api` **21/21**、`selftest` 16/16（**15 页**）、`e2e` **41/41**（15 页导航 + 工具试跑页头 + 任务详情产物摘要 + 产物操作条）、`visual` 24 张重建后一致。全部验证命令见 §4。
+- 当前基线：`check` **132 模块 / 55 分片**、`test:unit` **151/151**、`verify:api` **21/21**、`selftest` 16/16（**15 页**）、`e2e` **46/46**（15 页导航 + 工具试跑页头 + 任务详情产物摘要 + 产物操作条 + 快捷键录制 + 输出目录统计）、`visual` 24 张重建后一致。全部验证命令见 §4。
 - 提交链：P0 `192eacb→…→35406cf`；P1 批次一 `129fbc8→86d9681→f611382→7ee52f6→d128fbd→74e9eea→1821796`；Q2 见 `PROJECT-STATE.md` §3.109 的提交记录。
 - 原「约 60 个无关在途改动」已于 2026-11-21 按轮次入库（R68 / R69 后端与前端 / 供应商分层 / 对话页 / 文档共 4 笔），工作区干净；接手时若要改文档仍按「只 add 自己的文件」执行。
 
@@ -42,9 +42,9 @@
 | 1 | ~~**Q2 工具试跑面板**~~ ✅ 2026-11-21 | `GET /tools` 清单 + `POST /tools/{name}/test` 沙箱试跑；口径 chips 解释「清单为什么缺 run_python / web_search」；结果区分 200+`ok=false` 与 409/400/404 | 独立页 `features/tools-page/{index,dialog}.js` + `lib/tool-lab.js`；pages 数组与视觉基线已同步（`PROJECT-STATE.md` §3.109） | 未连 API 给诚实空态；试跑失败原样展示后端错误 ✅ |
 | 2 | ~~**J1-J3 产物增强**~~ ✅ 2026-11-21 | J1 版本对比：`history/rewind-NNN/` 快照 → 版本选择器 + 行级 diff（零依赖 LCS）；J2 Markdown 渲染切换（`lib/markdown.js` 已有）；J3 单文件另存为（main.js 增 `artifact:saveAs` IPC + 保存对话框） | `lib/artifact-versions.js` + `features/artifacts/versions.js` + `artifact:snapshots` / `artifact:saveAs` IPC（`PROJECT-STATE.md` §3.112） | 选择器与 diff 在真实回滚数据上未自动验证（本机无 `history/`，见 §3.112 边界）；另存只验到按钮与 IPC |
 | 3 | **N1-N2 定时任务编辑/启停/历史** | 编辑=预填表单+删旧项（前端闭环）；启停需 CLI 增 `schedule enable/disable` 子命令（`Schedule.enabled` 字段已有）；触发历史=`run_triggered` 事件匹配 | **唯一需要动 Python 的 P1 项**：`agentcrew/cli/schedule.py` + `tests/test_schedule.py` 用例；**不要** main.js 直写 schedules.json（与 tick 并发写冲突，方案 §N1 明令） | CLI 子命令有 `--json`；前端启停开关调 IPC 后刷新列表 |
-| 4 | **O1 快捷键自定义** | `boot.js:67-87` 硬编码 → settings.shortcuts 映射（如 `{palette:'Ctrl+K', newRun:'Ctrl+N'}`） | settings 白名单需加 `shortcuts` 键（照抄 runMeta 的放行方式）；冲突检测两键一用 | 改键后立即生效、重启保持；非法键名行内报错 |
-| 5 | **O2 通知偏好** | 完成/审批/预算三类开关，联动 `features/notifications`（过滤 INTERESTING 集合或按类目静音） | localStorage 或 settings 均可；与现有「系统通知」开关合并成一组 | 关掉某类后该类不再进面板与系统通知 |
-| 6 | **O3 数据管理** | 输出目录占用统计、归档 run 一键清理（走回收站，不 rm）、设置导出/导入 | main.js 新 IPC（du 统计 + 归档清理 + settings.json 导出导入）；**遵守个人文件安全纪律**：删除前确认、只动 outputDir | 统计数字与磁盘一致；清理只处理 archived 标记的 run |
+| 4 | ~~**O1 快捷键自定义**~~ ✅ 2026-11-21 | `boot.js` 硬编码 → settings.shortcuts 映射（palette / newRun / refresh） | `lib/shortcuts.js` + `features/settings/shortcuts.js`；settings 白名单已加 `shortcuts`（`PROJECT-STATE.md` §3.113） | 改键后立即生效、重启保持 ✅（e2e 13a/13a2 录制 Alt+P 后真能打开命令面板） |
+| 5 | ~~**O2 通知偏好**~~ ✅ 2026-11-21 | 系统通知开关 + 静默时段 + 最低级别 + **按类目静音**（审批 / 预算 / 运行结果） | `lib/notify-prefs.js`；localStorage 旧开关已并入 settings.notifyPrefs | 静音的类目不再进面板与系统通知 ✅（历史条目保留） |
+| 6 | ~~**O3 数据管理**~~ ✅ 2026-11-21 | 输出目录占用统计、归档 run 一键清理（走回收站）、设置导出/导入 | `data:usage` / `data:trashArchive` / `settings:export` / `settings:import` IPC + `lib/data-usage.js` | 统计实测 349 run / 519 MB ✅；清理只收已归档且非运行中，走 `shell.trashItem`（清理动作本身未自动化） |
 | 7 | **D2 预算 90% toast** | `budget_warning` 事件已有 → toast + 通知中心条目（事件源钩子已就绪，`INTERESTING` 已含 budget_warning） | 无依赖，半小时工作量 | 跑 mock 预算场景可见一次（去重生效，不重复弹） |
 | 8 | **D3 成本按模型聚合** | `dashboard/cost.js` 增按 model/provider 分组（llm_call 含 model，G1 已示范聚合写法） | 无依赖 | 与 run.json stats 的总成本守恒 |
 | 9 | ~~**E3 计划 diff**~~ ✅ 2026-11-21 | `runs/compare.js` 指标对比 → 下方新增任务级表格（新增/移除/变更，比标题·角色·状态·优先级·依赖） | `lib/task-diff.js` 纯函数 + 八例单测；`passed`/`succeeded` 归一（`PROJECT-STATE.md` §3.110） | 对比弹窗可见任务差异行 ✅（自动化点击未做，见 §3.110 边界） |
@@ -108,7 +108,7 @@ env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS ./node_modules/electron/dist/electro
 cd E:/agentcrew && python scripts/test.py    # 崩溃隔离跑器；基线 3612 passed / 0 failed
 ```
 
-**验收基线（截至 2026-11-21 J1-J3）：126 模块 / 55 分片、unit 133/133、verify:api 21/21、selftest 16/16（15 页）、e2e 41/41、visual 24/24。** 任何一项做完都要不低于此基线（新增能力要带新增用例）。
+**验收基线（截至 2026-11-21 O1-O3）：132 模块 / 55 分片、unit 151/151、verify:api 21/21、selftest 16/16（15 页）、e2e 46/46、visual 24/24。** 任何一项做完都要不低于此基线（新增能力要带新增用例）。
 
 ---
 
@@ -132,7 +132,7 @@ cd E:/agentcrew && python scripts/test.py    # 崩溃隔离跑器；基线 3612 
 
 1. 先跑一遍 §4 全套验证，确认起点是绿的（任何红先修环境再看代码）。
 2. 顺手项（半小时级）：D2 预算 toast → D3 成本聚合 → H1 模板扩充 → L2 follow toggle。
-3. 中型项：~~Q2 工具试跑页~~（✅ 2026-11-21）→ ~~E3 计划 diff~~（✅ 2026-11-21，§3.110）→ ~~F1-F2 任务图实时高亮与抽屉产物摘要~~（✅ 2026-11-21，§3.111）→ ~~J1-J3 产物增强~~（✅ 2026-11-21，§3.112）→ O1/O2/O3。
+3. 中型项：~~Q2 工具试跑页~~（✅ 2026-11-21）→ ~~E3 计划 diff~~（✅ 2026-11-21，§3.110）→ ~~F1-F2 任务图实时高亮与抽屉产物摘要~~（✅ 2026-11-21，§3.111）→ ~~J1-J3 产物增强~~（✅ 2026-11-21，§3.112）→ ~~O1-O3 设置页三件套~~（✅ 2026-11-21，§3.113）→ 下一批见下表（N1-N2 / H1-H2 / L1-L2 / P2-P3 / §5 内联审批）。
 4. 需拍板/核实的：H2（读 service.py 后回填结论）、§5 内联审批（建议先抽 decide+resume 公共函数）。
 5. N1 是唯一动 Python 的 P1 项，单独一笔提交（CLI + tests/test_schedule.py + 前端开关）。
 6. 批次 3 一律契约先行（API_ROUTES + openapi.yaml + test_api_contract.py），每项独立提交。

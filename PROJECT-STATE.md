@@ -8,7 +8,19 @@
 
 ## 0. 一句话现状
 
-**最新一轮（2026-11-21）：Studio J1-J3 产物版本对比 / Markdown 渲染 / 单文件另存**
+**最新一轮（2026-11-21）：Studio O1-O3 设置页三件套（快捷键 / 通知偏好 / 数据管理）**
+—— 快捷键从硬编码改成可录制（`settings.shortcuts`，命令面板 / 新建运行 / 刷新数据三个
+动作，`Mod+K` / `Mod+N` / `F5` 默认值，同键位冲突即时提示）；系统通知开关从
+localStorage 挪进设置，并补齐静默时段（支持 22:00–08:00 跨零点）、最低级别与
+**按类目静音**（审批 / 预算 / 运行结果，面板与系统通知同时生效）；设置页新增
+「数据管理」：输出目录占用统计（349 个 run / 519 MB 实测）、归档 run 一键清理
+（`shell.trashItem` 走系统回收站，只收已归档且非运行中、且在输出目录内的）、
+设置导出/导入（导入只收已知字段）。纯函数 `lib/shortcuts.js` /
+`lib/notify-prefs.js` / `lib/data-usage.js` + 十八例单测；`check` 132 模块 / 55 分片、
+`test:unit` 151/151、`verify:api` 21/21、`e2e` 46/46、`selftest` 16/16、`visual` 24/24。
+明细见 §3.113。
+
+**同日（2026-11-21）：Studio J1-J3 产物版本对比 / Markdown 渲染 / 单文件另存**
 —— 产物页的预览头变成操作条：有 rewind 快照时出现「版本」选择器，选中任一
 `history/rewind-NNN/` 里的同路径版本，就在预览区画行级 diff（零依赖 LCS，
 两万行以上的超大文件退化为「整段替换」并标注）；`.md/.markdown` 默认渲染、可一键
@@ -141,7 +153,7 @@ config 解析去重（R66e）、`main.py` 3388→~700 行拆进 `cli/` 九模块
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
-| Studio | `npm run check` **126** 模块 / **55** 样式分片、`test:unit` **133/133**、`verify:api` **21/21**、electron `e2e` **41/41**（15 页导航 + 命令面板 + 通知中心 + 对话检索 + 供应商分层 + 工具试跑页头 + 任务详情产物摘要 + 产物操作条）、`selftest` **16/16**（15 页导航）、`visual` 基线重建后复检 **24/24**（J1-J3 重建，见 §3.112；F1/F2 见 §3.111；E3 见 §3.110；Q2 见 §3.109） |
+| Studio | `npm run check` **132** 模块 / **55** 样式分片、`test:unit` **151/151**、`verify:api` **21/21**、electron `e2e` **46/46**（15 页导航 + 命令面板 + 通知中心 + 对话检索 + 供应商分层 + 工具试跑页头 + 任务详情产物摘要 + 产物操作条 + 快捷键录制 + 输出目录统计）、`selftest` **16/16**（15 页导航）、`visual` 基线重建后复检 **24/24**（O1-O3 重建，见 §3.113；J1-J3 见 §3.112；F1/F2 见 §3.111） |
 | 上线自检 | 本机可验 **9 项全通过**（doctor / 离线冒烟 / REST 认证 200·401 / `/metrics` / 无密钥退 3 / `clean` 干跑 / Studio 三连 / ruff+mypy）；目标机 10 项判据见 `docs/DEPLOY-CHECK-2026-11-13.md` |
 | 收尾 | 交付说明见 **`docs/CLOSURE-2026-11-13.md`**；B 类外部环境项 **5/5 全部闭环**；云主机真实部署验收 10 项中 **7 项闭环**（TLS/SSE、告警规则、日志、密钥、成本、webhook、备份），仅剩独立数据盘与两项 Docker 依赖（§3.77、`docs/DEPLOYMENT-VM-2026-11-13.md`） |
 | Git | `c9c4a60`（R61 真机修复）与 `c9cc47c`（R59–R61）均已推送到 `origin/master`，CI run **43453359080** / **43449592343** 的 **7 个 job 全部 success**（Python 3.10/3.11/3.12/3.13、Windows、Studio、Docker 真隔离）；`ebb9895`（R62）/ `8c6e411`（Studio V6-FE）/ `b712113`（桌面启动器）连同两笔状态回填已于 2026-11-14 推送到 `origin/master`（`92d3854..67aeda4`）；C10 `5cdeea8` 与状态回填 `d76d2ef` 同批推送，**2026-11-15 复核 CI run `43608513108`（head = `d76d2ef`）的 7 个 job 逐一 success**（Python 3.10/3.11/3.12/3.13、Windows·uv、Studio·Node 20、Sandbox·docker 真隔离），`Sync main` run `43608513094` success；上一批 `67aeda4` 的 run `43607497931` 亦 success。验收报告 `docs/ACCEPTANCE-2026-11-12.md`；真实模型评测历史证据为 23 条中 22 通过（`bench/eval-live-2026-11-13.md`，本次未重跑真实模型评测）。**2026-11-15 本轮两笔提交 `5e9bc70`（实现，26 文件 / +1866 −119）/ `bedb7e7`（状态回填）已推送到 `origin/master`**（`d76d2ef..bedb7e7`，`origin/main` 同哈希）；对应 CI run **`43712615843`** 结论 `success`、7 个 job 逐一 success，`Sync main` `43712615752` success |
@@ -3828,6 +3840,65 @@ F2 的 MANIFEST 真实数据只在本机 completed run 上人工核对（`202611
   diff」没有端到端自动化；快照目录形状以 `rewind.py` 的写入代码与 Studio rewind 页
   的文案（`features/rewind/page.js:109`）为准，未造假数据入库。J3 的保存对话框无法在
   自动化里确认（系统对话框），只验到按钮与 IPC 存在。
+
+### 3.113 Studio O1-O3：快捷键自定义 / 通知偏好 / 数据管理（2026-11-21）
+
+**起点**：`boot.js` 的键位写死在 keydown 里（`Mod+K` / `Mod+N`，改不动）；系统通知
+开关只存在 localStorage，与设置页的「系统通知」按钮是两套状态；输出目录越攒越大
+（实测 349 个 run / 519 MB），却没有占用统计，也没有安全的清理入口。
+
+**O1（快捷键）**：
+- `studio/src/lib/shortcuts.js`（纯函数）：动作表（palette / newRun / refresh，
+  默认 `Mod+K` / `Mod+N` / `F5`）、`normalizeSpec`（`Mod+K` / `Alt+Shift+P` / `F5`，
+  **裸字母与裸数字不合法**，否则会劫持输入框）、`specFromEvent`（忽略只按修饰键）、
+  `matches`（Ctrl 与 ⌘ 都归一成 Mod）、`resolveShortcuts`（非法覆盖回默认）、
+  `shortcutConflicts`（同键位绑两个动作）、`displaySpec`（Windows 显示 Ctrl）。
+- `app/boot.js`：keydown 改成「按当前 bindings 查动作再分派」，数字键 1-9 切页保持
+  固定；`S.settings.shortcuts` 每次按键现取，改完立即生效、重启保持。
+- 设置页新增「快捷键」组：每行动作 + 当前键位 + 录制（接管下一次 keydown，Esc 取消）
+  + 恢复默认；组内实时显示冲突文案。`main.js` 的 `defaultSettings()` 增加
+  `shortcuts: {}`（白名单放行）。
+
+**O2（通知偏好）**：
+- `studio/src/lib/notify-prefs.js`（纯函数）：`normalizePrefs`（system / quietFrom /
+  quietTo / minLevel / mute 三类目）、`levelOf`（error > warn > info）、
+  `inQuietHours`（起>止 视为跨零点，两端都填才生效）、`categoryOf` +
+  `mutedCategory`、`shouldNotifySystem`（开关 → 类目静音 → 窗口焦点 → 静默时段 → 级别，
+  五道闸）。
+- `features/notifications/index.js`：系统通知判定换成 `shouldNotifySystem`；
+  被静音的类目**连面板与 toast 都不再产生**（历史条目保留）；通知中心里的
+  「系统通知」按钮改成写 `settings.notifyPrefs`。
+- 设置页新增「通知」组：系统通知开关（即时保存、失败回滚）、静默时段（time 输入）、
+  最低级别（三选）、静默类目（三个复选）。
+- **修掉的回归**：面板里原来调用的 `setSystemEnabled()` 在本次重构后已不存在，若只改
+  `notifyFromEvents` 会让通知中心整块抛 ReferenceError（e2e 20c 当场抓到）。
+
+**O3（数据管理）**：
+- `studio/main.js`：`data:usage`——扫输出目录，逐 run 算体积（`dirSizeBytes`，只统计
+  普通文件、不跟随符号链接），带 `status`（读 `run.json`）与 `archived`（读
+  `settings.runMeta`），每个 run 之间 `setImmediate` 让出事件循环，349 个 run 不卡窗。
+  `data:trashArchive`——**走 `shell.trashItem`（系统回收站）而不是 rm**；只接受输出
+  目录内的路径、必须 `archived === true`、`run.json` 状态不是 `running`，否则拒收并
+  回错误原因。`settings:export` / `settings:import` 走系统对话框，导入按
+  `defaultSettings()` 的键白名单合并。
+- `studio/src/lib/data-usage.js`（纯函数）：`cleanupCandidates`（已归档且非运行中）、
+  `usageStats`（总数/体积/归档数/可清理数与体积）、`biggestRuns`（按体积降序取前 N）。
+- 设置页新增「数据管理」组：刷新统计（按钮触发，不自动扫盘）+ 最占空间前 6 +
+  「清理归档 run」（确认弹窗写明数量与体积 → 移到回收站）+ 导出/导入设置。
+
+**边界**：快捷键只覆盖三个全局动作，数字键与 Esc 固定；录制要求带修饰键或功能键。
+通知类目静音只影响**新**通知，面板里已有条目不会回删。占用统计是同步遍历文件树
+（逐 run 让出事件循环，但没有进度条与取消），超大目录（>1000 run）会明显变慢；
+清理依赖 `runMeta.archived` 标记，不代为归档；设置导入不做字段级校验（只做键白名单，
+非法值会在下次使用时被各自的默认兜底）。
+
+**验证**：`check` **132 模块 / 55 分片**；`test:unit` **151/151**（新增 `shortcuts` 七例、
+`notify-prefs` 七例、`data-usage` 四例）；`verify:api` 21/21；`e2e` **46/46**——13a
+快捷键组、13a1 通知偏好（含三个类目复选）、13a2 **录成 Alt+P 保存后真能打开命令面板
+并复位**、13a3/13a4 数据管理组与**真实扫一次输出目录**（349 个 run / 519 MB）、20c
+通知中心面板回归；`selftest` 16/16；`visual:update` 重建 24 张后 `visual` 24/24。
+**未覆盖**：清理动作没有自动化（会真删用户 run，只做按钮与候选计算的单测）；
+设置导入的系统文件对话框无法在自动化里点。
 
 ---
 
