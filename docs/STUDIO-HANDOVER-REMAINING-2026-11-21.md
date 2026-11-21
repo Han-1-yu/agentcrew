@@ -47,7 +47,7 @@
 | 6 | **O3 数据管理** | 输出目录占用统计、归档 run 一键清理（走回收站，不 rm）、设置导出/导入 | main.js 新 IPC（du 统计 + 归档清理 + settings.json 导出导入）；**遵守个人文件安全纪律**：删除前确认、只动 outputDir | 统计数字与磁盘一致；清理只处理 archived 标记的 run |
 | 7 | **D2 预算 90% toast** | `budget_warning` 事件已有 → toast + 通知中心条目（事件源钩子已就绪，`INTERESTING` 已含 budget_warning） | 无依赖，半小时工作量 | 跑 mock 预算场景可见一次（去重生效，不重复弹） |
 | 8 | **D3 成本按模型聚合** | `dashboard/cost.js` 增按 model/provider 分组（llm_call 含 model，G1 已示范聚合写法） | 无依赖 | 与 run.json stats 的总成本守恒 |
-| 9 | **E3 计划 diff** | `runs/compare.js` 已有指标对比 → 扩展任务级表格（两次 run 的任务状态/标题差异） | 无依赖 | 对话页/对比弹窗可见任务差异行 |
+| 9 | ~~**E3 计划 diff**~~ ✅ 2026-11-21 | `runs/compare.js` 指标对比 → 下方新增任务级表格（新增/移除/变更，比标题·角色·状态·优先级·依赖） | `lib/task-diff.js` 纯函数 + 八例单测；`passed`/`succeeded` 归一（`PROJECT-STATE.md` §3.110） | 对比弹窗可见任务差异行 ✅（自动化点击未做，见 §3.110 边界） |
 | 10 | **F1-F2 任务图** | F1 running 节点实时高亮（SSE `task_transition` 已接；**不加逐帧动画**，只切 class）；F2 节点抽屉补输入/输出产物摘要 | 无依赖 | 运行 mock run 节点颜色随状态变化；抽屉显示产物条目 |
 | 11 | **H1 profiles 模板扩充** | `features/profiles/templates.js` 3 个 → 写作/复核/代码执行/数据分析分类预设 | 纯本地数据 | 模板可导入为档案 |
 | 12 | **H2 绑定矩阵直写（待核实）** | 若 `agents --save` 支持 bindings 则直写，否则保留 YAML 复制 | **先读** `agentcrew/profiles/service.py` 与 CLI `agents` 参数面（方案 §8.2 未核实项） | 核实结论写回本表与 PROJECT-STATE |
@@ -108,7 +108,7 @@ env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS ./node_modules/electron/dist/electro
 cd E:/agentcrew && python scripts/test.py    # 崩溃隔离跑器；基线 3612 passed / 0 failed
 ```
 
-**验收基线（截至 2026-11-21 Q2）：119 模块 / 55 分片、unit 108/108、verify:api 21/21、selftest 16/16（15 页）、e2e 39/39、visual 24/24。** 任何一项做完都要不低于此基线（新增能力要带新增用例）。
+**验收基线（截至 2026-11-21 E3）：120 模块 / 55 分片、unit 115/115、verify:api 21/21、selftest 16/16（15 页）、e2e 39/39、visual 24/24。** 任何一项做完都要不低于此基线（新增能力要带新增用例）。
 
 ---
 
@@ -132,7 +132,7 @@ cd E:/agentcrew && python scripts/test.py    # 崩溃隔离跑器；基线 3612 
 
 1. 先跑一遍 §4 全套验证，确认起点是绿的（任何红先修环境再看代码）。
 2. 顺手项（半小时级）：D2 预算 toast → D3 成本聚合 → H1 模板扩充 → L2 follow toggle。
-3. 中型项：~~Q2 工具试跑页~~（✅ 2026-11-21）→ E3 计划 diff → F1-F2 → J1-J3 → O1/O2/O3。
+3. 中型项：~~Q2 工具试跑页~~（✅ 2026-11-21）→ ~~E3 计划 diff~~（✅ 2026-11-21，§3.110）→ F1-F2 任务图实时高亮与抽屉产物摘要 → J1-J3 → O1/O2/O3。
 4. 需拍板/核实的：H2（读 service.py 后回填结论）、§5 内联审批（建议先抽 decide+resume 公共函数）。
 5. N1 是唯一动 Python 的 P1 项，单独一笔提交（CLI + tests/test_schedule.py + 前端开关）。
 6. 批次 3 一律契约先行（API_ROUTES + openapi.yaml + test_api_contract.py），每项独立提交。
