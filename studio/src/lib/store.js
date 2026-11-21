@@ -21,6 +21,8 @@ const S = {
   detail: null,          // { kind:'task'|'agent', id }
   eventFilter: new Set(EVENT_TYPES),
   eventExpanded: new Set(),
+  convQuery: '',                    // 对话页搜索词（会话内有效）
+  convFilter: 'all',                // 对话页类型筛选
   simTimer: null,
   startedAt: Date.now(),
   view: { zoom: 1, x: 0, y: 0 },   // DAG 视图变换

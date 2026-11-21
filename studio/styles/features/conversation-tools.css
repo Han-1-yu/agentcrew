@@ -1,0 +1,178 @@
+/* 对话页的检索/操作层：工具栏、消息操作、代码复制、搜索高亮、产物预览。
+   与 conversation.css（气泡视觉）分开，避免单文件过长、也方便单独回归。 */
+
+/* ---------- 工具栏 ---------- */
+.conv-list { max-height: calc(100vh - 252px); }
+.conv-toolbar {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.conv-tb-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.conv-tb-row-sub { align-items: flex-start; }
+.conv-tb-summary {
+  display: flex; align-items: center; gap: 6px;
+  min-width: 0; font-size: var(--fs-xs); color: var(--text-ter);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.conv-tb-status { color: var(--text-sub); font-weight: 500; }
+.conv-tb-sep { opacity: 0.5; }
+.conv-tb-meta { overflow: hidden; text-overflow: ellipsis; }
+.conv-tb-tools { display: flex; align-items: center; gap: 8px; margin-left: auto; flex: 0 0 auto; }
+
+.conv-search {
+  display: flex; align-items: center; gap: 6px;
+  height: 28px; padding: 0 8px;
+  border-radius: var(--r-pill);
+  border: 0.5px solid transparent;
+  background: var(--bg-subtle);
+  color: var(--text-ter);
+  transition: border-color var(--dur-1) ease, background var(--dur-1) ease;
+}
+.conv-search:focus-within { border-color: var(--accent-border-med); background: var(--bg-panel); box-shadow: 0 0 0 3px var(--accent-focus); }
+.conv-search-input {
+  width: 168px; min-width: 80px;
+  border: none; outline: none; background: transparent;
+  color: var(--text); font-family: inherit; font-size: var(--fs-xs);
+}
+.conv-search-input::placeholder { color: var(--text-ter); }
+.conv-search-input::-webkit-search-cancel-button { display: none; }
+.conv-search-clear {
+  display: grid; place-items: center;
+  width: 16px; height: 16px; padding: 0;
+  border: none; border-radius: var(--r-pill);
+  background: var(--ink-10); color: var(--text-sub);
+  font-size: 9px; line-height: 1; cursor: pointer;
+}
+.conv-search-clear:hover { background: var(--ink-18); color: var(--text); }
+.conv-copy-btn { height: 28px; white-space: nowrap; }
+
+.conv-filters { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.conv-fchip {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 24px; padding: 0 9px;
+  border: none; border-radius: var(--r-pill);
+  background: var(--bg-subtle); color: var(--text-ter);
+  font-family: inherit; font-size: var(--fs-xs); cursor: pointer;
+  transition: background var(--dur-1) ease, color var(--dur-1) ease;
+}
+.conv-fchip:hover { background: var(--ink-12); color: var(--text-sub); }
+.conv-fchip.active { background: var(--accent-bg); color: var(--accent-text); font-weight: 500; }
+.conv-fchip-n { font-family: var(--font-mono); font-size: 10px; opacity: 0.75; }
+.conv-hitline { margin-left: 2px; font-size: var(--fs-xs); color: var(--text-ter); white-space: nowrap; }
+
+/* ---------- 消息操作 ---------- */
+.conv-system-main { display: flex; flex-direction: column; align-items: center; gap: 2px; max-width: 80%; }
+.conv-system-main .conv-system-bubble { max-width: 100%; }
+.conv-user-main { display: flex; flex-direction: column; align-items: flex-end; max-width: 78%; }
+.conv-user-main .conv-user-bubble { max-width: 100%; }
+.conv-actions { display: flex; align-items: center; gap: 2px; margin-left: auto; opacity: 0; transition: opacity var(--dur-1) ease; }
+.conv-msg:hover .conv-actions,
+.conv-msg:focus-within .conv-actions { opacity: 1; }
+.conv-user .conv-actions { margin: 4px 2px 0 0; }
+.conv-system .conv-actions { margin: 2px auto 0; }
+.conv-act {
+  display: grid; place-items: center;
+  width: 24px; height: 24px; padding: 0;
+  border: none; border-radius: var(--r-xs);
+  background: transparent; color: var(--text-ter); cursor: pointer;
+  transition: background var(--dur-1) ease, color var(--dur-1) ease;
+}
+.conv-act span { font-size: var(--fs-xs); padding: 0 4px; }
+.conv-act:hover { background: var(--bg-subtle); color: var(--text); }
+.conv-act:focus-visible { outline: 2px solid var(--accent-border-med); outline-offset: 1px; }
+
+.conv-msg-foot {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 8px; min-height: 20px;
+}
+.conv-foot-meta { font-size: var(--fs-xs); color: var(--text-ter); }
+
+/* ---------- 工具 / 门禁 / 产物细节 ---------- */
+.conv-tool-arg {
+  font-family: var(--font-mono); font-size: var(--fs-xs);
+  color: var(--text-ter);
+  max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.conv-tool-unknown { background: var(--text-ter); }
+.conv-tool-error { color: var(--error-text); font-size: var(--fs-xs); margin-bottom: 6px; }
+.conv-gate-count {
+  font-size: 10px; padding: 1px 6px; border-radius: var(--r-pill);
+  background: var(--error-bg); color: var(--error-text);
+}
+.conv-artifact-open { font-size: 11px; color: var(--accent-text); opacity: 0; transition: opacity var(--dur-1) ease; }
+.conv-artifact:hover .conv-artifact-open { opacity: 1; }
+
+/* ---------- Markdown 代码块复制 ---------- */
+.conv-note pre, .conv-stream-body pre { position: relative; }
+.conv-code-copy {
+  position: absolute; top: 6px; right: 6px;
+  padding: 2px 8px;
+  border: 0.5px solid var(--border-weak); border-radius: var(--r-pill);
+  background: var(--bg-float); color: var(--text-sub);
+  font-family: var(--font-ui); font-size: 10px; cursor: pointer;
+  opacity: 0; transition: opacity var(--dur-1) ease, color var(--dur-1) ease;
+}
+.conv-note pre:hover .conv-code-copy,
+.conv-stream-body pre:hover .conv-code-copy,
+.conv-code-copy:focus-visible { opacity: 1; }
+.conv-code-copy:hover { color: var(--text); border-color: var(--accent-border-soft); }
+
+/* ---------- 搜索命中 ---------- */
+.conv-hit {
+  background: var(--warn-bg);
+  color: var(--text);
+  border-radius: 3px;
+  padding: 0 2px;
+  box-shadow: inset 0 -1px 0 var(--warn-border);
+}
+
+/* ---------- 筛选无命中 ---------- */
+.conv-no-hit {
+  position: absolute; left: 50%; top: 40%; transform: translate(-50%, -50%);
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  width: min(320px, 80%);
+  padding: 20px;
+  text-align: center;
+}
+.conv-no-hit-title { font-size: var(--fs-sm); color: var(--text-sub); font-weight: 500; }
+.conv-no-hit-detail { font-size: var(--fs-xs); color: var(--text-ter); margin-bottom: 4px; }
+
+/* ---------- 产物预览（复用详情抽屉） ---------- */
+.conv-preview { display: flex; flex-direction: column; height: 100%; }
+.conv-preview-meta {
+  display: flex; flex-direction: column; gap: 2px;
+  margin-top: 6px; font-size: var(--fs-xs); color: var(--text-ter);
+  font-family: var(--font-mono); word-break: break-all;
+}
+.conv-preview-actions { display: flex; gap: 6px; margin-top: 8px; }
+.conv-preview-body { flex: 1; overflow-y: auto; padding: 14px 16px 20px; min-height: 0; }
+.conv-preview-code {
+  margin: 0; padding: 12px;
+  background: var(--bg-subtle); border-radius: var(--r-sm);
+  font-family: var(--font-mono); font-size: var(--fs-xs);
+  color: var(--text-sub); white-space: pre-wrap; word-break: break-word;
+}
+.conv-preview-md { padding: 0; }
+.conv-preview-md.conv-note { white-space: normal; }
+.conv-preview-img { max-width: 100%; border-radius: var(--r-sm); }
+.conv-preview-empty { font-size: var(--fs-xs); color: var(--text-ter); padding: 8px 0; }
+
+/* 触屏没有 hover：操作与复制键直接可见 */
+@media (hover: none) {
+  .conv-actions { opacity: 1; }
+  .conv-code-copy, .conv-artifact-open { opacity: 1; }
+}
+@media (max-width: 768px) {
+  .conv-toolbar { padding: 0 2px; }
+  .conv-tb-row { flex-wrap: wrap; }
+  .conv-tb-tools { width: 100%; margin-left: 0; }
+  .conv-search { flex: 1; }
+  .conv-search-input { width: 100%; }
+  .conv-filters { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 2px; }
+  .conv-hitline { display: none; }
+  .conv-tool-arg { max-width: 30%; }
+}

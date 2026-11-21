@@ -15,6 +15,30 @@ function artifactIcon(kind, size = 14) {
   return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
 }
 
+/* 扩展名 → 图标类别。产物页的清单自带 kind 时优先用它，这里服务「只有路径」的场景
+   （对话里的 artifact_written 事件、导出记录）。 */
+const KIND_BY_EXT = {
+  md: 'doc', markdown: 'doc', txt: 'doc', rst: 'doc', adoc: 'doc', pdf: 'doc', doc: 'doc', docx: 'doc',
+  py: 'code', js: 'code', mjs: 'code', cjs: 'code', ts: 'code', tsx: 'code', jsx: 'code',
+  java: 'code', go: 'code', rs: 'code', rb: 'code', php: 'code', kt: 'code', swift: 'code',
+  c: 'code', h: 'code', cpp: 'code', hpp: 'code', cs: 'code', html: 'code', htm: 'code',
+  css: 'code', scss: 'code', less: 'code', vue: 'code', svelte: 'code', sql: 'code',
+  sh: 'code', bash: 'code', ps1: 'code',
+  csv: 'report', xlsx: 'report', xls: 'report', png: 'report', jpg: 'report', jpeg: 'report',
+  gif: 'report', webp: 'report', svg: 'report',
+  json: 'config', yaml: 'config', yml: 'config', toml: 'config', ini: 'config', cfg: 'config',
+  env: 'config', conf: 'config', lock: 'config',
+};
+
+function artifactKind(path) {
+  const p = String(path || '');
+  const base = (p.split('/').pop() || '').toLowerCase();
+  if (/^(test_|.*(_test|\.test|\.spec))($|\.)/.test(base) || /(^|\/)(tests?|specs?)\//i.test(p)) return 'test';
+  if (base === 'dockerfile' || base === 'makefile') return 'config';
+  const ext = base.includes('.') ? base.split('.').pop() : '';
+  return KIND_BY_EXT[ext] || 'other';
+}
+
 function normalizeArtifactList(payload) {
   if (Array.isArray(payload)) return { entries: payload, manifestError: null };
   const entries = payload && Array.isArray(payload.entries) ? payload.entries : [];
@@ -37,4 +61,4 @@ function artifactExportOutcome(result) {
   return { type: 'error', message: '导出未返回保存路径' };
 }
 
-export { artifactExportOutcome, artifactIcon, groupArtifacts, normalizeArtifactList };
+export { artifactExportOutcome, artifactIcon, artifactKind, groupArtifacts, normalizeArtifactList };
