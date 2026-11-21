@@ -11,7 +11,7 @@
 
 - 会话模型已定为 **conversation = run（1:1）**（方案 §3.1 决策 A）：会话列表/重命名/置顶/归档是 run 的前端元数据层（settings.json `runMeta`），运行中追问走 guidance、分支/重做走 rewind。**不要再提独立会话实体**。
 - 批次 1（P0 对话闭环）**全部完成**；批次 2（P1）完成七项（flows 流程库页、通知中心、Ctrl+K、deriveAgents、导出 .md、Key 管理、**Q2 工具试跑页**）；批次 3（P2 + 新后端端点）**未动**。
-- 当前基线：`check` **132 模块 / 55 分片**、`test:unit` **151/151**、`verify:api` **21/21**、`selftest` 16/16（**15 页**）、`e2e` **46/46**（15 页导航 + 工具试跑页头 + 任务详情产物摘要 + 产物操作条 + 快捷键录制 + 输出目录统计）、`visual` 24 张重建后一致。全部验证命令见 §4。
+- 当前基线：`check` **133 模块 / 55 分片**、`test:unit` **155/155**、`verify:api` **21/21**、`selftest` 16/16（**15 页**）、`e2e` **47/47**（15 页导航 + 工具试跑页头 + 任务详情产物摘要 + 产物操作条 + 快捷键录制 + 输出目录统计 + 事件范围筛选）、`visual` 24 张重建后一致。全部验证命令见 §4。
 - 提交链：P0 `192eacb→…→35406cf`；P1 批次一 `129fbc8→86d9681→f611382→7ee52f6→d128fbd→74e9eea→1821796`；Q2 见 `PROJECT-STATE.md` §3.109 的提交记录。
 - 原「约 60 个无关在途改动」已于 2026-11-21 按轮次入库（R68 / R69 后端与前端 / 供应商分层 / 对话页 / 文档共 4 笔），工作区干净；接手时若要改文档仍按「只 add 自己的文件」执行。
 
@@ -25,7 +25,7 @@
 | 启动编排（REST/CLI 双通道） | `src/features/new-run/launch.js`、`rest-launch.js` | composer 与新建弹窗共用；ask/demo 恒走 CLI；`flowName` → REST `options.flow_name` / CLI `--flow` |
 | runMeta 契约 | `src/lib/run-meta.js`、`src/features/runs/{sidebar,meta-store,item-menu}.js` | settings.json `runMeta:{[run_id]:{alias,pinned,archived}}`；乐观写盘失败回滚；deleteRun 后裁剪；归档默认隐藏、可搜不可见 |
 | guidance 对账 | `src/features/conversation/assist.js`、`src/lib/messages.js` | 乐观插入 + 4s 轮询 GET 列表；`local-` 项 12s 宽限后丢弃；气泡 chip 由 ledger `guidance_injected/expired/withdrawn` 回写 |
-| 通知中心事件源 | `src/features/notifications/index.js`、`src/app/realtime.js appendEvents` | 只收**实时增量**（loadRealRun 的历史回放不触发）；通知偏好开关存 localStorage `agentcrew:notif-system` |
+| 通知中心事件源 | `src/features/notifications/index.js`、`src/app/realtime.js appendEvents` | 只收**实时增量**（loadRealRun 的历史回放不触发）；通知偏好（系统开关 / 静默时段 / 级别 / 类目静音）存 settings.json `notifyPrefs`，判定在 `lib/notify-prefs.js` |
 
 其他：审批自动 resume（`gates-page/approvals.js`，409 → 重试按钮）；附件（`features/attachments/`，主进程 `images:pick/readFiles` 校验 ≤4 张 ≤2.6MB）；流程库（`features/flows-page/`）；命令面板（`features/command-palette/`，Ctrl/Cmd+K 在 `boot.js`）。
 
@@ -51,7 +51,7 @@
 | 10 | ~~**F1-F2 任务图**~~ ✅ 2026-11-21 | F1 running 节点实时高亮（SSE `task_transition` 已接；**不加逐帧动画**，只切 class）；F2 节点抽屉补输入/输出产物摘要 | `lib/task-live.js` + `features/dashboard/dag-live.js`、`lib/task-artifacts.js` 纯函数 + 十一例单测；事件去重键拆到 `app/realtime-dedup.js`（`PROJECT-STATE.md` §3.111） | 节点 class/chip 就地切换 ✅；抽屉显示输入/输出条目 ✅（真实 SSE 高亮无自动化断言，见 §3.111 边界） |
 | 11 | **H1 profiles 模板扩充** | `features/profiles/templates.js` 3 个 → 写作/复核/代码执行/数据分析分类预设 | 纯本地数据 | 模板可导入为档案 |
 | 12 | **H2 绑定矩阵直写（待核实）** | 若 `agents --save` 支持 bindings 则直写，否则保留 YAML 复制 | **先读** `agentcrew/profiles/service.py` 与 CLI `agents` 参数面（方案 §8.2 未核实项） | 核实结论写回本表与 PROJECT-STATE |
-| 13 | **L1-L2 事件页** | L1 时间范围筛选 + 事件→「跳到对话/任务」定位；L2 follow toggle（实时滚动锁） | 无依赖 | 筛选后计数正确；开关生效且刷新后保持 |
+| 13 | ~~**L1-L2 事件页**~~ ✅ 2026-11-21 | L1 时间范围筛选（以最新事件为基准）+ 事件→「跳到任务 / 对话」；L2 follow toggle 已有 | `lib/event-view.js`（`PROJECT-STATE.md` §3.114） | 筛选组合与倒序 ✅；跳转入口存在 ✅（真实点击未做，见 §3.114 边界） |
 | 14 | **P2-P3 壳层** | P2 侧栏折叠（对话列表区可收起）；P3 `shell.js openUserMenu` 的演示状态切换器移入「开发者」子菜单，与真实账户语义分离 | 无依赖 | 演示菜单不再与账户混放 |
 | 15 | **§5 内联审批（P1）** | 对话页系统消息「等待人工审批」处内联审批卡：REST `GET/POST /runs/{id}/approvals` 直接 apiFetch（无需新 IPC）；未连 API 降级为跳门禁页 | 数据都在；复用 approvals.js 的 decide+auto-resume 逻辑（建议抽公共函数避免两处漂移） | 裁决后卡片显示 resume 结果；未连 API 可跳转 |
 | 16 | **M1 自定义供应商** | 默认**保留 YAML 复制**（设计边界：Studio 不重写 agentcrew.yaml，方案 §8.3）；若要直存需新后端端点 → 归入批次 3 | 维持现状即可关闭此项 | — |
@@ -91,10 +91,10 @@
 ```bash
 cd E:/agentcrew/studio
 npm run check          # 秒级，无需 GUI：分层/导入完整性/体量/入口
-npm run test:unit      # node --test tests/*.test.mjs（当前 91 用例）
-npm run selftest       # 真实 UI 驱动 --mock 运行 + 14 页导航（16 项）
-npm run e2e            # 14 页 + 命令面板/通知中心等（38 项）
-npm run verify:api     # 假后端 18 断言（含 P0 新增四断言）
+npm run test:unit      # node --test tests/*.test.mjs（当前 155 用例）
+npm run selftest       # 真实 UI 驱动 --mock 运行 + 15 页导航（16 项）
+npm run e2e            # 15 页 + 命令面板/通知中心/快捷键/数据统计等（47 项）
+npm run verify:api     # 假后端 21 断言（含工具试跑与 SSE 帧）
 
 # Git Bash 下 Electron 子进程需清掉宿主注入变量；npm script 之外的直调写法：
 env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS ./node_modules/electron/dist/electron.exe tools/verify-api-bridge.js
@@ -108,7 +108,7 @@ env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS ./node_modules/electron/dist/electro
 cd E:/agentcrew && python scripts/test.py    # 崩溃隔离跑器；基线 3612 passed / 0 failed
 ```
 
-**验收基线（截至 2026-11-21 O1-O3）：132 模块 / 55 分片、unit 151/151、verify:api 21/21、selftest 16/16（15 页）、e2e 46/46、visual 24/24。** 任何一项做完都要不低于此基线（新增能力要带新增用例）。
+**验收基线（截至 2026-11-21 L1）：133 模块 / 55 分片、unit 155/155、verify:api 21/21、selftest 16/16（15 页）、e2e 47/47、visual 24/24。** 任何一项做完都要不低于此基线（新增能力要带新增用例）。
 
 ---
 
@@ -132,7 +132,7 @@ cd E:/agentcrew && python scripts/test.py    # 崩溃隔离跑器；基线 3612 
 
 1. 先跑一遍 §4 全套验证，确认起点是绿的（任何红先修环境再看代码）。
 2. 顺手项（半小时级）：D2 预算 toast → D3 成本聚合 → H1 模板扩充 → L2 follow toggle。
-3. 中型项：~~Q2 工具试跑页~~（✅ 2026-11-21）→ ~~E3 计划 diff~~（✅ 2026-11-21，§3.110）→ ~~F1-F2 任务图实时高亮与抽屉产物摘要~~（✅ 2026-11-21，§3.111）→ ~~J1-J3 产物增强~~（✅ 2026-11-21，§3.112）→ ~~O1-O3 设置页三件套~~（✅ 2026-11-21，§3.113）→ 下一批见下表（N1-N2 / H1-H2 / L1-L2 / P2-P3 / §5 内联审批）。
+3. 中型项：~~Q2 工具试跑页~~（✅ 2026-11-21）→ ~~E3 计划 diff~~（✅ 2026-11-21，§3.110）→ ~~F1-F2 任务图实时高亮与抽屉产物摘要~~（✅ 2026-11-21，§3.111）→ ~~J1-J3 产物增强~~（✅ 2026-11-21，§3.112）→ ~~O1-O3 设置页三件套~~（✅ 2026-11-21，§3.113）→ ~~L1-L2 事件页~~（✅ 2026-11-21，§3.114）→ 下一批：N1-N2 / H1-H2 / P2-P3 / §5 内联审批。
 4. 需拍板/核实的：H2（读 service.py 后回填结论）、§5 内联审批（建议先抽 decide+resume 公共函数）。
 5. N1 是唯一动 Python 的 P1 项，单独一笔提交（CLI + tests/test_schedule.py + 前端开关）。
 6. 批次 3 一律契约先行（API_ROUTES + openapi.yaml + test_api_contract.py），每项独立提交。
