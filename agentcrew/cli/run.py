@@ -187,7 +187,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
     if image_error:
         return _fail(image_error)
     crew = Crew(settings, catalog=catalog, prompter=prompter, on_event=hook,
-                preset_tasks=preset_tasks, images=images)
+                preset_tasks=preset_tasks, images=images,
+                trigger_source=getattr(args, "trigger_source", None))
     hook.bind(crew)
     return _drive(crew, lambda: crew.run(goal), hook=hook, console=console)
 

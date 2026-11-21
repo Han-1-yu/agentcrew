@@ -79,6 +79,37 @@ function run(win) {
     const toolsOk = await js(`!!document.querySelector('#placeholder-view .page-head h2') && document.querySelector('#placeholder-view .page-head h2').textContent.includes('工具试跑')`);
     check('2c. 执行体档案 / 定时任务 / 流程库 / 工具试跑 页内容渲染', !!(profilesOk && schedulesOk && flowsOk && toolsOk), JSON.stringify({ profilesOk, schedulesOk, flowsOk, toolsOk }));
 
+    // 2c2. 定时任务表单（N1）：新建/编辑共用表单卡。这里只验「渲染与本地校验」，
+    // 不点真提交——e2e 连的是用户真实 output 目录，不该往里写日程。
+    await js(`document.querySelector('.nav-item[data-nav="schedules"]')?.click()`);
+    await sleep(700);
+    const formOk = await js(`(() => {
+      const slot = document.querySelector('#schedules-form');
+      const card = slot && slot.querySelector('.dash-block');
+      return !!(card && card.querySelector('textarea') && card.querySelector('input[type="time"]'));
+    })()`);
+    // 周期 tab → 7 个星期几胶囊（一次性行同时让位）
+    await js(`document.querySelector('#schedules-form .schedule-kind-btn[data-kind="recurring"]')?.click()`);
+    await sleep(200);
+    const weekdaysOk = await js(`(() => {
+      const chips = document.querySelectorAll('#schedules-form .schedule-wd').length;
+      const recurVisible = document.querySelector('#schedules-form .schedule-recur')?.closest('.schedule-row')?.style.display !== 'none';
+      const onceHidden = document.querySelector('#schedules-form input[type="datetime-local"]')?.closest('.schedule-row')?.style.display === 'none';
+      return chips === 7 && recurVisible && onceHidden;
+    })()`);
+    // 空目标点提交 → 本地校验拦下（toast 报错，不发后端）
+    await js(`document.querySelector('#schedules-form .modal-actions .btn-primary')?.click()`);
+    await sleep(250);
+    const blockedOk = await js(`!!document.querySelector('#toasts .toast.error')`);
+    check('2c2. 定时任务表单：周期切换出 7 个星期几胶囊、空目标被本地校验拦下', !!(formOk && weekdaysOk && blockedOk), JSON.stringify({ formOk, weekdaysOk, blockedOk }));
+
+    // 2c3. N2 触发历史：只读扫描最近 30 个 run 的 ledger，返回结构必须是数组
+    //      （没有 schedule: 来源时是空数组，而不是 undefined 或抛错）。
+    const historyOk = await js(`window.studio.scheduleHistory()
+      .then(r => !!(r && r.ok && r.data && Array.isArray(r.data.triggers)))`);
+    check('2c3. 定时任务触发历史 IPC 返回数组结构', !!historyOk, JSON.stringify({ historyOk }));
+
+
     // 2d. 对话页：消息流渲染（用户目标气泡 + 任务气泡）
     await js(`document.querySelector('.nav-item[data-nav="conversation"]')?.click()`);
     await sleep(700);

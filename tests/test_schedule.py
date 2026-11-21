@@ -2,12 +2,16 @@
 
 from datetime import datetime
 
+import pytest
+
 from agentcrew.cli.schedule import (
     Schedule,
+    _run_args,
     add_schedule,
     compute_next_run,
     load_schedules,
     remove_schedule,
+    set_enabled,
     tick,
 )
 
@@ -88,3 +92,54 @@ def test_remove_schedule(tmp_path):
     assert remove_schedule(tmp_path, s.id) is True
     assert remove_schedule(tmp_path, s.id) is False
     assert load_schedules(tmp_path) == []
+
+
+def test_disable_keeps_next_run_and_skips_tick(tmp_path):
+    # 停用不动 next_run（留作审计「本来该什么时候跑」），且 tick 不再命中
+    s = add_schedule(tmp_path, goal="g", mock=True, mode="agent", kind="once",
+                     at="2020-01-01T00:00:00", weekdays=[], time=None)
+    off = set_enabled(tmp_path, s.id, False, now=_dt("2026-11-09T12:00:00"))
+    assert off is not None and off.enabled is False
+    assert off.next_run == "2020-01-01T00:00:00"
+    fired = tick(tmp_path, now=_dt("2026-11-09T12:00:00"), runner=lambda od, sc: None)
+    assert fired == []
+
+
+def test_enable_recomputes_next_run_for_recurring(tmp_path):
+    # 停用一周后重新启用：不能沿用停用前的旧点（否则立刻补跑一次）
+    s = add_schedule(tmp_path, goal="g", mock=True, mode="agent", kind="recurring",
+                     at=None, weekdays=["MO", "TU", "WE", "TH", "FR"], time="09:00",
+                     now=_dt("2026-11-02T08:00:00"))
+    set_enabled(tmp_path, s.id, False, now=_dt("2026-11-02T08:30:00"))
+    later = _dt("2026-12-16T15:00:00")  # 周三 15:00，下一个命中点是周四 09:00
+    on = set_enabled(tmp_path, s.id, True, now=later)
+    assert on is not None and on.enabled is True
+    nxt = _dt(on.next_run)
+    assert nxt > later
+    assert (nxt.hour, nxt.minute) == (9, 0)
+    assert nxt.isoweekday() <= 5
+
+
+def test_enable_past_once_schedule_is_rejected(tmp_path):
+    # 一次性日程的 at 已过：没有下一个触发点可算，明确拒绝而不是排成「立刻触发」
+    s = add_schedule(tmp_path, goal="g", mock=True, mode="agent", kind="once",
+                     at="2020-01-01T00:00:00", weekdays=[], time=None)
+    set_enabled(tmp_path, s.id, False, now=_dt("2026-11-09T12:00:00"))
+    with pytest.raises(ValueError, match="触发时间已过"):
+        set_enabled(tmp_path, s.id, True, now=_dt("2026-11-09T12:00:00"))
+    assert load_schedules(tmp_path)[0].enabled is False
+
+
+def test_set_enabled_unknown_id_returns_none(tmp_path):
+    assert set_enabled(tmp_path, "sched_nope", True) is None
+
+
+def test_run_args_carry_trigger_source(tmp_path):
+    """tick 派发的 run 必须带来源，否则 Studio 的触发历史无从关联。"""
+    s = add_schedule(tmp_path, goal="写周报", mock=True, mode="agent", kind="recurring",
+                     at=None, weekdays=["MO"], time="09:00",
+                     now=_dt("2026-11-09T00:00:00"))
+    args = _run_args(s)
+    assert args[:3] == ["run", "--goal", "写周报"]
+    assert args[args.index("--trigger-source") + 1] == f"schedule:{s.id}"
+    assert "--no-live" in args

@@ -216,9 +216,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_sched_list.add_argument("--json", action="store_true", help="输出 JSON")
     p_sched_rm = schedule_sub.add_parser("remove", help="删除日程")
     p_sched_rm.add_argument("schedule_id", help="日程 id（见 list）")
+    p_sched_on = schedule_sub.add_parser(
+        "enable", help="启用日程（重算下次触发时间）")
+    p_sched_on.add_argument("schedule_id", help="日程 id（见 list）")
+    p_sched_on.add_argument("--json", action="store_true", help="输出 JSON")
+    p_sched_off = schedule_sub.add_parser("disable", help="停用日程（保留在列表里）")
+    p_sched_off.add_argument("schedule_id", help="日程 id（见 list）")
+    p_sched_off.add_argument("--json", action="store_true", help="输出 JSON")
     p_sched_tick = schedule_sub.add_parser("tick", help="到期检查 + 触发（幂等，可高频调用）")
     p_sched_tick.add_argument("--json", action="store_true", help="输出本轮触发 JSON")
-    for _sched_parser in (p_sched_add, p_sched_list, p_sched_rm, p_sched_tick):
+    for _sched_parser in (p_sched_add, p_sched_list, p_sched_rm, p_sched_on,
+                          p_sched_off, p_sched_tick):
         _sched_parser.add_argument("--output-dir", metavar="DIR", help="output 目录（定位 _schedules/）")
 
     samples = sub.add_parser(
@@ -419,4 +427,7 @@ def _add_run_flags(parser: argparse.ArgumentParser) -> None:
              "deferred = 审批单落盘后 run 挂起，用 approve 命令在另一个进程裁决再 resume")
     parser.add_argument("--no-live", action="store_true",
                         help="关闭实时看板，只保留结束报告（CI 友好）")
+    parser.add_argument("--trigger-source", metavar="SOURCE", default=None,
+                        help="谁发起的这次 run（如 schedule:sched_xxx），落进 ledger 的 "
+                             "run_triggered 事件；定时任务的历史据此关联")
 

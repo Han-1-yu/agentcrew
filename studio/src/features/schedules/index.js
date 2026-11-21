@@ -1,17 +1,12 @@
 /**
- * 定时任务页（对齐 WorkBuddy 的 Automations）：一次性 / 周期日程的列表、新建与删除。
+ * 定时任务页（对齐 WorkBuddy 的 Automations）：日程列表 + 新建 / 编辑表单。
  * 到期触发由主进程每分钟调用 `main.py schedule tick` 完成（幂等）。
  */
 import { h } from '../../lib/dom.js';
-
-import { MODES, MODE_ORDER } from '../../lib/mode.js';
-import { confirmAction } from '../../ui/modal.js';
 import { toast } from '../../ui/toast.js';
 
-const WEEKDAYS = [
-  ['MO', '一'], ['TU', '二'], ['WE', '三'], ['TH', '四'],
-  ['FR', '五'], ['SA', '六'], ['SU', '日'],
-];
+import { scheduleCard } from './card.js';
+import { buildScheduleForm } from './form.js';
 
 function emptyState(msg) {
   return h('div', { class: 'page-state' },
@@ -19,8 +14,19 @@ function emptyState(msg) {
     h('div', { class: 'page-state-detail' }, msg || '在下方新建一条日程，到点后会自动跑一次运行。'));
 }
 
-async function refresh(listEl) {
+async function loadTriggers() {
+  // 历史读失败不该拖垮列表：卡片退回「扫描范围」文案即可。
+  try {
+    const res = await window.studio.scheduleHistory();
+    if (res && res.ok && res.data && Array.isArray(res.data.triggers)) return res.data.triggers;
+  } catch { /* 忽略：没有历史比整页报错更可用 */ }
+  return [];
+}
+
+async function refresh(listEl, formSlot) {
   listEl.innerHTML = '';
+  // 列表要等 CLI（另起 python 进程）返回，所以不再顺带重置表单：
+  // 表单在挂载时同步渲染，刷列表不该把用户正在填的内容清掉。
   let schedules = [];
   try {
     const res = await window.studio.scheduleList();
@@ -33,102 +39,29 @@ async function refresh(listEl) {
     return;
   }
   if (!schedules.length) { listEl.appendChild(emptyState()); return; }
-  schedules.forEach(s => listEl.appendChild(scheduleCard(s, listEl)));
+  const triggers = await loadTriggers();
+  const bySchedule = new Map();
+  triggers.forEach(t => {
+    if (!bySchedule.has(t.scheduleId)) bySchedule.set(t.scheduleId, []);
+    bySchedule.get(t.scheduleId).push(t);
+  });
+  schedules.forEach(s => listEl.appendChild(scheduleCard(s, {
+    triggers: bySchedule.get(s.id) || [],
+    onChanged: () => refresh(listEl, formSlot),
+    onEdit: (schedule) => {
+      renderForm(formSlot, listEl, schedule);
+      formSlot.scrollIntoView({ block: 'nearest' });
+    },
+  })));
 }
 
-async function ensureScheduleOk(promise, fallback) {
-  const result = await promise;
-  if (!result || result.ok !== true) throw new Error((result && result.error) || fallback);
-  return result;
-}
-
-function scheduleCard(s, listEl) {
-  const when = s.kind === 'recurring'
-    ? `每周 ${(s.weekdays || []).join('·')} ${s.time || ''}`
-    : (s.next_run || s.at || '—');
-  const modeLabel = (MODES[s.mode] && MODES[s.mode].mode) || s.mode;
-  return h('div', { class: 'schedule-card' },
-    h('div', { class: 'schedule-head' },
-      h('span', { class: `schedule-state ${s.enabled ? 'on' : 'off'}` }, s.enabled ? '启用' : '已触发/停用'),
-      h('span', { class: 'schedule-meta mono' }, `${s.kind === 'recurring' ? '周期' : '一次性'} · ${modeLabel}${s.mock ? ' · Mock' : ''}`),
-      h('button', { class: 'btn btn-sm btn-danger', onclick: () => {
-        confirmAction('删除定时任务', `将删除「${s.goal}」，此操作不可撤销。`, async () => {
-          try {
-            await ensureScheduleOk(window.studio.scheduleRemove({ id: s.id }), '删除失败');
-            toast('success', '已删除', '定时任务已移除');
-            refresh(listEl);
-          } catch (e) { toast('error', '删除失败', String(e.message || e)); }
-        }, '删除');
-      } }, '删除')),
-    h('div', { class: 'schedule-goal' }, s.goal),
-    h('div', { class: 'schedule-when' }, `下次触发：${s.next_run || '—'}`));
-}
-
-function buildAddCard(listEl) {
-  const kindInputs = {};
-  const card = h('div', { class: 'dash-block' },
-    h('div', { class: 'block-head' },
-      h('h2', { class: 'block-title' }, '新建定时任务'),
-      h('div', { class: 'schedule-kind', role: 'tablist' },
-        ['once', 'recurring'].map(k => {
-          kindInputs[k] = h('button', {
-            type: 'button', class: 'schedule-kind-btn' + (k === 'once' ? ' active' : ''),
-            'data-kind': k, onclick: () => switchKind(k),
-          }, k === 'once' ? '一次性' : '周期');
-          return kindInputs[k];
-        }))),
-    h('div', { class: 'schedule-form' },
-      h('div', { class: 'schedule-row' },
-        h('label', { class: 'nr-label' }, '目标'),
-        h('textarea', { id: 'sched-goal', class: 'nr-textarea', rows: 2, placeholder: '到点要执行的目标，例如：生成每日数据日报' })),
-      h('div', { class: 'schedule-row', id: 'sched-once-row' },
-        h('label', { class: 'nr-label' }, '触发时间'),
-        h('input', { id: 'sched-at', class: 'nr-input', type: 'datetime-local' })),
-      h('div', { class: 'schedule-row', id: 'sched-recur-row', style: 'display:none' },
-        h('label', { class: 'nr-label' }, '每天触发时间'),
-        h('div', { class: 'schedule-recur' },
-          h('input', { id: 'sched-time', class: 'nr-input', type: 'time', value: '09:00' }),
-          h('div', { class: 'schedule-weekdays' }, WEEKDAYS.map(([k, label]) =>
-            h('label', { class: 'schedule-wd' },
-              h('input', { type: 'checkbox', 'data-wd': k, checked: k !== 'SA' && k !== 'SU' }), label))))),
-      h('div', { class: 'schedule-row' },
-        h('label', { class: 'nr-label' }, '执行模式'),
-        h('select', { id: 'sched-mode', class: 'nr-select' },
-          MODE_ORDER.map(m => h('option', { value: m, selected: m === 'agent' }, MODES[m].mode)))),
-      h('label', { class: 'nr-slow-label', style: 'visibility:visible' },
-        h('input', { id: 'sched-mock', type: 'checkbox' }), 'Mock 模式（不调大模型）')),
-    h('div', { class: 'modal-actions' },
-      h('button', { class: 'btn btn-primary', onclick: async () => {
-        const goal = document.getElementById('sched-goal').value.trim();
-        if (!goal) { toast('error', '还没有目标', '先写一句到点要执行的目标'); return; }
-        const kind = document.querySelector('.schedule-kind-btn.active')?.dataset.kind || 'once';
-        const mode = document.getElementById('sched-mode').value;
-        const mock = document.getElementById('sched-mock').checked;
-        const payload = { goal, mode, mock };
-        if (kind === 'once') {
-          const at = document.getElementById('sched-at').value;
-          if (!at) { toast('error', '缺少时间', '请选择触发时间'); return; }
-          payload.at = at.includes('T') && at.length === 16 ? at + ':00' : at;
-        } else {
-          const time = document.getElementById('sched-time').value;
-          const wds = [...document.querySelectorAll('#sched-recur-row input[data-wd]:checked')].map(i => i.dataset.wd);
-          if (!time) { toast('error', '缺少时间', '请选择每天触发时间'); return; }
-          if (!wds.length) { toast('error', '缺少星期', '至少勾选一个星期几'); return; }
-          payload.daily = time; payload.weekdays = wds.join(',');
-        }
-        try {
-          await ensureScheduleOk(window.studio.scheduleAdd(payload), '添加失败');
-          toast('success', '已添加', '定时任务已注册');
-          refresh(listEl);
-        } catch (e) { toast('error', '添加失败', String(e.message || e)); }
-      } }, '添加')));
-
-  function switchKind(kind) {
-    Object.keys(kindInputs).forEach(k => kindInputs[k].classList.toggle('active', k === kind));
-    document.getElementById('sched-once-row').style.display = kind === 'once' ? '' : 'none';
-    document.getElementById('sched-recur-row').style.display = kind === 'recurring' ? '' : 'none';
-  }
-  return card;
+function renderForm(formSlot, listEl, initial) {
+  formSlot.innerHTML = '';
+  formSlot.appendChild(buildScheduleForm({
+    initial,
+    // 提交成功后表单回到「新建」空态（编辑态引用的那条可能已经被替换掉）。
+    onDone: () => { renderForm(formSlot, listEl, null); refresh(listEl, formSlot); },
+  }));
 }
 
 async function renderSchedulesPage(container) {
@@ -144,11 +77,14 @@ async function renderSchedulesPage(container) {
     } }, '立即检查到期')));
   const wrap = h('div', { class: 'schedules-wrap' });
   container.appendChild(wrap);
-  const listEl = h('div', { id: 'schedules-list' });
-  wrap.appendChild(buildAddCard(listEl));
+  const formSlot = h('div', { class: 'schedule-form-slot', id: 'schedules-form' });
+  const listEl = h('div', { class: 'schedules-list', id: 'schedules-list' });
+  wrap.appendChild(formSlot);
   wrap.appendChild(h('h2', { class: 'block-title', style: 'margin:20px 0 8px' }, '已注册日程'));
   wrap.appendChild(listEl);
-  refresh(listEl);
+  // 表单先同步渲染（不等 CLI），列表后台加载：首屏不该被一次子进程启动卡住。
+  renderForm(formSlot, listEl, null);
+  refresh(listEl, formSlot);
 }
 
 export { renderSchedulesPage };

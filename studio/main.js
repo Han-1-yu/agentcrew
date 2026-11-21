@@ -317,6 +317,46 @@ function startScheduleTicker() {
 
 // ---------- run 扫描与读取 ----------
 
+// 定时任务触发历史（N2）：最近 N 个 run 的 ledger 里 `run_triggered source=schedule:<id>`
+// 就是「这条日程叫起来过哪几次」。只扫最新 N 个目录——历史里有几百个 run，
+// 全扫会把「打开定时任务页」变成一次磁盘风暴，而这里只需要「最近的几次」。
+const SCHEDULE_HISTORY_SCAN = 30;
+
+function scheduleTriggers(limitRuns = SCHEDULE_HISTORY_SCAN) {
+  const root = settings.outputDir;
+  let dirs = [];
+  try {
+    dirs = fs.readdirSync(root, { withFileTypes: true })
+      .filter(e => e.isDirectory() && /^\d{8}-\d{6}/.test(e.name))
+      .map(e => e.name)
+      .sort()
+      .reverse()
+      .slice(0, Math.max(1, limitRuns));
+  } catch { return []; }
+  const triggers = [];
+  for (const name of dirs) {
+    const ledgerFile = path.join(root, name, 'ledger.jsonl');
+    let text = '';
+    try { text = fs.readFileSync(ledgerFile, 'utf8'); } catch { continue; }
+    for (const line of text.split('\n')) {
+      // 便宜匹配先行：绝大多数行不含这个事件名，避免每行都 JSON.parse。
+      if (!line.includes('"run_triggered"')) continue;
+      let item;
+      try { item = JSON.parse(line); } catch { continue; }
+      // ledger 行形如 {"ts":..,"event":"run_triggered","data":{"source":"schedule:<id>"}}
+      const source = String((item && item.data && item.data.source) || '');
+      if (!source.startsWith('schedule:')) continue;
+      triggers.push({
+        scheduleId: source.slice('schedule:'.length),
+        runDir: name,
+        at: item.ts || null,
+      });
+    }
+  }
+  // 新的在前：卡片上先看到最近一次
+  return triggers.sort((a, b) => String(b.runDir).localeCompare(String(a.runDir)));
+}
+
 function readJsonTolerant(file) {
   try { return { ok: true, data: JSON.parse(fs.readFileSync(file, 'utf8')) }; }
   catch (e) { return { ok: false, error: String(e && e.message || e) }; }
@@ -1202,7 +1242,23 @@ function registerIpc() {
     try { return { ok: true, data: await runScheduleJson(['tick', '--json']) }; }
     catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
+  // 启停走 CLI 子命令而不是直写 schedules.json：tick 是另一个进程，
+  // 两处同时写同一份文件会互相覆盖（方案 §N1 明令）。
+  ipcMain.handle('schedule:setEnabled', async (_e, arg) => {
+    const p = objArg(arg);
+    const action = p.enabled ? 'enable' : 'disable';
+    try {
+      const data = await runScheduleJson(
+        [action, String(p.id || ''), '--json'], p.outputDir || null);
+      return { ok: true, data };
+    } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+  });
 
+  // 触发历史只读不写：数据来自各 run 的 ledger（来源在 tick 派发时就写进去了）。
+  ipcMain.handle('schedule:history', async () => {
+    try { return { ok: true, data: { triggers: scheduleTriggers() } }; }
+    catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+  });
   ipcMain.handle('settings:get', () => {
     const repoOk = fs.existsSync(path.join(settings.repoRoot, 'main.py'));
     const outOk = fs.existsSync(settings.outputDir);

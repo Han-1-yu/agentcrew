@@ -309,6 +309,7 @@ class Crew(CrewAssembly):
         entity_memory_enabled: bool | None = None,
         preset_tasks: Sequence[Any] | None = None,
         images: Sequence[Mapping[str, Any]] | None = None,
+        trigger_source: str | None = None,
     ) -> None:
         """``catalog`` / ``store`` 缺省由本类按需构造；``prompter`` **原样透传**。
 
@@ -347,6 +348,10 @@ class Crew(CrewAssembly):
         ``entity_memory_enabled``：``None``（默认）时取
         ``settings.entity_memory_enabled``；显式传 True/False 可覆盖。开启后经验
         沉淀时同步抽取实体、规划阶段注入实体参考块。
+
+        ``trigger_source``：谁发起的这次 run（``schedule:<id>`` / ``webhook`` 等）。
+        非空时在 run ledger 落一条 ``run_triggered``，让「这次 run 是定时任务叫起来的
+        还是人点的」能从审计里直接读出来；``None``（默认）时不写，行为与改造前一致。
         """
         self._settings = settings
         self._catalog = catalog if catalog is not None else build_catalog(settings)
@@ -374,6 +379,7 @@ class Crew(CrewAssembly):
             else entity_memory_enabled
         )
         self._run: _Run | None = None
+        self._trigger_source = trigger_source
         self._injected_checkpoint = checkpoint
         self._resume_board: TaskBoard | None = None
         self._board: TaskBoard | None = None
@@ -886,6 +892,10 @@ class Crew(CrewAssembly):
                 "goal": run.goal,
             })
         ledger.emit("run_started", goal=run.goal)
+        if self._trigger_source:
+            # C8 同形事件：API 的 webhook 触发也写 `run_triggered(source=webhook)`，
+            # 这里补上 CLI 侧来源（`schedule:<id>`），定时任务的历史才能对上号。
+            ledger.emit("run_triggered", source=self._trigger_source)
         # P2-2：把上一次运行停在哪个半步如实报出来（首次运行什么都没有 → 不发事件）。
         self._recover_superstep(run)
         try:

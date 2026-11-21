@@ -39,6 +39,8 @@ contextBridge.exposeInMainWorld('studio', {
   scheduleList: () => invoke('schedule:list'),
   scheduleAdd: (p) => invoke('schedule:add', p),
   scheduleRemove: (p) => invoke('schedule:remove', p),
+  scheduleSetEnabled: (p) => invoke('schedule:setEnabled', p),
+  scheduleHistory: (p) => invoke('schedule:history', p),
   scheduleTick: () => invoke('schedule:tick'),
   // 运行列表 / 快照 / 事件
   listRuns: () => invoke('runs:list'),

@@ -498,6 +498,19 @@ async def test_run_record_persisted_with_config_snapshot(env):
 # ── 规划阶段 ──────────────────────────────────────────────────────────────
 
 
+async def test_trigger_source_lands_run_triggered_event(env):
+    """N2：定时任务派发的 run 要能在 ledger 里认出「谁叫起来的」。"""
+    rec = await Crew(env["settings"], trigger_source="schedule:sched_test").run("做一个 Todo 应用")
+    ledger = Ledger(_run_dir(env["settings"], rec.run_id) / "ledger.jsonl", run_id=rec.run_id)
+    triggered = [e for e in ledger.events() if e.event == "run_triggered"]
+    assert len(triggered) == 1
+    assert triggered[0].data["source"] == "schedule:sched_test"
+    # 没给来源时不写这条事件：默认路径的 ledger 形状不变
+    rec2 = await Crew(env["settings"]).run("做一个 Todo 应用")
+    ledger2 = Ledger(_run_dir(env["settings"], rec2.run_id) / "ledger.jsonl", run_id=rec2.run_id)
+    assert [e for e in ledger2.events() if e.event == "run_triggered"] == []
+
+
 async def test_plan_repair_succeeds_on_second_attempt(env, monkeypatch):
     """坏计划 → 错误回灌 → 重拆成功：两次调用，第二轮 feedback 点名未注册角色。"""
     bad = {"tasks": [dict(PLAN["tasks"][0], role="does_not_exist")]}

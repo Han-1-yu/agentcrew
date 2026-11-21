@@ -351,6 +351,7 @@ def _cmd_schedule(args: argparse.Namespace) -> int:
         add_schedule,
         load_schedules,
         remove_schedule,
+        set_enabled,
         tick,
     )
 
@@ -414,6 +415,22 @@ def _cmd_schedule(args: argparse.Namespace) -> int:
         if not ok:
             return _fail(f"找不到日程：{args.schedule_id}")
         _out(console, f"已删除日程 {args.schedule_id}")
+        return EXIT_CODES["ok"]
+
+    if action in ("enable", "disable"):
+        wanted = action == "enable"
+        try:
+            toggled = set_enabled(settings.output_dir, args.schedule_id, wanted)
+        except ValueError as exc:
+            return _fail(str(exc))
+        if toggled is None:
+            return _fail(f"找不到日程：{args.schedule_id}")
+        if getattr(args, "json", False):
+            print(json.dumps({"schedule": toggled.model_dump(mode="json")},
+                             ensure_ascii=False, indent=2))
+            return EXIT_CODES["ok"]
+        state = "已启用" if toggled.enabled else "已停用"
+        _out(console, f"{state} {toggled.id}，下次触发 {toggled.next_run or '—'}")
         return EXIT_CODES["ok"]
 
     # tick

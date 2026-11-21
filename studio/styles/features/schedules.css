@@ -14,9 +14,15 @@
 }
 .schedule-state.on { background: var(--success-bg); color: var(--success-text); }
 .schedule-state.off { background: var(--bg-subtle); color: var(--text-ter); }
+/* 编辑一张日程时，新建表单会换到同一位（max-width 与卡片对齐） */
+.schedule-form-slot { max-width: 640px; }
+/* 启停 / 编辑 / 删除：靠右成组，不挤占状态胶囊的空间 */
+.schedule-actions { display: inline-flex; gap: var(--sp-2); }
 .schedule-meta { flex: 1; font-size: var(--fs-xs); color: var(--text-ter); }
 .schedule-goal { font-size: var(--fs-body); color: var(--text); font-weight: 500; word-break: break-word; }
 .schedule-when { margin-top: 3px; font-size: var(--fs-xs); color: var(--text-ter); font-family: var(--font-mono); }
+/* N2 触发历史：比「下次触发」再淡一档，避免和主信息抢注意力 */
+.schedule-history { margin-top: 2px; font-size: var(--fs-xs); color: var(--text-ter); opacity: 0.85; }
 
 .schedule-kind { display: inline-flex; gap: 2px; padding: 2px; background: var(--bg-subtle); border: 0.5px solid var(--border); border-radius: var(--r-pill); }
 .schedule-kind-btn {

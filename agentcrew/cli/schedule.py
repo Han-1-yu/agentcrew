@@ -133,6 +133,9 @@ def _run_args(schedule: Schedule) -> list[str]:
         args += ["--gate", "plan", "--approval-mode", "deferred"]
     else:
         args.append("--auto")
+    # 来源进 ledger（`run_triggered source=schedule:<id>`）：到期的 run 与日程对得上号，
+    # Studio 的「触发历史」就不必猜「这条 run 是不是定时任务叫起来的」。
+    args += ["--trigger-source", f"schedule:{schedule.id}"]
     args += ["--no-live"]
     return args
 
@@ -173,6 +176,40 @@ def add_schedule(
     schedules.append(schedule)
     save_schedules(output_dir, schedules)
     return schedule
+
+
+def set_enabled(
+    output_dir: Path,
+    schedule_id: str,
+    enabled: bool,
+    *,
+    now: datetime | None = None,
+) -> Schedule | None:
+    """启用 / 停用一条日程，返回改后的对象（找不到返回 ``None``）。
+
+    启用时**必须重算** ``next_run``：停用期间日历照常走，沿用旧值会让重新启用的
+    日程立刻补跑一次（周期日程在停用一周后尤其明显）。停用只翻开关、不动
+    ``next_run``——列表里保留「本来该什么时候跑」用于审计。
+
+    一次性日程的 ``at`` 已经过去了就没法「重新启用」（没有下一个触发点可算），
+    此时抛 ``ValueError`` 让调用方提示重建，而不是把它排成「立刻触发」。
+    """
+    now = now or _now()
+    schedules = load_schedules(output_dir)
+    for index, schedule in enumerate(schedules):
+        if schedule.id != schedule_id:
+            continue
+        if enabled:
+            nxt = compute_next_run(schedule, now)
+            if nxt is not None and nxt <= now and schedule.kind == "once":
+                raise ValueError(
+                    f"一次性日程的触发时间已过（{schedule.at}），请删除后重建")
+            schedule.next_run = _iso(nxt) if nxt else None
+        schedule.enabled = enabled
+        schedules[index] = schedule
+        save_schedules(output_dir, schedules)
+        return schedule
+    return None
 
 
 def remove_schedule(output_dir: Path, schedule_id: str) -> bool:
