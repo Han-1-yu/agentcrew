@@ -1,6 +1,6 @@
 # AgentCrew 项目状态
 
-> **最后更新：2026-11-19** · 本文是仓库**唯一状态源**。
+> **最后更新：2026-11-21** · 本文是仓库**唯一状态源**。
 > 历次交接文档、验收/审查/测试报告、一次性工作提示词已在本日汇总并入本文后删除，
 > 原文备份见 `.workbuddy/archive/reports-2026-11-02/`（git 亦可通过历史恢复）。
 
@@ -8,11 +8,58 @@
 
 ## 0. 一句话现状
 
-**最新一轮：R68（2026-11-19）** —— 咨询多轮上下文（R5 遗留闭环）：同一
+**最新一轮：R69（2026-11-20）** —— 执行体档案从「只读展板」补成可管理工作台：
+新增 `agents.d/<key>.yaml` 文件化存储（目录覆盖主配置、坏文件不阻断配置但进诊断）、
+`agents --save/--delete/--check/--usage/--key`、保存前的绑定/工具/模型别名校验、
+`.bak` 备份与 `.trash` 回收站；Studio 档案页支持新建/编辑/复制/删除/导入导出、
+配置诊断分级、按角色生效预览、跨 run 调用与成本、断链与未绑定角色可视化。
+调研与方案见 `docs/PROFILES-2026-11-20.md`，明细见 §3.105。全量 **3612 passed /
+0 failed / 6 skipped / 0 error**（194 文件 / 97 批次 / 530.5s）。
+
+**上一轮：R68（2026-11-19）** —— 咨询多轮上下文（R5 遗留闭环）：同一
 `(提问方, 目标角色)` 配对保留最近 N 轮问答，作为 user/assistant 历史塞进下一次咨询，
 默认 3 轮、`0` = 退回 R6 行为；历史仅 run 内存、不落盘、不进经验库、配对隔离、单条
 截断防膨胀；env/YAML/快照/options 四通道登记。全量 **3588 passed / 0 failed /
 6 skipped / 0 error**（484.8s），`ruff` 全绿、`mypy` 158 文件零错误。明细见 §3.100。
+
+**2026-11-20 前端补片**：命令框加入「快速切换模型」下拉（选中项勾选 + 短名单 +
+相对成本 + 自定义模型入口，键盘可达），只写 `settings.defaultModel`、不动当前 run。
+check **83** 模块 / 45 分片、unit **38/38**、e2e **33/33**、visual **21/21**；Python 后端未改。见 §3.101。
+
+**2026-11-20 对话页增强**：调研主流 Agent 对话形态后补齐「监督工作台」能力——工具栏
+（状态/计数/搜索/筛选/复制 Markdown）、命中高亮与无命中空态、消息级复制与定位、工具卡片
+摘要与耗时、产物抽屉预览（Markdown/代码/图片）、Agent 页脚元数据、系统消息跳计划/结果/审批、
+未读计数与回到最新；顺带修掉筛选时重复消息的 reconcile 缺陷。check **88** 模块 / 46 分片、
+unit **50/50**、e2e **35/35**、visual **22/22**；Python 后端未改。调研与取舍见
+`docs/AGENT-CHAT-UX-2026-11-20.md`，明细见 §3.102。
+
+**2026-11-20 供应商页梳理**：供应商板块按「大模型供应商 / Agent 智能体」分层——25 个大模型
+（国内→国际→聚合→本地，组内常用优先）、3 个 Agent 智能体（Claude Code / Codex / CLI），
+Mock 作为测试替身从列表与所有选择器隐藏；新增类型 tabs、分区头部、类型徽标与 Agent 专属卡片，
+新建运行/预设添加按 optgroup 分组，模型切换器与默认模型只收大模型。check **90** 模块 / 46 分片、
+unit **56/56**、e2e **36/36**、visual **23/23**；Python 后端未改。规则见
+`docs/PROVIDERS-2026-11-20.md`，明细见 §3.103。
+
+**2026-11-20 真实模型与调用量核查**：按官方文档核对 2026-11 仍可调用的模型 ID，替换
+`gpt-5.6-terra`、`claude-fable-5-1`、`deepseek-v4-flash`、`gemini-2.5-*`、`kimi-k2.5`、
+`ernie-4.5` 等过期/虚构值；供应商改按 OpenRouter 作者请求份额排序（DeepSeek 31.8% →
+OpenAI 19.0% → Gemini 15.1% → 智谱 7.0% → Anthropic 6.3% → 通义 6.2% → Mistral 2.6%），
+企业 API 支出份额只进 tooltip；Agent 按编程 Agent Token 份额排（Claude Code 60% →
+Codex CLI 33% → 自定义 CLI 无数据）。目录频繁变化的平台不再硬编码模型，改走实时拉取。
+check **90** 模块 / 46 分片、unit **59/59**、e2e **36/36**、visual **23/23**；Python 后端未改。
+证据与来源见 `docs/MODEL-CATALOG-2026-11-20.md`，明细见 §3.104。
+
+**2026-11-21 Studio 对话闭环（P0 批次）**：按 `docs/STUDIO-FEATURE-COMPLETION-2026-11-21.md`
+批次 1 落地，会话模型采用 **conversation = run（1:1）**、零后端改动——「新对话」空态页
+（模板 chips + 焦点落输入框）、输入框三态分流（空态/终态直发创建 run：REST `POST /runs`
+优先 / CLI 兜底 / 超时绝不自动重发；running 发 `guidance`；发送键变「停止整个运行」）、
+指引气泡与 4s 对账（pending→consumed→「已被 T-xxx 吸收」chip）、消息级「编辑后重发 /
+从此重做」、图片附件（composer 与弹窗共用，CLI `--image` / REST base64、用户气泡缩略图）、
+侧栏「对话」全量列表（时间分组+置顶+搜索+状态筛选+归档+分页，`runMeta` 别名/置顶/归档
+乐观写盘失败回滚）、条目「⋯」菜单、审批闭环（批准后自动 resume，409 显「已裁决待恢复」
++ 重试；审批卡带计划/交付上下文）。check **110** 模块 / **50** 分片、unit **91/91**、
+verify:api **18/18**（新增对账/409/单发/分流四断言）、e2e **36/36**、selftest **16/16**、
+visual 基线重建后 **23/23**；Python 后端未改。明细见 §3.106。
 
 **上一轮：R67（2026-11-19）** —— Studio 前端 iOS/HIG 视觉与交互重设计，
 **功能与接口调用零变更**、Python 后端一行未改：令牌层双主题对齐 HIG（系统色/分隔线/
@@ -40,12 +87,12 @@ config 解析去重（R66e）、`main.py` 3388→~700 行拆进 `cli/` 九模块
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | **R68 后最新全量 3588 passed / 0 failed / 6 skipped / 0 error**（193 文件 / 97 批次 / 484.8s，Windows 本机 `scripts/test.py --batch 2 --retries 4 --retry-failed 3 --keep-pycache`，1 例崩溃重试恢复为环境噪音）。上一轮 R67 后为 3576 passed（513.5s）；R66 后为 3576 passed（632.4s）；R65 后 3546 passed（509.5s）。6 个 skip 沿用跑器结果，其中 4 个 docker 真容器用例由 CI 覆盖 |
-| 静态检查 | R66 后重跑 `ruff check agentcrew/ main.py`：**All checks passed**；`mypy agentcrew/ main.py`：**158 文件零错误**（Windows / Python 3.12.16；R66f 起 main.py 纳入 mypy 范围） |
+| 全量测试 | **R69 后最新全量 3612 passed / 0 failed / 6 skipped / 0 error**（194 文件 / 97 批次 / 530.5s，Windows 本机 `scripts/test.py --batch 2 --retries 4 --retry-failed 3 --keep-pycache`）。上一轮 R68 后为 3588 passed（484.8s）；R67 后为 3576 passed（513.5s）；R66 后为 3576 passed（632.4s）。6 个 skip 沿用跑器结果，其中 4 个 docker 真容器用例由 CI 覆盖 |
+| 静态检查 | R66 后重跑 `ruff check agentcrew/ main.py`：**All checks passed**；`mypy agentcrew/ main.py`：**161 文件零错误**（Windows / Python 3.12.16；R69 新增 profiles 包） |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
-| Studio | `npm run check` **81** 模块 / **45** 样式分片、`test:unit` **38/38**、`verify:api` **13/13**、electron `e2e` **32/32**（13 页导航）、`selftest` **16/16**、`visual` 基线重建后复检 **20/20**（2026-11-19 R67 iOS/HIG 重设计后本机实跑，见 §3.99） |
+| Studio | `npm run check` **110** 模块 / **50** 样式分片、`test:unit` **91/91**、`verify:api` **18/18**、electron `e2e` **36/36**（13 页导航 + 模型下拉 + 对话检索 + 供应商分层/调用量）、`selftest` **16/16**、`visual` 基线重建后复检 **23/23**（对话闭环批次重建，见 §3.106；R69 档案页基线见 §3.105；R67 重设计基线见 §3.99） |
 | 上线自检 | 本机可验 **9 项全通过**（doctor / 离线冒烟 / REST 认证 200·401 / `/metrics` / 无密钥退 3 / `clean` 干跑 / Studio 三连 / ruff+mypy）；目标机 10 项判据见 `docs/DEPLOY-CHECK-2026-11-13.md` |
 | 收尾 | 交付说明见 **`docs/CLOSURE-2026-11-13.md`**；B 类外部环境项 **5/5 全部闭环**；云主机真实部署验收 10 项中 **7 项闭环**（TLS/SSE、告警规则、日志、密钥、成本、webhook、备份），仅剩独立数据盘与两项 Docker 依赖（§3.77、`docs/DEPLOYMENT-VM-2026-11-13.md`） |
 | Git | `c9c4a60`（R61 真机修复）与 `c9cc47c`（R59–R61）均已推送到 `origin/master`，CI run **43453359080** / **43449592343** 的 **7 个 job 全部 success**（Python 3.10/3.11/3.12/3.13、Windows、Studio、Docker 真隔离）；`ebb9895`（R62）/ `8c6e411`（Studio V6-FE）/ `b712113`（桌面启动器）连同两笔状态回填已于 2026-11-14 推送到 `origin/master`（`92d3854..67aeda4`）；C10 `5cdeea8` 与状态回填 `d76d2ef` 同批推送，**2026-11-15 复核 CI run `43608513108`（head = `d76d2ef`）的 7 个 job 逐一 success**（Python 3.10/3.11/3.12/3.13、Windows·uv、Studio·Node 20、Sandbox·docker 真隔离），`Sync main` run `43608513094` success；上一批 `67aeda4` 的 run `43607497931` 亦 success。验收报告 `docs/ACCEPTANCE-2026-11-12.md`；真实模型评测历史证据为 23 条中 22 通过（`bench/eval-live-2026-11-13.md`，本次未重跑真实模型评测）。**2026-11-15 本轮两笔提交 `5e9bc70`（实现，26 文件 / +1866 −119）/ `bedb7e7`（状态回填）已推送到 `origin/master`**（`d76d2ef..bedb7e7`，`origin/main` 同哈希）；对应 CI run **`43712615843`** 结论 `success`、7 个 job 逐一 success，`Sync main` `43712615752` success |
@@ -3305,6 +3352,190 @@ options 范围与类型校验）。全量 **3588 passed / 0 failed / 6 skipped /
 
 ---
 
+### 3.101 前端补片：命令框内快速切换模型（2026-11-20）
+
+**需求**：在命令框里选模型要像切「下一次用哪个模型」一样即时——点输入卡右下角的
+模型名就地向上弹出短名单，不必先进「供应商」页或完整切换弹窗。
+
+| 层 | 文件 | 改动 |
+|---|---|---|
+| 数据 | 新增 `src/features/composer/quick-models.js` | 12 个常用 alias 短名单 + 展示元数据（徽标、`costWeight` 相对成本，1.00x = 基准，只用于横向比较、不参与计费） |
+| 交互 | 新增 `src/features/composer/model-menu.js` | 向上弹出的 popover：当前项勾选并置顶、`↑/↓/Home/End/Enter/Esc`、点击外部关闭、`aria-haspopup="menu"` + `menuitemradio`；底部「配置自定义模型」打开完整切换弹窗 |
+| 装配 | `composer/index.js` + `index.html` | 模型名按钮转为开关（`aria-expanded`）；切页/缩放自动收起；开关文案优先显示 `settings.defaultModel` |
+| 样式 | `styles/components/composer.css` | 浮层/行/徽标/键盘焦点态全部走既有令牌，明暗双主题适配 |
+
+**语义与边界**：命令框发起的是**下一次运行**，选择只写 `settings.defaultModel`
+（新建运行在未显式指定模型时读它），**不改当前 run**——主进程 `model:switch` 在运行中
+会直接拒绝，而改一条已结束 run 的模型等于篡改历史；要改当前 run 仍走完整切换弹窗。
+保存失败回滚内存值并提示，避免界面显示一个没生效的模型。
+
+**验证**：`check` 83 模块 / 45 分片；`test:unit` 38/38；e2e 新增第 20 项（打开下拉 /
+唯一当前项 / Esc 关闭并回焦）**33/33**；visual 基线重建后 **21/21**；暗色实拍核对
+徽标与选中态对比度。Python 后端未改。
+
+---
+
+### 3.102 对话页增强：从「事件气泡」到「监督工作台」（2026-11-20）
+
+**起点**：调研 ChatGPT / Claude / Gemini / Perplexity / Manus / Devin / Cursor /
+Kimi / DeepSeek 后，共识是 Agent 对话区要回答四个问题：**在做什么、做了多久、产出了什么、
+哪里要我拍板**。R43 的对话页只把 ledger 画成气泡，缺少检索、消息操作、产物预览与进度线索。
+
+| 层 | 文件 | 改动 |
+|---|---|---|
+| 纯数据 | 新增 `lib/conversation.js` | 7 类筛选、跨字段搜索（目标/角色/任务标题/正文/工具入参/产物/门禁意见）、工具入参摘要、单条纯文本、Markdown 导出、文件名清洗 |
+| 工具栏 | 新增 `features/conversation/toolbar.js` | 运行状态 + 任务/消息/产物计数；搜索（180ms 防抖、`/` 聚焦、Esc 清除、命中计数）；类型 chips；复制整段对话 |
+| 视图 | `view.js` / 新增 `items.js` | 消息级复制与打开任务；工具卡片加摘要行、状态点、耗时、错误；门禁问题计数；产物按扩展名图标；Agent 页脚（耗时/产物/门禁/返工）；系统消息跳计划/结果/审批；`<mark>` 高亮；代码块复制 |
+| 产物预览 | 新增 `features/conversation/preview.js` | 复用右侧详情抽屉：Markdown 渲染、代码纯文本、图片 data URI；复制路径、跳关联任务 |
+| 控制器 | `conversation/index.js` | 搜索/筛选状态、筛选后回顶、换 run 落底、未读计数与「N 条新消息」、无命中空态、`role=log` |
+| 兜底 | `lib/messages.js` | 无 `task_notes` 时用 `task.result.summary` 作为正文，避免对话只剩一行时长 |
+| 样式 | 新增 `styles/features/conversation-tools.css` | 工具栏/操作/高亮/预览/无命中，明暗双主题；触屏常显操作 |
+| 测试 | 新增 `tests/conversation.test.mjs`、`tests/messages.test.mjs` +2、`e2e.js` +2 项 | 筛选/搜索/摘要/导出 10 例；正文兜底 2 例；工具栏-搜索-筛选-预览、复制 Markdown |
+
+**顺带修复**：筛选使消息顺序变化时，`reconcileMessages` 按 key 判断旧节点是否仍被使用，
+会把「已被新节点替换的同一 key 旧节点」留下，搜索时出现重复消息；改为按节点身份清理。
+
+**边界**：内联审批不做——`S.dash` 没有 approvals 数据，需要主进程读 `approvals.json` 与裁决 IPC；
+重生成/分支不做——run 是一次性执行、不是可编辑会话；行内来源引用不做——ledger 无 web 检索来源字段。
+本轮只改前端，Python 一行未改。
+
+**验证**：`check` 88 模块 / 46 分片；`test:unit` **50/50**；e2e **35/35**（第 21 项覆盖检索/筛选/
+产物预览，第 22 项读取系统剪贴板校验 Markdown）；`visual` 基线与 22 张截图一致。调研细节与
+横向对比见 `docs/AGENT-CHAT-UX-2026-11-20.md`。
+
+---
+
+### 3.103 供应商板块梳理：大模型供应商 vs Agent 智能体（2026-11-20）
+
+**起点**：原页面把 27 个预设平铺，Mock（离线替身）、CLI（执行引擎）与真实模型厂商混在一起；
+新增预设 append 到数组末尾，列表看不出规律；后端已有的 Claude Code / Codex 两个 CLI 智能体
+预设前端也没有展示。
+
+| 层 | 文件 | 改动 |
+|---|---|---|
+| 契约 | `contracts/providers.js` | 新增 `providerType`（llm / agent / internal）、`PROVIDER_TYPE_LABELS`、Claude Code / Codex 预设；`MODEL_ALIASES` 只收 llm，Mock 标 internal |
+| 排序 | 新增 `lib/providers.js` | 大模型在前 → 国内→国际→聚合→本地 → 组内常用优先 → 名称；未收录排末尾 |
+| 页面 | `features/providers/index.js` | 类型 tabs（全部/大模型/Agent）+ 两个分区 + 分区说明 + 排序提示；Mock 过滤；分类 chips 只作用于大模型 |
+| 卡片 | `features/providers/card.js` | 类型徽标；Agent 紫色左边线/头像、展示 CLI 命令与执行入口；Agent 不提供「设为默认模型」与 HTTP 测试/测速 |
+| 选择器 | `new-run/provider-options.js`、`providers/{models,forms}.js` | 新建运行与预设添加按 optgroup 分组；模型切换器/默认模型排除 Agent 与 Mock |
+| 测试 | `tests/providers.test.mjs`、`e2e.js` +2 项 | 类型判定 / 别名过滤 / 排序稳定性 6 例；e2e 校验两分区、Mock 隐藏、Agent 视图 |
+
+**结果**：列表 28 条 = 25 个大模型（国内 12 / 国际 5 / 聚合 7 / 本地 1）+ 3 个 Agent 智能体
+（Claude Code、Codex、CLI）；Mock 从页面与所有选择器隐藏，只在「新建运行」的 Mock 复选项保留。
+排序规则与清单见 `docs/PROVIDERS-2026-11-20.md`。
+
+**边界**：只改前端展示与选择器，后端 `PROVIDER_PRESETS` 与调度未动；Agent 仍以
+`provider:model` 别名绑定到任务，因此「从列表里分区」不等于新增执行通道。
+
+**验证**：`check` 90 模块 / 46 分片；`test:unit` **56/56**（新增 6 例）；e2e **36/36**；
+`visual` 23 张一致（新增 Agent 视图截图）。
+
+---
+
+### 3.104 真实模型核对与调用量排序（2026-11-20）
+
+**起点**：供应商目录里混有过期或从未存在的模型 ID（`gpt-5.6-terra`、`claude-fable-5-1`、
+`deepseek-v4-flash`、`gemini-2.5-*`、`kimi-k2.5`、`ernie-4.5` 等），排序按分类而非实际使用；
+Agent 只有内置适配器，没有真实产品的使用量依据。
+
+**核对口径**：存在性以厂商官方模型目录/发布说明为准（2026-11-20）；调用量用 OpenRouter
+作者请求份额（2026-11-09 周）作为公开代理指标，企业 API 支出份额（Menlo 2026）只作
+tooltip 参考、不参与排序；Agent 用 Who Burned More 观测样本（2026-11-18，215 名开发者）
+的 Token 份额。完整证据与链接见 `docs/MODEL-CATALOG-2026-11-20.md`。
+
+| 层 | 文件 | 改动 |
+|---|---|---|
+| 契约 | `contracts/providers.js` | 重写 25 个大模型的 `suggested_models` 为可核对的当前 ID；新增 `PROVIDER_USAGE`/`AGENT_USAGE` 并挂到每个 provider；`deepseek-v4-flash`→`deepseek-flash`、`claude-fable-5-1`→`-5-2`、`gemini-2.5-*`→`gemini-4-*`、`kimi-k2.5`→`kimi-k3.1-pro` 等 |
+| 排序 | `lib/providers.js` | 类型 → 调用量排名 → 未上榜按分类/常用/名称；新增 `usageRank` |
+| 页面/卡片 | `features/providers/{index,card}.js` | 从内置目录补齐 API 数据缺失的 usage；卡片显示 `#1 31.8%` 徽标，tooltip 带口径/日期/企业支出份额；标题行允许换行 |
+| 命令框 | `features/composer/quick-models.js` | 12 个快捷模型同步为真实 ID，按使用量近似排序 |
+| 测试 | `tests/providers.test.mjs` +3 | 调用量前七顺序、请求份额 vs 支出份额、Agent Token 排序 |
+
+**结果**：大模型排序 DeepSeek → OpenAI → Gemini → 智谱 → Anthropic → 通义 → Mistral；
+Anthropic 请求份额第 5 但企业支出 55%，tooltip 里并列展示，避免把「按调用量」误读成
+「按支出」。Agent 排序 Claude Code（60%）→ Codex CLI（33%）→ 自定义 CLI（无数据）。
+SiliconFlow / Groq / Together / Fireworks / DeepInfra / Replicate / HuggingFace / 百川 /
+零一万物 / 讯飞星火不再硬编码模型，统一走「拉取在线模型」，避免再次写入假 ID。
+
+**边界**：OpenRouter ≠ 全市场调用量；腾讯 Hy4（请求份额 2.3%）与英伟达 Nemotron（1.6%）
+未在 AgentCrew 内置目录，需自定义 provider；模型 ID 会随时更新，前端只保证「核对日期当天正确」。
+
+**验证**：`check` 90 模块 / 46 分片；`test:unit` **59/59**；e2e **36/36**；`visual` 23 张一致。
+
+---
+
+### 3.105 R69：执行体档案从只读展板到管理工作台（2026-11-20）
+
+**起点**：`AgentProfile` 的字段与运行期解析都已完整，但管理面只有一块只读页：
+默认 0 档案时只有两段空态文案；新建/编辑/删除/导入/诊断/用量全部缺失。原始设计
+（`docs/WorkBuddy功能对齐-差距与实施.md` §4.1）刻意不做程序化写配置，理由是
+「写坏 config 风险高于收益」。这个判断在「只能改主配置」的前提下成立。
+
+**调研**：对照 Claude Code Subagents（一档案一文件、来源/覆盖可见、`/agents` 增删改）、
+VS Code Custom Agents（诊断视图、工具优先级）、Copilot Studio（保存前 checker、
+Test、Analytics）、Dify New Agent（独立资源、Duplicate、DSL 导入导出、Preview）、
+CrewAI（`agents.yaml` 声明式 + Visual Builder 模板）、OpenAI AgentKit（Preview + 版本 +
+模板），提炼出七条模式并刻意放弃三项（完整版本历史 / 在线试跑 / 组织级市场）。
+完整对标与取舍见 `docs/PROFILES-2026-11-20.md`。
+
+| 层 | 文件 | 改动 |
+|---|---|---|
+| 存储 | `agentcrew/profiles/store.py` | **新增**：`agents.d/<key>.yaml` 解析（单/映射/`agents.profiles` 包装）、key 规则与路径安全、原子写、`.bak`、`.trash`、宽容扫描 |
+| 服务 | `agentcrew/profiles/service.py` | **新增**：档案视图（来源/被谁用/覆盖标记）、诊断分级（坏文件/断链/工具扩权/模型别名/预算冲突/未绑定）、保存前按 `validate_bindings` 全角色校验、删除保护、导出、跨 run 用量聚合 |
+| 配置 | `agentcrew/config.py` | `profiles_dir`（目录优先于 YAML）、`profile_errors`（坏文件不阻断加载，排除出快照）、来源 `config_path`（不落快照） |
+| 启动期 | `agentcrew/agents/plan.py` | 绑定到坏档案时，报错直接指出文件名与校验原因，而不是笼统的「未定义」 |
+| CLI | `agentcrew/cli/catalog.py` / `parser.py` | `agents --save/--delete/--check/--usage/--key/--force/--dry-run`；`--json` 增加 source/file/used_by/shadowed/storage/summary/diagnostics，保留 `resolved` 兼容旧消费者 |
+| 前端数据层 | `studio/src/lib/{agent-binding,profile-form}.js` | 缓存失效 + 保存/删除/用量/工具/诊断封装；表单模型、校验、生效预览、筛选/摘要/格式化为纯函数 |
+| 前端页面 | `studio/src/features/profiles/*`（9 模块） | 页头/状态条/诊断/筛选/卡片/绑定矩阵/编辑器/模板/导入；9 条 IPC（save/delete/yaml/usage/tools/check） |
+| 样式 | `styles/features/profiles.css` + `profiles-editor.css` | 页面与编辑器分片（均 <300 行） |
+| 测试 | `tests/test_profile_store.py` | **24 例**：解析、原子写/备份/回收站、路径穿越、目录覆盖、坏文件诊断、启动期定位、绑定保护、批量全有或全无、模型别名、用量、CLI 端到端 |
+| 测试 | `studio/tests/profile-form.test.mjs` | **10 组**：校验/预览/筛选/摘要/格式化 |
+| 测试 | `studio/probe-edge.js` | P16：宽模态/7 字段/预览/4 模板、导入弹窗、save-dry-run/usage/tools 三条 IPC |
+
+**关键行为**
+
+- 目录优先级：`agents.d` > `agentcrew.yaml`；同名时卡片标「覆盖 YAML」，诊断给 warning。
+- 坏文件：`Settings.load` 不再整体失败；可加载档案生效，问题进 `profile_errors`，
+  `agents --json` / `--check` / Studio 诊断可见，且可以直接用 `--save --force` 覆盖修复；
+  绑定到坏档案的角色仍在启动期被拒绝并指出文件。
+- 保存保护：新增/覆盖是两个明确意图（无 `--force` 拒绝覆盖）；覆盖前 `.bak`；
+  删除移入 `.trash`；仍被角色绑定时拒绝，强制删除需显式确认。
+- 保存前校验：工具扩权、`split_by_path` 路径重叠、`best_of` 裁判参赛、模型别名无法解析，
+  全部在落盘前拒绝，报错逐条列出。
+
+**验证**：`ruff` 全绿、`mypy` 161 文件零错误；档案用例 24 passed，相关回归 191 passed，全量 **3612 passed / 0 failed / 6 skipped / 0 error**（530.5s）；
+Studio `check` 100 模块 / 47 分片、`test:unit` 69/69、`e2e` 36/36、`visual` 23/23、
+探针 P16 通过（另 3 项历史失败与本轮无关：快捷键顺序期望、未连后端时供应商卡片数）。
+
+### 3.106 Studio 对话闭环 P0 批次（2026-11-21）
+
+按 `docs/STUDIO-FEATURE-COMPLETION-2026-11-21.md` 批次 1 执行。核心决策：**conversation = run（1:1）**——
+会话列表/重命名/置顶/归档是 run 的前端元数据层（settings.json `runMeta`），运行中追问走 guidance、
+分支/重做走 rewind、终态追问是「基于此对话再问」的新 run；**Python 后端一行未改**。
+
+| 模块 | 内容 |
+| --- | --- |
+| `src/lib/composer-intent.js`（新） | 输入框三态分流判定：create / guidance（与后端 `_GUIDANCE_RUNNABLE` 同口径）/ stop（planning/preparing 只能停） |
+| `src/lib/run-meta.js`（新） | runMeta 归一化 / patch / 裁剪 / 时间分组 / 筛选 / 重绘签名（纯函数） |
+| `src/lib/messages.js` | 聚合 `guidance_injected/expired/withdrawn/compacted` 审计事件 + GET 列表/乐观插入项为指引气泡（命中只更新 chip，未知 id 才补 system 消息）；`approval_decided` 入流；run_started 附带输入图片 |
+| `src/features/attachments/index.js`（新） | composer 与新建弹窗共用附件区（≤4 张、单张 ≤2.6MB，主进程校验；CLI 取 path / REST 取 base64） |
+| `src/features/composer/submit.js`（新） | 三态提交：直发创建（launchRun 编排）、guidance 直发（202 乐观入列，超时视为「可能已发送」绝不重发）、停止（确认后 REST cancel / CLI cancelOffline 兜底） |
+| `src/features/new-run/launch.js`（新） | C1 启动编排：REST `POST /runs` 优先（options 白名单映射，ask/demo 恒 CLI）、明确答复才降级、run_id 定位目录后 switchRun |
+| `src/features/new-run/rest-launch.js`（新） | REST 通道可用性判定、options 构造、run_id → 目录定位切换 |
+| `src/features/runs/sidebar.js`（新） + `meta-store.js`（新） + `item-menu.js`（新） | B1 侧栏「对话」全量列表（分组/搜索/筛选/归档/分页）；B3 runMeta 乐观写盘失败回滚、删除裁剪；B2 条目「⋯」菜单（别名/置顶/归档/删除/对比/打开目录） |
+| `src/features/conversation/{index,assist,view}.js` | 指引气泡渲染 + 4s 对账轮询（local- 项 12s 宽限）；输入图片缩略图；「编辑后重发」「从此重做」；A1 新对话空态（模板 chips） |
+| `src/features/gates-page/approvals.js` | I1 批准/接受后自动 resume（409 → 「已裁决，待恢复」+ 重试按钮）；I2 审批卡上下文（计划=任务/角色数+查看计划；交付=T-FINAL 状态+产物摘要+查看产物） |
+| `src/features/plan/index.js` | E1 挂起时「去审批」直达 |
+| `main.js` / `preload.js` | `runMeta` 设置键白名单；`images:pick` / `images:readFiles` IPC；`run:start` 透传 `--image` |
+| 样式 | `attachments.css`（新）、`conversation-extras.css`（新，指引气泡/缩略图/新对话）、`runs-sidebar.css`（新）、composer 停止态 |
+
+**验证**：`check` 110 模块 / 50 分片；`test:unit` **91/91**（新增 composer-intent、run-meta、
+guidance 消息聚合三组用例）；`verify:api` **18/18**（新增 guidance 直发对账、审批自动 resume 409、
+REST 创建单次恰好一条 POST、分流判定四断言）；`selftest` **16/16**、`e2e` **36/36**；
+`visual:update` 重建 **23** 张基线后复检一致。
+
+---
+
 ## 4. 历史报告汇总（已并入本文，原文归档）
 
 | 报告 | 时间 | 核心结论 | 现状 |
@@ -3614,6 +3845,7 @@ CI 7 job 矩阵 · 真实模型多模态 · MCP / 浏览器互通 · RAG 命中�
 | `sdk/README.md` · `sdk/agentcrew_sdk/` · `sdk/examples/` | **R16 官方 Python SDK**：安装与方法表、异常层次、SSE、刻意不做的事与已知限制；客户端源码与两个可运行示例 |
 | `artifacts/contracts/state-enums.md` · `event-types.md` · `openapi.yaml` · `schemas/*.json` | R4 同步后的状态枚举、事件、HTTP 接口与落盘结构契约 |
 | `docs/role-agent-binding-design.md` | 「角色 = 职责 + 权限，执行体可多绑」设计方案（v1 草案，部分已落地） |
+| `docs/PROFILES-2026-11-20.md` | **R69 执行体档案**：使用场景、差距、成熟项目对标、`agents.d` 方案与验证 |
 | `docs/MAGPIE_COMPARISON.md` | 供应商韧性设计参考（故障转移/冷却/限流/循环检测的来源与取舍） |
 | `docs/reference/original-prompt.md` | 需求原文（验收口径的最终依据） |
 | `docs/superpowers/specs/*.md` | 设计规格与验收整改任务书（`test_architecture` 与验收矩阵的依据） |

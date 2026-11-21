@@ -72,13 +72,27 @@ Electron userData 目录的 `settings.json`，可在「设置」里手动修改�
 - **回归**：后端 `scripts/test.py` 2887 passed / 0 failed；`npm run check` 69 JS / 42 CSS、`npm run e2e` 32/32、`npm run selftest` 16/16、`npm run visual` 20 张一致。
 - 方案细则见 `docs/WorkBuddy前端交互-实施方案细则.md`（含 13 项遗漏与边界清单）。
 
+## V7-FE 对话闭环补全（P0 批次，2026-11-21）
+
+按 `docs/STUDIO-FEATURE-COMPLETION-2026-11-21.md` 批次 1 落地。会话模型采用 **conversation = run（1:1）**：列表/重命名/置顶/归档是 run 的前端元数据层（settings.json `runMeta`），运行中追问走 guidance，分支/重做走 rewind，零后端改动。
+
+- **A1 新建对话**：侧栏「新对话」按钮 → 空态对话页（最近目标 + 内置模板 chips，点击填入输入框），发送即直发创建 run；切 run 自动退出新对话态。
+- **A2 输入框语义分流**：`lib/composer-intent.js` 判定 create / guidance / stop 三态——空态/终态直发创建 run（REST `POST /runs` 优先、CLI 兜底，超时绝不自动重发）；running/awaiting_approval 直发 `POST /runs/{id}/guidance`（202 乐观入列、4s 与 GET 列表对账）；发送键在 running 且输入为空时切换为「停止整个运行」（确认后 cancel）。
+- **A3 指引气泡**：`lib/messages.js` 聚合 `guidance_injected/expired/withdrawn/compacted` 审计事件 + GET 列表/乐观插入项；气泡 chip 表达「待吸收 / 已被 T-xxx 吸收 / 已撤回 / 已过期」。
+- **A4/K1 消息级操作**：用户目标气泡「编辑后重发」（预填新建弹窗）、Agent 气泡「从此重做」（复用 rewind dry-run → resume 弹窗）。
+- **A5 图片附件**：composer 与新建弹窗共用附件区（≤4 张、单张 ≤2.6MB，主进程选图/读取校验）；CLI 通道传 `--image`、REST 通道传 base64 `images`；用户目标气泡显示输入图片缩略图（`context/images/`）。
+- **B1/B2/B3 会话列表**：侧栏「对话」升级为全量列表——时间分组（置顶/今天/昨天/近 7 天/更早）+ 搜索（别名/目标/runId，归档可搜不可见）+ 状态筛选 chips + 归档开关 + 本地分页（每页 30）；条目「⋯」菜单：重命名（本地别名）/置顶/归档/删除/对比/打开目录；`runMeta` 契约（alias/pinned/archived）乐观写盘、失败回滚，deleteRun 后裁剪幽灵键。
+- **C1/C2 启动编排**：`new-run/launch.js` 统一 REST 优先 / CLI 兜底（composer 与弹窗共用）；REST options 按 `run_options.py` 白名单映射（mock/default_model/max_cost_usd/max_llm_calls/approval_mode），ask 与 demo 恒走 CLI；新建弹窗接入附件区。
+- **I1/I2/E1 审批闭环**：批准/接受后自动 `POST resume`（409 如实显示「已裁决，待恢复」+ 重试按钮，不假装成功）；审批卡带上下文（计划卡点 = 任务/角色数 + 查看计划；交付卡点 = T-FINAL 状态与产物摘要 + 查看产物）；计划审查页挂起时给「去审批」直达；对话页审批系统消息跳门禁页。
+- **回归**：`npm run check` 110 JS / 50 CSS；`npm run test:unit` 91/91（新增 composer-intent / run-meta / guidance 消息聚合用例）；`npm run verify:api` 18/18（新增 guidance 直发对账、审批自动 resume 409、REST 创建单发、分流判定四断言）；`npm run selftest` 16/16、`npm run e2e` 36/36；`npm run visual:update` 重建 23 张基线后一致。
+
 ## 自测
 
 ```bash
 npm run check        # 结构护栏：分层、导入完整性、单文件体量、入口收敛（秒级，无需 GUI）
 npm run e2e          # 端到端：13 页导航（含回滚重跑）/ 详情 / 运行切换 / 新建运行 / 成本 / 供应商全链路（32 项）
 npm run selftest     # 真实 UI 驱动一次 --mock 运行：列表 → 看板 → 事件 → 产物 → 设置 → 启动/取消（16 项）
-npm run verify:api          # 后端 API 代理：认证头 + SSE 帧 + C10 指引/R62 rewind 的 REST 路径（13 项，无需 GUI / 无需真后端）
+npm run verify:api          # 后端 API 代理：认证头 + SSE 帧 + C10 指引/R62 rewind/审批自动 resume/REST 创建的 REST 路径（18 项，无需 GUI / 无需真后端）
 npm run verify:transitions  # 状态切换：演示→真实运行 / 快速连点切 run / 单通道纪律（11 项）
 npm run visual              # 视觉回归：把 e2e 的 16 张截图与本机基线比对（版式/配色变了会失败）
 ```
