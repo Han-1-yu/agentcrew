@@ -327,6 +327,7 @@ python main.py config import /etc/agentcrew/new.yaml
 | `AGENTCREW_WEBHOOK_URL` 或 `webhooks` | 空 | 按需 | 关键节点外推；R15 起失败会落盘补投 |
 | `AGENTCREW_MAX_CONCURRENCY` | 4 | 按 Provider 配额调 | 峰值并发受 DAG 宽度约束 |
 | `AGENTCREW_MAX_CONCURRENT_RUNS` | 8 | 按内存与 Provider 配额调 | `serve` 同时运行的 run 数上限，超限 `POST /runs` 回 429 |
+| `AGENTCREW_LEDGER_FSYNC` / `_BATCH` | `each` / `32` | 高吞吐批处理（评测、回放）按需设 `batch` 或 `none` | ledger 落盘分级：`each` 逐条 fsync（默认，崩溃时最后一条要么完整要么不存在）；`batch` 每 N 条；`none` 进行中不 fsync。**三种策略在 run 终局 `close()` 时都强制收口**，窗口只存在于 run 进行中；进程崩溃不丢（页缓存），断电可能丢窗口内事件。实测数据见 `bench/persistence-2026-11-21.md` |
 | `AGENTCREW_GATE` | `both`（TTY）/ 非 TTY 降级 `none` | 无人值守加 `--auto` | 非 TTY 降级会在 stderr 明说，不会偷偷放行 |
 
 大多数能力开关默认关闭是刻意的（升级不该静默改变成本结构），完整清单见
@@ -347,7 +348,7 @@ G-2 配置即 RCE、G-9 `run_python` 无隔离这三条，是部署方必须自�
 | Web 启用信息 | `webhook_enabled` 只记打码 URL（丢掉查询串，那里常带 token） |
 | R15 spool | `<output_dir>/_webhook_spool/` 只存 URL 短哈希与脱敏 payload，不存 URL / 密钥 |
 | HTTP 入口 | `POST /runs` 的 options 不接收 `webhook_secret`；API Key 只在服务端配置 |
-| 工具侧 | `web_fetch` 仅公网 80/443 且拒绝私网 / 重定向（防 SSRF）；Webhook **不做**内网黑名单，因为目标是运维显式配置的 |
+| 工具侧 | `web_fetch` 仅公网 80/443 且拒绝私网 / 重定向（防 SSRF）；P3-1 起 DNS 解析结果**只用于建连**（校验与连接同一份结果，堵住 rebinding 窗口），TLS 证书仍锚定域名。**不再读取 `HTTP(S)_PROXY`**（旧实现由 urllib 隐式继承）：需要出网代理请在同一台机器上用透明代理/网关，或换自定义 `fetcher` 注入 |
 | `run_python` | **默认不注册**（`code_exec_enabled=false`）。打开后默认走 `local` 后端：`-I` 隔离、裁剪环境变量（只留 PATH/SYSTEMROOT/TEMP/TMP/PYTHONIOENCODING）、`cwd` 锁 run 目录、默认 10s 超时并杀进程。**没有**网络 / CPU / 内存 / 系统调用隔离。C2 起可选 `sandbox_backend=docker`：`--network none`、非 root（65534）、`--cap-drop ALL`、`no-new-privileges`、只读根 + `/tmp` tmpfs、`--memory`/`--cpus`/`--pids-limit`、只挂 `<run_dir>:/workspace`。选了 docker 而没有 docker 时 run 直接失败，不静默退回 local |
 | `run_tests`（C3） | 与 `run_python` **同一开关**（`code_exec_enabled`）与**同一后端**。只接受 `path` / `timeout`，不接受任意 pytest 参数（否则 `--rootdir=` 能绕过路径边界）；路径走 `resolve_in_workdir`；不写 `.pytest_cache`；输出保留尾部并标注省略量 |
 | G1 执行校验（C3） | `gate_config.exec_verify: true`（默认关）。静态校验放行后，把该任务产物铺进 `<run_dir>/verify/<task_id>/` 跑它自己的 pytest；失败并入 G1 issue 走既有返工通道；无测试文件记 `skipped`；mock 通道显式跳过并记 `g1_exec_check_skipped` |
@@ -476,8 +477,9 @@ tool_guards:
 
 - `serve` 是**单进程 asyncio**；内存中维护运行中 run 表，服务重启后 `/runs` 的实时状态
   从盘上 `run.json` 重建，但「本进程启动过的 run」的实时视图不共享。
-- `Ledger.emit` 每次 open/append/fsync，**没有跨进程锁**；两个进程写同一 `ledger.jsonl`
-  会交错。
+- `Ledger.emit` 每条事件 open/append/flush，**没有跨进程锁**；两个进程写同一
+  `ledger.jsonl` 会交错。fsync 频率由 `AGENTCREW_LEDGER_FSYNC` 决定（默认 `each`
+  = 逐条 fsync；`batch` / `none` 换吞吐，窗口见 §3.2 表）。
 - R15 的 spool 是跨进程共享目录，多实例可能重复补投（at-least-once，靠 delivery 幂等）。
 
 因此：

@@ -8,7 +8,15 @@
 
 ## 0. 一句话现状
 
-**最新一轮：R69（2026-11-20）** —— 执行体档案从「只读展板」补成可管理工作台：
+**最新一轮（2026-11-21）：阶段 3 持久化分级 + 审计 P3-1 收口**
+—— `Ledger` 的 fsync 从「每条一次」变成可配三档（`each` 默认不变 / `batch` 每 N 条 /
+`none`），**三种策略都在 `close()` 强制收口**，默认逐条 fsync 的语义一分不降；实测
+`batch` 吞吐 362 → 1780 events/s（4.9×，`bench/persistence-2026-11-21.md`）。
+`web_fetch` 的 DNS rebinding 窗口（审计 P3-1）改为「校验过的 IP 直连」——解析与建连
+用同一份结果，TLS 证书仍锚定域名。全量 **3626 passed / 0 failed / 6 skipped / 0 error**
+（194 文件 / 97 批次 / 503.4s），`ruff` 全绿、`mypy` 161 文件零错误。明细见 §3.108。
+
+**R69（2026-11-20）** —— 执行体档案从「只读展板」补成可管理工作台：
 新增 `agents.d/<key>.yaml` 文件化存储（目录覆盖主配置、坏文件不阻断配置但进诊断）、
 `agents --save/--delete/--check/--usage/--key`、保存前的绑定/工具/模型别名校验、
 `.bak` 备份与 `.trash` 回收站；Studio 档案页支持新建/编辑/复制/删除/导入导出、
@@ -95,8 +103,8 @@ config 解析去重（R66e）、`main.py` 3388→~700 行拆进 `cli/` 九模块
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | **R69 后最新全量 3612 passed / 0 failed / 6 skipped / 0 error**（194 文件 / 97 批次 / 530.5s，Windows 本机 `scripts/test.py --batch 2 --retries 4 --retry-failed 3 --keep-pycache`）。上一轮 R68 后为 3588 passed（484.8s）；R67 后为 3576 passed（513.5s）；R66 后为 3576 passed（632.4s）。6 个 skip 沿用跑器结果，其中 4 个 docker 真容器用例由 CI 覆盖 |
-| 静态检查 | R66 后重跑 `ruff check agentcrew/ main.py`：**All checks passed**；`mypy agentcrew/ main.py`：**161 文件零错误**（Windows / Python 3.12.16；R69 新增 profiles 包） |
+| 全量测试 | **阶段 3 后最新全量 3626 passed / 0 failed / 6 skipped / 0 error**（194 文件 / 97 批次 / 503.4s，Windows 本机 `scripts/test.py --batch 2 --retries 4 --retry-failed 3 --keep-pycache`）。上一轮 R69 后为 3612 passed（530.5s）；R68 后为 3588 passed（484.8s）；R67 后为 3576 passed（513.5s）。6 个 skip 沿用跑器结果，其中 4 个 docker 真容器用例由 CI 覆盖 |
+| 静态检查 | 阶段 3 后重跑 `ruff check agentcrew/ main.py scripts/persistence.py`：**All checks passed**；`mypy agentcrew/ main.py`：**161 文件零错误**（Windows / Python 3.12.16） |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
 | 稳定性 | 同进程 20 连跑 20/20 成功，RSS −2.3%、句柄 +1、线程不增长 |
@@ -3563,6 +3571,61 @@ REST 创建单次恰好一条 POST、分流判定四断言）；`selftest` **16/
 
 ---
 
+### 3.108 阶段 3：ledger 落盘分级与 web_fetch DNS rebinding 收口（2026-11-21）
+
+**起点**：R65 按外部评审六阶段方案施工时，阶段 3（持久化测量 + fsync 分级）与审计
+观察项 P3-1 一直挂着。本轮两件一起收口——同一原则：**默认行为不变，只把原本隐式的
+窗口显式化、可配置化**。
+
+**1）ledger fsync 分级**（`agentcrew/runtime/ledger.py`）
+
+- 现状问题：`Ledger.emit` 每条事件 open / append / flush / fsync。这是 spec §13.2 的
+  承诺（Ctrl-C 时最后一条要么完整落盘、要么根本不出现），但评测 / 批量回放 /
+  `worker` 跑批这类高吞吐路径，为每条事件付一次磁盘往返。
+- 修法：新增 `FSYNC_POLICIES` 与 `resolve_sync_policy()`，三档——`each`（默认，逐条
+  fsync）/ `batch`（每 N 条，默认 32）/ `none`（进行中不 fsync）。入参优先，其次
+  `AGENTCREW_LEDGER_FSYNC` / `AGENTCREW_LEDGER_FSYNC_BATCH`；非法值抛 `ValueError`
+  **fail-fast**（落盘策略打错字不该被静默当默认值）。
+- **终局收口**：`close()` 先 `flush()` 再置关闭位，`flush()` 幂等（`each` 下是空操作）。
+  `_finalize` / `_pause` / rewind 的 close 调用点一处未改——三种策略下 run 终局都强制
+  fsync，窗口只存在于 run 进行中。
+- 实测（新增 `scripts/persistence.py` → `bench/persistence-2026-11-21.md`，2000 事件/
+  策略，Windows 本机 3.12.16）：**each 362 events/s（P95 3.43ms）→ batch 1780（4.9×，
+  P95 0.93ms）→ none 1944（再 +9%）**。成本集中在「每条一次 fsync」，不是 JSONL
+  序列化；`none` 相对 `batch` 的边际收益很小，却把窗口放到整场 run。
+- 边界：`batch` 的崩溃窗口 = 最近未满 N 条；`none` 进程崩溃不丢（OS 页缓存），
+  **断电可能丢掉整个 run 的事件**——只给「整场可重跑」的场景。读取侧宽容规则、
+  observer 回调、脱敏口径全部未变；`.env.example` / README 环境变量表 /
+  OPERATIONS §3.2 与 §4.4 已登记。
+
+**2）web_fetch P3-1：DNS rebinding（TOCTOU）**（`agentcrew/tools/network.py`）
+
+- 旧链路：`getaddrinfo` 校验全部结果公网 → 交回 urllib `opener.open` **再独立解析一次
+  DNS**；TTL 0 轮换记录可让「校验通过、实际连到私网」。
+- 新链路：`_pick_public_ip()` 用**同一份**解析结果（任一私网记录立即拒绝、全公网取
+  第一个），`socket.create_connection` 直连该 IP；HTTPS 用 `ssl.create_default_context()`
+  + `server_hostname=原域名`（**证书与 SNI 仍锚定域名**，IP 只是传输地址），
+  `http.client` 发请求（`Host` 头按原域名生成，虚拟主机不受影响）；3xx / 4xx / 5xx 仍以
+  `HTTPError` 抛出（文案与旧 opener 路径一致），`finally` 关连接。
+- **一处可见的行为变化**：不再隐式继承 `HTTP(S)_PROXY`（旧实现是 urllib opener 带的）。
+  需要出网代理的部署要走透明代理/网关，或注入自定义 `fetcher`——已写进 OPERATIONS §3.3
+  边界表，避免被当成「静默回归」。
+- 回归六例（`tests/test_new_builtin_tools.py`）：三个 `_pick_public_ip` 语义、
+  **私网解析在建连之前拒绝**（`create_connection` 被碰即失败）、校验 IP 直连 +
+  `Host`/path 保真的本地回测端到端、4xx 仍是 `HTTPError`。
+
+**验证**：新增 14 例（ledger 8 / network 6）。全量 `scripts/test.py` **3626 passed /
+0 failed / 6 skipped / 0 error**（194 文件 / 97 批次 / 503.4s）；`ruff check agentcrew/
+main.py scripts/` 全绿；`mypy agentcrew/ main.py` **161 文件零错误**；把
+`AGENTCREW_LEDGER_FSYNC=batch`（batch=16）实跑 `run --sample linear --no-live --auto`
+→ `completed`，69 条 ledger 事件完整可读。
+
+**仍未做（阶段 4–6 原样挂着）**：Crew/CLI/API 拆分与体量门禁、README 减重与
+LICENSE/SECURITY/CONTRIBUTING、`scripts/quality_eval.py` 与发布门槛；审计 P1-2
+（`POST /runs` 同步装配超时）仍需真实 provider 分步时延复测。
+
+---
+
 ## 4. 历史报告汇总（已并入本文，原文归档）
 
 | 报告 | 时间 | 核心结论 | 现状 |
@@ -3878,7 +3941,7 @@ CI 7 job 矩阵 · 真实模型多模态 · MCP / 浏览器互通 · RAG 命中�
 | `docs/superpowers/specs/*.md` | 设计规格与验收整改任务书（`test_architecture` 与验收矩阵的依据） |
 | `docs/superpowers/plans/*.md` | V1 实施计划（历史过程材料，备查） |
 | `studio/docs/refactor-aurora-glass.md` | Studio 表现层重构（Aurora Glass）与留白二轮的设计说明（11-02） |
-| `bench/report.md` · `bench/stability.md` | 性能与稳定性实测证据（R2 验收项） |
+| `bench/report.md` · `bench/stability.md` · `bench/persistence-2026-11-21.md` | 性能与稳定性实测证据（R2 验收项）；阶段 3 的 ledger 三档 fsync 吞吐/延迟口径（`scripts/persistence.py` 可复跑） |
 | `artifacts/` · `output/` | 运行证据与产物样例 |
 
 **本次删除**（原文在 `.workbuddy/archive/reports-2026-11-02/`，亦可用 git 恢复）

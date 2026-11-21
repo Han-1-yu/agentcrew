@@ -19,7 +19,14 @@
 | 容量 | 单进程约 32 run/分（mock 60ms）；8 worker × 并发 2 = 105.84 run/分 |
 | 一句话定位 | 8 角色多 Agent 编排器：规划 → 执行 → 三层门禁 → 交付；可完全离线（mock）跑通，可横向加 worker |
 
-**最新一轮（2026-11-18）R65**：按一次外部评审给出的六阶段方案，先做「堵漏洞 + 真实运行
+**最新一轮（2026-11-21）阶段 3**：持久化分级 + 审计观察项 P3-1 收口——`Ledger` 的
+fsync 可配 `each`（默认，语义不变）/ `batch`（每 N 条）/ `none`，三种策略在 `close()`
+都强制收口；实测 `batch` 吞吐 4.9×（`bench/persistence-2026-11-21.md`，`scripts/persistence.py`
+可复跑）。`web_fetch` 改为「校验过的 IP 直连」，堵住 DNS rebinding 的 TOCTOU 窗口
+（证书仍锚定域名；不再隐式读 `HTTP(S)_PROXY`）。全量 3626 passed / 0 failed。细节见
+[`PROJECT-STATE.md`](../PROJECT-STATE.md) §3.108。
+
+**上一轮（2026-11-18）R65**：按一次外部评审给出的六阶段方案，先做「堵漏洞 + 真实运行
 可靠性」：多接收端 webhook 签名密钥不再明文进 `run.json`（存量 266 个 run 已回填）、
 RBAC `run_ids` 白名单真正按 run id 生效、确定性失败不再把 `attempts` 额度烧光、
 G2 评审材料改为「完整交付清单 + 按文件均分预算 + 禁止以『未提供全文』驳回」；

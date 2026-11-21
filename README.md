@@ -2413,6 +2413,8 @@ models:
 | `AGENTCREW_EMBEDDING_BASE_URL` | 空 | C6：OpenAI 兼容端点根地址（空=用 provider 预设，适配 vLLM / 公司网关） |
 | `AGENTCREW_EMBEDDING_TIMEOUT_SECONDS` / `_BATCH_SIZE` | `10` / `32` | C6：单批超时与批量大小（上限 120s / 256 条） |
 | `AGENTCREW_STREAM` | `false` | P3-3：Agent 走流式 LLM 路径（逐块记 `agent_stream_chunk`；默认关，实时性需要时开） |
+| `AGENTCREW_LEDGER_FSYNC` | `each` | 阶段 3：ledger 落盘策略。`each` 逐条 fsync（spec §13.2 全承诺）；`batch` 每 N 条 fsync；`none` run 进行中不 fsync。三种策略在 `close()` 时都强制收口，崩溃窗口只存在于 run 进行中。口径见 `bench/persistence-2026-11-21.md` |
+| `AGENTCREW_LEDGER_FSYNC_BATCH` | `32` | 阶段 3：`batch` 策略的 N（必须 ≥1） |
 | `AGENTCREW_UNTRUSTED_INPUTS` | `false` | G-1：不可信输入预设——只给只读工具（read_file/list_files/grep），不挂 MCP |
 | `AGENTCREW_OTEL_ENABLED` | `false` | P2-3：每次 run 导出一条 OTel trace（`gen_ai.*` 语义 + OTLP/HTTP JSON，零依赖） |
 | `AGENTCREW_OTEL_CAPTURE_CONTENT` | `false` | P2-3：是否采集 prompt/completion 内容（默认不采，含源码与用户数据） |
