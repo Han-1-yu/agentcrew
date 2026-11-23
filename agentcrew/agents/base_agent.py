@@ -43,8 +43,10 @@ import json
 import re
 from abc import ABC
 from collections.abc import Callable, Mapping, Sequence
+from contextvars import Token
 from datetime import datetime
 from functools import wraps
+from pathlib import Path
 from typing import Any, NoReturn
 
 from agentcrew.agents.peer import CONSULT_CONTEXT
@@ -98,9 +100,13 @@ from agentcrew.task.task import Task, TaskResult
 from agentcrew.tools import Tool, ToolRegistry
 from agentcrew.tools.schema import function_spec, schema_hint, validate_tool_args
 from agentcrew.utils.clock import seconds_between, utc_now
-from agentcrew.utils.files import UnsafePathError
+from agentcrew.utils.files import UnsafePathError, safe_relpath
 from agentcrew.utils.trace import TraceContext, reset_trace, set_trace
-from agentcrew.utils.workspace import current_workspace
+from agentcrew.utils.workspace import (
+    current_workspace,
+    reset_workspace,
+    set_workspace,
+)
 
 #: 默认摘要的长度上限（spec §8.1「取 notes 前 400 字符」）。
 #: P3-6 起：有产物时产物正文智能摘要优先于此额度，notes 作为补充；无产物时
@@ -547,6 +553,7 @@ class BaseAgent(ABC):
         stream_sink: Callable[[str, str, str], None] | None = None,
         images: list[dict[str, Any]] | None = None,
         agent_profiles: Mapping[str, AgentProfile] | None = None,
+        task_isolation: bool = False,
     ) -> None:
         """``catalog`` 是本 run 的角色目录（含自定义角色），可为 ``None``。
 
@@ -591,6 +598,8 @@ class BaseAgent(ABC):
         #: R59：执行体池（profile key → AgentProfile）。只有 PM 的拆解提示词用它
         #: 渲染「可用执行体」菜单；``None``/空 = 不渲染，行为与 R59 之前逐字一致。
         self._agent_profiles = agent_profiles
+        #: R70：任务级工作区隔离（默认关；只影响 agentic CLI 任务）。
+        self._task_isolation = task_isolation
         self._tool_registry = tool_registry
         self._max_tool_calls = max_tool_calls
         self._subtask_creator = subtask_creator
@@ -676,9 +685,15 @@ class BaseAgent(ABC):
             # 这里沿用同一命名。否则这些调用会落进 ``unknown``，看起来像"归因失败"，
             # 实际只是配置里没有 profile。
             profile=self.agent_key or "default"))
+        # R70：任务级工作区隔离（默认关）。与 trace 同为按协程隔离的上下文：
+        # agentic 任务进入独立目录、进入前播种上游产物；读回桥读同一个
+        # contextvar，自动从隔离目录按契约收交付物。关闭时恒 None，逐字不变。
+        ws_token = self._maybe_isolate_workspace(task, pack)
         try:
             return await self._execute_traced(task, pack, fix_hints=fix_hints)
         finally:
+            if ws_token is not None:
+                reset_workspace(ws_token)
             reset_trace(token)
 
     async def _execute_traced(
@@ -822,6 +837,69 @@ class BaseAgent(ABC):
         if workspace_files is not None:
             return ParsedOutput(files=workspace_files, notes=raw)
         return parse_fenced_blocks(raw)
+
+    def _maybe_isolate_workspace(
+        self, task: Task, pack: ContextPack,
+    ) -> Token[Path | None] | None:
+        """R70：开关开且为 agentic 别名时，切到任务级工作区并返回复位 token。
+
+        返回 ``None`` 表示「不适用」（开关关 / 非 agentic / 未注入工作区），
+        调用方保持 run 级工作区原样。隔离目录为 ``<run_ws>/tasks/<task_id>``：
+        同一任务的多次 attempt / 返工复用同一目录（自己的上一版文件天然可见），
+        上游产物每次进入重新播种（覆盖），跟上上游返工后的新版。
+        """
+        if not self._task_isolation:
+            return None
+        if not self._models.is_agentic_cli(self._resolve_alias(task)):
+            return None
+        root = current_workspace()
+        if root is None:
+            # 未注入工作区时 provider 会照旧明确报错；这里不越权建目录。
+            return None
+        try:
+            task_dir = root / "tasks" / safe_relpath(task.id).as_posix()
+        except UnsafePathError:
+            return None  # 非法 task id 不该出现；出现则退回 run 级而非乱写
+        task_dir.mkdir(parents=True, exist_ok=True)
+        seeded, skipped = self._seed_upstream(task_dir, pack)
+        self._ledger.emit(
+            "task_workspace_isolated",
+            task_id=task.id, role=self.spec.key,
+            path=str(task_dir), seeded=seeded, skipped=skipped,
+        )
+        return set_workspace(task_dir)
+
+    def _seed_upstream(
+        self, task_dir: Path, pack: ContextPack,
+    ) -> tuple[int, int]:
+        """把上游已交付产物复制进隔离工作区，返回 ``(成功数, 跳过数)``。
+
+        只复制 ``pack.upstream`` 声明过的文件；从 ArtifactStore 读字节（文本 /
+        二进制同一通道），写入路径过 ``safe_relpath`` + 二次防逃逸。缺件 /
+        读失败 / 非法路径一律跳过并计数——播种是尽力而为，绝不炸掉执行。
+        """
+        seeded = 0
+        skipped = 0
+        root = task_dir.resolve()
+        for digest in pack.upstream:
+            for rel in digest.files:
+                try:
+                    safe = safe_relpath(rel)
+                    data = self._store.read_bytes(rel)
+                except (OSError, ValueError):
+                    skipped += 1
+                    continue
+                target = (task_dir / safe).resolve()
+                if not target.is_relative_to(root):
+                    skipped += 1
+                    continue
+                try:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(data)
+                    seeded += 1
+                except OSError:
+                    skipped += 1
+        return seeded, skipped
 
     def _agentic_workspace_files(self, task: Task) -> dict[str, str] | None:
         """R60：agentic CLI 执行后，从 run 工作区按契约读回交付物。

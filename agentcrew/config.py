@@ -115,6 +115,8 @@ _ENV_TO_FIELD: dict[str, str] = {
     "AGENTCREW_MAX_DYNAMIC_TASKS": "max_dynamic_tasks",
     "AGENTCREW_PEER_CONSULT_CAPTURE_ENABLED": "peer_consult_capture_enabled",
     "AGENTCREW_PEER_CONSULT_HISTORY_TURNS": "peer_consult_history_turns",
+    # R70：agentic 执行体的任务级工作区隔离（默认关）。
+    "AGENTCREW_AGENTIC_TASK_ISOLATION": "agentic_task_isolation",
     "AGENTCREW_SUPERVISOR_REVIEW_ENABLED": "supervisor_review_enabled",
     "AGENTCREW_MAX_SUBTASK_CORRECTIONS": "max_subtask_corrections",
     "AGENTCREW_SUPERVISOR_SCOPE": "supervisor_scope",
@@ -143,6 +145,8 @@ _YAML_SCALAR_KEYS = (
     "profiles_dir",
     # R3：两个能力开关都是顶层标量，走与 max_concurrency 同一条读取/合并路径。
     "tools_enabled", "code_exec_enabled", "entity_memory_enabled",
+    # R70：agentic 执行体并行隔离（借 Orca Parallel Worktrees 思想，默认关）。
+    "agentic_task_isolation",
     # C2：沙箱后端与其资源上限（docker 模式下才生效）。
     "sandbox_backend", "sandbox_image", "sandbox_memory_mb", "sandbox_cpus",
     "sandbox_allow_network",
@@ -1309,6 +1313,17 @@ class Settings(BaseModel):
     预算防护：轮数上限 5；每条问题/答复在进提示词前截断（见
     :meth:`BaseAgent.consult`）。``0`` 时退回 R6 行为——只带任务背景，不带任何
     历史。依赖 ``peer_dialogue_enabled``（没开咨询就没有历史可攒）。
+    """
+    agentic_task_isolation: bool = False
+    """R70：agentic 执行体的**任务级工作区隔离**——默认关闭，关闭时逐字不变。
+
+    R60 以来工作区是 run 级（``<run_dir>/workspace``），同一 run 内并发的
+    agentic CLI 任务共享一个 cwd，互相踩草稿/依赖安装。开启后，每个 agentic
+    任务在 ``<run_dir>/workspace/tasks/<task_id>`` 里独立执行，进入前把上游
+    已交付产物播种进去；读回桥读同一个 contextvar，自动从隔离目录按契约收
+    交付物。只影响 ``is_agentic_cli`` 为真的别名（mock 通道恒 False，离线
+    回放不受影响）；ReAct 工具仍以 run 级工作区为根。对标 Orca 的 Parallel
+    Worktrees（目录隔离 + 产物播种；git worktree 后端留待后续）。
     """
     delegation_mode: Literal["any", "manager_only"] = "any"
     """R6：谁能发起动态委派（``<subtask>`` 围栏建任务），默认 ``any`` = 现状。

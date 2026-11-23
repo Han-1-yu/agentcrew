@@ -509,6 +509,10 @@ class AgentFactory:
             # R59：执行体池下发给 PM 渲染规划菜单（其余 Agent 不读）。
             agent_profiles=(
                 self._settings.agent_profiles if self._settings is not None else None),
+            # R70：任务级工作区隔离（默认关；只影响 agentic CLI 任务）。
+            task_isolation=(
+                self._settings.agentic_task_isolation
+                if self._settings is not None else False),
         )
         if resolved is not None:
             agent.path_scope = list(resolved.path_scope)

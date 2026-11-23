@@ -197,3 +197,11 @@ models:
 #   technical_writer:
 #     agents:
 #       - { ref: fast-writer, duty: primary }
+
+# ── R70：agentic 执行体任务级工作区隔离（可选，默认关）─────────────────────
+# 借 Orca「Parallel Worktrees」的隔离思想：开启后每个 agentic CLI 任务在
+# <run_dir>/workspace/tasks/<task_id> 里独立执行，进入前播种上游已交付产物，
+# 并发任务互不踩草稿。只影响 claude-code / codex 这类 agentic 别名；普通
+# provider 与 mock 通道不受影响。也可用环境变量
+# AGENTCREW_AGENTIC_TASK_ISOLATION=true 或 run options 按 run 打开。
+# agentic_task_isolation: true

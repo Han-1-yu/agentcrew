@@ -63,12 +63,17 @@ ALLOWED_RUN_OPTIONS: frozenset[str] = frozenset({
     # C5：文档 RAG 开关与参数可按 run 覆盖——它是「上下文里多带几段手册」，
     # 不影响任何安全边界（与 sandbox_backend 的「刻意排除」相反）。
     "docs_rag_enabled", "docs_rag_limit", "docs_rag_vector_weight",
+    # R70：agentic 执行体任务级工作区隔离——只改执行协程的 cwd 上下文，
+    # 不触碰沙箱/网络等安全边界，允许按 run 覆盖（与 sandbox_backend 的
+    # 「刻意排除」相反）。
+    "agentic_task_isolation",
 })
 
 _BOOL_KEYS = frozenset({
     "mock", "tools_enabled", "entity_memory_enabled",
     "peer_dialogue_enabled", "peer_consult_capture_enabled",
     "supervisor_review_enabled", "docs_rag_enabled",
+    "agentic_task_isolation",
 })
 
 #: 允许为 ``null``（= 显式清空）的键；其余键给 ``null`` 视为非法输入。
