@@ -607,6 +607,10 @@ class BaseAgent(ABC):
         #: 空列表 = 不限（单 agent 路径完全不受影响）。
         self.path_scope: list[str] = []
         self.agent_key: str = ""
+        #: R70：Orca 式 Markdown 人格 / 记忆（SOUL.md / MEMORY.md companion）。
+        #: 由 AgentFactory 按档案注入；空串 = 关闭态，提示词逐字不变。
+        self.soul_text: str = ""
+        self.memory_text: str = ""
         #: 执行体级预算（来自 AgentProfile）；None = 不限制。
         self.cost_ceiling_usd: float | None = None
         self.max_calls_per_task: int | None = None
@@ -779,8 +783,11 @@ class BaseAgent(ABC):
         改成「直接调函数」，不再教模型写 ``<tool_call>`` 文本——两套指令同时给会
         让模型在两套协议之间摇摆。默认 ``False``，提示词与改造前逐字一致。
         """
-        system_parts: list[str] = [
-            self.spec.system_prompt,
+        system_parts: list[str] = [self.spec.system_prompt]
+        # R70：Orca SOUL.md——人格紧跟角色职责（身份优先）；空串 = 逐字不变。
+        if self.soul_text:
+            system_parts.append(f"## 执行体人格（SOUL.md）\n{self.soul_text}")
+        system_parts += [
             f"## 输出规范\n{self.spec.output_contract}",
             _ARTIFACT_FORMAT,
             # 明说 token 预算：撞上上限时回复会被**截断**，围栏随之未闭合，
@@ -805,6 +812,10 @@ class BaseAgent(ABC):
         # P3-4：仅在注入了消息路由时告知模型可以跨角色发问。
         if self._message_router is not None:
             system_parts.append(_MESSAGE_SECTION)
+        # R70：Orca MEMORY.md——长期 notes 放 system 末尾；交付物契约仍在
+        # user 消息末尾，近因优先级不变。空串 = 逐字不变。
+        if self.memory_text:
+            system_parts.append(f"## 执行体记忆（MEMORY.md）\n{self.memory_text}")
         system = "\n\n".join(system_parts)
         user_message: Message = {
             "role": "user", "content": _render_pack(pack, fix_hints)}

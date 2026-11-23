@@ -267,6 +267,46 @@ def profile_sources(directory: Path) -> dict[str, Path]:
     return {key: entry.path for key, entry in entries.items()}
 
 
+#: R70：借 Orca「Bot Memory in Markdown」——人格与记忆的 companion 文件。
+#: 与档案同目录、按 key 命名：``<key>.SOUL.md`` / ``<key>.MEMORY.md``。
+#: **Markdown 是唯一事实源**：YAML 的保存 / 备份 / 回收站一律不触碰它们；
+#: 人在平台外编辑后，下一次 run（工厂刷新）生效。
+COMPANION_KINDS = ("SOUL", "MEMORY")
+
+#: 单份 companion 的字符上限（防上下文预算膨胀）；超出截断并标注。
+COMPANION_MAX_CHARS = 6000
+
+
+def companion_path(directory: Path, key: str, kind: str) -> Path:
+    """companion 文件路径；非法 key / kind 抛 :class:`ProfileStoreError`。"""
+    normalized = validate_profile_key(key)
+    if kind not in COMPANION_KINDS:
+        raise ProfileStoreError(
+            f"未知的 companion 类型：{kind!r}（只支持 SOUL / MEMORY）")
+    return directory / f"{normalized}.{kind}.md"
+
+
+def read_companion(
+    directory: Path, key: str, kind: str,
+    *, max_chars: int = COMPANION_MAX_CHARS,
+) -> str:
+    """读取 companion 文本；缺失 / 空 / 不可读 → ``""``（绝不阻断 run）。
+
+    去首尾空白；超过字符上限时截断并追加「…（已截断）」标注。截断在读取层
+    做一次，提示词层不再二次截断。空串 = 关闭态，提示词逐字不变。
+    """
+    path = companion_path(directory, key, kind)
+    try:
+        text = read_text(path).strip()
+    except (OSError, ValueError):
+        return ""
+    if not text:
+        return ""
+    if max_chars > 0 and len(text) > max_chars:
+        text = text[:max_chars].rstrip() + "\n…（已截断）"
+    return text
+
+
 def _backup(path: Path) -> Path | None:
     if not path.is_file():
         return None

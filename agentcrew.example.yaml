@@ -198,6 +198,14 @@ models:
 #     agents:
 #       - { ref: fast-writer, duty: primary }
 
+# ── R70：执行体人格 / 记忆（SOUL.md / MEMORY.md，可选）─────────────────────
+# 借 Orca「Bot Memory in Markdown」：在档案同目录放两份**纯 Markdown**，
+# 文件即事实源、平台外可直接编辑，下一次 run 生效；YAML 保存/备份/回收站
+# 不触碰它们。SOUL 紧跟角色职责注入 system 提示词（人格），MEMORY 追加在
+# system 末尾（长期记忆）；空文件 = 零变化。单份上限 6000 字符（超出截断）。
+#   agents.d/fast-writer.SOUL.md    # 你是快写手：先给结论再给细节…
+#   agents.d/fast-writer.MEMORY.md  # - 2026-11 项目 A 用 pnpm…
+
 # ── R70：agentic 执行体任务级工作区隔离（可选，默认关）─────────────────────
 # 借 Orca「Parallel Worktrees」的隔离思想：开启后每个 agentic CLI 任务在
 # <run_dir>/workspace/tasks/<task_id> 里独立执行，进入前播种上游已交付产物，

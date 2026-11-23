@@ -35,6 +35,7 @@ from agentcrew.agents.technical_writer import TechnicalWriterAgent
 from agentcrew.artifacts.store import ArtifactStore
 from agentcrew.config import Settings
 from agentcrew.models.factory import ModelFactory
+from agentcrew.profiles.store import read_companion
 from agentcrew.roles.binding import Aggregation, BoundAgent, Duty, RoleAgents
 from agentcrew.roles.catalog import RoleCatalog
 from agentcrew.roles.spec import RoleSpec
@@ -523,6 +524,12 @@ class AgentFactory:
             agent.max_concurrency = prof.max_concurrency
             agent.max_rpm = prof.max_rpm
             agent.run_cost_ceiling_usd = prof.run_cost_ceiling_usd
+            # R70：Orca 式 Markdown 人格 / 记忆（companion 文件，空 = 零变化）。
+            # 只有配置了档案目录才读；YAML 内联 profile 同样按 key 找 companion。
+            if self._settings is not None and self._settings.profiles_dir is not None:
+                directory = self._settings.profiles_dir
+                agent.soul_text = read_companion(directory, resolved.profile, "SOUL")
+                agent.memory_text = read_companion(directory, resolved.profile, "MEMORY")
         self._agents[cache_key] = agent
         return agent
 
