@@ -71,6 +71,7 @@
 | approvals `decision.comment` | I4 审批意见字段 | 现 decision 仅 action |
 | provider 配置写端点 | M1 直存 | 突破「Studio 不重写 agentcrew.yaml」边界，需明确拍板 |
 | schedule daily/月度/cron | N3 | `_compute_recurring` 现仅 weekly |
+| 执行体人格/记忆编辑（R70 O2-FE） | 档案页读写 `agents.d/<key>.SOUL.md` / `<key>.MEMORY.md`：展示字数与截断状态、编辑/保存（6000 字符上限、写失败回滚）、未配 `profiles_dir` 时诚实空态 | 后端 R70 只有只读注入（`read_companion`）；写端点与 IPC 需契约先行（API_ROUTES + openapi.yaml + test_api_contract），每项独立提交 |
 
 纯前端 P2（无后端依赖）：A7 代码块全屏/HTML 预览（iframe sandbox 需安全评审）、B5 批量归档/删除 + 智能重命名、C4 临时运行、C5 目标+选项存为模板、D4 阶段耗时时间线、F3 awaiting_approval 节点徽标、G3 跨 run 同角色对比、H3 .yaml 文件导入、J4 HTML sandbox 预览/单 HTML 分享导出、K3 回滚历史浏览器、L3 事件分布小图、M2 provider 用量聚合、O4 i18n/更新检查。
 

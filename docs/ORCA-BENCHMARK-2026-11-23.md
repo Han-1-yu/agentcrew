@@ -95,8 +95,8 @@
 
 | 编号 | 借鉴项 | 对应 | 优先级 | 本轮 | 理由 / 边界 |
 |---|---|---|---|---|---|
-| O1 | **任务级工作区隔离** | F8/F3 | P0 | ✅ | 并发 agentic 任务共享 cwd 是真隐患（互相踩草稿/依赖安装）；隔离 + 上游产物播种即可，git worktree 作后续可选后端 |
-| O2 | **SOUL.md / MEMORY.md** | F15 | P0 | ✅ | 与 R69 档案天然互补；纯文件、平台外可编辑正是 orca 的精髓；空文件=零变化 |
+| O1 | **任务级工作区隔离** | F8/F3 | P0 | ✅ 已落地 `52553aa` | 并发 agentic 任务共享 cwd 是真隐患（互相踩草稿/依赖安装）；隔离 + 上游产物播种即可，git worktree 作后续可选后端 |
+| O2 | **SOUL.md / MEMORY.md** | F15 | P0 | ✅ 已落地 `4b6ab12` | 与 R69 档案天然互补；纯文件、平台外可编辑正是 orca 的精髓；空文件=零变化 |
 | O3 | GitHub 事件触发适配器 | F14/F7/F10 | P1 | ⏭ | 在 C8 入站 webhook 上识别 `X-GitHub-Event`（issues/PR/check_suite）→ 目标模板；需真实 webhook 联调，下一轮 |
 | O4 | 行级评审批注 → 定向返工 | F6 | P1 | ⏭ | 审批 `decision.comment`（交接表 I4）+ 产物预览行锚点批注注入返工上下文；动审批状态机与前端，单独一轮 |
 | O5 | git worktree 后端 + diff 交付 | F8/F7 | P2 | ⏭ | O1 的可选升级：配 `workspace_repo` 时按任务 `git worktree add`，T-FINAL 产 diff/commit message 草稿；依赖 git 环境与清理策略 |
@@ -142,7 +142,8 @@
 
 **验收**：新增 `tests/test_task_isolation.py`——默认关布局不变 / 开且 agentic
 时按任务建目录 / 上游产物播种且缺件跳过 / 读回走隔离目录 / 并发两任务互不见
-草稿 / 非 agentic 不隔离 / 配置四通道 / options 非法值 400。
+草稿 / 非 agentic 不隔离 / 配置四通道 / options 非法值 400。**已落地：15 例全绿**
+（提交 `52553aa`）。
 
 ### 5.2 O2 SOUL.md / MEMORY.md（companion 文件，空=零变化）
 
@@ -171,7 +172,17 @@
 
 **验收**：新增 `tests/test_profile_documents.py`——读取四态（缺失/空/超长/
 坏路径）/ 装配注入 / 无档案不注入 / build_messages 空态逐字不变 / 非空两段
-出现且顺序正确 / YAML 保存不写 companion。
+出现且顺序正确 / YAML 保存不写 companion。**已落地：9 例全绿**（提交
+`4b6ab12`）。
+
+### 5.3 实施记录与实测发现
+
+| 项 | 结论 |
+|---|---|
+| 提交链 | `b6e1715`（本文）→ `52553aa`（O1）→ `4b6ab12`（O2）；后续一笔文档回填 |
+| 验证 | 定向回归 252 + 103 passed；`ruff` 全绿；`mypy agentcrew` 160 文件零错误；全量 **3656 passed / 0 failed / 6 skipped / 0 error**（196 文件 / 49 批次 / 498.0s，基线 3632 + 新增 24） |
+| 既有约束（测试暴露） | 同一 run 内两个任务**不能声明同一产物路径**（`ArtifactStore` 冲突校验，R3 起就有）；并发隔离测试因此用两个不同路径——这是引擎的正确约束，不是隔离的缺陷 |
+| 默认关证据 | 关闭态不建 `tasks/`、不发 `task_workspace_isolated`、cwd 与提示词逐字不变；SOUL/MEMORY 空文件时 system 拼接逐字不变（黄金断言） |
 
 ---
 

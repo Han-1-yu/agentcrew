@@ -1,6 +1,6 @@
 # AgentCrew 项目状态
 
-> **最后更新：2026-11-21** · 本文是仓库**唯一状态源**。
+> **最后更新：2026-11-23** · 本文是仓库**唯一状态源**。
 > 历次交接文档、验收/审查/测试报告、一次性工作提示词已在本日汇总并入本文后删除，
 > 原文备份见 `.workbuddy/archive/reports-2026-11-02/`（git 亦可通过历史恢复）。
 
@@ -8,7 +8,17 @@
 
 ## 0. 一句话现状
 
-**最新一轮（2026-11-21）：Studio §5 对话页内联审批卡**
+**最新一轮（2026-11-23）：R70 Orca 对标——任务级工作区隔离 + SOUL/MEMORY**
+—— 按 `https://github.com/stablyai/orca` 的差距矩阵（`docs/ORCA-BENCHMARK-2026-11-23.md`）
+落地两片，**均默认关闭、离线可测、不碰四条红线**：**O1** 给 agentic CLI 任务按
+`<run_ws>/tasks/<task_id>` 隔离工作区（进入前播种上游已交付产物、读回走同一 contextvar、
+并发任务互不踩草稿，`agentic_task_isolation` 四通道登记 + run options 可覆盖）；**O2**
+给执行体档案补纯 Markdown 的 `<key>.SOUL.md` / `<key>.MEMORY.md`（人格紧跟角色职责、
+记忆追加 system 末尾，空文件逐字不变，YAML 保存/备份/回收站不触碰）。确定性引擎/
+调度/门禁零改动；新增 **24** 例回归（15 + 9），全量 **3656 passed / 0 failed /
+6 skipped / 0 error**（196 文件 / 49 批次 / 498.0s）。明细见 §3.118。
+
+**上一轮（2026-11-21）：Studio §5 对话页内联审批卡**
 —— 对话流里出现「等待人工审批」时，那条系统消息下面直接长出审批卡：卡里列出待裁决的
 审批单 id 与动作（计划卡点给「批准执行 / 取消运行」，交付卡点给「接受交付 / 放弃交付」），
 批准 / 接受后自动 `POST /runs/{id}/resume`，续跑失败（409 别的进程在跑）如实显示原因并给
@@ -183,7 +193,7 @@ config 解析去重（R66e）、`main.py` 3388→~700 行拆进 `cli/` 九模块
 
 | 指标 | 当前值 |
 | --- | --- |
-| 全量测试 | **N1-N2 后最新全量 3632 passed / 0 failed / 6 skipped / 0 error**（194 文件 / 49 批次 / 435.9s，Windows 本机 `scripts/test.py`）。阶段 3 后为 3626 passed（503.4s）；R69 后为 3612 passed（530.5s）；R68 后为 3588 passed（484.8s）。6 个 skip 沿用跑器结果，其中 4 个 docker 真容器用例由 CI 覆盖 |
+| 全量测试 | **R70 后最新全量 3656 passed / 0 failed / 6 skipped / 0 error**（196 文件 / 49 批次 / 498.0s，Windows 本机 `scripts/test.py`；1 例进程被杀后隔离重试恢复，非回归）。N1-N2 后为 3632 passed（435.9s）；阶段 3 后为 3626（503.4s）；R69 后为 3612（530.5s）。6 个 skip 沿用跑器结果，其中 4 个 docker 真容器用例由 CI 覆盖 |
 | 静态检查 | N1-N2 后重跑 `ruff check agentcrew/ tests/`：**All checks passed**；`mypy agentcrew`：**160 文件零错误**（Windows / Python 3.12.16） |
 | 预设样例 | 3 套（`todo` 混合并发 / `linear` 严格串行 / `hierarchy` 两层并行），均 0 失败 0 阻塞 |
 | 性能 | 峰值并发 1→2→4→4（= 图宽度），达效率 100%（理论上限 1.65×） |
@@ -192,7 +202,7 @@ config 解析去重（R66e）、`main.py` 3388→~700 行拆进 `cli/` 九模块
 | 上线自检 | 本机可验 **9 项全通过**（doctor / 离线冒烟 / REST 认证 200·401 / `/metrics` / 无密钥退 3 / `clean` 干跑 / Studio 三连 / ruff+mypy）；目标机 10 项判据见 `docs/DEPLOY-CHECK-2026-11-13.md` |
 | 收尾 | 交付说明见 **`docs/CLOSURE-2026-11-13.md`**；B 类外部环境项 **5/5 全部闭环**；云主机真实部署验收 10 项中 **7 项闭环**（TLS/SSE、告警规则、日志、密钥、成本、webhook、备份），仅剩独立数据盘与两项 Docker 依赖（§3.77、`docs/DEPLOYMENT-VM-2026-11-13.md`） |
 | Git | `c9c4a60`（R61 真机修复）与 `c9cc47c`（R59–R61）均已推送到 `origin/master`，CI run **43453359080** / **43449592343** 的 **7 个 job 全部 success**（Python 3.10/3.11/3.12/3.13、Windows、Studio、Docker 真隔离）；`ebb9895`（R62）/ `8c6e411`（Studio V6-FE）/ `b712113`（桌面启动器）连同两笔状态回填已于 2026-11-14 推送到 `origin/master`（`92d3854..67aeda4`）；C10 `5cdeea8` 与状态回填 `d76d2ef` 同批推送，**2026-11-15 复核 CI run `43608513108`（head = `d76d2ef`）的 7 个 job 逐一 success**（Python 3.10/3.11/3.12/3.13、Windows·uv、Studio·Node 20、Sandbox·docker 真隔离），`Sync main` run `43608513094` success；上一批 `67aeda4` 的 run `43607497931` 亦 success。验收报告 `docs/ACCEPTANCE-2026-11-12.md`；真实模型评测历史证据为 23 条中 22 通过（`bench/eval-live-2026-11-13.md`，本次未重跑真实模型评测）。**2026-11-15 本轮两笔提交 `5e9bc70`（实现，26 文件 / +1866 −119）/ `bedb7e7`（状态回填）已推送到 `origin/master`**（`d76d2ef..bedb7e7`，`origin/main` 同哈希）；对应 CI run **`43712615843`** 结论 `success`、7 个 job 逐一 success，`Sync main` `43712615752` success |
-| 角色 | 8 个内置岗位角色 + 执行体（Agent Profile）可多绑 |
+| 角色 | 8 个内置岗位角色 + 执行体（Agent Profile）可多绑；R70 起档案可配 `SOUL.md` / `MEMORY.md` 两份 Markdown companion（人格 / 长期记忆） |
 
 ```bash
 cd E:/agentcrew
@@ -4105,6 +4115,62 @@ F2 的 MANIFEST 真实数据只在本机 completed run 上人工核对（`202611
 且**没有任何伪造的裁决行**）；`selftest` 16/16；`visual:update` 重建 24 张后 `visual` 24/24。
 - **未覆盖**：真实裁决 → 自动 resume 的闭环仍靠门禁页 e2e 与后端 API 测试覆盖；e2e 连的是
   演示态，内联卡的 `ready` 分支只由单测（`inlineApprovalMode`）与门禁页共用逻辑兜底。
+
+---
+
+### 3.118 R70 Orca 对标：任务级工作区隔离 + SOUL/MEMORY（2026-11-23）
+
+**起点**：用户要求「根据 GitHub 上的 stablyai/orca 完善 agentcrew」。调研见
+`docs/ORCA-BENCHMARK-2026-11-23.md`（README 一手核验 + 本地源码逐点对照）：Orca 是
+MIT 的开源 Agent IDE（约 133.5k star / 24,140 commits），把用户自己的订阅 CLI agent
+（Claude Code / Codex / Grok / Cursor …30+）接成可并行的 bot 舰队。AgentCrew 的长板
+（确定性调度、契约门禁、审计、断点续跑）不动；短板按 ROI 选两项先落地，其余（GitHub
+事件触发、行级批注返工、git worktree 后端、终端双模、移动伴侣）进路线图。
+
+**O1：任务级工作区隔离（`agentic_task_isolation`，默认关）**
+
+| 层 | 文件 | 改动 |
+|---|---|---|
+| 配置 | `config.py` | 新字段默认 `False`；env `AGENTCREW_AGENTIC_TASK_ISOLATION`、YAML 标量键、快照三处登记 |
+| 入口 | `api/run_options.py` | 白名单 + `_BOOL_KEYS`（非布尔 400，null 拒） |
+| 装配 | `agents/registry.py` | 构造 Agent 时下发 `task_isolation=settings.agentic_task_isolation` |
+| 执行 | `agents/base_agent.py` | `execute()` 在 trace 外再套工作区上下文：开关开且 `is_agentic_cli(alias)` 为真时 `set_workspace(run_ws/"tasks"/<task_id>)`，`finally` 复位；`_maybe_isolate_workspace` 进入前把 `pack.upstream` 声明文件从 `ArtifactStore` 播种（`safe_relpath` + 二次防逃逸，缺件/非法路径跳过计数），落 `task_workspace_isolated` 事件 |
+| 读回 | 无需改 | `_agentic_workspace_files` / `_workspace_binary_files` 读同一 contextvar，自动从隔离目录按契约收交付物 |
+
+**语义与边界**：默认关 → 不建 `tasks/`、不发事件、cwd 与提示词逐字不变；只影响
+agentic CLI 任务（mock 通道 `is_agentic_cli` 恒 False，离线回放不变）；ReAct 工具仍以
+run 级工作区为根（`crew/assembly.py`）；同一任务的 attempt/返工复用隔离目录（自己的上
+一版文件可见），上游每次进入重新播种；非法 task id 退回 run 级而非乱写。实测发现一条
+**既有引擎约束**（非本片引入）：同一 run 内两个任务不能声明同一产物路径（store 冲突
+校验），并发测试因此用两个不同路径。
+
+**O2：SOUL.md / MEMORY.md 执行体人格与记忆（companion 文件，空=零变化）**
+
+| 层 | 文件 | 改动 |
+|---|---|---|
+| 存储 | `profiles/store.py` | `COMPANION_KINDS` / `companion_path(<dir>, <key>, kind)` / `read_companion`：`<key>.SOUL.md` / `<key>.MEMORY.md`；缺失/空/不可读 → `""`；上限 6000 字符，超出截断并标注；读取层截断一次，提示词层不再截 |
+| 装配 | `agents/registry.py` | 解析出 profile 后按 `settings.profiles_dir` 读两份 companion，注入 `agent.soul_text` / `agent.memory_text`（YAML 内联 profile 同样按 key 找） |
+| 提示词 | `agents/base_agent.py` | `build_messages`：SOUL 紧跟角色 system_prompt（身份优先）；MEMORY 追加 system 末尾（交付物契约仍在 user 消息末尾，近因优先级不变）；两者皆空时 system 拼接逐字不变 |
+| 样例 | `agentcrew.example.yaml` | 两段注释：文件命名、生效时机、上限、YAML 不触碰 |
+
+**语义与边界**：**Markdown 是唯一事实源**——R69 的 YAML 保存/`.bak`/`.trash` 不触碰
+companion，平台外编辑后下一次 run（工厂刷新）生效；Studio 编辑入口留下一轮（O2-FE）。
+无档案（单 agent 老路径）不注入；空文件 = 关闭态。分层 `agents → profiles` 在
+`test_architecture.py` 禁止集之外，护栏未改。
+
+**验证**：新增 `tests/test_task_isolation.py` **15 例**（默认关布局不变 / 隔离与播种 /
+缺件与非法路径跳过 / 二进制字节 / 并发互不见草稿 / 非 agentic 与 mock 不隔离 / 返工复
+用目录并重新播种 / 非法 task id / 配置四通道 / options 布尔与 null）+ `tests/test_profile_documents.py`
+**9 例**（路径与非法 kind/key / 读取四态 / 不可读不阻断 / 工厂注入与无档案不注入 /
+build_messages 空态逐字与顺序 / YAML 保存不触碰）。受影响面定向回归 **252 + 103 passed**；
+`ruff` 全绿；`mypy agentcrew` **160 文件零错误**；全量 **3656 passed / 0 failed /
+6 skipped / 0 error**（196 文件 / 49 批次 / 498.0s）。
+
+**提交**：`b6e1715`（调研文档）→ `52553aa`（O1）→ `4b6ab12`（O2）。
+
+**未覆盖（诚实边界）**：真实 Claude Code / Codex 的隔离端到端（需本机 CLI + 登录，离
+线以 fake 子进程覆盖装配与读回全链）；git worktree 后端（O5，配 `workspace_repo` 后
+再叠加）；Studio 侧 SOUL/MEMORY 编辑与读取展示（O2-FE）。
 
 ---
 
